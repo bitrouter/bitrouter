@@ -440,6 +440,10 @@ impl From<bitrouter_ai::error::ModelError> for BitrouterError {
             ModelError::InvalidResponse { message, usage } => {
                 Self::UpstreamInvalidResponse { message, usage }
             }
+            ModelError::DecisionResponse { failure } => Self::UpstreamInvalidResponse {
+                message: failure.message,
+                usage: failure.usage,
+            },
             ModelError::Provider { status, message } => Self::Upstream { status, message },
             ModelError::PolicyViolation { message } => Self::UpstreamPolicyViolation { message },
             ModelError::InvalidCredential { message } | ModelError::Configuration { message } => {

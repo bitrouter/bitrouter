@@ -67,6 +67,7 @@ pub mod builder;
 pub mod context;
 pub mod executor;
 pub mod hooks;
+pub mod operations;
 pub mod pipeline;
 pub mod request_checks;
 pub mod routing;

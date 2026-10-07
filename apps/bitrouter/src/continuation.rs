@@ -2057,7 +2057,7 @@ impl PreRequestHook for ContinuationRuntime {
             return Ok(HookDecision::Allow);
         }
         let Some(previous_response_id) = ctx
-            .prompt()
+            .require_generation_prompt()?
             .params
             .extra
             .get("previous_response_id")
@@ -2117,7 +2117,9 @@ impl PreRequestHook for ContinuationRuntime {
                         .causal_prefix_commitment
                         .as_ref()
                         .and_then(|commitment| {
-                            authenticated_visible_causal_prefix(ctx.prompt(), commitment)
+                            ctx.generation_prompt().and_then(|prompt| {
+                                authenticated_visible_causal_prefix(prompt, commitment)
+                            })
                         });
                 if let (Some(commitment), Some(suffix_start)) = (
                     active.causal_prefix_commitment.clone(),
@@ -2131,7 +2133,7 @@ impl PreRequestHook for ContinuationRuntime {
                     Some(ContinuationAdjustment::Detach)
                 } else {
                     let hidden_suffix = !ctx
-                        .prompt()
+                        .require_generation_prompt()?
                         .messages
                         .iter()
                         .any(|message| message.role == Role::Assistant);
@@ -2168,7 +2170,7 @@ impl RouteHook for ContinuationRuntime {
         }
         ctx.insert_extension(Arc::new(RequireContinuationAuthority));
         let Some(previous_response_id) = ctx
-            .prompt()
+            .require_generation_prompt()?
             .params
             .extra
             .get("previous_response_id")
@@ -2875,26 +2877,30 @@ mod tests {
             .expect("valid Responses request")
     }
 
+    fn valid_generation_result(response_id: &str) -> GenerateResult {
+        GenerateResult {
+            content: vec![Content::Text {
+                text: "ready".into(),
+                provider_metadata: Default::default(),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 7,
+                completion_tokens: 11,
+                ..Default::default()
+            }),
+            finish_reason: Some(FinishReason::Stop),
+            response_id: Some(response_id.into()),
+            stop_details: None,
+            provider_metadata: Default::default(),
+        }
+    }
+
     fn valid_nonstream_result(target: &RoutingTarget, response_id: &str) -> ExecutionResult {
         ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result: GenerateResult {
-                content: vec![Content::Text {
-                    text: "ready".into(),
-                    provider_metadata: Default::default(),
-                }],
-                usage: Some(Usage {
-                    prompt_tokens: 7,
-                    completion_tokens: 11,
-                    ..Default::default()
-                }),
-                finish_reason: Some(FinishReason::Stop),
-                response_id: Some(response_id.into()),
-                stop_details: None,
-                provider_metadata: Default::default(),
-            },
+            result: valid_generation_result(response_id).into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
             server_tool_calls: Vec::new(),
@@ -3781,17 +3787,19 @@ mod tests {
             model: "openai:gpt-5".into(),
             caller: CallerContext::new("key", owner),
             headers: Default::default(),
-            prompt: Prompt {
-                model: "gpt-5".into(),
-                system: None,
-                system_provider_metadata: Default::default(),
-                messages,
-                tools: Vec::new(),
-                params,
-                response_format: None,
-                tool_choice: None,
-                stream: true,
-            },
+            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
+                Prompt {
+                    model: "gpt-5".into(),
+                    system: None,
+                    system_provider_metadata: Default::default(),
+                    messages,
+                    tools: Vec::new(),
+                    params,
+                    response_format: None,
+                    tool_choice: None,
+                    stream: true,
+                },
+            )),
             inbound_protocol: Some(ApiProtocol::Responses),
         })
     }
@@ -4105,6 +4113,7 @@ mod tests {
         provider_response_id: &str,
     ) -> RequiredFinalizationContext {
         RequiredFinalizationContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: request_id.into(),
             delivery_attempt_id,
             caller: CallerContext::new("key", "owner"),
@@ -4955,10 +4964,8 @@ mod tests {
                 duplicate_rollback: None,
             };
             let executor = Arc::new(MockExecutor::new(vec![
-                MockResponse::Generate(valid_nonstream_result(&target, first_provider_id).result),
-                MockResponse::Generate(
-                    valid_nonstream_result(&target, duplicate_provider_id).result,
-                ),
+                MockResponse::Generate(valid_generation_result(first_provider_id)),
+                MockResponse::Generate(valid_generation_result(duplicate_provider_id)),
             ]));
             let mut builder = PipelineBuilder::new();
             builder
@@ -5073,8 +5080,8 @@ mod tests {
             }),
         };
         let executor = Arc::new(MockExecutor::new(vec![
-            MockResponse::Generate(valid_nonstream_result(&target, "provider-late-owner-a").result),
-            MockResponse::Generate(valid_nonstream_result(&target, "provider-late-owner-b").result),
+            MockResponse::Generate(valid_generation_result("provider-late-owner-a")),
+            MockResponse::Generate(valid_generation_result("provider-late-owner-b")),
         ]));
         let mut builder = PipelineBuilder::new();
         builder
@@ -5129,13 +5136,9 @@ mod tests {
         let upstream_target = target("credential");
         let responses = (0..4)
             .map(|index| {
-                MockResponse::Generate(
-                    valid_nonstream_result(
-                        &upstream_target,
-                        &format!("provider-reused-root-{index}"),
-                    )
-                    .result,
-                )
+                MockResponse::Generate(valid_generation_result(&format!(
+                    "provider-reused-root-{index}"
+                )))
             })
             .collect();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -5389,10 +5392,9 @@ mod tests {
         routes.insert("gpt-5", vec![target.clone()]);
         let responses = (0..3)
             .map(|index| {
-                MockResponse::Generate(
-                    valid_nonstream_result(&target, &format!("provider-unknown-http-{index}"))
-                        .result,
-                )
+                MockResponse::Generate(valid_generation_result(&format!(
+                    "provider-unknown-http-{index}"
+                )))
             })
             .collect();
         let mut builder = PipelineBuilder::new();
@@ -7078,17 +7080,19 @@ mod tests {
             model: "gpt-5".into(),
             caller: CallerContext::new("key", "tool-owner"),
             headers: Default::default(),
-            prompt: Prompt {
-                model: "gpt-5".into(),
-                system: None,
-                system_provider_metadata: Default::default(),
-                messages: vec![Message::text(Role::User, "answer with search")],
-                tools: Vec::new(),
-                params,
-                response_format: None,
-                tool_choice: None,
-                stream,
-            },
+            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
+                Prompt {
+                    model: "gpt-5".into(),
+                    system: None,
+                    system_provider_metadata: Default::default(),
+                    messages: vec![Message::text(Role::User, "answer with search")],
+                    tools: Vec::new(),
+                    params,
+                    response_format: None,
+                    tool_choice: None,
+                    stream,
+                },
+            )),
             inbound_protocol: Some(ApiProtocol::Responses),
         }
     }
@@ -7351,10 +7355,18 @@ mod tests {
             .clone()
             .execute(nonstream_tool_request("nonstream-tool-request-1", None))
             .await?;
-        assert_eq!(first.result.response_id.as_deref(), Some("provider-final"));
+        assert_eq!(
+            first
+                .result
+                .generation()
+                .ok_or_else(|| anyhow::anyhow!("generation result missing"))?
+                .response_id
+                .as_deref(),
+            Some("provider-final")
+        );
         let usage = first
             .result
-            .usage
+            .usage()
             .ok_or_else(|| anyhow::anyhow!("aggregated usage missing"))?;
         assert_eq!((usage.prompt_tokens, usage.completion_tokens), (30, 5));
 
@@ -7403,19 +7415,28 @@ mod tests {
             .execute(nonstream_tool_request(request_id, None))
             .await?;
         assert_eq!(
-            result.result.finish_reason,
+            result
+                .result
+                .generation()
+                .ok_or_else(|| anyhow::anyhow!("generation result missing"))?
+                .finish_reason,
             Some(bitrouter_ai::types::FinishReason::Other(
                 expected_reason.into()
             ))
         );
         assert_eq!(
-            result.result.response_id.as_deref(),
+            result
+                .result
+                .generation()
+                .ok_or_else(|| anyhow::anyhow!("generation result missing"))?
+                .response_id
+                .as_deref(),
             Some("provider-intermediate"),
             "native id remains available for response framing and request-local audit"
         );
         let usage = result
             .result
-            .usage
+            .usage()
             .ok_or_else(|| anyhow::anyhow!("synthetic result usage missing"))?;
         assert_eq!((usage.prompt_tokens, usage.completion_tokens), (10, 2));
 

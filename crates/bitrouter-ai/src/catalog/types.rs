@@ -16,7 +16,7 @@
 //! are ignored (no `deny_unknown_fields`) so the registry can add fields
 //! without breaking this consumer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 
@@ -120,6 +120,8 @@ pub enum RegistryProtocol {
     Anthropic,
     /// OpenAI Responses.
     Responses,
+    /// Native Decisions.
+    Decisions,
 }
 
 impl RegistryProtocol {
@@ -129,6 +131,7 @@ impl RegistryProtocol {
             RegistryProtocol::Openai => ApiProtocol::ChatCompletions,
             RegistryProtocol::Anthropic => ApiProtocol::Messages,
             RegistryProtocol::Responses => ApiProtocol::Responses,
+            RegistryProtocol::Decisions => ApiProtocol::Decisions,
         }
     }
 }
@@ -396,6 +399,10 @@ pub struct RegistryModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<RegistryPricing>,
+    /// Independent protocol tariffs; dist keys use runtime protocol names.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub pricing_by_protocol: HashMap<ApiProtocol, RegistryPricing>,
+
     /// Resolved rate limits for this (provider, model) pair, if any.
     #[serde(default)]
     pub rate_limits: Option<RegistryRateLimits>,
@@ -415,6 +422,10 @@ pub struct RegistryModel {
 /// any context tiers.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryPricing {
+    /// Declared processing profile for these rates. Absent tariffs remain
+    /// bound to the deployment's configured endpoint by the application.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_profile: Option<PricingEndpointProfile>,
     /// Input-token rates.
     #[serde(default)]
     pub input_tokens: Option<InputTokenPricing>,
@@ -424,6 +435,50 @@ pub struct RegistryPricing {
     /// Higher context-length pricing brackets (step function on input size).
     #[serde(default)]
     pub context_tiers: Vec<RegistryContextTier>,
+}
+
+/// Published processing-profile provenance; application pricing validates the
+/// effective endpoint rather than inferring premiums from this declaration.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingEndpointProfile {
+    /// OpenAI global processing.
+    OpenaiGlobal,
+    /// OpenAI US regional processing.
+    OpenaiUs,
+    /// OpenAI European regional processing.
+    OpenaiEurope,
+}
+
+impl PricingEndpointProfile {
+    /// Whether a configured endpoint matches these published rates. This is
+    /// applicability only: it never applies a regional price multiplier.
+    pub fn matches_api_base(self, api_base: &str) -> bool {
+        let Ok(url) = reqwest::Url::parse(api_base) else {
+            return false;
+        };
+        let host = match self {
+            Self::OpenaiGlobal => "api.openai.com",
+            Self::OpenaiUs => "us.api.openai.com",
+            Self::OpenaiEurope => "eu.api.openai.com",
+        };
+        url.scheme() == "https"
+            && url.host_str() == Some(host)
+            && url.port().is_none_or(|port| port == 443)
+            && url.path().trim_end_matches('/') == "/v1"
+            && url.query().is_none()
+    }
+
+    /// Stable source/config vocabulary for frozen applicability evidence.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiGlobal => "openai_global",
+            Self::OpenaiUs => "openai_us",
+            Self::OpenaiEurope => "openai_europe",
+        }
+    }
 }
 
 /// Input-token rates (USD per 1M tokens == µUSD per token).

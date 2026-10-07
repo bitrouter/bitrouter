@@ -89,9 +89,21 @@ pub trait RouteHook: Send + Sync {
     /// Resolve / mutate the routing chain.
     async fn resolve(
         &self,
-        chain: &mut Vec<RoutingTarget>,
-        ctx: &mut PipelineContext,
-    ) -> Result<()>;
+        _chain: &mut Vec<RoutingTarget>,
+        _ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Capture request-scoped evidence after all mutations and compatibility
+    /// filters. Targets are immutable here; this callback performs no dispatch.
+    async fn after_resolve(
+        &self,
+        _chain: &[RoutingTarget],
+        _ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Stage 3 — execution observation + fallback control.

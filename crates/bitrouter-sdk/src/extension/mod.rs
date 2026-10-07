@@ -44,6 +44,22 @@ impl ExtensionApi {
         revision: &str,
         callback: Arc<Callback>,
     ) -> Result<()> {
+        self.request_check_for(
+            id,
+            revision,
+            callback,
+            crate::language_model::operations::OperationScope::Generation,
+        )
+    }
+
+    /// Register a callback with explicit operation support after migrating coverage.
+    pub fn request_check_for(
+        &mut self,
+        id: &str,
+        revision: &str,
+        callback: Arc<Callback>,
+        supported_operations: crate::language_model::operations::OperationScope,
+    ) -> Result<()> {
         if let Some(message) = &self.invalid {
             return Err(BitrouterError::bad_request(message.clone()));
         }
@@ -64,7 +80,10 @@ impl ExtensionApi {
                 Err(BitrouterError::bad_request(message))
             }
             Entry::Vacant(entry) => {
-                entry.insert(Registration::new(revision, callback));
+                entry.insert(
+                    Registration::new(revision, callback)
+                        .with_supported_operations(supported_operations),
+                );
                 Ok(())
             }
         }

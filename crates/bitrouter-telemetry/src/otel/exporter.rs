@@ -458,7 +458,11 @@ impl OtelExporter {
         };
 
         let model = ctx.model().to_string();
-        let span_name = format!("chat {model}");
+        let operation = match ctx.operation() {
+            bitrouter_ai::types::ModelOperation::Generation => "chat",
+            bitrouter_ai::types::ModelOperation::Decisions => "decisions",
+        };
+        let span_name = format!("{operation} {model}");
         let mut attributes = vec![
             KeyValue::new("bitrouter.request_id", ctx.request_id().to_string()),
             KeyValue::new(
@@ -466,10 +470,26 @@ impl OtelExporter {
                 ctx.caller().api_key_id().to_string(),
             ),
             KeyValue::new("bitrouter.user_id", ctx.caller().user_id().to_string()),
-            KeyValue::new("gen_ai.operation.name", "chat"),
+            KeyValue::new("gen_ai.operation.name", operation),
+            KeyValue::new(
+                "bitrouter.operation",
+                if operation == "chat" {
+                    "generation"
+                } else {
+                    "decisions"
+                },
+            ),
             KeyValue::new("gen_ai.request.model", model),
         ];
-        attributes.extend(request_param_attrs(ctx.prompt()));
+        if let Some(protocol) = ctx.inbound_protocol() {
+            attributes.push(KeyValue::new(
+                "bitrouter.inbound_protocol",
+                protocol.as_str().to_owned(),
+            ));
+        }
+        if let Some(prompt) = ctx.generation_prompt() {
+            attributes.extend(request_param_attrs(prompt));
+        }
 
         let builder = self
             .tracer
@@ -619,7 +639,12 @@ impl ObserveHook for OtelExporter {
             return;
         };
 
-        let span_name = format!("chat {}", target.service_id);
+        let operation = if target.api_protocol == ApiProtocol::Decisions {
+            "decisions"
+        } else {
+            "chat"
+        };
+        let span_name = format!("{operation} {}", target.service_id);
         let attrs = build_hop_client_attrs(target);
 
         let span = self
@@ -863,6 +888,12 @@ impl ObserveHook for OtelExporter {
                 "bitrouter.request_duration_ms",
                 i64::try_from(ctx.request_duration_ms()).unwrap_or(i64::MAX),
             ));
+            if let Some(target) = ctx.serving_target() {
+                span.set_attribute(KeyValue::new(
+                    "bitrouter.outbound_protocol",
+                    target.api_protocol.as_str().to_owned(),
+                ));
+            }
             if let Some(result) = &ctx.execution_result {
                 span.set_attribute(KeyValue::new(
                     "bitrouter.provider_id",
@@ -889,7 +920,11 @@ impl ObserveHook for OtelExporter {
                     "gen_ai.response.model",
                     result.model_id.clone(),
                 ));
-                if let Some(id) = &result.result.response_id {
+                if let Some(id) = result
+                    .result
+                    .generation()
+                    .and_then(|result| result.response_id.as_ref())
+                {
                     let observable_id = match ctx.serving_target() {
                         Some(target) if target.api_protocol == ApiProtocol::Responses => {
                             encode_gateway_continuation_id(ctx.request_id()).ok()
@@ -901,7 +936,7 @@ impl ObserveHook for OtelExporter {
                     }
                 }
 
-                if let Some(usage) = &result.result.usage {
+                if let Some(usage) = result.result.usage() {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.usage.input_tokens",
                         usage.prompt_tokens as i64,
@@ -919,7 +954,11 @@ impl ObserveHook for OtelExporter {
                 }
 
                 // Spec: gen_ai.response.finish_reasons is an array of strings.
-                if let Some(reason) = &result.result.finish_reason {
+                if let Some(reason) = result
+                    .result
+                    .generation()
+                    .and_then(|result| result.finish_reason.as_ref())
+                {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.response.finish_reasons",
                         opentelemetry::Value::Array(opentelemetry::Array::String(vec![
@@ -1003,12 +1042,41 @@ impl ObserveHook for OtelExporter {
             // Optional prompt / response content capture (off by default).
             if self.config.content_capture == ContentCaptureMode::Full {
                 let mut redactor = bitrouter_ai::diagnostics::DiagnosticRedactor::default();
-                redactor.capture_prompt_continuity(ctx.prompt());
-                if let Some(json) = captured_content_json(&ctx.prompt().messages, &redactor) {
+                let input_json = ctx.generation_prompt().and_then(|prompt| {
+                    redactor.capture_prompt_continuity(prompt);
+                    captured_content_json(&prompt.messages, &redactor)
+                });
+                if let Some(json) = input_json {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.input.messages",
                         truncate_utf8(json, self.config.content_attr_max_bytes),
                     ));
+                }
+                if let Some(request) = ctx.decision_request() {
+                    let safety_identifier = request
+                        .safety_identifier
+                        .as_ref()
+                        .and_then(|value| value.as_deref());
+                    let input =
+                        serde_json::json!({"input": request.input, "questions": request.questions});
+                    if let Some(json) = captured_decision_content_json(&input, safety_identifier) {
+                        span.set_attribute(KeyValue::new(
+                            "bitrouter.decisions.input",
+                            truncate_utf8(json, self.config.content_attr_max_bytes),
+                        ));
+                    }
+                    if let Some(result) = ctx
+                        .execution_result
+                        .as_ref()
+                        .and_then(|result| result.result.decisions())
+                        && let Some(json) =
+                            captured_decision_content_json(&result.answers, safety_identifier)
+                    {
+                        span.set_attribute(KeyValue::new(
+                            "bitrouter.decisions.answers",
+                            truncate_utf8(json, self.config.content_attr_max_bytes),
+                        ));
+                    }
                 }
                 // Response content. The non-streaming path reconstructs it in
                 // the IR (`execution_result.content`); the streaming path does
@@ -1023,7 +1091,8 @@ impl ObserveHook for OtelExporter {
                 let ir_content = ctx
                     .execution_result
                     .as_ref()
-                    .map(|result| result.result.content.as_slice())
+                    .and_then(|result| result.result.generation())
+                    .map(|result| result.content.as_slice())
                     .unwrap_or_default();
                 let output_json = if !ir_content.is_empty() {
                     redactor.capture_content_continuity(ir_content);
@@ -1211,6 +1280,18 @@ fn request_param_attrs(prompt: &Prompt) -> Vec<KeyValue> {
 /// the attempt hit) for trace inspection.
 fn build_hop_client_attrs(target: &RoutingTarget) -> Vec<KeyValue> {
     let mut attrs = vec![
+        KeyValue::new(
+            "bitrouter.operation",
+            if target.api_protocol == ApiProtocol::Decisions {
+                "decisions"
+            } else {
+                "generation"
+            },
+        ),
+        KeyValue::new(
+            "bitrouter.outbound_protocol",
+            target.api_protocol.as_str().to_owned(),
+        ),
         KeyValue::new("bitrouter.provider_id", target.provider_name.clone()),
         KeyValue::new("bitrouter.model_id", target.service_id.clone()),
     ];
@@ -1267,6 +1348,37 @@ fn captured_content_json<T: serde::Serialize + ?Sized>(
     redactor: &bitrouter_ai::diagnostics::DiagnosticRedactor,
 ) -> Option<String> {
     let mut value = serde_json::to_value(content).ok()?;
+    redactor.scrub_value(&mut value);
+    serde_json::to_string(&value).ok()
+}
+
+fn captured_decision_content_json<T: serde::Serialize + ?Sized>(
+    content: &T,
+    safety_identifier: Option<&str>,
+) -> Option<String> {
+    fn omit_identifiers(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                fields.remove("safety_identifier");
+                for value in fields.values_mut() {
+                    omit_identifiers(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    omit_identifiers(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut value = serde_json::to_value(content).ok()?;
+    omit_identifiers(&mut value);
+    let mut redactor = bitrouter_ai::diagnostics::DiagnosticRedactor::default();
+    if let Some(identifier) = safety_identifier {
+        redactor.add_replacement(identifier.to_owned(), "[redacted safety identifier]".into());
+    }
     redactor.scrub_value(&mut value);
     serde_json::to_string(&value).ok()
 }
@@ -1443,7 +1555,7 @@ mod hop_tests {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: vec![Content::Text {
                     text: "ok".into(),
                     provider_metadata: Default::default(),
@@ -1457,7 +1569,8 @@ mod hop_tests {
                 response_id: Some("chatcmpl-test123".into()),
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
             server_tool_calls: Vec::new(),
@@ -1683,7 +1796,11 @@ mod hop_tests {
         exporter.after_phase(Phase::PreRequest, &ctx).await;
         exporter.on_hop_start(&ctx, &target).await;
         let mut result = fresh_result(&target);
-        result.result.response_id = Some("native-nonstream-sentinel".into());
+        if let bitrouter_sdk::language_model::types::PipelineOutput::Generation(generation) =
+            &mut result.result
+        {
+            generation.response_id = Some("native-nonstream-sentinel".into());
+        }
         exporter
             .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
             .await;
@@ -1806,14 +1923,15 @@ mod hop_tests {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: Vec::new(),
                 usage: Some(Usage::default()),
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
@@ -1876,14 +1994,15 @@ mod hop_tests {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: Vec::new(),
                 usage: Some(Usage::default()),
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
@@ -1942,14 +2061,15 @@ mod hop_tests {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: Vec::new(),
                 usage: Some(Usage::default()),
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
@@ -2163,6 +2283,120 @@ mod hop_tests {
     }
 
     #[tokio::test]
+    async fn native_decision_spans_conform_and_exclude_safety_identifier()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use bitrouter_ai::protocol::decisions::DecisionsCodec;
+        for mode in [ContentCaptureMode::Off, ContentCaptureMode::Full] {
+            let (exporter, captured) = make_test_exporter_with(OtelConfig {
+                content_capture: mode,
+                ..Default::default()
+            });
+            let request = DecisionsCodec::parse_request(serde_json::json!({
+                "model":"test-model","input":"private-native-evidence",
+                "safety_identifier":"private-native-safety",
+                "questions":[{"type":"predicate","name":"q","instructions":"check evidence"}]
+            }))?;
+            let native = DecisionsCodec::parse_response(
+                serde_json::json!({
+                    "model":"test-model","answers":[{"type":"predicate","name":"q","probability":0.7,
+                        "safety_identifier":"private-native-safety", "safe_extension":true,
+                        "extra_answer":{"nested":[{"safety_identifier":"private-upstream-safety",
+                            "echo":"private-native-safety"}]}}],
+                    "usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10,
+                        "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+                        "output_tokens_details":{"reasoning_tokens":0}}
+                }),
+                &request,
+            )?;
+            let wire_before = DecisionsCodec::render_response(&native, &request)?;
+            assert_eq!(
+                wire_before["answers"][0]["safety_identifier"],
+                "private-native-safety"
+            );
+            let mut target = fresh_target("openai");
+            target.api_protocol = ApiProtocol::Decisions;
+            let mut ctx = PipelineContext::new(PipelineRequest::new_decisions(
+                "test-model",
+                CallerContext::new("k1", "u1"),
+                request,
+            ));
+            let mut result = fresh_result(&target);
+            result.result = native.into();
+            exporter.after_phase(Phase::PreRequest, &ctx).await;
+            exporter.on_hop_start(&ctx, &target).await;
+            exporter
+                .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
+                .await;
+            ctx.execution_result = Some(result);
+            exporter
+                .on_request_end(&ctx, &RequestOutcome::Completed)
+                .await;
+            assert!(exporter.provider.force_flush().is_ok());
+            let spans = captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            assert_conforms_to_span_schema(&spans);
+            let root = spans
+                .iter()
+                .find(|span| {
+                    span.name == "decisions test-model" && span.span_kind == SpanKind::Internal
+                })
+                .ok_or("missing native root span")?;
+            assert_eq!(str_attr(root, "bitrouter.operation"), Some("decisions"));
+            assert_eq!(
+                str_attr(root, "bitrouter.inbound_protocol"),
+                Some("decisions")
+            );
+            assert_eq!(i64_attr(root, "gen_ai.usage.input_tokens"), Some(10));
+            assert_eq!(str_attr(root, "gen_ai.input.messages"), None);
+            assert_eq!(str_attr(root, "gen_ai.output.messages"), None);
+            let input = str_attr(root, "bitrouter.decisions.input");
+            let answers = str_attr(root, "bitrouter.decisions.answers");
+            if mode == ContentCaptureMode::Full {
+                assert!(input.is_some_and(|input| input.contains("private-native-evidence")));
+                assert!(answers.is_some_and(|answers| answers.contains("probability")));
+                let answer_json: serde_json::Value =
+                    serde_json::from_str(answers.ok_or("missing captured native answers")?)?;
+                assert!(answer_json[0].get("safety_identifier").is_none());
+                assert!(
+                    answer_json[0]["extra_answer"]["nested"][0]
+                        .get("safety_identifier")
+                        .is_none()
+                );
+                assert_eq!(answer_json[0]["safe_extension"], true);
+            } else {
+                assert!(input.is_none());
+                assert!(answers.is_none());
+            }
+            assert!(!format!("{spans:?}").contains("private-native-safety"));
+            assert!(!format!("{spans:?}").contains("private-upstream-safety"));
+            let wire_after = DecisionsCodec::render_response(
+                ctx.execution_result
+                    .as_ref()
+                    .and_then(|result| result.result.decisions())
+                    .ok_or("missing native result")?,
+                ctx.decision_request().ok_or("missing native request")?,
+            )?;
+            assert_eq!(wire_after, wire_before);
+            let hop = spans
+                .iter()
+                .find(|span| span.span_kind == SpanKind::Client)
+                .ok_or("missing native hop span")?;
+            assert_eq!(
+                str_attr(hop, "bitrouter.outbound_protocol"),
+                Some("decisions")
+            );
+            assert!(
+                !hop.attributes
+                    .iter()
+                    .any(|attribute| attribute.key.as_str().starts_with("gen_ai."))
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn route_and_settle_internal_spans_parent_on_root_chat() {
         // The exporter emits brief `route` and `settle` INTERNAL spans at
         // their respective phase boundaries; they should sit alongside the
@@ -2350,7 +2584,8 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn streamed_pipeline_exports_canonical_latency_and_first_token_timing() {
+    async fn streamed_pipeline_exports_canonical_latency_and_first_token_timing()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (exporter, captured) = make_test_exporter();
         let exporter = Arc::new(exporter);
         let target = fresh_target("openai");
@@ -2378,7 +2613,13 @@ mod hop_tests {
         let pipeline = Arc::new(builder.build().expect("pipeline builds"));
 
         let mut request = fresh_request();
-        request.prompt.stream = true;
+        request
+            .input
+            .generation_prompt_mut()
+            .ok_or_else(|| {
+                bitrouter_sdk::error::BitrouterError::internal("expected generation fixture")
+            })?
+            .stream = true;
         let stream = pipeline
             .clone()
             .execute_stream(request)
@@ -2437,6 +2678,7 @@ mod hop_tests {
             "hop upstream duration {hop_upstream_duration_ms}ms and finalized upstream duration \
              {upstream_duration_ms}ms measure the same call and must stay within a few ms"
         );
+        Ok(())
     }
 
     #[tokio::test]
@@ -2499,7 +2741,8 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn provider_stream_span_ends_before_settlement_io() {
+    async fn provider_stream_span_ends_before_settlement_io()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (exporter, captured) = make_test_exporter();
         let exporter = Arc::new(exporter);
         let target = fresh_target("openai");
@@ -2529,7 +2772,13 @@ mod hop_tests {
         let pipeline = Arc::new(builder.build().expect("pipeline builds"));
 
         let mut request = fresh_request();
-        request.prompt.stream = true;
+        request
+            .input
+            .generation_prompt_mut()
+            .ok_or_else(|| {
+                bitrouter_sdk::error::BitrouterError::internal("expected generation fixture")
+            })?
+            .stream = true;
         let stream = pipeline
             .clone()
             .execute_stream(request)
@@ -2555,6 +2804,8 @@ mod hop_tests {
         release.notify_one();
         assert!(drain.await.expect("drain task").iter().all(Result::is_ok));
         pipeline.drain_pending_settlements().await;
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -3065,7 +3316,8 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn streamed_request_conforms_to_the_committed_span_schema() {
+    async fn streamed_request_conforms_to_the_committed_span_schema()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // The widest single lifecycle available in-crate: a streamed request
         // through the real pipeline, so `route`, the hop CLIENT span, `settle`
         // and the root generation are all produced by the code paths that
@@ -3114,7 +3366,13 @@ mod hop_tests {
         let pipeline = Arc::new(builder.build().expect("pipeline builds"));
 
         let mut request = fresh_request();
-        request.prompt.stream = true;
+        request
+            .input
+            .generation_prompt_mut()
+            .ok_or_else(|| {
+                bitrouter_sdk::error::BitrouterError::internal("expected generation fixture")
+            })?
+            .stream = true;
         let stream = pipeline
             .clone()
             .execute_stream(request)
@@ -3139,6 +3397,8 @@ mod hop_tests {
             );
         }
         assert_conforms_to_span_schema(&spans);
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -3196,13 +3456,24 @@ mod hop_tests {
             )]),
         };
         let mut request = fresh_request();
-        request.prompt.messages.push(Message {
-            role: Role::Assistant,
-            content: vec![signed.clone()],
-        });
+        request
+            .input
+            .generation_prompt_mut()
+            .ok_or("expected generation fixture")?
+            .messages
+            .push(Message {
+                role: Role::Assistant,
+                content: vec![signed.clone()],
+            });
         let mut ctx = PipelineContext::new(request);
         let mut result = fresh_result(&fresh_target("google"));
-        result.result.content.push(signed.clone());
+        if let bitrouter_sdk::language_model::types::PipelineOutput::Generation(generation) =
+            &mut result.result
+        {
+            generation.content.push(signed.clone());
+        } else {
+            return Err("expected generation result".into());
+        }
         ctx.execution_result = Some(result);
         let (exporter, captured) = make_test_exporter_with(OtelConfig {
             content_capture: ContentCaptureMode::Full,
@@ -3225,7 +3496,7 @@ mod hop_tests {
             assert!(recorded.contains("lookup"));
         }
         assert!(
-            ctx.prompt()
+            ctx.require_generation_prompt()?
                 .messages
                 .iter()
                 .flat_map(|message| &message.content)

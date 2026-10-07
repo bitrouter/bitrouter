@@ -18,7 +18,7 @@ use crate::language_model::hooks::FallbackDecision;
 use crate::language_model::request_checks::RequestCheckBinding;
 use crate::language_model::stream::UsagePricing;
 use crate::language_model::types::RoutingTarget;
-use bitrouter_ai::types::{ApiProtocol, Capability};
+use bitrouter_ai::types::{ApiProtocol, Capability, ModelOperation};
 
 /// How a cascade chain should be ordered.
 #[derive(
@@ -41,6 +41,8 @@ pub enum SortOrder {
 /// ordering / filtering.
 #[derive(Debug, Clone, Default)]
 pub struct RoutingPrefs {
+    /// Semantic operation; incompatible wires are excluded before protocol selection.
+    pub operation: ModelOperation,
     /// Ordering applied to the cascade chain.
     pub sort: SortOrder,
     /// Only providers carrying all these tags are eligible.

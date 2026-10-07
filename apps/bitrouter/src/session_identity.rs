@@ -218,17 +218,23 @@ impl PreRequestHook for SessionContextHook {
         let protocol_kind = protocol_kind(ctx.inbound_protocol());
         let harness_hint = header_value(ctx, "x-bitrouter-harness")
             .and_then(|value| parse_compatibility_harness(&value));
-        let legacy = resolve_session_signal(&ExtractorInput {
-            harness_hint,
-            protocol_hint: protocol_kind,
-            headers: ctx.headers(),
-            raw_body: &raw_body,
-            prompt: ctx.prompt(),
+        let legacy = ctx.generation_prompt().map(|prompt| {
+            resolve_session_signal(&ExtractorInput {
+                harness_hint,
+                protocol_hint: protocol_kind,
+                headers: ctx.headers(),
+                raw_body: &raw_body,
+                prompt,
+            })
         });
-        for legacy_evidence in legacy.evidence {
+        for legacy_evidence in legacy
+            .as_ref()
+            .into_iter()
+            .flat_map(|legacy| &legacy.evidence)
+        {
             evidence.push(IdentityEvidence {
                 transport: "derived".to_string(),
-                field: legacy_evidence.value,
+                field: legacy_evidence.value.clone(),
                 source: "legacy".to_string(),
                 used_for_route_match: false,
                 value_representation: "presence_only".to_string(),
@@ -301,7 +307,7 @@ impl PreRequestHook for SessionContextHook {
             claimed_controller_instance_id: claimed_controller,
             acp_session_id,
             native: std::mem::take(&mut native),
-            legacy_workflow_session_id: legacy.signal.key,
+            legacy_workflow_session_id: legacy.and_then(|legacy| legacy.signal.key),
             api_continuation_id,
             evidence,
             conflicts,
@@ -607,12 +613,16 @@ fn body_evidence(
 
 fn canonical_extra_body(ctx: &PipelineContext) -> serde_json::Value {
     serde_json::Value::Object(
-        ctx.prompt()
-            .params
-            .extra
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect(),
+        ctx.generation_prompt()
+            .map(|prompt| {
+                prompt
+                    .params
+                    .extra
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
     )
 }
 
@@ -653,7 +663,7 @@ fn extra_object(
     ctx: &PipelineContext,
     name: &str,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    parse_object_value(ctx.prompt().params.extra.get(name)?)
+    parse_object_value(ctx.generation_prompt()?.params.extra.get(name)?)
 }
 
 fn parse_object_value(
@@ -684,7 +694,7 @@ fn object_string(
 }
 
 fn extra_string(ctx: &PipelineContext, name: &str) -> Option<String> {
-    ctx.prompt()
+    ctx.generation_prompt()?
         .params
         .extra
         .get(name)

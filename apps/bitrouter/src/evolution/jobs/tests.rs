@@ -15,10 +15,13 @@ struct JudgeRequestContract;
 #[async_trait::async_trait]
 impl PreRequestHook for JudgeRequestContract {
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
-        assert!(ctx.prompt().tools.is_empty());
-        assert_eq!(ctx.prompt().tool_choice, Some(ToolChoice::None));
+        assert!(ctx.require_generation_prompt()?.tools.is_empty());
+        assert_eq!(
+            ctx.require_generation_prompt()?.tool_choice,
+            Some(ToolChoice::None)
+        );
         assert!(
-            ctx.prompt().params.max_tokens.is_none(),
+            ctx.require_generation_prompt()?.params.max_tokens.is_none(),
             "judge has no product token ceiling"
         );
         assert!(!ctx.headers().contains_key("x-bitrouter-controller-id"));

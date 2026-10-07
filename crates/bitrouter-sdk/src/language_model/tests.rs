@@ -66,7 +66,9 @@ fn request_for_model(model: &str) -> PipelineRequest {
     let mut request = request();
     request.original_model = model.to_string();
     request.model = model.to_string();
-    request.prompt.model = model.to_string();
+    if let crate::language_model::types::PipelineInput::Generation(prompt) = &mut request.input {
+        prompt.model = model.to_string();
+    }
     request
 }
 
@@ -610,13 +612,21 @@ struct EffectiveDefaultsHook(Arc<AtomicUsize>);
 #[async_trait]
 impl PreRequestHook for EffectiveDefaultsHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        if ctx.prompt().system.as_deref() != Some("candidate default")
-            || ctx.prompt().params.supplemental_extra.get("temperature")
+        if ctx.require_generation_prompt()?.system.as_deref() != Some("candidate default")
+            || ctx
+                .require_generation_prompt()?
+                .params
+                .supplemental_extra
+                .get("temperature")
                 != Some(&serde_json::json!(0.2))
-            || ctx.prompt().params.supplemental_extra.get("candidate_only")
+            || ctx
+                .require_generation_prompt()?
+                .params
+                .supplemental_extra
+                .get("candidate_only")
                 != Some(&serde_json::json!(true))
             || ctx
-                .prompt()
+                .require_generation_prompt()?
                 .params
                 .supplemental_extra
                 .contains_key("checked_a_only")
@@ -714,16 +724,20 @@ impl ModelSelector for CandidateModelSelector {
         if policy != "candidate-policy" {
             return Err(BitrouterError::internal("unexpected candidate policy"));
         }
-        if ctx.prompt().system.as_deref() != Some("candidate default")
-            || ctx.prompt().params.supplemental_extra.get("candidate_only")
+        if ctx.require_generation_prompt()?.system.as_deref() != Some("candidate default")
+            || ctx
+                .require_generation_prompt()?
+                .params
+                .supplemental_extra
+                .get("candidate_only")
                 != Some(&serde_json::json!(true))
             || ctx
-                .prompt()
+                .require_generation_prompt()?
                 .params
                 .supplemental_extra
                 .contains_key("legacy_a_only")
             || ctx
-                .prompt()
+                .require_generation_prompt()?
                 .params
                 .supplemental_extra
                 .contains_key("checked_a_only")
@@ -1067,7 +1081,11 @@ async fn run_convergence_request(
     streamed: bool,
 ) -> Result<()> {
     let mut request = request_for_model(model);
-    request.prompt.stream = streamed;
+    request
+        .input
+        .generation_prompt_mut()
+        .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+        .stream = streamed;
     if streamed {
         let parts = collect_stream(pipeline.execute_stream(request).await?).await;
         for part in parts {
@@ -1291,7 +1309,8 @@ async fn checked_ordinary_mutation_stops_stream() -> Result<()> {
 }
 
 #[tokio::test]
-async fn full_pipeline_runs_all_four_stages() {
+async fn full_pipeline_runs_all_four_stages()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let recorded = Arc::new(AtomicUsize::new(0));
 
     let pipeline = pipeline_with(
@@ -1305,8 +1324,17 @@ async fn full_pipeline_runs_all_four_stages() {
     );
 
     let resp = pipeline.execute(request()).await.expect("request succeeds");
-    assert_eq!(resp.result.content.len(), 1);
+    assert_eq!(
+        resp.result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content
+            .len(),
+        1
+    );
     assert_eq!(recorded.load(Ordering::SeqCst), 1, "recorder ran");
+
+    Ok(())
 }
 
 #[test]
@@ -1964,7 +1992,8 @@ async fn settlement_recorder_runs_even_on_failure() {
 }
 
 #[tokio::test]
-async fn fallback_tries_next_on_5xx_then_succeeds() {
+async fn fallback_tries_next_on_5xx_then_succeeds()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline = pipeline_with(
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
@@ -1989,16 +2018,22 @@ async fn fallback_tries_next_on_5xx_then_succeeds() {
 
     let resp = pipeline.execute(request()).await.expect("falls back to b");
     assert_eq!(
-        resp.result.content,
+        resp.result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content,
         vec![Content::Text {
             text: "from b".into(),
             provider_metadata: Default::default(),
         }]
     );
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn fallback_tries_next_on_upstream_429_then_succeeds() {
+async fn fallback_tries_next_on_upstream_429_then_succeeds()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline = pipeline_with(
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
@@ -2023,12 +2058,18 @@ async fn fallback_tries_next_on_upstream_429_then_succeeds() {
 
     let response = pipeline.execute(request()).await.unwrap();
     assert_eq!(
-        response.result.content,
+        response
+            .result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content,
         vec![Content::Text {
             text: "from b".into(),
             provider_metadata: Default::default(),
         }]
     );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -2081,7 +2122,8 @@ async fn default_fallback_stops_on_upstream_bad_request() {
 }
 
 #[tokio::test]
-async fn custom_fallback_retries_upstream_bad_request_then_succeeds() {
+async fn custom_fallback_retries_upstream_bad_request_then_succeeds()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline = pipeline_with(
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
@@ -2100,12 +2142,18 @@ async fn custom_fallback_retries_upstream_bad_request_then_succeeds() {
 
     let response = pipeline.execute(request()).await.unwrap();
     assert_eq!(
-        response.result.content,
+        response
+            .result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content,
         vec![Content::Text {
             text: "from b".into(),
             provider_metadata: Default::default(),
         }]
     );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -2317,7 +2365,8 @@ async fn local_rate_limit_does_not_fall_back() {
 }
 
 #[tokio::test]
-async fn fallback_tries_next_on_payment_required_then_succeeds() {
+async fn fallback_tries_next_on_payment_required_then_succeeds()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // The account-failover path: the first target is out of credits
     // (`PaymentRequired`), routing must drop to the next account, which
     // serves the request. A single `routing_table` with two providers
@@ -2349,12 +2398,17 @@ async fn fallback_tries_next_on_payment_required_then_succeeds() {
         .await
         .expect("credit exhaustion on the first account falls back to the second");
     assert_eq!(
-        resp.result.content,
+        resp.result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content,
         vec![Content::Text {
             text: "from account b".into(),
             provider_metadata: Default::default(),
         }]
     );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -2450,7 +2504,8 @@ async fn fallback_does_not_retry_on_4xx_even_with_observe_only_execution_hook() 
 }
 
 #[tokio::test]
-async fn observe_hook_panic_is_swallowed() {
+async fn observe_hook_panic_is_swallowed()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
         Arc::new(MockExecutor::always_text("hi")),
@@ -2464,14 +2519,25 @@ async fn observe_hook_panic_is_swallowed() {
         .execute(request())
         .await
         .expect("request unaffected");
-    assert_eq!(resp.result.content.len(), 1);
+    assert_eq!(
+        resp.result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content
+            .len(),
+        1
+    );
+
+    Ok(())
 }
 
 // ===== StreamHook stage =====
 
 fn stream_request() -> PipelineRequest {
     let mut req = request();
-    req.prompt.stream = true;
+    if let Some(prompt) = req.input.generation_prompt_mut() {
+        prompt.stream = true;
+    }
     req
 }
 
@@ -3665,17 +3731,23 @@ fn semantic_auth_executor(
         .expect("executor")
 }
 
-async fn semantic_auth_error(error: ModelError) -> BitrouterError {
+async fn semantic_auth_error(error: ModelError) -> Result<BitrouterError> {
     let provider = "semantic-auth-failure";
     let executor = semantic_auth_executor(provider, SemanticAuthFailurePoint::Apply, error);
     let mut target = auth_retry_target("https://example.invalid".into());
     target.provider_name = provider.into();
     let req = request();
     let ctx = PipelineContext::new(req.clone());
-    executor
-        .execute(&target, &req.prompt, &ctx)
+    Ok(executor
+        .execute(
+            &target,
+            req.input.generation_prompt().ok_or_else(|| {
+                crate::error::BitrouterError::internal("expected generation fixture")
+            })?,
+            &ctx,
+        )
         .await
-        .expect_err("semantic authentication failure must fail execution")
+        .expect_err("semantic authentication failure must fail execution"))
 }
 
 fn assert_error_surfaces_omit(error: &BitrouterError, private: &str) {
@@ -3706,22 +3778,37 @@ async fn opaque_auth_error(
     point: OpaqueAuthFailurePoint,
     stream: bool,
     api_base: String,
-) -> BitrouterError {
+) -> Result<BitrouterError> {
     let executor = opaque_auth_executor(point);
     let target = auth_retry_target(api_base);
     let req = if stream { stream_request() } else { request() };
     let ctx = PipelineContext::new(req.clone());
-    if stream {
-        match executor.execute_stream(&target, &req.prompt, &ctx).await {
+    Ok(if stream {
+        match executor
+            .execute_stream(
+                &target,
+                req.input.generation_prompt().ok_or_else(|| {
+                    crate::error::BitrouterError::internal("expected generation fixture")
+                })?,
+                &ctx,
+            )
+            .await
+        {
             Ok(_) => panic!("opaque {point:?} failure unexpectedly opened a stream"),
             Err(error) => error,
         }
     } else {
         executor
-            .execute(&target, &req.prompt, &ctx)
+            .execute(
+                &target,
+                req.input.generation_prompt().ok_or_else(|| {
+                    crate::error::BitrouterError::internal("expected generation fixture")
+                })?,
+                &ctx,
+            )
             .await
             .expect_err("opaque authentication failure must fail execution")
-    }
+    })
 }
 
 fn spawn_auth_retry_server(
@@ -3818,7 +3905,7 @@ async fn assert_semantic_auth_failure_falls_back(
     error: ModelError,
     point: SemanticAuthFailurePoint,
     stream: bool,
-) {
+) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     const SENTINEL: &str = "semantic-auth-private-sentinel";
     const NONSTREAM_OK: &str = r#"{"id":"chatcmpl-semantic-fallback","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
     const STREAM_OK: &str = concat!(
@@ -3874,7 +3961,7 @@ async fn assert_semantic_auth_failure_falls_back(
             .await
             .expect("retryable auth failure must fall back to a healthy target");
         assert!(matches!(
-            result.result.content.as_slice(),
+            result.result.generation().ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?.content.as_slice(),
             [Content::Text { text, .. }] if text == "ok"
         ));
     }
@@ -3901,6 +3988,8 @@ async fn assert_semantic_auth_failure_falls_back(
             1
         }
     );
+
+    Ok(())
 }
 
 fn auth_retry_executor(
@@ -3920,7 +4009,8 @@ fn auth_retry_executor(
 }
 
 #[tokio::test]
-async fn http_executor_refreshes_auth_and_retries_non_streaming_401_once() {
+async fn http_executor_refreshes_auth_and_retries_non_streaming_401_once()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let seen_auths = Arc::new(std::sync::Mutex::new(Vec::new()));
     let api_base = spawn_auth_retry_server(
         vec![
@@ -3942,7 +4032,15 @@ async fn http_executor_refreshes_auth_and_retries_non_streaming_401_once() {
     let req = request();
     let ctx = PipelineContext::new(req.clone());
 
-    let result = executor.execute(&target, &req.prompt, &ctx).await.unwrap();
+    let result = executor
+        .execute(
+            &target,
+            req.input.generation_prompt().ok_or_else(|| {
+                crate::error::BitrouterError::internal("expected generation fixture")
+            })?,
+            &ctx,
+        )
+        .await?;
 
     assert_eq!(refreshes.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -3950,14 +4048,23 @@ async fn http_executor_refreshes_auth_and_retries_non_streaming_401_once() {
         vec!["Bearer stale".to_string(), "Bearer fresh".to_string()]
     );
     assert_eq!(*rejected.lock().unwrap(), vec!["Bearer stale".to_string()]);
-    match result.result.content.as_slice() {
+    match result
+        .result
+        .generation()
+        .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+        .content
+        .as_slice()
+    {
         [Content::Text { text, .. }] => assert_eq!(text, "ok"),
         other => panic!("expected one text block, got {other:?}"),
     }
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn http_executor_refreshes_auth_and_retries_streaming_401_once() {
+async fn http_executor_refreshes_auth_and_retries_streaming_401_once()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let seen_auths = Arc::new(std::sync::Mutex::new(Vec::new()));
     let stream_body = concat!(
         "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n",
@@ -3982,7 +4089,13 @@ async fn http_executor_refreshes_auth_and_retries_streaming_401_once() {
     let ctx = PipelineContext::new(req.clone());
 
     let mut stream = executor
-        .execute_stream(&target, &req.prompt, &ctx)
+        .execute_stream(
+            &target,
+            req.input.generation_prompt().ok_or_else(|| {
+                crate::error::BitrouterError::internal("expected generation fixture")
+            })?,
+            &ctx,
+        )
         .await
         .unwrap();
     let mut text = String::new();
@@ -3999,10 +4112,12 @@ async fn http_executor_refreshes_auth_and_retries_streaming_401_once() {
     );
     assert_eq!(*rejected.lock().unwrap(), vec!["Bearer stale".to_string()]);
     assert_eq!(text, "ok");
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() {
+async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() -> Result<()> {
     let mut observed = Vec::new();
     for point in [
         OpaqueAuthFailurePoint::PrepareBody,
@@ -4012,7 +4127,7 @@ async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() {
             observed.push((
                 point,
                 stream,
-                opaque_auth_error(point, stream, "https://example.invalid".into()).await,
+                opaque_auth_error(point, stream, "https://example.invalid".into()).await?,
             ));
         }
     }
@@ -4027,7 +4142,7 @@ async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() {
         observed.push((
             OpaqueAuthFailurePoint::Refresh,
             stream,
-            opaque_auth_error(OpaqueAuthFailurePoint::Refresh, stream, api_base).await,
+            opaque_auth_error(OpaqueAuthFailurePoint::Refresh, stream, api_base).await?,
         ));
     }
 
@@ -4043,6 +4158,7 @@ async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() {
             "opaque {point:?} failure lost its safe operation diagnostic for stream={stream}: {diagnostic}"
         );
     }
+    Ok(())
 }
 
 #[tokio::test]
@@ -4103,7 +4219,8 @@ async fn pipeline_settlement_never_receives_opaque_auth_failure_text() {
 }
 
 #[tokio::test]
-async fn opaque_auth_failures_preserve_retryable_fallback_semantics_in_both_modes() {
+async fn opaque_auth_failures_preserve_retryable_fallback_semantics_in_both_modes()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for stream in [false, true] {
         for point in [
             SemanticAuthFailurePoint::PrepareBody,
@@ -4118,9 +4235,10 @@ async fn opaque_auth_failures_preserve_retryable_fallback_semantics_in_both_mode
                 point,
                 stream,
             )
-            .await;
+            .await?;
         }
     }
+    Ok(())
 }
 
 #[tokio::test]
@@ -4153,7 +4271,7 @@ async fn opaque_auth_failures_preserve_safe_domain_facts_and_discard_private_fie
         ),
         (ModelError::Timeout, 504),
     ] {
-        let error = semantic_auth_error(input).await;
+        let error = semantic_auth_error(input).await?;
         assert_error_surfaces_omit(&error, SENTINEL);
         let public_status = match status {
             503 | 403 => 502,
@@ -4253,7 +4371,7 @@ impl Executor for GatedExecutor {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: vec![Content::Text {
                     text: "done".into(),
                     provider_metadata: Default::default(),
@@ -4267,7 +4385,8 @@ impl Executor for GatedExecutor {
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
             server_tool_calls: Vec::new(),
@@ -4286,7 +4405,8 @@ impl Executor for GatedExecutor {
 }
 
 #[tokio::test]
-async fn nonstream_execute_detached_returns_full_usage_when_connected() {
+async fn nonstream_execute_detached_returns_full_usage_when_connected()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -4301,9 +4421,18 @@ async fn nonstream_execute_detached_returns_full_usage_when_connected() {
         .execute_detached(request())
         .await
         .expect("connected request succeeds");
-    assert_eq!(resp.result.content.len(), 1);
+    assert_eq!(
+        resp.result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content
+            .len(),
+        1
+    );
     // `always_text` reports usage (prompt=10, completion=5).
     assert_eq!(captured.lock().unwrap().clone(), vec![(10, 5)]);
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -4618,7 +4747,8 @@ fn gen_result(content: Vec<Content>) -> GenerateResult {
 }
 
 #[tokio::test]
-async fn server_tool_loop_resolves_a_router_tool_call() {
+async fn server_tool_loop_resolves_a_router_tool_call()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::config::ServerToolLoopConfig;
     use crate::language_model::server_tools::loop_controller::ServerToolLoop;
@@ -4676,9 +4806,18 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
     // The router tool call was executed by the loop; the caller sees the final
     // text after two upstream calls, with usage summed across both.
     assert!(
-        matches!(&resp.result.content[0], Content::Text { text, .. } if text == "final answer")
+        matches!(&resp.result.generation().ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?.content[0], Content::Text { text, .. } if text == "final answer")
     );
-    assert_eq!(resp.result.usage.unwrap().prompt_tokens, 6);
+    assert_eq!(
+        resp.result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .usage
+            .as_ref()
+            .ok_or_else(|| crate::error::BitrouterError::internal("usage fixture missing"))?
+            .prompt_tokens,
+        6
+    );
     let snapshots = captured.lock().unwrap();
     assert_eq!(
         snapshots
@@ -4688,10 +4827,13 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
         Some(1),
         "upstream duration belongs to the final provider call, not the whole tool loop"
     );
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn fusion_declaration_is_advertised_and_executed_end_to_end() {
+async fn fusion_declaration_is_advertised_and_executed_end_to_end()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Exercises the full metadata-threading path: the declaration hook parses a
     // bitrouter:fusion declaration and stashes the resolved config; the loop
     // snapshots it into the ToolContext; the FusionToolset advertises + runs the
@@ -4730,12 +4872,16 @@ async fn fusion_declaration_is_advertised_and_executed_end_to_end() {
     // A bare bitrouter:fusion declaration, named `fusion` so the loop strips it
     // before upstream (empty args → single-member panel on the request model).
     let mut req = request();
-    req.prompt.tools.push(Tool::ProviderDefined {
-        id: "bitrouter.fusion".to_string(),
-        name: "fusion".to_string(),
-        args: serde_json::json!({}),
-        provider_metadata: Default::default(),
-    });
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+        .tools
+        .push(Tool::ProviderDefined {
+            id: "bitrouter.fusion".to_string(),
+            name: "fusion".to_string(),
+            args: serde_json::json!({}),
+            provider_metadata: Default::default(),
+        });
 
     let server_loop = Arc::new(ServerToolLoop::new(
         ToolsetRegistry::new(vec![Arc::new(FusionToolset::new(Arc::new(ScriptedRunner)))]),
@@ -4766,14 +4912,26 @@ async fn fusion_declaration_is_advertised_and_executed_end_to_end() {
 
     let resp = pipeline.execute(req).await.expect("request succeeds");
     assert!(
-        matches!(&resp.result.content[0], Content::Text { text, .. } if text == "final answer")
+        matches!(&resp.result.generation().ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?.content[0], Content::Text { text, .. } if text == "final answer")
     );
     // Two upstream turns ran (the fusion tool was executed and fed back).
-    assert_eq!(resp.result.usage.unwrap().prompt_tokens, 6);
+    assert_eq!(
+        resp.result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .usage
+            .as_ref()
+            .ok_or_else(|| crate::error::BitrouterError::internal("usage fixture missing"))?
+            .prompt_tokens,
+        6
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
-async fn without_loop_a_tool_call_turn_is_returned_unchanged() {
+async fn without_loop_a_tool_call_turn_is_returned_unchanged()
+-> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // No server_tool_loop configured: the pipeline stays single-shot and hands
     // the model's tool-call turn straight back to the caller (only one upstream
     // call is consumed).
@@ -4787,7 +4945,16 @@ async fn without_loop_a_tool_call_turn_is_returned_unchanged() {
     let pipeline = pipeline_with(routing_table(&["openai"]), executor, |_b| {});
 
     let resp = pipeline.execute(request()).await.expect("request succeeds");
-    assert!(matches!(&resp.result.content[0], Content::ToolCall { .. }));
+    assert!(matches!(
+        &resp
+            .result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .content[0],
+        Content::ToolCall { .. }
+    ));
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -5094,14 +5261,24 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
         accepted.api_base = server.uri();
         accepted.api_protocol = ApiProtocol::Responses;
         let mut req = request();
-        req.prompt.stream = streamed;
-        req.prompt.response_format = Some(ResponseFormat::JsonSchema {
+        req.input
+            .generation_prompt_mut()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .stream = streamed;
+        req.input
+            .generation_prompt_mut()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .response_format = Some(ResponseFormat::JsonSchema {
             name: None,
             description: None,
             strict: None,
             schema: serde_json::json!({"type":"object"}),
         });
-        let original = req.prompt.clone();
+        let original = req
+            .input
+            .generation_prompt()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .clone();
         let report = match direct.render_request(&rejected.model_target(), &original, streamed) {
             Err(ModelError::Incompatible { report }) => report,
             _ => return Err(BitrouterError::internal("direct admission disagrees")),
@@ -5128,6 +5305,8 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
             assert!(
                 result
                     .result
+                    .generation()
+                    .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?
                     .content
                     .iter()
                     .any(|part| matches!(part, Content::Text { text, .. } if text == "allowed"))
@@ -5147,7 +5326,16 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
                 .map_err(BitrouterError::internal)?["input"][0]["content"][0]["text"],
             "hi"
         );
-        assert_eq!(original.messages, request().prompt.messages);
+        assert_eq!(
+            original.messages,
+            request()
+                .input
+                .generation_prompt()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .messages
+        );
     }
     Ok(())
 }
@@ -5159,8 +5347,12 @@ async fn conversion_admission_all_excluded_returns_reports_without_attempting_or
     use bitrouter_ai::protocol::{InboundAdapter, responses::ResponsesAdapter};
     for streamed in [false, true] {
         let mut req = request();
-        req.prompt = ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[{"type":"reasoning","id":"rs-secret","summary":[],"encrypted_content":"opaque-secret"},{"role":"user","content":"keep original history"}]}))?;
-        let original = req.prompt.clone();
+        *req.input.generation_prompt_mut().ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))? = ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[{"type":"reasoning","id":"rs-secret","summary":[],"encrypted_content":"opaque-secret"},{"role":"user","content":"keep original history"}]}))?;
+        let original = req
+            .input
+            .generation_prompt()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .clone();
         let observer = Arc::new(AdmissionObserver::default());
         let mut native_target = target("native");
         native_target.api_protocol = ApiProtocol::Responses;
@@ -5235,11 +5427,15 @@ async fn projection_admission_routes_file_results_without_asset_loss_or_failure_
         accepted.api_base = server.uri();
         accepted.api_protocol = ApiProtocol::Responses;
         let mut req = request();
-        req.prompt=ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[
+        *req.input.generation_prompt_mut().ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))? =ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[
             {"type":"function_call","call_id":"c","name":"f","arguments":"{}"},
             {"type":"function_call_output","call_id":"c","output":[{"type":"input_text","text":"before"},{"type":"input_file","file_id":"file-secret"},{"type":"input_text","text":"after"}]}
         ]}))?;
-        let original = req.prompt.clone();
+        let original = req
+            .input
+            .generation_prompt()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .clone();
         let direct = ModelClient::new(HttpTimeouts::default())?;
         let error = direct
             .render_request(&rejected.model_target(), &original, streamed)
@@ -5352,17 +5548,26 @@ impl ObserveHook for Arc<ConversionEvents> {
     async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
 }
 
-fn json_observation_request(streamed: bool) -> PipelineRequest {
+fn json_observation_request(streamed: bool) -> Result<PipelineRequest> {
     let mut req = request();
-    req.prompt.tools = vec![Tool::Function {
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?
+        .tools = vec![Tool::Function {
         name: "f".into(),
         description: None,
         parameters: serde_json::json!({"type":"object"}),
         strict: Some(true),
         provider_metadata: Default::default(),
     }];
-    req.prompt.stream = streamed;
-    req.prompt.messages = vec![Message {
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+        .stream = streamed;
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+        .messages = vec![Message {
         role: Role::Tool,
         content: vec![Content::ToolResult {
             call_id: "c".into(),
@@ -5374,7 +5579,7 @@ fn json_observation_request(streamed: bool) -> PipelineRequest {
             provider_metadata: Default::default(),
         }],
     }];
-    req
+    Ok(req)
 }
 
 struct MisreportedAdmission;
@@ -5450,11 +5655,17 @@ async fn projection_admission_preserves_tool_constraints_during_http_fallback() 
         let parameters = serde_json::json!({"type":"object","additionalProperties":false,
             "properties":{"limit":{"type":"integer","exclusiveMinimum":0}},"required":["limit"]});
         let mut req = request();
-        req.prompt = ChatCompletionsAdapter.parse_request(serde_json::json!({
+        *req.input.generation_prompt_mut().ok_or_else(|| {
+            crate::error::BitrouterError::internal("expected generation fixture")
+        })? = ChatCompletionsAdapter.parse_request(serde_json::json!({
             "model":"test-model","stream":streamed,"messages":[{"role":"user","content":"keep"}],
             "tools":[{"type":"function","function":{"name":"f","parameters":parameters}}]
         }))?;
-        let original = req.prompt.clone();
+        let original = req
+            .input
+            .generation_prompt()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .clone();
         let direct = ModelClient::new(HttpTimeouts::default())?;
         let error = direct
             .render_request(&rejected.model_target(), &original, streamed)
@@ -5566,8 +5777,12 @@ async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_a
             .executor(Arc::new(dispatch))
             .observe_hook(events.clone());
         let pipeline = Arc::new(builder.build()?);
-        let req = json_observation_request(streamed);
-        let source = req.prompt.clone();
+        let req = json_observation_request(streamed)?;
+        let source = req
+            .input
+            .generation_prompt()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .clone();
         if streamed {
             for part in collect_stream(pipeline.execute_stream(req).await?).await {
                 let _ = part?;
@@ -5608,7 +5823,16 @@ async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_a
             .map_err(BitrouterError::internal)?;
             assert_eq!(value, serde_json::json!(["value-secret", 42]));
         }
-        assert_eq!(source, json_observation_request(streamed).prompt);
+        assert_eq!(
+            source,
+            json_observation_request(streamed)?
+                .input
+                .generation_prompt()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .clone()
+        );
     }
     Ok(())
 }
@@ -5630,12 +5854,12 @@ async fn successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_obse
         let pipeline = Arc::new(builder.build()?);
         let error = if streamed {
             pipeline
-                .execute_stream(json_observation_request(true))
+                .execute_stream(json_observation_request(true)?)
                 .await
                 .err()
         } else {
             pipeline
-                .execute(json_observation_request(false))
+                .execute(json_observation_request(false)?)
                 .await
                 .err()
         }
@@ -5669,6 +5893,124 @@ async fn successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_obse
             let _ = pipeline.execute(request()).await?;
         }
         assert_eq!(*events.0.lock().await, vec!["start:unchanged"]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_stream_upstream_errors_redact_admitted_continuity() -> Result<()> {
+    use bitrouter_ai::protocol::{OutboundAdapter, chat_completions::ChatCompletionsAdapter};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    for protocol in [ApiProtocol::Messages, ApiProtocol::ChatCompletions] {
+        let server = MockServer::start().await;
+        let mut selected = target("fixture");
+        selected.api_base = server.uri();
+        selected.api_key = "continuity-test-key".into();
+        selected.api_protocol = protocol.clone();
+        let signature = "private-continuity-sentinel";
+        let mut req = request();
+        let prompt = req
+            .input
+            .generation_prompt_mut()
+            .ok_or_else(|| BitrouterError::internal("missing generation fixture"))?;
+        let mut private_values = vec![signature.to_owned()];
+        let upstream_path = if protocol == ApiProtocol::Messages {
+            prompt.messages.insert(
+                0,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Reasoning {
+                        text: "prior reasoning".into(),
+                        provider_metadata: std::collections::BTreeMap::from([(
+                            "anthropic".into(),
+                            serde_json::json!({"signature": signature}),
+                        )]),
+                        native: None,
+                    }],
+                },
+            );
+            "/messages"
+        } else {
+            selected.chat_google_extensions = true;
+            let result = ChatCompletionsAdapter.parse_response(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "tool_calls": [{
+                    "id": "fixture-call", "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": signature}}
+                }]}, "finish_reason": "tool_calls"}]
+            }))?;
+            let bound = bitrouter_ai::providers::google_chat::bind_result(
+                result,
+                &selected.model_target(),
+            )?;
+            let replay_proof = bound
+                .content
+                .iter()
+                .find_map(|content| {
+                    let Content::ToolCall {
+                        provider_metadata, ..
+                    } = content
+                    else {
+                        return None;
+                    };
+                    provider_metadata
+                        .get("google")?
+                        .get("replayProof")?
+                        .as_str()
+                })
+                .ok_or_else(|| BitrouterError::internal("missing bound replay proof"))?;
+            private_values.push(replay_proof.to_owned());
+            prompt.messages.insert(
+                0,
+                Message {
+                    role: Role::Assistant,
+                    content: bound.content,
+                },
+            );
+            "/chat/completions"
+        };
+        let original = prompt.clone();
+        Mock::given(method("POST"))
+            .and(path(upstream_path))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": format!("Invalid history: {}", private_values.join(" / ")),
+                    "param": "messages"}
+            })))
+            .mount(&server)
+            .await;
+        let ctx = PipelineContext::new(req);
+        let source = ctx.require_generation_prompt()?;
+        let error = HttpExecutor::with_defaults()?
+            .execute(&selected, source, &ctx)
+            .await
+            .err()
+            .ok_or_else(|| BitrouterError::internal("echoed upstream error accepted"))?;
+        assert!(matches!(&error, BitrouterError::UpstreamBadRequest { .. }));
+        assert_eq!(error.status(), 400);
+        let public = error.public_message();
+        assert!(public.contains("Invalid history"));
+        assert!(public.contains("[redacted continuity]"));
+        for value in private_values {
+            assert!(!public.contains(&value));
+            assert!(!format!("{error:?}").contains(&value));
+        }
+        let sent = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("missing request inventory"))?;
+        assert_eq!(sent.len(), 1);
+        let wire = sent[0]
+            .body_json::<serde_json::Value>()
+            .map_err(BitrouterError::internal)?;
+        let sent_signature = if protocol == ApiProtocol::Messages {
+            &wire["messages"][0]["content"][0]["signature"]
+        } else {
+            &wire["messages"][0]["tool_calls"][0]["extra_content"]["google"]["thought_signature"]
+        };
+        assert_eq!(sent_signature, signature);
+        assert_eq!(source, &original);
     }
     Ok(())
 }
@@ -5780,8 +6122,14 @@ async fn google_signed_parallel_and_sequential_tools_survive_sdk_gateway_cycles(
             .executor(Arc::new(HttpExecutor::with_defaults()?));
         let pipeline = Arc::new(builder.build()?);
         let mut req = request();
-        req.prompt.stream = streamed;
-        req.prompt.tools = vec![Tool::Function {
+        req.input
+            .generation_prompt_mut()
+            .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?
+            .stream = streamed;
+        req.input
+            .generation_prompt_mut()
+            .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?
+            .tools = vec![Tool::Function {
             name: "lookup_city".into(),
             description: None,
             parameters: serde_json::json!({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}),
@@ -5792,10 +6140,21 @@ async fn google_signed_parallel_and_sequential_tools_survive_sdk_gateway_cycles(
             let result = if streamed {
                 collect_generate(pipeline.clone().execute_stream(req.clone()).await?).await?
             } else {
-                pipeline.execute(req.clone()).await?.result
+                pipeline
+                    .execute(req.clone())
+                    .await?
+                    .result
+                    .generation()
+                    .cloned()
+                    .ok_or_else(|| BitrouterError::internal("expected generation result"))?
             };
-            let gateway =
-                ChatCompletionsAdapter.render_response(&result, &req.prompt, "fixture-gateway")?;
+            let gateway = ChatCompletionsAdapter.render_response(
+                &result,
+                req.input
+                    .generation_prompt()
+                    .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?,
+                "fixture-gateway",
+            )?;
             let mut messages = vec![gateway["choices"][0]["message"].clone()];
             let mut count = 0;
             for content in &result.content {
@@ -5814,7 +6173,11 @@ async fn google_signed_parallel_and_sequential_tools_survive_sdk_gateway_cycles(
             );
             let continuation = ChatCompletionsAdapter
                 .parse_request(serde_json::json!({"model":"test-model","messages":messages}))?;
-            req.prompt.messages.extend(continuation.messages);
+            req.input
+                .generation_prompt_mut()
+                .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?
+                .messages
+                .extend(continuation.messages);
             let mut unrelated = selected.clone();
             unrelated.provider_name = "unrelated".into();
             unrelated.chat_google_extensions = false;

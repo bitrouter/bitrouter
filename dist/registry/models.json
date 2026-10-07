@@ -6388,7 +6388,8 @@
         {
           "api_protocol": [
             "openai",
-            "responses"
+            "responses",
+            "decisions"
           ],
           "pricing": {
             "input_tokens": {
@@ -6398,6 +6399,27 @@
             },
             "output_tokens": {
               "text": 0.5
+            }
+          },
+          "pricing_by_protocol": {
+            "decisions": {
+              "context_tiers": [
+                {
+                  "above_input_tokens": 272000,
+                  "input_tokens": {
+                    "no_cache": 0.2
+                  }
+                }
+              ],
+              "endpoint_profile": "openai_global",
+              "input_tokens": {
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+                "no_cache": 0.1
+              },
+              "output_tokens": {
+                "text": 0.0
+              }
             }
           },
           "provider": "openai",

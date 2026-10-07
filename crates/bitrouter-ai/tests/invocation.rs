@@ -243,7 +243,7 @@ fn response(protocol: &ApiProtocol) -> Value {
             json!({"id":"msg_fixture","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}})
         }
 
-        ApiProtocol::Custom(_) => Value::Null,
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => Value::Null,
     }
 }
 
@@ -288,7 +288,7 @@ fn response_stream(protocol: &ApiProtocol) -> String {
                 + &event(json!({"type":"message_stop"}))
         }
 
-        ApiProtocol::Custom(_) => String::new(),
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => String::new(),
     }
 }
 
@@ -1006,7 +1006,7 @@ async fn three_protocols_invoke_without_sdk_and_keep_source_prompt() -> TestResu
                         && !headers.contains("authorization:")
                 ),
 
-                ApiProtocol::Custom(_) => {}
+                ApiProtocol::Custom(_) | ApiProtocol::Decisions => {}
             }
             assert_eq!(request.body["model"], "selected-model");
             assert_eq!(request.body["stream"], stream);

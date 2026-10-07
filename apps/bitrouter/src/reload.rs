@@ -603,6 +603,9 @@ fn restart_required_fields(
     if current.server.log_level != candidate.server.log_level {
         fields.insert("server.log_level".to_string());
     }
+    if current.server.require_known_pricing != candidate.server.require_known_pricing {
+        fields.insert("server.require_known_pricing".to_string());
+    }
     if current.server.skip_auth != candidate.server.skip_auth {
         fields.insert("server.skip_auth".to_string());
     }
@@ -1066,12 +1069,35 @@ fn server_tools_changed(
 fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
     let mut entries = Vec::new();
     for (provider_id, provider) in &config.providers {
+        if provider
+            .models
+            .iter()
+            .any(|model| model.pricing.is_some() || !model.pricing_by_protocol.is_empty())
+        {
+            entries.push(format!(
+                "{provider_id}|endpoint|{}",
+                crate::metering::tariff::endpoint_profile(&provider.api_base)
+            ));
+            for (protocol, endpoint) in &provider.protocol_endpoints {
+                entries.push(format!(
+                    "{provider_id}|endpoint|{protocol}|{}",
+                    crate::metering::tariff::endpoint_profile(endpoint)
+                ));
+            }
+        }
         for model in &provider.models {
             if let Some(pricing) = &model.pricing {
                 let provider_model_id = model.provider_model_id.as_deref().unwrap_or_default();
                 entries.push(format!(
                     "{provider_id}|{}|{}|{pricing:?}",
                     model.id, provider_model_id
+                ));
+            }
+            for (protocol, pricing) in &model.pricing_by_protocol {
+                let native_id = model.provider_model_id.as_deref().unwrap_or_default();
+                entries.push(format!(
+                    "{provider_id}|{}|{native_id}|{protocol}|{pricing:?}",
+                    model.id
                 ));
             }
         }
@@ -1243,9 +1269,11 @@ fn changed_configuration_fields(
 
 fn fixed_restart_field(path: &str) -> String {
     match path {
-        "server.listen" | "server.control_socket" | "server.log_level" | "server.skip_auth" => {
-            path.to_string()
-        }
+        "server.listen"
+        | "server.control_socket"
+        | "server.log_level"
+        | "server.skip_auth"
+        | "server.require_known_pricing" => path.to_string(),
         "inherit_defaults"
         | "control"
         | "chat"
@@ -3500,6 +3528,76 @@ presets:
         assert!(fields.contains(&"server.listen".to_string()));
         assert!(fields.contains(&"upstream.fallback_backoff_ms".to_string()));
         assert!(fields.contains(&"future_runtime".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_tariffs_endpoint_profiles_and_known_price_policy_require_restart()
+    -> anyhow::Result<()> {
+        use bitrouter_ai::types::ApiProtocol;
+        let current: bitrouter_sdk::config::Config = serde_json::from_value(serde_json::json!({
+            "providers":{"fixture":{"api_base":"https://api.openai.com/v1", "models":[{
+                "id":"test", "pricing_by_protocol":{"decisions":{"input_micro_usd_per_token":0.1,"output_micro_usd_per_token":0}}
+            }]}}
+        }))?;
+        let expected = "providers.*.models.*.pricing".to_string();
+        let mut rate = current.clone();
+        let provider = rate
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing fixture"))?;
+        let model = provider
+            .models
+            .first_mut()
+            .ok_or_else(|| anyhow::anyhow!("missing model"))?;
+        model
+            .pricing_by_protocol
+            .get_mut(&ApiProtocol::Decisions)
+            .ok_or_else(|| anyhow::anyhow!("missing tariff"))?
+            .input_micro_usd_per_token = Some(0.2);
+        assert!(
+            restart_required_fields(&current, &rate, Some(&BTreeSet::new())).contains(&expected)
+        );
+        let mut endpoint = current.clone();
+        endpoint
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing fixture"))?
+            .api_base = "https://eu.api.openai.com/v1".into();
+        assert!(
+            restart_required_fields(&current, &endpoint, Some(&BTreeSet::new()))
+                .contains(&expected)
+        );
+        let mut protocol_endpoint = current.clone();
+        protocol_endpoint
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing fixture"))?
+            .protocol_endpoints
+            .insert("decisions".into(), "https://us.api.openai.com/v1".into());
+        assert!(
+            restart_required_fields(&current, &protocol_endpoint, Some(&BTreeSet::new()))
+                .contains(&expected)
+        );
+        let mut provenance = current.clone();
+        provenance
+            .providers
+            .get_mut("fixture")
+            .and_then(|provider| provider.models.first_mut())
+            .and_then(|model| model.pricing_by_protocol.get_mut(&ApiProtocol::Decisions))
+            .ok_or_else(|| anyhow::anyhow!("missing tariff"))?
+            .endpoint_profile =
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal);
+        assert!(
+            restart_required_fields(&current, &provenance, Some(&BTreeSet::new()))
+                .contains(&expected)
+        );
+        let mut strict = current.clone();
+        strict.server.require_known_pricing = true;
+        assert!(
+            restart_required_fields(&current, &strict, Some(&BTreeSet::new()))
+                .contains(&"server.require_known_pricing".to_string())
+        );
         Ok(())
     }
 

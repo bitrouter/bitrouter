@@ -3,11 +3,109 @@
 //! Model content, prompts, results and events are owned by `bitrouter_ai::types`.
 
 use crate::caller::CallerContext;
+use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::target::ModelTarget;
 use bitrouter_ai::types::{
     ApiProtocol, AuthScheme, ChatCompletionsCompatibility, ChatTokenLimitField, GenerateResult,
-    ModelCompatibility, Prompt, ReasoningEffortConfig, ServerToolCall,
+    ModelCompatibility, ModelOperation, Prompt, ReasoningEffortConfig, ServerToolCall, Usage,
 };
+
+/// Typed model-call input inside the shared gateway lifecycle.
+#[derive(Debug, Clone)]
+pub enum PipelineInput {
+    /// Generative messages/tools/options.
+    Generation(Box<Prompt>),
+    /// Native evidence and ordered decision questions.
+    Decisions(DecisionRequest),
+}
+
+impl PipelineInput {
+    /// Semantic operation derived from the payload.
+    pub fn operation(&self) -> ModelOperation {
+        match self {
+            Self::Generation(_) => ModelOperation::Generation,
+            Self::Decisions(_) => ModelOperation::Decisions,
+        }
+    }
+
+    /// Borrow the generation payload when this is a generation call.
+    pub fn generation_prompt(&self) -> Option<&Prompt> {
+        match self {
+            Self::Generation(prompt) => Some(prompt),
+            Self::Decisions(_) => None,
+        }
+    }
+
+    /// Mutate a generation request before it enters the immutable pipeline context.
+    pub fn generation_prompt_mut(&mut self) -> Option<&mut Prompt> {
+        match self {
+            Self::Generation(prompt) => Some(prompt),
+            Self::Decisions(_) => None,
+        }
+    }
+
+    /// Borrow the native decision request when this is a decision call.
+    pub fn decision_request(&self) -> Option<&DecisionRequest> {
+        match self {
+            Self::Generation(_) => None,
+            Self::Decisions(request) => Some(request),
+        }
+    }
+}
+
+/// Typed model result, retaining operation-specific semantics.
+#[derive(Debug, Clone)]
+pub enum PipelineOutput {
+    /// Generative content/usage/termination.
+    Generation(GenerateResult),
+    /// Ordered typed decision answers and usage.
+    Decisions(DecisionResult),
+}
+
+impl PipelineOutput {
+    /// Canonical usage when it is available.
+    pub fn usage(&self) -> Option<&Usage> {
+        match self {
+            Self::Generation(result) => result.usage.as_ref(),
+            Self::Decisions(result) => Some(&result.usage),
+        }
+    }
+
+    /// Borrow a generative result.
+    pub fn generation(&self) -> Option<&GenerateResult> {
+        match self {
+            Self::Generation(result) => Some(result),
+            Self::Decisions(_) => None,
+        }
+    }
+
+    /// Borrow a native decision result.
+    pub fn decisions(&self) -> Option<&DecisionResult> {
+        match self {
+            Self::Generation(_) => None,
+            Self::Decisions(result) => Some(result),
+        }
+    }
+
+    pub(crate) fn generation_mut(&mut self) -> Option<&mut GenerateResult> {
+        match self {
+            Self::Generation(result) => Some(result),
+            Self::Decisions(_) => None,
+        }
+    }
+}
+
+impl From<GenerateResult> for PipelineOutput {
+    fn from(result: GenerateResult) -> Self {
+        Self::Generation(result)
+    }
+}
+
+impl From<DecisionResult> for PipelineOutput {
+    fn from(result: DecisionResult) -> Self {
+        Self::Decisions(result)
+    }
+}
 
 /// The result of executing one routing target — the upstream response plus
 /// timing. Written into `PipelineContext` after Stage 3.
@@ -21,8 +119,8 @@ pub struct ExecutionResult {
     /// `None` for a single-credential provider. Reflects any failover
     /// hop, so it can differ from the chain's primary account.
     pub account_label: Option<String>,
-    /// The generation result.
-    pub result: GenerateResult,
+    /// The typed model result.
+    pub result: PipelineOutput,
     /// End-to-end request duration in milliseconds.
     pub request_duration_ms: u64,
     /// Time spent in the final provider-facing operation.
@@ -277,7 +375,7 @@ pub struct PipelineRequest {
     /// Inbound HTTP headers.
     pub headers: http::HeaderMap,
     /// The canonical request body.
-    pub prompt: Prompt,
+    pub input: PipelineInput,
     /// The wire protocol the request arrived on, when known — set by the HTTP
     /// server from the endpoint that was hit. Lets the router prefer a
     /// same-protocol (native) upstream so a faithful round-trip replaces a
@@ -296,8 +394,26 @@ impl PipelineRequest {
             model,
             caller,
             headers: http::HeaderMap::new(),
-            prompt,
+            input: PipelineInput::Generation(Box::new(prompt)),
             inbound_protocol: None,
+        }
+    }
+
+    /// Construct a native decision request with a fresh gateway request identity.
+    pub fn new_decisions(
+        model: impl Into<String>,
+        caller: CallerContext,
+        request: DecisionRequest,
+    ) -> Self {
+        let model = model.into();
+        Self {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            original_model: model.clone(),
+            model,
+            caller,
+            headers: http::HeaderMap::new(),
+            input: PipelineInput::Decisions(request),
+            inbound_protocol: Some(ApiProtocol::Decisions),
         }
     }
 }
@@ -307,6 +423,6 @@ impl PipelineRequest {
 pub struct PipelineResponse {
     /// The request id this answers.
     pub request_id: String,
-    /// The generation result.
-    pub result: GenerateResult,
+    /// The typed model result.
+    pub result: PipelineOutput,
 }

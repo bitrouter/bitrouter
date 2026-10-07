@@ -396,12 +396,8 @@ mod tests {
         let pending = PendingEvalDecisionStore::default();
         let invocation = EvalInvocation::new("owner-a");
         pending.insert(&invocation, pending_decision("external-request"));
-        let recorder = EvalSettlementRecorder::new(
-            eval_store.clone(),
-            pending.clone(),
-            std::sync::Arc::new(crate::metering::PricingTable::new()),
-        )
-        .with_trajectory(trajectory);
+        let recorder = EvalSettlementRecorder::new(eval_store.clone(), pending.clone())
+            .with_trajectory(trajectory);
         let mut missing_metering = context("external-request");
         missing_metering.emit(invocation.clone());
 
@@ -1608,6 +1604,7 @@ mod tests {
 
     fn context(request_id: &str) -> SettlementContext {
         SettlementContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: request_id.into(),
             caller: CallerContext::new("key-a", "owner-a"),
             target: None,

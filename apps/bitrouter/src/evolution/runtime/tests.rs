@@ -442,7 +442,13 @@ async fn named_candidate_keeps_preset_defaults_and_tool_safety_selection() -> Re
         .await?;
     let tools = session(&fixture, "tools", "fixture").await?;
     let mut with_tools = request(&tools, "tool-request", "@coding")?;
-    with_tools.prompt.tools = serde_json::from_value(json!([{
+    with_tools
+        .input
+        .generation_prompt_mut()
+        .ok_or_else(|| {
+            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+        })?
+        .tools = serde_json::from_value(json!([{
         "type":"function", "name":"read_file", "description":"Read a file", "parameters":{"type":"object"}
     }]))?;
     pipeline.execute(with_tools).await?;

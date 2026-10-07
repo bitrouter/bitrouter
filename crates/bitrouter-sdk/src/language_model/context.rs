@@ -3,9 +3,10 @@
 //! view borrowed from it). `SettlementContext` lives in
 //! [`crate::language_model::settlement`].
 
+use crate::error::{BitrouterError, Result};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -19,7 +20,7 @@ use crate::language_model::timing::{
     FirstTokenKind, FirstTokenTiming, duration_millis, elapsed_millis,
 };
 use crate::language_model::types::{
-    ExecutionResult, PipelineRequest, PipelineResponse, RoutingTarget,
+    ExecutionResult, PipelineInput, PipelineRequest, PipelineResponse, RoutingTarget,
 };
 use crate::plugin::PluginId;
 use bitrouter_ai::auth::ContinuationAuthority;
@@ -28,7 +29,8 @@ use bitrouter_ai::protocol::responses::{
     assistant_turn_commitment, extend_causal_prefix,
 };
 use bitrouter_ai::types::{
-    ApiProtocol, ChatStreamOptions, Content, FinishReason, Prompt, StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, FinishReason, ModelOperation, Prompt, StreamPart,
+    Usage,
 };
 
 static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
@@ -156,7 +158,7 @@ pub struct PipelineContext {
     model: String,
     caller: CallerContext,
     headers: http::HeaderMap,
-    prompt: Prompt,
+    input: PipelineInput,
     /// The inbound wire protocol (Stage 0). Route resolution uses it to prefer
     /// a native, same-protocol upstream. `None` when the request was built
     /// without a known inbound protocol.
@@ -181,6 +183,8 @@ pub struct PipelineContext {
     /// The execution result (Stage 3). Stored here rather than moved out so
     /// Settlement can borrow it without an ownership fight.
     pub execution_result: Option<ExecutionResult>,
+    completed_decision_usage: Mutex<Option<Usage>>,
+    completed_decision_failure: AtomicBool,
     stream_provider_started_at: Option<Instant>,
     first_token_timing: Option<FirstTokenTiming>,
     generation_duration_ms: Option<u64>,
@@ -226,7 +230,7 @@ impl PipelineContext {
             model: req.model,
             caller: req.caller,
             headers: req.headers,
-            prompt: req.prompt,
+            input: req.input,
             inbound_protocol: req.inbound_protocol,
             request_started_at: Instant::now(),
             delivery_attempt_id: NEXT_DELIVERY_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed),
@@ -235,6 +239,8 @@ impl PipelineContext {
             last_attempted_target: Mutex::new(None),
             successful_target: Arc::new(Mutex::new(None)),
             execution_result: None,
+            completed_decision_usage: Mutex::new(None),
+            completed_decision_failure: AtomicBool::new(false),
             stream_provider_started_at: None,
             first_token_timing: None,
             generation_duration_ms: None,
@@ -262,7 +268,7 @@ impl PipelineContext {
             model: self.model.clone(),
             caller: self.caller.clone(),
             headers: self.headers.clone(),
-            prompt,
+            input: PipelineInput::Generation(Box::new(prompt)),
             inbound_protocol: self.inbound_protocol.clone(),
             request_started_at: self.request_started_at,
             delivery_attempt_id: self.delivery_attempt_id,
@@ -271,6 +277,8 @@ impl PipelineContext {
             last_attempted_target: Mutex::new(None),
             successful_target: self.successful_target.clone(),
             execution_result: None,
+            completed_decision_usage: Mutex::new(None),
+            completed_decision_failure: AtomicBool::new(false),
             stream_provider_started_at: None,
             first_token_timing: None,
             generation_duration_ms: None,
@@ -459,9 +467,48 @@ impl PipelineContext {
         &self.headers
     }
 
-    /// The canonical request body.
-    pub fn prompt(&self) -> &Prompt {
-        &self.prompt
+    /// The typed model-call payload.
+    pub fn input(&self) -> &PipelineInput {
+        &self.input
+    }
+
+    /// Semantic operation derived from the typed request.
+    pub fn operation(&self) -> ModelOperation {
+        self.input.operation()
+    }
+
+    /// Borrow generation semantics when this is a generation call.
+    pub fn generation_prompt(&self) -> Option<&Prompt> {
+        self.input.generation_prompt()
+    }
+
+    /// Require generation semantics in a generation-specific extension path.
+    pub fn require_generation_prompt(&self) -> crate::error::Result<&Prompt> {
+        self.generation_prompt().ok_or_else(|| {
+            crate::error::BitrouterError::bad_request(
+                "this configured behavior requires generation input",
+            )
+        })
+    }
+
+    /// Borrow native decision evidence/questions.
+    pub fn decision_request(&self) -> Option<&bitrouter_ai::decisions::DecisionRequest> {
+        self.input.decision_request()
+    }
+
+    /// Retain independently validated usage from a completed failed decision.
+    pub(crate) fn record_decision_failure_usage(&self, usage: Option<Usage>) {
+        self.completed_decision_failure
+            .store(true, Ordering::Release);
+        let mut stored = match self.completed_decision_usage.lock() {
+            Ok(stored) => stored,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *stored = usage;
+    }
+
+    pub(crate) fn has_completed_decision_failure(&self) -> bool {
+        self.completed_decision_failure.load(Ordering::Acquire)
     }
 
     /// The inbound wire protocol the request arrived on, if known. Route
@@ -486,8 +533,11 @@ impl PipelineContext {
     }
 
     /// Apply a policy-owned reasoning effort to the canonical request.
-    pub fn set_policy_reasoning_effort(&mut self, effort: bitrouter_ai::types::ReasoningEffort) {
-        self.set_policy_reasoning_effort_override(Some(effort));
+    pub fn set_policy_reasoning_effort(
+        &mut self,
+        effort: bitrouter_ai::types::ReasoningEffort,
+    ) -> crate::error::Result<()> {
+        self.set_policy_reasoning_effort_override(Some(effort))
     }
 
     /// Apply a policy-owned reasoning-effort override to the canonical request.
@@ -499,10 +549,15 @@ impl PipelineContext {
     pub fn set_policy_reasoning_effort_override(
         &mut self,
         effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    ) {
-        self.prompt.params.reasoning_effort = effort;
-        self.prompt.params.reasoning_effort_source =
-            bitrouter_ai::types::ReasoningEffortSource::Policy;
+    ) -> crate::error::Result<()> {
+        let PipelineInput::Generation(prompt) = &mut self.input else {
+            return Err(crate::error::BitrouterError::bad_request(
+                "Decisions does not support reasoning effort",
+            ));
+        };
+        prompt.params.reasoning_effort = effort;
+        prompt.params.reasoning_effort_source = bitrouter_ai::types::ReasoningEffortSource::Policy;
+        Ok(())
     }
 
     /// Apply preset prompt-body overrides. `system_prompt`, when
@@ -515,19 +570,24 @@ impl PipelineContext {
     pub fn apply_preset_overrides(
         &mut self,
         overrides: &crate::language_model::routing::PromptOverrides,
-    ) {
+    ) -> crate::error::Result<()> {
         if overrides.is_empty() {
-            return;
+            return Ok(());
         }
+        let PipelineInput::Generation(prompt) = &mut self.input else {
+            return Err(crate::error::BitrouterError::bad_request(
+                "Decisions does not support generation defaults",
+            ));
+        };
         if let Some(system) = &overrides.system_prompt {
             // Only fill `system` if the request did not already set one.
-            if self.prompt.system.is_none() {
-                self.prompt.system = Some(system.clone());
+            if prompt.system.is_none() {
+                prompt.system = Some(system.clone());
             }
         }
         for (k, v) in &overrides.params {
             // Don't clobber an explicit request value; presets are defaults.
-            if self.prompt.params.extra.contains_key(k) {
+            if prompt.params.extra.contains_key(k) {
                 continue;
             }
 
@@ -537,40 +597,41 @@ impl PipelineContext {
             // safety checks by remaining an untyped supplemental field.
             match k.as_str() {
                 "store" => {
-                    if self.prompt.params.store.is_none() {
-                        self.prompt.params.store = v.as_bool();
+                    if prompt.params.store.is_none() {
+                        prompt.params.store = v.as_bool();
                     }
-                    if self.prompt.params.store.is_some() {
+                    if prompt.params.store.is_some() {
                         continue;
                     }
                 }
                 "parallel_tool_calls" => {
-                    if self.prompt.params.parallel_tool_calls.is_none() {
-                        self.prompt.params.parallel_tool_calls = v.as_bool();
+                    if prompt.params.parallel_tool_calls.is_none() {
+                        prompt.params.parallel_tool_calls = v.as_bool();
                     }
-                    if self.prompt.params.parallel_tool_calls.is_some() {
+                    if prompt.params.parallel_tool_calls.is_some() {
                         continue;
                     }
                 }
                 "stream_options" => {
-                    if self.prompt.params.chat_stream_options.is_none()
+                    if prompt.params.chat_stream_options.is_none()
                         && let Ok(options) = serde_json::from_value::<ChatStreamOptions>(v.clone())
                     {
-                        self.prompt.params.chat_stream_options = Some(options);
+                        prompt.params.chat_stream_options = Some(options);
                     }
-                    if self.prompt.params.chat_stream_options.is_some() {
+                    if prompt.params.chat_stream_options.is_some() {
                         continue;
                     }
                 }
                 _ => {}
             }
 
-            self.prompt
+            prompt
                 .params
                 .supplemental_extra
                 .entry(k.clone())
                 .or_insert_with(|| v.clone());
         }
+        Ok(())
     }
 
     /// Write this plugin's metadata blob.
@@ -639,7 +700,11 @@ impl PipelineContext {
     /// can still estimate prompt tokens. The estimate is deliberately rough but
     /// should not collapse tool-heavy agent follow-up turns to `0`.
     fn prompt_text_chars(&self) -> u64 {
-        let prompt = self.prompt();
+        let Some(prompt) = self.generation_prompt() else {
+            return self
+                .decision_request()
+                .map_or(0, |request| request.text_chars());
+        };
         let mut chars = prompt
             .system
             .as_ref()
@@ -683,13 +748,15 @@ impl PipelineContext {
     /// Fold a finished `StreamContext` back in: usage lands in the execution
     /// result, stream-stage events are merged.
     pub fn absorb_stream(&mut self, stream: StreamContext) {
-        if let Some(exec) = self.execution_result.as_mut() {
+        if let Some(exec) = self.execution_result.as_mut()
+            && let Some(result) = exec.result.generation_mut()
+        {
             if let Some(usage) = stream.final_usage {
-                exec.result.usage = Some(usage);
+                result.usage = Some(usage);
             }
-            exec.result.finish_reason = stream.finish_reason.clone();
+            result.finish_reason = stream.finish_reason.clone();
             if stream.response_id.is_some() {
-                exec.result.response_id = stream.response_id.clone();
+                result.response_id = stream.response_id.clone();
             }
         }
         self.stream_terminal_succeeded = stream.terminal_succeeded;
@@ -709,7 +776,9 @@ impl PipelineContext {
     ) -> RequiredFinalizationContext {
         let target = self.serving_target();
         let execution = self.execution_result.as_ref();
-        let finish_reason = execution.and_then(|result| result.result.finish_reason.clone());
+        let generation = execution.and_then(|result| result.result.generation());
+        let prompt = self.generation_prompt();
+        let finish_reason = generation.and_then(|result| result.finish_reason.clone());
         let successful_terminal = if streamed {
             self.stream_terminal_succeeded
         } else {
@@ -718,24 +787,29 @@ impl PipelineContext {
         let delivered = if streamed {
             self.stream_assistant_turn_commitment.clone()
         } else {
-            execution.and_then(|result| assistant_turn_commitment(&result.result.content))
+            generation.and_then(|result| assistant_turn_commitment(&result.content))
         };
-        let causal_prefix_commitment = delivered.as_ref().and_then(|delivered| {
-            self.extension::<CausalPrefixPlan>().map_or_else(
-                || extend_causal_prefix(None, &self.prompt.messages, delivered),
-                |plan| plan.finalize(&self.prompt.messages, delivered),
-            )
-        });
+        let causal_prefix_commitment =
+            delivered
+                .as_ref()
+                .zip(prompt)
+                .and_then(|(delivered, prompt)| {
+                    self.extension::<CausalPrefixPlan>().map_or_else(
+                        || extend_causal_prefix(None, &prompt.messages, delivered),
+                        |plan| plan.finalize(&prompt.messages, delivered),
+                    )
+                });
         RequiredFinalizationContext {
+            operation: self.operation(),
             request_id: self.request_id.clone(),
             delivery_attempt_id: self.delivery_attempt_id,
             caller: self.caller.clone(),
             target,
             effective_model: self.model.clone(),
-            effective_effort: self.prompt.params.reasoning_effort,
+            effective_effort: prompt.and_then(|prompt| prompt.params.reasoning_effort),
             causal_prefix_commitment,
             inbound_protocol: self.inbound_protocol.clone(),
-            response_id: execution.and_then(|result| result.result.response_id.clone()),
+            response_id: generation.and_then(|result| result.response_id.clone()),
             finish_reason,
             streamed,
             successful_terminal,
@@ -770,14 +844,21 @@ impl PipelineContext {
                     .and_then(|target| target.account_label.clone())
             });
         let usage = exec
-            .and_then(|e| e.result.usage.clone())
+            .and_then(|e| e.result.usage().cloned())
+            .or_else(|| match self.completed_decision_usage.lock() {
+                Ok(usage) => usage.clone(),
+                Err(poisoned) => poisoned.into_inner().clone(),
+            })
             .unwrap_or_default();
         SettlementContext {
+            operation: self.operation(),
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
             target,
             model_id,
-            reasoning_effort: self.prompt.params.reasoning_effort,
+            reasoning_effort: self
+                .generation_prompt()
+                .and_then(|prompt| prompt.params.reasoning_effort),
             provider_id,
             account_label,
             prompt_tokens: usage.prompt_tokens,
@@ -788,13 +869,19 @@ impl PipelineContext {
             usage_origin: usage.origin,
             raw_usage: usage.raw.as_deref().cloned(),
             web_search_count: usage.web_search_count,
-            media_input_count: count_media(self.prompt.messages.iter().flat_map(|m| &m.content)),
+            media_input_count: match &self.input {
+                PipelineInput::Generation(prompt) => {
+                    count_media(prompt.messages.iter().flat_map(|m| &m.content))
+                }
+                PipelineInput::Decisions(request) => request.image_count(),
+            },
             // Note: for streamed requests both fields below are 0 / empty.
             // The streaming path only folds usage back (via `absorb_stream`);
             // response content and server_tool_calls are not reconstructed in
             // the IR. This is an intentional deferral, not a bug.
             media_output_count: count_media(
-                exec.map(|e| e.result.content.as_slice())
+                exec.and_then(|e| e.result.generation())
+                    .map(|result| result.content.as_slice())
                     .unwrap_or_default()
                     .iter(),
             ),
@@ -807,7 +894,9 @@ impl PipelineContext {
             ttft_ms: self.first_token_timing.map(|timing| timing.ttft_ms),
             generation_duration_ms: self.generation_duration_ms,
             first_token_kind: self.first_token_timing.map(|timing| timing.kind),
-            finish_reason: exec.and_then(|e| e.result.finish_reason.clone()),
+            finish_reason: exec
+                .and_then(|e| e.result.generation())
+                .and_then(|result| result.finish_reason.clone()),
             error: None,
             events: std::mem::take(&mut self.events),
         }
@@ -820,41 +909,28 @@ impl PipelineContext {
     }
 
     /// Render the final non-streaming HTTP response.
-    pub(crate) fn response(&self) -> PipelineResponse {
+    pub(crate) fn response(&self) -> Result<PipelineResponse> {
         let result = self
             .execution_result
             .as_ref()
             .map(|execution| execution.result.clone())
-            .unwrap_or(bitrouter_ai::types::GenerateResult {
-                content: Vec::new(),
-                usage: None,
-                finish_reason: None,
-                response_id: None,
-                stop_details: None,
-                provider_metadata: Default::default(),
-            });
-        PipelineResponse {
+            .ok_or_else(|| BitrouterError::internal("response requires a completed execution"))?;
+        Ok(PipelineResponse {
             request_id: self.request_id.clone(),
             result,
-        }
+        })
     }
 
     /// Render the final non-streaming HTTP response.
-    pub fn into_response(self) -> PipelineResponse {
-        let result = self.execution_result.map(|e| e.result).unwrap_or(
-            bitrouter_ai::types::GenerateResult {
-                content: Vec::new(),
-                usage: None,
-                finish_reason: None,
-                response_id: None,
-                stop_details: None,
-                provider_metadata: Default::default(),
-            },
-        );
-        PipelineResponse {
+    pub fn into_response(self) -> Result<PipelineResponse> {
+        let result = self
+            .execution_result
+            .map(|e| e.result)
+            .ok_or_else(|| BitrouterError::internal("response requires a completed execution"))?;
+        Ok(PipelineResponse {
             request_id: self.request_id,
             result,
-        }
+        })
     }
 }
 
@@ -1062,7 +1138,7 @@ mod tests {
             model: prompt.model.clone(),
             caller: CallerContext::local(),
             headers: http::HeaderMap::new(),
-            prompt,
+            input: crate::language_model::types::PipelineInput::Generation(Box::new(prompt)),
             inbound_protocol: None,
         };
         PipelineContext::new(req)
@@ -1098,30 +1174,37 @@ mod tests {
     }
 
     #[test]
-    fn apply_preset_overrides_sets_system_only_if_unset() {
+    fn apply_preset_overrides_sets_system_only_if_unset()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // No system in the request → preset fills it.
         let mut ctx = ctx_from_prompt(empty_prompt());
         let overrides = PromptOverrides {
             system_prompt: Some("Reason carefully.".to_string()),
             params: Default::default(),
         };
-        ctx.apply_preset_overrides(&overrides);
-        assert_eq!(ctx.prompt().system.as_deref(), Some("Reason carefully."));
+        ctx.apply_preset_overrides(&overrides)?;
+        assert_eq!(
+            ctx.require_generation_prompt()?.system.as_deref(),
+            Some("Reason carefully.")
+        );
 
         // Request already has a system → preset is a default, not an override.
         let mut prompt = empty_prompt();
         prompt.system = Some("Be concise.".to_string());
         let mut ctx = ctx_from_prompt(prompt);
-        ctx.apply_preset_overrides(&overrides);
+        ctx.apply_preset_overrides(&overrides)?;
         assert_eq!(
-            ctx.prompt().system.as_deref(),
+            ctx.require_generation_prompt()?.system.as_deref(),
             Some("Be concise."),
             "request-set system survives preset"
         );
+
+        Ok(())
     }
 
     #[test]
-    fn apply_preset_overrides_merges_into_supplemental_params_without_clobbering() {
+    fn apply_preset_overrides_merges_into_supplemental_params_without_clobbering()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut prompt = empty_prompt();
         prompt
             .params
@@ -1136,15 +1219,24 @@ mod tests {
             system_prompt: None,
             params: overrides_map,
         };
-        ctx.apply_preset_overrides(&overrides);
+        ctx.apply_preset_overrides(&overrides)?;
 
         // Existing key kept; new key filled in.
-        assert_eq!(ctx.prompt().params.extra["temperature"], 0.7);
-        assert_eq!(ctx.prompt().params.supplemental_extra["top_k"], 40);
+        assert_eq!(
+            ctx.require_generation_prompt()?.params.extra["temperature"],
+            0.7
+        );
+        assert_eq!(
+            ctx.require_generation_prompt()?.params.supplemental_extra["top_k"],
+            40
+        );
+
+        Ok(())
     }
 
     #[test]
-    fn apply_preset_overrides_promotes_normalized_protocol_fields() {
+    fn apply_preset_overrides_promotes_normalized_protocol_fields()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut prompt = empty_prompt();
         prompt.params.store = Some(false);
         let mut ctx = ctx_from_prompt(prompt);
@@ -1160,44 +1252,70 @@ mod tests {
                 ),
             ]),
         };
-        ctx.apply_preset_overrides(&overrides);
+        ctx.apply_preset_overrides(&overrides)?;
 
-        assert_eq!(ctx.prompt().params.store, Some(false));
-        assert_eq!(ctx.prompt().params.parallel_tool_calls, Some(false));
+        assert_eq!(ctx.require_generation_prompt()?.params.store, Some(false));
         assert_eq!(
-            ctx.prompt()
+            ctx.require_generation_prompt()?.params.parallel_tool_calls,
+            Some(false)
+        );
+        assert_eq!(
+            ctx.require_generation_prompt()?
                 .params
                 .chat_stream_options
                 .as_ref()
                 .and_then(|options| options.include_obfuscation),
             Some(false)
         );
-        assert!(ctx.prompt().params.supplemental_extra.is_empty());
+        assert!(
+            ctx.require_generation_prompt()?
+                .params
+                .supplemental_extra
+                .is_empty()
+        );
+
+        Ok(())
     }
 
     #[test]
-    fn empty_overrides_are_a_noop() {
+    fn empty_overrides_are_a_noop()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut ctx = ctx_from_prompt(empty_prompt());
-        ctx.apply_preset_overrides(&PromptOverrides::default());
-        assert!(ctx.prompt().system.is_none());
-        assert!(ctx.prompt().params.extra.is_empty());
-        assert!(ctx.prompt().params.supplemental_extra.is_empty());
+        ctx.apply_preset_overrides(&PromptOverrides::default())?;
+        assert!(ctx.require_generation_prompt()?.system.is_none());
+        assert!(ctx.require_generation_prompt()?.params.extra.is_empty());
+        assert!(
+            ctx.require_generation_prompt()?
+                .params
+                .supplemental_extra
+                .is_empty()
+        );
+
+        Ok(())
     }
 
     #[test]
-    fn policy_default_effort_clears_a_caller_effort() {
+    fn policy_default_effort_clears_a_caller_effort()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut prompt = empty_prompt();
         prompt.params.reasoning_effort = Some(ReasoningEffort::High);
         prompt.params.reasoning_effort_source = ReasoningEffortSource::Caller;
         let mut ctx = ctx_from_prompt(prompt);
 
-        ctx.set_policy_reasoning_effort_override(None);
+        ctx.set_policy_reasoning_effort_override(None)?;
 
-        assert_eq!(ctx.prompt().params.reasoning_effort, None);
         assert_eq!(
-            ctx.prompt().params.reasoning_effort_source,
+            ctx.require_generation_prompt()?.params.reasoning_effort,
+            None
+        );
+        assert_eq!(
+            ctx.require_generation_prompt()?
+                .params
+                .reasoning_effort_source,
             ReasoningEffortSource::Policy
         );
+
+        Ok(())
     }
 
     #[test]
@@ -1408,7 +1526,7 @@ mod tests {
             provider_id: "anthropic".into(),
             model_id: "claude".into(),
             account_label: None,
-            result: bitrouter_ai::types::GenerateResult {
+            result: (bitrouter_ai::types::GenerateResult {
                 content: Vec::new(),
                 usage: Some(Usage {
                     prompt_tokens: 12,
@@ -1422,7 +1540,8 @@ mod tests {
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
             server_tool_calls: Vec::new(),
@@ -1444,14 +1563,15 @@ mod tests {
                 provider_id: "provider".into(),
                 model_id: "model".into(),
                 account_label: None,
-                result: bitrouter_ai::types::GenerateResult {
+                result: (bitrouter_ai::types::GenerateResult {
                     content: Vec::new(),
                     usage: None,
                     finish_reason: None,
                     response_id: None,
                     stop_details: None,
                     provider_metadata: Default::default(),
-                },
+                })
+                .into(),
                 request_duration_ms: 0,
                 upstream_duration_ms: None,
                 server_tool_calls: Vec::new(),

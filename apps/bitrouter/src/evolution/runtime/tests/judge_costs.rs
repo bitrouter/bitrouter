@@ -194,7 +194,13 @@ async fn judge_costs_reuse_cached_response_and_refresh_authoritative_receipts() 
         .context("metering missing")?;
     let mut replay = request(&job.identity, id, "fixture:strong")?;
     replay.headers.clear();
-    replay.prompt.tool_choice = Some(bitrouter_ai::types::ToolChoice::None);
+    replay
+        .input
+        .generation_prompt_mut()
+        .ok_or_else(|| {
+            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+        })?
+        .tool_choice = Some(bitrouter_ai::types::ToolChoice::None);
     assert!(pipeline.execute(replay.clone()).await.is_err());
     replay.caller = CallerContext::anonymous();
     assert!(pipeline.execute(replay).await.is_err());

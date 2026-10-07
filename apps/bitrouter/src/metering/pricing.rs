@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use bitrouter_ai::types::{NormalizedUsage, Usage, UsageNormalizationError};
+use bitrouter_ai::types::{
+    ApiProtocol, ModelOperation, NormalizedUsage, Usage, UsageNormalizationError,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -35,8 +37,11 @@ use sha2::{Digest, Sha256};
 ///   model)` miss is reported, not papered over.
 /// - **#443 → #445** — the lookup is keyed by `(provider, service_id)` so a
 ///   service id that differs from the public model name still resolves.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelPricing {
+    /// Published processing-profile provenance, retained across tier selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
     /// Micro-USD charged per prompt (input) token (base bracket). `None` =
     /// unconfigured.
     pub input_micro_usd_per_token: Option<f64>,
@@ -58,7 +63,7 @@ pub struct ModelPricing {
 /// [`above_input_tokens`](Self::above_input_tokens). The selected bracket's
 /// rates apply to the whole request (a step function, not graduated marginal
 /// brackets). Mirrors the base [`ModelPricing`] rate fields.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContextTier {
     /// Exclusive lower bound on total input tokens. A request whose input
     /// size is strictly greater than this enters the bracket; one exactly at
@@ -81,6 +86,7 @@ impl ModelPricing {
     /// Use [`partial`](Self::partial) when only some rates are known.
     pub fn new(input_micro_usd_per_token: f64, output_micro_usd_per_token: f64) -> Self {
         Self {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(input_micro_usd_per_token),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -93,6 +99,7 @@ impl ModelPricing {
     /// are billed as `None` (charge is skipped).
     pub fn partial(input: Option<f64>, output: Option<f64>) -> Self {
         Self {
+            endpoint_profile: None,
             input_micro_usd_per_token: input,
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -110,6 +117,7 @@ impl ModelPricing {
         output: Option<f64>,
     ) -> Self {
         Self {
+            endpoint_profile: None,
             input_micro_usd_per_token: input,
             cache_read_micro_usd_per_token: cache_read,
             cache_write_micro_usd_per_token: cache_write,
@@ -130,6 +138,7 @@ impl ModelPricing {
             .max_by_key(|t| t.above_input_tokens)
         {
             Some(tier) => ModelPricing {
+                endpoint_profile: self.endpoint_profile,
                 input_micro_usd_per_token: tier
                     .input_micro_usd_per_token
                     .or(self.input_micro_usd_per_token),
@@ -145,6 +154,7 @@ impl ModelPricing {
                 context_tiers: Vec::new(),
             },
             None => ModelPricing {
+                endpoint_profile: self.endpoint_profile,
                 input_micro_usd_per_token: self.input_micro_usd_per_token,
                 cache_read_micro_usd_per_token: self.cache_read_micro_usd_per_token,
                 cache_write_micro_usd_per_token: self.cache_write_micro_usd_per_token,
@@ -172,6 +182,29 @@ impl ModelPricing {
             && self.cache_read_micro_usd_per_token.is_some()
             && self.cache_write_micro_usd_per_token.is_some()
             && self.output_micro_usd_per_token.is_some()
+    }
+}
+
+impl From<&bitrouter_sdk::config::PricingConfig> for ModelPricing {
+    fn from(pricing: &bitrouter_sdk::config::PricingConfig) -> Self {
+        Self {
+            endpoint_profile: pricing.endpoint_profile,
+            input_micro_usd_per_token: pricing.input_micro_usd_per_token,
+            cache_read_micro_usd_per_token: pricing.cache_read_micro_usd_per_token,
+            cache_write_micro_usd_per_token: pricing.cache_write_micro_usd_per_token,
+            output_micro_usd_per_token: pricing.output_micro_usd_per_token,
+            context_tiers: pricing
+                .context_tiers
+                .iter()
+                .map(|tier| ContextTier {
+                    above_input_tokens: tier.above_input_tokens,
+                    input_micro_usd_per_token: tier.input_micro_usd_per_token,
+                    cache_read_micro_usd_per_token: tier.cache_read_micro_usd_per_token,
+                    cache_write_micro_usd_per_token: tier.cache_write_micro_usd_per_token,
+                    output_micro_usd_per_token: tier.output_micro_usd_per_token,
+                })
+                .collect(),
+        }
     }
 }
 
@@ -244,6 +277,9 @@ pub struct EffectivePricingRates {
 /// Auditable result of normalizing usage and applying effective pricing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChargeEvidence {
+    /// Frozen wire/profile/tariff evidence; absent for legacy or explicit offline calculations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tariff_snapshot: Option<crate::metering::tariff::FrozenTariff>,
     /// Whether the final charge is usable.
     pub status: ChargeStatus,
     /// Computed charge, absent when status is not `computed`.
@@ -265,10 +301,42 @@ pub struct ChargeEvidence {
 /// directly (and by tests).
 #[derive(Debug, Clone, Default)]
 pub struct PricingTable {
-    entries: HashMap<(String, String), ModelPricing>,
+    entries: HashMap<(String, String), ModelTariffs>,
+    endpoint_profiles: HashMap<(String, Option<ApiProtocol>), String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ModelTariffs {
+    generation: Option<ModelPricing>,
+    by_protocol: HashMap<ApiProtocol, ModelPricing>,
 }
 
 impl PricingTable {
+    /// Bind configured endpoint profiles at assembly time. Protocol None is
+    /// the provider default; explicit protocol endpoints override that anchor.
+    pub fn configure_endpoint(
+        &mut self,
+        provider: &str,
+        protocol: Option<ApiProtocol>,
+        api_base: &str,
+    ) {
+        self.endpoint_profiles.insert(
+            (provider.to_owned(), protocol),
+            crate::metering::tariff::endpoint_profile(api_base),
+        );
+    }
+
+    pub(crate) fn endpoint_profile_for(
+        &self,
+        provider: &str,
+        protocol: &ApiProtocol,
+    ) -> Option<&str> {
+        self.endpoint_profiles
+            .get(&(provider.to_owned(), Some(protocol.clone())))
+            .or_else(|| self.endpoint_profiles.get(&(provider.to_owned(), None)))
+            .map(String::as_str)
+    }
+
     /// An empty table.
     pub fn new() -> Self {
         Self::default()
@@ -282,7 +350,9 @@ impl PricingTable {
         pricing: ModelPricing,
     ) {
         self.entries
-            .insert((provider.into(), service_id.into()), pricing);
+            .entry((provider.into(), service_id.into()))
+            .or_default()
+            .generation = Some(pricing);
     }
 
     /// Resolve pricing for a `(provider, service_id)` pair. Returns `None` when
@@ -294,10 +364,41 @@ impl PricingTable {
     /// per lookup): a 2-tuple of `&str` hashes the same as `(String, String)`
     /// under the standard `Hash` derivation, so `HashMap::get` with the
     /// `BorrowedKey` newtype reuses the borrow.
-    pub fn resolve(&self, provider: &str, service_id: &str) -> Option<ModelPricing> {
-        self.entries
-            .get(&BorrowedKey(provider, service_id) as &dyn KeyLike)
+    pub fn resolve(
+        &self,
+        provider: &str,
+        service_id: &str,
+        protocol: &ApiProtocol,
+    ) -> Option<ModelPricing> {
+        let tariffs = self
+            .entries
+            .get(&BorrowedKey(provider, service_id) as &dyn KeyLike)?;
+        tariffs
+            .by_protocol
+            .get(protocol)
+            .or_else(|| {
+                if protocol.operation() == ModelOperation::Generation {
+                    tariffs.generation.as_ref()
+                } else {
+                    None
+                }
+            })
             .cloned()
+    }
+
+    /// Install an independent tariff for this exact outbound wire.
+    pub fn insert_for_protocol(
+        &mut self,
+        provider: impl Into<String>,
+        service_id: impl Into<String>,
+        protocol: ApiProtocol,
+        pricing: ModelPricing,
+    ) {
+        self.entries
+            .entry((provider.into(), service_id.into()))
+            .or_default()
+            .by_protocol
+            .insert(protocol, pricing);
     }
 }
 
@@ -418,6 +519,7 @@ pub fn calculate_charge_evidence(
         };
 
     ChargeEvidence {
+        tariff_snapshot: None,
         status: ChargeStatus::Computed,
         charge_micro_usd: Some(charge_micro_usd),
         normalized_usage,
@@ -524,6 +626,7 @@ fn unknown_evidence(
     reason: &str,
 ) -> ChargeEvidence {
     ChargeEvidence {
+        tariff_snapshot: None,
         status: ChargeStatus::Unknown,
         charge_micro_usd: None,
         normalized_usage,
@@ -534,8 +637,12 @@ fn unknown_evidence(
     }
 }
 
-fn pricing_version(pricing: &ModelPricing) -> String {
+pub(crate) fn pricing_version(pricing: &ModelPricing) -> String {
     let mut hasher = Sha256::new();
+    if let Some(profile) = pricing.endpoint_profile {
+        hasher.update(b"endpoint-profile-v1|");
+        hasher.update(profile.as_str().as_bytes());
+    }
     hash_rate(&mut hasher, pricing.input_micro_usd_per_token);
     hash_rate(&mut hasher, pricing.cache_read_micro_usd_per_token);
     hash_rate(&mut hasher, pricing.cache_write_micro_usd_per_token);
@@ -706,6 +813,7 @@ mod tests {
     #[test]
     fn context_tier_inherits_omitted_cache_rates_from_base() {
         let pricing = ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(2.0),
             cache_read_micro_usd_per_token: Some(0.2),
             cache_write_micro_usd_per_token: Some(2.5),
@@ -787,14 +895,27 @@ mod tests {
         let mut table = PricingTable::new();
         // #443: service id differs from the public model name — still resolves.
         table.insert("openai", "gpt-5-2026-01", ModelPricing::new(1.0, 4.0));
-        assert!(table.resolve("openai", "gpt-5-2026-01").is_some());
-        assert!(table.resolve("openai", "gpt-5").is_none());
-        assert!(table.resolve("anthropic", "gpt-5-2026-01").is_none());
+        assert!(
+            table
+                .resolve("openai", "gpt-5-2026-01", &ApiProtocol::ChatCompletions)
+                .is_some()
+        );
+        assert!(
+            table
+                .resolve("openai", "gpt-5", &ApiProtocol::ChatCompletions)
+                .is_none()
+        );
+        assert!(
+            table
+                .resolve("anthropic", "gpt-5-2026-01", &ApiProtocol::ChatCompletions)
+                .is_none()
+        );
     }
 
     /// Base ≤128k = 1.3/7.8 µ$/token; higher bracket >128k = 2.0/12.0.
     fn tiered() -> ModelPricing {
         ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.3),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -835,6 +956,7 @@ mod tests {
     #[test]
     fn resolve_highest_applicable_tier_is_order_independent() {
         let p = ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.0),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -911,6 +1033,7 @@ mod tests {
     #[test]
     fn tier_inherits_base_rate_when_bucket_rate_is_omitted() {
         let pricing = ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.3),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -929,5 +1052,51 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(calculate_charge_micro_usd(&hi, &pricing), Some(407_800));
+    }
+    #[test]
+    fn wire_tariff_does_not_inherit_other_bucket_rates_or_native_generation_price()
+    -> anyhow::Result<()> {
+        let mut table = PricingTable::new();
+        table.insert("fixture", "native", ModelPricing::new(2.0, 9.0));
+        table.insert_for_protocol(
+            "fixture",
+            "native",
+            ApiProtocol::Responses,
+            ModelPricing::partial(Some(0.5), None),
+        );
+        assert!(
+            table
+                .resolve("fixture", "native", &ApiProtocol::Decisions)
+                .is_none()
+        );
+        let response = table
+            .resolve("fixture", "native", &ApiProtocol::Responses)
+            .ok_or_else(|| anyhow::anyhow!("override missing"))?;
+        let usage = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 3,
+            ..Default::default()
+        };
+        assert_eq!(calculate_charge_micro_usd(&usage, &response), None);
+        let mut native = ModelPricing::cache_aware(Some(0.1), Some(0.0), Some(0.0), Some(0.0));
+        native.context_tiers.push(ContextTier {
+            above_input_tokens: 272000,
+            input_micro_usd_per_token: Some(0.2),
+            ..Default::default()
+        });
+        table.insert_for_protocol("fixture", "native", ApiProtocol::Decisions, native);
+        let native = table
+            .resolve("fixture", "native", &ApiProtocol::Decisions)
+            .ok_or_else(|| anyhow::anyhow!("native tariff missing"))?;
+        for (input, expected) in [(272000, 27200), (272001, 54400)] {
+            let usage = Usage {
+                prompt_tokens: input,
+                completion_tokens: 0,
+                origin: UsageOrigin::ProviderReported,
+                ..Default::default()
+            };
+            assert_eq!(calculate_charge_micro_usd(&usage, &native), Some(expected));
+        }
+        Ok(())
     }
 }

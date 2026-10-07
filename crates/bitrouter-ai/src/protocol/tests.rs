@@ -10,7 +10,7 @@ fn request_projection_report(
     protocol: ApiProtocol,
     prompt: &Prompt,
 ) -> crate::error::Result<crate::conversion::ConversionReport> {
-    match adapter_for(protocol).render_request(prompt) {
+    match adapter_for(protocol)?.render_request(prompt) {
         Err(crate::error::ModelError::Incompatible { report }) => Ok(report),
         Err(error) => Err(error),
         Ok(_) => Err(crate::error::ModelError::invalid_request(
@@ -30,14 +30,17 @@ impl<T: InboundAdapter + OutboundAdapter> BothAdapter for T {}
 /// Test-only lookup that returns one of the four built-in adapters as a
 /// `BothAdapter` so the matrix tests can call inbound + outbound methods on
 /// the same value.
-fn adapter_for(protocol: ApiProtocol) -> Box<dyn BothAdapter> {
-    match protocol {
+fn adapter_for(protocol: ApiProtocol) -> crate::error::Result<Box<dyn BothAdapter>> {
+    Ok(match protocol {
         ApiProtocol::ChatCompletions => Box::new(chat_completions::ChatCompletionsAdapter),
         ApiProtocol::Messages => Box::new(messages::MessagesAdapter),
         ApiProtocol::Responses => Box::new(responses::ResponsesAdapter),
-
-        ApiProtocol::Custom(_) => unreachable!("test helper only handles built-in protocols"),
-    }
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+            return Err(ModelError::invalid_request(
+                "generation fixture requires a generation protocol",
+            ));
+        }
+    })
 }
 
 fn all_protocols() -> [ApiProtocol; 3] {
@@ -50,8 +53,8 @@ fn all_protocols() -> [ApiProtocol; 3] {
 
 /// A minimal valid request body for `protocol`, carrying a single user turn —
 /// enough for `parse_request` to succeed so a test can layer one extra field on.
-fn minimal_request(protocol: ApiProtocol) -> serde_json::Value {
-    match protocol {
+fn minimal_request(protocol: ApiProtocol) -> crate::error::Result<serde_json::Value> {
+    Ok(match protocol {
         ApiProtocol::Messages => serde_json::json!({
             "model": "m", "max_tokens": 1024,
             "messages": [{ "role": "user", "content": "hi" }],
@@ -60,9 +63,12 @@ fn minimal_request(protocol: ApiProtocol) -> serde_json::Value {
             "model": "m", "messages": [{ "role": "user", "content": "hi" }],
         }),
         ApiProtocol::Responses => serde_json::json!({ "model": "m", "input": "hi" }),
-
-        ApiProtocol::Custom(_) => unreachable!("test helper only handles built-in protocols"),
-    }
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+            return Err(ModelError::invalid_request(
+                "generation fixture requires a generation protocol",
+            ));
+        }
+    })
 }
 
 /// A canonical prompt exercising system + a user message + a tool definition.
@@ -228,8 +234,7 @@ fn official_usage_response(protocol: ApiProtocol) -> serde_json::Value {
                 "cache_creation_input_tokens": 100
             }
         }),
-
-        ApiProtocol::Custom(_) => serde_json::Value::Null,
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => serde_json::Value::Null,
     }
 }
 
@@ -328,8 +333,7 @@ fn official_usage_stream(protocol: ApiProtocol) -> Vec<SseEvent> {
                 data: serde_json::json!({"type": "message_stop"}).to_string(),
             },
         ],
-
-        ApiProtocol::Custom(_) => Vec::new(),
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => Vec::new(),
     }
 }
 
@@ -425,8 +429,7 @@ fn assert_official_usage_wire(protocol: ApiProtocol, wire: &serde_json::Value, u
                 usage.cache_write_tokens,
             );
         }
-
-        ApiProtocol::Custom(_) => (),
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => (),
     }
 }
 
@@ -441,7 +444,7 @@ fn usage_from_parts(parts: &[StreamPart]) -> Option<Usage> {
 }
 
 fn decode_usage_stream(protocol: ApiProtocol, events: &[SseEvent]) -> Option<Usage> {
-    let mut decoder = adapter_for(protocol).stream_decoder();
+    let mut decoder = adapter_for(protocol).ok()?.stream_decoder();
     let mut parts = Vec::new();
     for event in events {
         let decoded = decoder.decode(event);
@@ -476,8 +479,7 @@ fn usage_wire_from_frames(protocol: ApiProtocol, frames: &[SseFrame]) -> Option<
                 == Some("message_delta"))
             .then(|| json.get("usage").cloned())
             .flatten(),
-
-            ApiProtocol::Custom(_) => None,
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
         }
     })
 }
@@ -488,11 +490,11 @@ fn usage_wire_from_frames(protocol: ApiProtocol, frames: &[SseFrame]) -> Option<
 /// every (inbound, outbound) pair and assert the request body and the response
 /// text survive the round trip.
 #[test]
-fn conversion_matrix_4x4_non_streaming() {
+fn conversion_matrix_4x4_non_streaming() -> crate::error::Result<()> {
     for inbound_proto in all_protocols() {
         for outbound_proto in all_protocols() {
-            let inbound = adapter_for(inbound_proto.clone());
-            let outbound = adapter_for(outbound_proto.clone());
+            let inbound = adapter_for(inbound_proto.clone())?;
+            let outbound = adapter_for(outbound_proto.clone())?;
             let canonical = sample_prompt();
 
             // client → router (inbound parse of an inbound-rendered request)
@@ -538,6 +540,7 @@ fn conversion_matrix_4x4_non_streaming() {
             );
         }
     }
+    Ok(())
 }
 
 /// Decode official provider response shapes, cross-render them through every
@@ -545,9 +548,9 @@ fn conversion_matrix_4x4_non_streaming() {
 /// rendered target again. This is the non-streaming usage half of the 4×4
 /// protocol matrix.
 #[test]
-fn usage_conversion_matrix_4x4_non_streaming_official_wire() {
+fn usage_conversion_matrix_4x4_non_streaming_official_wire() -> crate::error::Result<()> {
     for source_protocol in all_protocols() {
-        let source = adapter_for(source_protocol.clone());
+        let source = adapter_for(source_protocol.clone())?;
         let parsed = source.parse_response(official_usage_response(source_protocol.clone()));
         assert!(
             parsed.is_ok(),
@@ -570,7 +573,7 @@ fn usage_conversion_matrix_4x4_non_streaming_official_wire() {
         );
 
         for target_protocol in all_protocols() {
-            let target = adapter_for(target_protocol.clone());
+            let target = adapter_for(target_protocol.clone())?;
             let rendered = target.render_response(&parsed, &sample_prompt(), "usage-matrix");
             assert!(
                 rendered.is_ok(),
@@ -612,14 +615,15 @@ fn usage_conversion_matrix_4x4_non_streaming_official_wire() {
             );
         }
     }
+    Ok(())
 }
 
 /// Responses clients such as LiteLLM deserialize `created_at` as part of the
 /// standard response object.  Omitting it turns an otherwise successful HTTP
 /// response into a client-side schema error and may trigger duplicate retries.
 #[test]
-fn responses_non_streaming_response_includes_created_at() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_non_streaming_response_includes_created_at() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let before = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("test clock must be after the Unix epoch")
@@ -640,6 +644,7 @@ fn responses_non_streaming_response_includes_created_at() {
         (before..=after).contains(&created_at),
         "response.created_at {created_at} must be generated during rendering ({before}..={after})"
     );
+    Ok(())
 }
 
 /// The streaming matrix: for every outbound protocol, encode a canonical part
@@ -680,7 +685,7 @@ fn conversion_matrix_4x4_streaming() -> crate::error::Result<()> {
     ];
 
     for outbound_proto in all_protocols() {
-        let outbound = adapter_for(outbound_proto.clone());
+        let outbound = adapter_for(outbound_proto.clone())?;
         // encode canonical → outbound SSE frames
         let mut encoder = outbound.stream_encoder("resp_s", "test-model");
         let mut frames = Vec::new();
@@ -741,7 +746,7 @@ fn conversion_matrix_4x4_streaming() -> crate::error::Result<()> {
 
         // and the decoded stream re-encodes in every inbound protocol
         for inbound_proto in all_protocols() {
-            let inbound = adapter_for(inbound_proto.clone());
+            let inbound = adapter_for(inbound_proto.clone())?;
             let mut enc = inbound.stream_encoder("resp_s", "test-model");
             for part in &decoded {
                 let conversion = enc.encode(part);
@@ -775,7 +780,7 @@ fn conversion_matrix_4x4_streaming() -> crate::error::Result<()> {
 /// then encoded by every target protocol, checked at the exact wire path, and
 /// decoded once more to catch asymmetric encoder/decoder bugs.
 #[test]
-fn usage_conversion_matrix_4x4_streaming_official_wire() {
+fn usage_conversion_matrix_4x4_streaming_official_wire() -> crate::error::Result<()> {
     for source_protocol in all_protocols() {
         let source_usage = decode_usage_stream(
             source_protocol.clone(),
@@ -795,7 +800,7 @@ fn usage_conversion_matrix_4x4_streaming_official_wire() {
         );
 
         for target_protocol in all_protocols() {
-            let target = adapter_for(target_protocol.clone());
+            let target = adapter_for(target_protocol.clone())?;
             let mut encoder = target.stream_encoder("usage-stream", "provider/model");
             let usage_part = StreamPart::Usage {
                 usage: source_usage.clone(),
@@ -865,13 +870,14 @@ fn usage_conversion_matrix_4x4_streaming_official_wire() {
             );
         }
     }
+    Ok(())
 }
 
 /// Read and write cache buckets are independently optional. Pin all four
 /// combinations so a renderer cannot accidentally gate one bucket on the
 /// presence of the other or overwrite the shared OpenAI details object.
 #[test]
-fn usage_cache_buckets_are_independent_non_streaming_and_streaming() {
+fn usage_cache_buckets_are_independent_non_streaming_and_streaming() -> crate::error::Result<()> {
     for protocol in [
         ApiProtocol::ChatCompletions,
         ApiProtocol::Responses,
@@ -889,7 +895,7 @@ fn usage_cache_buckets_are_independent_non_streaming_and_streaming() {
             };
             let mut result = sample_result();
             result.usage = Some(usage.clone());
-            let adapter = adapter_for(protocol.clone());
+            let adapter = adapter_for(protocol.clone())?;
 
             let rendered = adapter.render_response(&result, &sample_prompt(), "cache-buckets");
             assert!(rendered.is_ok(), "{protocol:?}: non-stream render failed");
@@ -965,11 +971,12 @@ fn usage_cache_buckets_are_independent_non_streaming_and_streaming() {
             assert_eq!(reparsed_usage.cache_write_tokens, cache_write_tokens);
         }
     }
+    Ok(())
 }
 
 #[test]
-fn chat_completions_request_roundtrip() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_completions_request_roundtrip() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = sample_prompt();
     let json = adapter.render_request(&prompt).unwrap();
     assert_eq!(json["model"], "test-model");
@@ -978,11 +985,12 @@ fn chat_completions_request_roundtrip() {
     let parsed = adapter.parse_request(json).unwrap();
     assert_eq!(parsed.system.as_deref(), Some("be brief"));
     assert_eq!(parsed.tools.len(), 1);
+    Ok(())
 }
 
 #[test]
-fn chat_token_limit_fields_roundtrip_without_alias_drift() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_token_limit_fields_roundtrip_without_alias_drift() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     for (field, expected_hint) in [
         ("max_tokens", ChatTokenLimitField::MaxTokens),
         (
@@ -990,7 +998,7 @@ fn chat_token_limit_fields_roundtrip_without_alias_drift() {
             ChatTokenLimitField::MaxCompletionTokens,
         ),
     ] {
-        let mut body = minimal_request(ApiProtocol::ChatCompletions);
+        let mut body = minimal_request(ApiProtocol::ChatCompletions)?;
         body[field] = 321.into();
         let prompt = adapter.parse_request(body).unwrap();
         assert_eq!(prompt.params.max_tokens, Some(321));
@@ -1004,11 +1012,12 @@ fn chat_token_limit_fields_roundtrip_without_alias_drift() {
         };
         assert!(rendered.get(other).is_none());
     }
+    Ok(())
 }
 
 #[test]
-fn chat_token_limit_alias_conflicts_are_rejected() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_token_limit_alias_conflicts_are_rejected() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let equal = serde_json::json!({
         "model": "m",
         "messages": [{"role": "user", "content": "hi"}],
@@ -1035,26 +1044,30 @@ fn chat_token_limit_alias_conflicts_are_rejected() {
         error,
         crate::error::ModelError::InvalidRequest { .. }
     ));
+    Ok(())
 }
 
 #[test]
-fn token_limit_translates_across_every_protocol_pair() {
+fn token_limit_translates_across_every_protocol_pair() -> crate::error::Result<()> {
     for inbound_protocol in all_protocols() {
-        let mut body = minimal_request(inbound_protocol.clone());
+        let mut body = minimal_request(inbound_protocol.clone())?;
         match inbound_protocol {
             ApiProtocol::ChatCompletions => body["max_completion_tokens"] = 777.into(),
             ApiProtocol::Messages => body["max_tokens"] = 777.into(),
             ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
-
-            ApiProtocol::Custom(_) => unreachable!(),
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+                return Err(ModelError::invalid_request(
+                    "generation fixture requires a generation protocol",
+                ));
+            }
         }
-        let prompt = adapter_for(inbound_protocol.clone())
+        let prompt = adapter_for(inbound_protocol.clone())?
             .parse_request(body)
             .unwrap();
         assert_eq!(prompt.params.max_tokens, Some(777));
 
         for outbound_protocol in all_protocols() {
-            let rendered = adapter_for(outbound_protocol.clone())
+            let rendered = adapter_for(outbound_protocol.clone())?
                 .render_request(&prompt)
                 .unwrap();
             match outbound_protocol {
@@ -1074,16 +1087,20 @@ fn token_limit_translates_across_every_protocol_pair() {
                 }
                 ApiProtocol::Messages => assert_eq!(rendered["max_tokens"], 777),
                 ApiProtocol::Responses => assert_eq!(rendered["max_output_tokens"], 777),
-
-                ApiProtocol::Custom(_) => unreachable!(),
+                ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+                    return Err(ModelError::invalid_request(
+                        "generation fixture requires a generation protocol",
+                    ));
+                }
             }
         }
     }
+    Ok(())
 }
 
 #[test]
-fn target_token_limit_override_wins_over_inbound_spelling() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn target_token_limit_override_wins_over_inbound_spelling() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let cases = [
         (
             "max_tokens",
@@ -1097,7 +1114,7 @@ fn target_token_limit_override_wins_over_inbound_spelling() {
         ),
     ];
     for (inbound_field, override_field, outbound_field) in cases {
-        let mut body = minimal_request(ApiProtocol::ChatCompletions);
+        let mut body = minimal_request(ApiProtocol::ChatCompletions)?;
         body[inbound_field] = 99.into();
         let prompt = adapter.parse_request(body).unwrap();
         let target = ModelTarget {
@@ -1124,11 +1141,12 @@ fn target_token_limit_override_wins_over_inbound_spelling() {
         assert_eq!(rendered[outbound_field], 99);
         assert!(rendered.get(inbound_field).is_none());
     }
+    Ok(())
 }
 
 #[test]
-fn chat_target_omits_explicitly_unsupported_optional_fields() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_target_omits_explicitly_unsupported_optional_fields() -> crate::error::Result<()> {
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = chat
         .parse_request(serde_json::json!({
             "model": "m",
@@ -1162,11 +1180,12 @@ fn chat_target_omits_explicitly_unsupported_optional_fields() {
     let rendered = chat.render_request_for_target(&prompt, &target).unwrap();
     assert!(rendered.get("store").is_none(), "{rendered}");
     assert!(rendered.get("stream_options").is_none(), "{rendered}");
+    Ok(())
 }
 
 #[test]
-fn chat_target_does_not_silently_drop_store_true() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_target_does_not_silently_drop_store_true() -> crate::error::Result<()> {
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = chat
         .parse_request(serde_json::json!({
             "model": "m",
@@ -1202,19 +1221,21 @@ fn chat_target_does_not_silently_drop_store_true() {
         error,
         crate::error::ModelError::InvalidRequest { .. }
     ));
+    Ok(())
 }
 
 #[test]
-fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
+fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution()
+-> crate::error::Result<()> {
     for inbound_protocol in [ApiProtocol::Messages, ApiProtocol::Responses] {
-        let mut body = minimal_request(inbound_protocol.clone());
+        let mut body = minimal_request(inbound_protocol.clone())?;
         match inbound_protocol {
             ApiProtocol::Messages => body["max_tokens"] = 777.into(),
             ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
 
             _ => unreachable!(),
         }
-        let mut prompt = adapter_for(inbound_protocol.clone())
+        let mut prompt = adapter_for(inbound_protocol.clone())?
             .parse_request(body)
             .unwrap();
         prompt
@@ -1258,20 +1279,21 @@ fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
                     },
                 },
             };
-            let rendered = adapter_for(ApiProtocol::ChatCompletions)
+            let rendered = adapter_for(ApiProtocol::ChatCompletions)?
                 .render_request_for_target(&prompt, &target)
                 .unwrap();
             assert_eq!(rendered[expected], 777, "{inbound_protocol:?}");
             assert!(rendered.get(absent).is_none(), "{inbound_protocol:?}");
         }
     }
+    Ok(())
 }
 
 #[test]
-fn chat_completions_passes_through_uncommon_params() {
+fn chat_completions_passes_through_uncommon_params() -> crate::error::Result<()> {
     // Typed uncommon fields and raw same-protocol extras both survive a native
     // parse/render round trip.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "gpt-5",
         "messages": [{"role": "user", "content": "hi"}],
@@ -1305,11 +1327,12 @@ fn chat_completions_passes_through_uncommon_params() {
             "Chat Completions `{key}` must survive parse/render"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn messages_passes_through_uncommon_params() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_passes_through_uncommon_params() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-sonnet-4-6",
         "messages": [{"role": "user", "content": "hi"}],
@@ -1334,6 +1357,7 @@ fn messages_passes_through_uncommon_params() {
             "Anthropic `{key}` must survive parse/render"
         );
     }
+    Ok(())
 }
 
 // ===== structured outputs (response_format) =====
@@ -1360,8 +1384,8 @@ fn sample_prompt_with_schema() -> Prompt {
 }
 
 #[test]
-fn chat_completions_inbound_promotes_json_schema_response_format() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_completions_inbound_promotes_json_schema_response_format() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "weather?"}],
@@ -1393,13 +1417,14 @@ fn chat_completions_inbound_promotes_json_schema_response_format() {
     }
     // Promoted out of extras to avoid double-rendering.
     assert!(!prompt.params.extra.contains_key("response_format"));
+    Ok(())
 }
 
 #[test]
-fn chat_completions_inbound_leaves_json_object_in_extras() {
+fn chat_completions_inbound_leaves_json_object_in_extras() -> crate::error::Result<()> {
     // The legacy `{type: "json_object"}` JSON mode has no schema to translate,
     // so it must keep passing through opaquely.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "hi"}],
@@ -1409,11 +1434,12 @@ fn chat_completions_inbound_leaves_json_object_in_extras() {
     assert!(prompt.response_format.is_none());
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["response_format"], body["response_format"]);
+    Ok(())
 }
 
 #[test]
-fn chat_completions_outbound_renders_json_schema() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_completions_outbound_renders_json_schema() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let rendered = adapter
         .render_request(&sample_prompt_with_schema())
         .unwrap();
@@ -1427,13 +1453,14 @@ fn chat_completions_outbound_renders_json_schema() {
         rendered["response_format"]["json_schema"]["schema"]["properties"]["location"]["type"],
         "string"
     );
+    Ok(())
 }
 
 #[test]
-fn chat_completions_outbound_supplies_default_name() {
+fn chat_completions_outbound_supplies_default_name() -> crate::error::Result<()> {
     // Chat Completions requires `name`; renderer fills it when absent (e.g. when
     // the inbound was Anthropic/Google which carry no name).
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = Prompt {
         response_format: Some(ResponseFormat::JsonSchema {
             name: None,
@@ -1460,11 +1487,12 @@ fn chat_completions_outbound_supplies_default_name() {
             .get("description")
             .is_none()
     );
+    Ok(())
 }
 
 #[test]
-fn messages_inbound_promotes_output_config_format() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_inbound_promotes_output_config_format() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-7",
         "max_tokens": 1024,
@@ -1484,13 +1512,14 @@ fn messages_inbound_promotes_output_config_format() {
         other => panic!("expected JsonSchema, got {other:?}"),
     }
     assert!(!prompt.params.extra.contains_key("output_config"));
+    Ok(())
 }
 
 #[test]
-fn messages_inbound_accepts_legacy_output_format_alias() {
+fn messages_inbound_accepts_legacy_output_format_alias() -> crate::error::Result<()> {
     // The deprecated flat `output_format` shape (pre-GA, still emitted by
     // some clients — vercel/ai#12298) must still parse cleanly.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-7",
         "max_tokens": 1024,
@@ -1506,14 +1535,16 @@ fn messages_inbound_accepts_legacy_output_format_alias() {
         Some(ResponseFormat::JsonSchema { .. })
     ));
     assert!(!prompt.params.extra.contains_key("output_format"));
+    Ok(())
 }
 
 #[test]
-fn messages_inbound_legacy_alias_does_not_disturb_output_config_siblings() {
+fn messages_inbound_legacy_alias_does_not_disturb_output_config_siblings()
+-> crate::error::Result<()> {
     // If the legacy `output_format` alias is what matched, an unrelated
     // `output_config` blob the client supplied must be left fully intact in
     // extras so its siblings (`unknown_key` here) survive the round trip.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-7",
         "max_tokens": 1024,
@@ -1528,11 +1559,12 @@ fn messages_inbound_legacy_alias_does_not_disturb_output_config_siblings() {
     ));
     assert_eq!(prompt.params.extra["output_config"]["unknown_key"], "x");
     assert!(!prompt.params.extra.contains_key("output_format"));
+    Ok(())
 }
 
 #[test]
 fn messages_outbound_renders_admitted_output_config_format() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let mut prompt = sample_prompt_with_schema();
     let report = request_projection_report(ApiProtocol::Messages, &prompt)?;
     assert_eq!(report.issues.len(), 2);
@@ -1560,11 +1592,11 @@ fn messages_outbound_renders_admitted_output_config_format() -> crate::error::Re
 }
 
 #[test]
-fn messages_inbound_promotes_output_config_effort() {
+fn messages_inbound_promotes_output_config_effort() -> crate::error::Result<()> {
     // Anthropic's GA reasoning `effort` knob (`output_config.effort`) is lifted
     // into the canonical `reasoning_effort` and stripped from the pass-through
     // extras so the outbound adapter renders it exactly once.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1574,13 +1606,14 @@ fn messages_inbound_promotes_output_config_effort() {
     let prompt = adapter.parse_request(body).unwrap();
     assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::High));
     assert!(!prompt.params.extra.contains_key("output_config"));
+    Ok(())
 }
 
 #[test]
-fn messages_inbound_promotes_output_config_format_and_effort() {
+fn messages_inbound_promotes_output_config_format_and_effort() -> crate::error::Result<()> {
     // `format` + `effort` under one `output_config`: both are promoted to their
     // canonical slots and the now-empty `output_config` is dropped from extras.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1597,12 +1630,13 @@ fn messages_inbound_promotes_output_config_format_and_effort() {
         Some(ResponseFormat::JsonSchema { .. })
     ));
     assert!(!prompt.params.extra.contains_key("output_config"));
+    Ok(())
 }
 
 #[test]
-fn messages_inbound_effort_preserves_unknown_output_config_siblings() {
+fn messages_inbound_effort_preserves_unknown_output_config_siblings() -> crate::error::Result<()> {
     // Lifting `effort` must leave unrelated `output_config` siblings intact.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1613,11 +1647,12 @@ fn messages_inbound_effort_preserves_unknown_output_config_siblings() {
     assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::Low));
     assert_eq!(prompt.params.extra["output_config"]["unknown_key"], "x");
     assert!(prompt.params.extra["output_config"].get("effort").is_none());
+    Ok(())
 }
 
 #[test]
-fn messages_outbound_renders_output_config_effort() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_outbound_renders_output_config_effort() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let prompt = Prompt {
         model: "claude-opus-4-8".to_string(),
         system: None,
@@ -1634,13 +1669,14 @@ fn messages_outbound_renders_output_config_effort() {
     };
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["output_config"]["effort"], "high");
+    Ok(())
 }
 
 #[test]
-fn messages_outbound_merges_format_and_effort_into_output_config() {
+fn messages_outbound_merges_format_and_effort_into_output_config() -> crate::error::Result<()> {
     // `response_format` + `reasoning_effort` must coexist under one
     // `output_config` object rather than one clobbering the other.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let prompt = Prompt {
         model: "claude-opus-4-8".to_string(),
         system: None,
@@ -1663,14 +1699,16 @@ fn messages_outbound_merges_format_and_effort_into_output_config() {
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["output_config"]["effort"], "xhigh");
     assert_eq!(rendered["output_config"]["format"]["type"], "json_schema");
+    Ok(())
 }
 
 #[test]
-fn messages_outbound_preserves_unknown_output_config_sibling_with_effort() {
+fn messages_outbound_preserves_unknown_output_config_sibling_with_effort()
+-> crate::error::Result<()> {
     // The inbound adapter leaves unknown output_config siblings in extra after
     // lifting effort; the outbound render must merge them back rather than drop
     // them when it rebuilds output_config.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1681,14 +1719,15 @@ fn messages_outbound_preserves_unknown_output_config_sibling_with_effort() {
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["output_config"]["effort"], "high");
     assert_eq!(rendered["output_config"]["unknown_key"], "x");
+    Ok(())
 }
 
 #[test]
-fn effort_routes_messages_to_chat_completions() {
+fn effort_routes_messages_to_chat_completions() -> crate::error::Result<()> {
     // Cross-protocol (reverse direction): a Messages client's
     // output_config.effort reaches an OpenAI-style upstream as reasoning_effort.
-    let messages = adapter_for(ApiProtocol::Messages);
-    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let messages = adapter_for(ApiProtocol::Messages)?;
+    let cc = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1698,14 +1737,15 @@ fn effort_routes_messages_to_chat_completions() {
     let prompt = messages.parse_request(body).unwrap();
     let rendered = cc.render_request(&prompt).unwrap();
     assert_eq!(rendered["reasoning_effort"], "high");
+    Ok(())
 }
 
 #[test]
-fn effort_routes_chat_completions_to_messages() {
+fn effort_routes_chat_completions_to_messages() -> crate::error::Result<()> {
     // Cross-protocol: a Chat Completions client's `reasoning_effort` reaches an
     // Anthropic Messages upstream as `output_config.effort`.
-    let cc = adapter_for(ApiProtocol::ChatCompletions);
-    let messages = adapter_for(ApiProtocol::Messages);
+    let cc = adapter_for(ApiProtocol::ChatCompletions)?;
+    let messages = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "messages": [{"role": "user", "content": "hi"}],
@@ -1714,14 +1754,15 @@ fn effort_routes_chat_completions_to_messages() {
     let prompt = cc.parse_request(body).unwrap();
     let rendered = messages.render_request(&prompt).unwrap();
     assert_eq!(rendered["output_config"]["effort"], "high");
+    Ok(())
 }
 
 #[test]
-fn effort_routes_messages_to_responses() {
+fn effort_routes_messages_to_responses() -> crate::error::Result<()> {
     // Cross-protocol: a Messages client's `output_config.effort` reaches a
     // Responses upstream as `reasoning.effort`.
-    let messages = adapter_for(ApiProtocol::Messages);
-    let responses = adapter_for(ApiProtocol::Responses);
+    let messages = adapter_for(ApiProtocol::Messages)?;
+    let responses = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1731,11 +1772,12 @@ fn effort_routes_messages_to_responses() {
     let prompt = messages.parse_request(body).unwrap();
     let rendered = responses.render_request(&prompt).unwrap();
     assert_eq!(rendered["reasoning"]["effort"], "max");
+    Ok(())
 }
 
 #[test]
 fn responses_reasoning_effort_preserves_reasoning_siblings() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-5.6-sol",
         "input": "hi",
@@ -1756,10 +1798,10 @@ fn responses_reasoning_effort_preserves_reasoning_siblings() -> crate::error::Re
 }
 
 #[test]
-fn messages_inbound_accepts_mid_conversation_system() {
+fn messages_inbound_accepts_mid_conversation_system() -> crate::error::Result<()> {
     // Opus 4.8 mid-conversation system messages: a `role:"system"` entry at a
     // non-first position parses into a canonical System-role message in place.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1776,14 +1818,15 @@ fn messages_inbound_accepts_mid_conversation_system() {
         text_of(&prompt.messages[1].content),
         "Terse mode: keep replies under 40 words."
     );
+    Ok(())
 }
 
 #[test]
-fn messages_outbound_renders_mid_conversation_system() {
+fn messages_outbound_renders_mid_conversation_system() -> crate::error::Result<()> {
     // A canonical System-role message renders as a `role:"system"` entry so the
     // request is serialized faithfully; the upstream model decides support. The
     // top-level system instruction still rides the out-of-band `system` field.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let prompt = Prompt {
         model: "claude-opus-4-8".to_string(),
         system: Some("top-level system".to_string()),
@@ -1805,13 +1848,14 @@ fn messages_outbound_renders_mid_conversation_system() {
         rendered["messages"][1]["content"][0]["text"],
         "switch to terse mode"
     );
+    Ok(())
 }
 
 #[test]
-fn messages_mid_conversation_system_round_trips() {
+fn messages_mid_conversation_system_round_trips() -> crate::error::Result<()> {
     // Messages -> canonical -> Messages preserves both the top-level system and
     // an interleaved mid-conversation system message, in order.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1829,14 +1873,15 @@ fn messages_mid_conversation_system_round_trips() {
     assert_eq!(msgs.len(), 3);
     assert_eq!(msgs[1]["role"], "system");
     assert_eq!(msgs[1]["content"][0]["text"], "be terse");
+    Ok(())
 }
 
 #[test]
-fn mid_conversation_system_routes_messages_to_chat_completions() {
+fn mid_conversation_system_routes_messages_to_chat_completions() -> crate::error::Result<()> {
     // Cross-protocol: a Messages client's mid-conversation system message reaches
     // an OpenAI-style upstream as an in-place `role:"system"` message.
-    let messages = adapter_for(ApiProtocol::Messages);
-    let cc = adapter_for(ApiProtocol::ChatCompletions);
+    let messages = adapter_for(ApiProtocol::Messages)?;
+    let cc = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 1024,
@@ -1853,13 +1898,14 @@ fn mid_conversation_system_routes_messages_to_chat_completions() {
             .any(|m| m["role"] == "system" && m.to_string().contains("be terse")),
         "interleaved system survives cross-protocol routing: {msgs:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn messages_inbound_parses_refusal_stop_details() {
+fn messages_inbound_parses_refusal_stop_details() -> crate::error::Result<()> {
     // Opus 4.8 refusals carry a stop_details object {type, category,
     // explanation}; surface category + explanation on the canonical result.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -1875,11 +1921,12 @@ fn messages_inbound_parses_refusal_stop_details() {
     let details = result.stop_details.expect("stop_details present");
     assert_eq!(details.category.as_deref(), Some("cyber"));
     assert_eq!(details.explanation.as_deref(), Some("declined"));
+    Ok(())
 }
 
 #[test]
-fn messages_parse_response_omits_stop_details_when_absent() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_parse_response_omits_stop_details_when_absent() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -1891,11 +1938,12 @@ fn messages_parse_response_omits_stop_details_when_absent() {
     });
     let result = adapter.parse_response(body).unwrap();
     assert!(result.stop_details.is_none());
+    Ok(())
 }
 
 #[test]
-fn messages_outbound_renders_refusal_stop_details() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_outbound_renders_refusal_stop_details() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let result = GenerateResult {
         content: vec![],
         usage: None,
@@ -1915,13 +1963,14 @@ fn messages_outbound_renders_refusal_stop_details() {
     assert_eq!(rendered["stop_details"]["category"], "bio");
     // explanation was None -> omitted, not serialised as null.
     assert!(rendered["stop_details"].get("explanation").is_none());
+    Ok(())
 }
 
 #[test]
-fn refusal_stop_details_round_trips_messages() {
+fn refusal_stop_details_round_trips_messages() -> crate::error::Result<()> {
     // Messages -> canonical -> Messages preserves the refusal category and
     // explanation in Anthropic's wire shape.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -1938,11 +1987,12 @@ fn refusal_stop_details_round_trips_messages() {
         .unwrap();
     assert_eq!(rendered["stop_details"]["category"], "cyber");
     assert_eq!(rendered["stop_details"]["explanation"], "no");
+    Ok(())
 }
 
 #[test]
-fn responses_inbound_promotes_text_format() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_inbound_promotes_text_format() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-4o",
         "input": "weather?",
@@ -1965,15 +2015,16 @@ fn responses_inbound_promotes_text_format() {
     // promoted, the rest of `text` stays in extras).
     assert_eq!(prompt.params.extra["text"]["verbosity"], "low");
     assert!(prompt.params.extra["text"].get("format").is_none());
+    Ok(())
 }
 
 #[test]
-fn responses_inbound_leaves_json_object_in_extras() {
+fn responses_inbound_leaves_json_object_in_extras() -> crate::error::Result<()> {
     // `text.format: {type: "json_object"}` (and `{type: "text"}`) carries no
     // schema to translate, so it is not promoted to the canonical slot — it
     // passes through opaquely and round-trips unchanged. Mirrors the Chat
     // Completions json_object case.
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-4o",
         "input": "weather?",
@@ -1983,25 +2034,27 @@ fn responses_inbound_leaves_json_object_in_extras() {
     assert!(prompt.response_format.is_none());
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["text"], body["text"]);
+    Ok(())
 }
 
 #[test]
-fn responses_outbound_renders_text_format() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_outbound_renders_text_format() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let rendered = adapter
         .render_request(&sample_prompt_with_schema())
         .unwrap();
     assert_eq!(rendered["text"]["format"]["type"], "json_schema");
     assert_eq!(rendered["text"]["format"]["name"], "weather");
     assert_eq!(rendered["text"]["format"]["strict"], true);
+    Ok(())
 }
 
 #[test]
-fn responses_outbound_merges_text_siblings() {
+fn responses_outbound_merges_text_siblings() -> crate::error::Result<()> {
     // When an inbound supplied a `text` object with `verbosity` (or any
     // other future sibling), the outbound render must preserve it alongside
     // the synthesised `format`.
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut prompt = sample_prompt_with_schema();
     prompt
         .params
@@ -2010,17 +2063,19 @@ fn responses_outbound_merges_text_siblings() {
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["text"]["verbosity"], "low");
     assert_eq!(rendered["text"]["format"]["type"], "json_schema");
+    Ok(())
 }
 
 #[test]
-fn builtin_adapters_advertise_response_format_support() {
+fn builtin_adapters_advertise_response_format_support() -> crate::error::Result<()> {
     for proto in all_protocols() {
-        let a = adapter_for(proto.clone());
+        let a = adapter_for(proto.clone())?;
         assert!(
             a.supports_response_format(),
             "{proto:?} should advertise response_format support"
         );
     }
+    Ok(())
 }
 
 #[test]
@@ -2129,7 +2184,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
 }
 
 #[test]
-fn messages_cache_tokens_round_trip() {
+fn messages_cache_tokens_round_trip() -> crate::error::Result<()> {
     // Messages prompt caching exposes `cache_read_input_tokens` and
     // `cache_creation_input_tokens` in `usage`. Parser captures them, encoder
     // emits them on the non-streaming response, and on `message_delta` they
@@ -2141,7 +2196,7 @@ fn messages_cache_tokens_round_trip() {
     // alongside the cache buckets — so the parser folds the cache totals
     // back into `prompt_tokens` and the renderer unfolds them when writing
     // the wire payload.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -2170,10 +2225,11 @@ fn messages_cache_tokens_round_trip() {
     // Wire format: input_tokens excludes the cache buckets (audit1 §13).
     // Round-trips to the same 100 the upstream sent.
     assert_eq!(rendered["usage"]["input_tokens"], 100);
+    Ok(())
 }
 
 #[test]
-fn messages_cache_tokens_match_subset_contract() {
+fn messages_cache_tokens_match_subset_contract() -> crate::error::Result<()> {
     // Regression: the canonical `Usage` doc-comment states that
     // `cache_read_tokens` and `cache_write_tokens` are **subsets of**
     // `prompt_tokens`. Anthropic's wire payload uses the opposite
@@ -2182,7 +2238,7 @@ fn messages_cache_tokens_match_subset_contract() {
     // downstream billing layers that compute `no_cache = prompt_tokens
     // - cache_read - cache_write` saturate to 0 on cache-heavy
     // requests and silently undercharge the uncached portion.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -2214,17 +2270,18 @@ fn messages_cache_tokens_match_subset_contract() {
         usage.cache_read_tokens,
         usage.cache_write_tokens,
     );
+    Ok(())
 }
 
 #[test]
-fn messages_usage_with_no_cache_fields_keeps_prompt_tokens_unchanged() {
+fn messages_usage_with_no_cache_fields_keeps_prompt_tokens_unchanged() -> crate::error::Result<()> {
     // Belt-and-braces: when an upstream omits the cache fields entirely
     // (the common case for non-Anthropic Anthropic-API-compatible
     // upstreams, or Anthropic requests without prompt caching), the
     // canonical `prompt_tokens` must equal Anthropic's wire-level
     // `input_tokens` — the cache-fold is a no-op when both cache
     // totals are 0.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -2241,17 +2298,18 @@ fn messages_usage_with_no_cache_fields_keeps_prompt_tokens_unchanged() {
     assert_eq!(usage.prompt_tokens, 1_234);
     assert_eq!(usage.cache_read_tokens, 0);
     assert_eq!(usage.cache_write_tokens, 0);
+    Ok(())
 }
 
 #[test]
-fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
+fn messages_stream_preserves_cache_inclusive_prompt_tokens() -> crate::error::Result<()> {
     // The stream decoder receives `message_start` (which carries the
     // full cache breakdown) and `message_delta` (which typically only
     // refreshes `output_tokens`). The terminal Usage frame must reflect
     // the inclusive prompt_tokens contract — the test pins this so a
     // future refactor of the delta path can't quietly drop the
     // cache-fold and undercharge again.
-    let decoder = adapter_for(ApiProtocol::Messages);
+    let decoder = adapter_for(ApiProtocol::Messages)?;
     let mut stream_decoder = decoder.stream_decoder();
 
     let start = SseEvent {
@@ -2313,10 +2371,11 @@ fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
             "message_delta": { "output_tokens": 200 },
         }))
     );
+    Ok(())
 }
 
 #[test]
-fn messages_stream_web_search_count_from_delta() {
+fn messages_stream_web_search_count_from_delta() -> crate::error::Result<()> {
     // `message_delta.usage` carries cumulative final counts, so
     // `web_search_count` must be ASSIGNED from the delta value, not
     // accumulated. This test also guards against double-counting: the
@@ -2325,7 +2384,7 @@ fn messages_stream_web_search_count_from_delta() {
     // `start(0) + delta(5) + delta(5) == 10` would both pass — but since
     // only one `message_delta` is emitted per stream, the regression is
     // caught by the equality check below.
-    let decoder = adapter_for(ApiProtocol::Messages);
+    let decoder = adapter_for(ApiProtocol::Messages)?;
     let mut stream_decoder = decoder.stream_decoder();
 
     let start = SseEvent {
@@ -2368,13 +2427,14 @@ fn messages_stream_web_search_count_from_delta() {
         .expect("terminal Usage frame missing");
     assert_eq!(usage.web_search_count, 5);
     assert_eq!(usage.completion_tokens, 15);
+    Ok(())
 }
 
 #[test]
-fn chat_completions_cache_tokens_round_trip() {
+fn chat_completions_cache_tokens_round_trip() -> crate::error::Result<()> {
     // Chat Completions surfaces cached prompt tokens via
     // `prompt_tokens_details.cached_tokens`. Parse → canonical → render.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "id": "c1",
         "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
@@ -2394,16 +2454,17 @@ fn chat_completions_cache_tokens_round_trip() {
         rendered["usage"]["prompt_tokens_details"]["cached_tokens"],
         70
     );
+    Ok(())
 }
 
 #[test]
-fn chat_completions_parse_captures_refusal_and_reasoning_aliases() {
+fn chat_completions_parse_captures_refusal_and_reasoning_aliases() -> crate::error::Result<()> {
     // `message.refusal` (when non-empty) is the OpenAI refusal text; carry it
     // as a Content::Text and set FinishReason::ContentFilter regardless of
     // what `finish_reason` says (OpenAI sometimes also says "content_filter"
     // but not always). `message.reasoning` / `message.thinking` are
     // OpenAI-compatible vendor aliases for `reasoning_content`.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
 
     // refusal
     let body = serde_json::json!({
@@ -2442,16 +2503,17 @@ fn chat_completions_parse_captures_refusal_and_reasoning_aliases() {
     assert!(
         matches!(result.content.first(), Some(Content::Reasoning { text, .. }) if text == "internal monologue")
     );
+    Ok(())
 }
 
 #[test]
-fn messages_stream_encoder_closes_block_on_kind_transition() {
+fn messages_stream_encoder_closes_block_on_kind_transition() -> crate::error::Result<()> {
     // v0 #429 regression: when the canonical part stream transitions
     // text → reasoning → text → tool, the Anthropic encoder MUST emit a
     // `content_block_stop` before opening the new block kind. Strict
     // clients (Claude Code) reject a text_delta inside an open `thinking`
     // block. Ref: docs.anthropic.com/en/api/messages-streaming.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let mut encoder = adapter.stream_encoder("msg_x", "claude-3-7-sonnet");
     let parts = [
         StreamPart::ReasoningStart {
@@ -2499,10 +2561,11 @@ fn messages_stream_encoder_closes_block_on_kind_transition() {
         thinking_open < first_stop && first_stop < text_open,
         "block_stop must fall *between* thinking_start and text_start; got:\n{joined}"
     );
+    Ok(())
 }
 
 #[test]
-fn messages_stream_encoder_drops_unsigned_reasoning() {
+fn messages_stream_encoder_drops_unsigned_reasoning() -> crate::error::Result<()> {
     // Non-Anthropic reasoning has no Anthropic continuity signature. If it is
     // exposed to Claude Code as a `thinking` block, the next Claude request
     // replays that block and Anthropic rejects it as an invalid signature.
@@ -2529,7 +2592,7 @@ fn messages_stream_encoder_drops_unsigned_reasoning() {
                 reason: FinishReason::Stop,
             },
         ],
-    );
+    )?;
     let joined = events
         .iter()
         .map(|(name, data)| format!("{name} {data}"))
@@ -2545,6 +2608,7 @@ fn messages_stream_encoder_drops_unsigned_reasoning() {
         joined.contains("visible answer"),
         "dropping unsigned reasoning must not drop visible text: {joined}"
     );
+    Ok(())
 }
 
 // ===== block-lifecycle markers (StreamPart::TextStart/TextEnd/ReasoningStart/
@@ -2555,8 +2619,8 @@ fn messages_stream_encoder_drops_unsigned_reasoning() {
 fn encode_stream_events(
     protocol: ApiProtocol,
     parts: &[StreamPart],
-) -> Vec<(String, serde_json::Value)> {
-    let adapter = adapter_for(protocol);
+) -> crate::error::Result<Vec<(String, serde_json::Value)>> {
+    let adapter = adapter_for(protocol)?;
     let mut encoder = adapter.stream_encoder("resp_m", "test-model");
     let mut out = Vec::new();
     for part in parts {
@@ -2574,13 +2638,16 @@ fn encode_stream_events(
             out.push((event.unwrap_or_default(), json));
         }
     }
-    out
+    Ok(out)
 }
 
 /// Decode a sequence of SSE `(event_name, data_json)` through `protocol` into
 /// the canonical part stream. Shared by the round-trip tests.
-fn decode_stream(protocol: ApiProtocol, events: &[(&str, serde_json::Value)]) -> Vec<StreamPart> {
-    let adapter = adapter_for(protocol);
+fn decode_stream(
+    protocol: ApiProtocol,
+    events: &[(&str, serde_json::Value)],
+) -> crate::error::Result<Vec<StreamPart>> {
+    let adapter = adapter_for(protocol)?;
     let mut decoder = adapter.stream_decoder();
     let mut parts = Vec::new();
     for (event, data) in events {
@@ -2594,7 +2661,7 @@ fn decode_stream(protocol: ApiProtocol, events: &[(&str, serde_json::Value)]) ->
         );
     }
     parts.extend(decoder.finish().unwrap());
-    parts
+    Ok(parts)
 }
 
 /// A canonical stream of two *distinct* text blocks, each bracketed by its own
@@ -2620,12 +2687,12 @@ fn two_text_blocks() -> Vec<StreamPart> {
 }
 
 #[test]
-fn anthropic_two_text_blocks_reencode_as_distinct_blocks_not_merged() {
+fn anthropic_two_text_blocks_reencode_as_distinct_blocks_not_merged() -> crate::error::Result<()> {
     // The merged-block fix on the Anthropic wire: two bracketed text blocks must
     // re-encode as TWO `content_block_start`(type=text) + TWO
     // `content_block_stop`, never a single merged block. Without the lifecycle
     // markers both deltas land in one block.
-    let events = encode_stream_events(ApiProtocol::Messages, &two_text_blocks());
+    let events = encode_stream_events(ApiProtocol::Messages, &two_text_blocks())?;
     let text_starts = events
         .iter()
         .filter(|(name, data)| {
@@ -2653,15 +2720,16 @@ fn anthropic_two_text_blocks_reencode_as_distinct_blocks_not_merged() {
         .collect();
     assert_eq!(indices.len(), 2);
     assert_ne!(indices[0], indices[1], "blocks must use distinct indices");
+    Ok(())
 }
 
 #[test]
-fn responses_two_text_blocks_reencode_as_distinct_items_not_merged() {
+fn responses_two_text_blocks_reencode_as_distinct_items_not_merged() -> crate::error::Result<()> {
     // The merged-block fix on the Responses wire: two bracketed text blocks must
     // re-encode as TWO `output_item.added`(type=message) + TWO
     // `output_item.done`, each in its own `output_index` — never one merged
     // message item (which would render the two upstream blocks as one).
-    let events = encode_stream_events(ApiProtocol::Responses, &two_text_blocks());
+    let events = encode_stream_events(ApiProtocol::Responses, &two_text_blocks())?;
     let message_added = events
         .iter()
         .filter(|(name, data)| {
@@ -2708,10 +2776,11 @@ fn responses_two_text_blocks_reencode_as_distinct_items_not_merged() {
         completed_output_len, 2,
         "terminal envelope must replay both message items: {events:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
+fn text_reasoning_text_reencodes_with_three_distinct_blocks() -> crate::error::Result<()> {
     // text → reasoning → text, each bracketed, must re-encode as three distinct
     // blocks with the right kinds on both block-framed wires — the canonical
     // ordering (#416/#454-1) plus the merged-block fix together.
@@ -2745,7 +2814,7 @@ fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
     ];
 
     // Anthropic: 2 text blocks + 1 thinking block, 3 stops.
-    let anthropic = encode_stream_events(ApiProtocol::Messages, &parts);
+    let anthropic = encode_stream_events(ApiProtocol::Messages, &parts)?;
     let count_kind = |kind: &str| {
         anthropic
             .iter()
@@ -2771,7 +2840,7 @@ fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
     );
 
     // Responses: 2 message items + 1 reasoning item.
-    let responses = encode_stream_events(ApiProtocol::Responses, &parts);
+    let responses = encode_stream_events(ApiProtocol::Responses, &parts)?;
     let count_item = |kind: &str| {
         responses
             .iter()
@@ -2787,10 +2856,11 @@ fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
         1,
         "one reasoning item: {responses:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn anthropic_thinking_signature_survives_stream_roundtrip() {
+fn anthropic_thinking_signature_survives_stream_roundtrip() -> crate::error::Result<()> {
     // A streamed Anthropic thinking block carries its `signature` as a
     // `signature_delta` event before `content_block_stop`. Decoding the upstream
     // stream and re-encoding it for the client must preserve that signature —
@@ -2824,8 +2894,8 @@ fn anthropic_thinking_signature_survives_stream_roundtrip() {
             serde_json::json!({ "type": "content_block_stop", "index": 0 }),
         ),
     ];
-    let parts = decode_stream(ApiProtocol::Messages, &upstream);
-    let reencoded = encode_stream_events(ApiProtocol::Messages, &parts);
+    let parts = decode_stream(ApiProtocol::Messages, &upstream)?;
+    let reencoded = encode_stream_events(ApiProtocol::Messages, &parts)?;
     let sig = reencoded.iter().find_map(|(name, data)| {
         if name == "content_block_delta"
             && data.pointer("/delta/type").and_then(|t| t.as_str()) == Some("signature_delta")
@@ -2842,10 +2912,12 @@ fn anthropic_thinking_signature_survives_stream_roundtrip() {
         Some("SIG-roundtrip-xyz"),
         "thinking signature must survive decode->encode; got {reencoded:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn anthropic_stream_decoder_lifts_thinking_signature_onto_reasoning_end() {
+fn anthropic_stream_decoder_lifts_thinking_signature_onto_reasoning_end() -> crate::error::Result<()>
+{
     // The IR contract: a streamed `signature_delta` is lifted onto the block's
     // `ReasoningEnd` (not surfaced as a stray part, never merged into the
     // reasoning text), so downstream re-encoding can replay it.
@@ -2876,7 +2948,7 @@ fn anthropic_stream_decoder_lifts_thinking_signature_onto_reasoning_end() {
             serde_json::json!({ "type": "content_block_stop", "index": 0 }),
         ),
     ];
-    let parts = decode_stream(ApiProtocol::Messages, &events);
+    let parts = decode_stream(ApiProtocol::Messages, &events)?;
     let sig = parts
         .iter()
         .find_map(|p| match p {
@@ -2896,10 +2968,11 @@ fn anthropic_stream_decoder_lifts_thinking_signature_onto_reasoning_end() {
         )),
         "signature must not leak into the reasoning text: {parts:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn coarse_wires_drop_block_markers_and_emit_only_deltas() {
+fn coarse_wires_drop_block_markers_and_emit_only_deltas() -> crate::error::Result<()> {
     // Chat Completions and Generate Content frame no content blocks, so the
     // block-lifecycle markers re-encode to NOTHING — a bare start/end emits zero
     // SSE frames — while the text deltas pass through unaffected. This proves the
@@ -2907,7 +2980,7 @@ fn coarse_wires_drop_block_markers_and_emit_only_deltas() {
     // client simply drops the frames.
     {
         let protocol = ApiProtocol::ChatCompletions;
-        let adapter = adapter_for(protocol.clone());
+        let adapter = adapter_for(protocol.clone())?;
         let mut encoder = adapter.stream_encoder("resp_c", "test-model");
 
         // Each marker alone yields no frames.
@@ -2932,7 +3005,7 @@ fn coarse_wires_drop_block_markers_and_emit_only_deltas() {
 
         // The full two-block stream decodes back to exactly the two deltas,
         // concatenated — the markers left no trace.
-        let events = encode_stream_events(protocol.clone(), &two_text_blocks());
+        let events = encode_stream_events(protocol.clone(), &two_text_blocks())?;
         let mut decoder = adapter.stream_decoder();
         let mut decoded = Vec::new();
         for (event, data) in &events {
@@ -2968,10 +3041,11 @@ fn coarse_wires_drop_block_markers_and_emit_only_deltas() {
             "{protocol:?}: coarse wire must not produce block markers: {decoded:?}"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn block_markers_survive_anthropic_decode_then_reencode_roundtrip() {
+fn block_markers_survive_anthropic_decode_then_reencode_roundtrip() -> crate::error::Result<()> {
     // Full same-protocol round trip on Anthropic: real two-block upstream SSE
     // decodes to a marker-bracketed canonical stream, which re-encodes back into
     // two distinct content blocks. This is the end-to-end merged-block fix.
@@ -3013,7 +3087,7 @@ fn block_markers_survive_anthropic_decode_then_reencode_roundtrip() {
             serde_json::json!({ "type": "message_stop" }),
         ),
     ];
-    let decoded = decode_stream(ApiProtocol::Messages, &upstream);
+    let decoded = decode_stream(ApiProtocol::Messages, &upstream)?;
     // The decoder must surface the two block boundaries as start/end markers.
     assert_eq!(
         decoded
@@ -3033,7 +3107,7 @@ fn block_markers_survive_anthropic_decode_then_reencode_roundtrip() {
     );
 
     // Re-encode and assert the two distinct blocks survive.
-    let reencoded = encode_stream_events(ApiProtocol::Messages, &decoded);
+    let reencoded = encode_stream_events(ApiProtocol::Messages, &decoded)?;
     let text_starts = reencoded
         .iter()
         .filter(|(name, data)| {
@@ -3045,10 +3119,11 @@ fn block_markers_survive_anthropic_decode_then_reencode_roundtrip() {
         text_starts, 2,
         "round trip must preserve two distinct text blocks: {reencoded:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn block_markers_survive_responses_decode_then_reencode_roundtrip() {
+fn block_markers_survive_responses_decode_then_reencode_roundtrip() -> crate::error::Result<()> {
     // Full same-protocol round trip on Responses: two real `message` items
     // decode to marker-bracketed canonical parts and re-encode into two distinct
     // message items.
@@ -3086,7 +3161,7 @@ fn block_markers_survive_responses_decode_then_reencode_roundtrip() {
             serde_json::json!({ "type": "response.completed", "response": { "id": "resp_1", "status": "completed" } }),
         ),
     ];
-    let decoded = decode_stream(ApiProtocol::Responses, &upstream);
+    let decoded = decode_stream(ApiProtocol::Responses, &upstream)?;
     assert_eq!(
         decoded
             .iter()
@@ -3104,7 +3179,7 @@ fn block_markers_survive_responses_decode_then_reencode_roundtrip() {
         "decode must emit two TextEnd markers: {decoded:?}"
     );
 
-    let reencoded = encode_stream_events(ApiProtocol::Responses, &decoded);
+    let reencoded = encode_stream_events(ApiProtocol::Responses, &decoded)?;
     let message_added = reencoded
         .iter()
         .filter(|(name, data)| {
@@ -3116,10 +3191,11 @@ fn block_markers_survive_responses_decode_then_reencode_roundtrip() {
         message_added, 2,
         "round trip must preserve two distinct message items: {reencoded:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_call_streaming_still_frames_distinctly_with_markers_present() {
+fn tool_call_streaming_still_frames_distinctly_with_markers_present() -> crate::error::Result<()> {
     // Regression guard: the markers must not disturb tool-call framing. A text
     // block followed by two tool calls must still produce, on Responses, one
     // message item + two distinct `function_call` items (each tool call in its
@@ -3146,7 +3222,7 @@ fn tool_call_streaming_still_frames_distinctly_with_markers_present() {
             reason: FinishReason::Stop,
         },
     ];
-    let events = encode_stream_events(ApiProtocol::Responses, &parts);
+    let events = encode_stream_events(ApiProtocol::Responses, &parts)?;
     let function_added = events
         .iter()
         .filter(|(name, data)| {
@@ -3170,15 +3246,16 @@ fn tool_call_streaming_still_frames_distinctly_with_markers_present() {
         message_added, 1,
         "one text block → one message item: {events:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn messages_stream_error_preserves_provider_status() {
+fn messages_stream_error_preserves_provider_status() -> crate::error::Result<()> {
     // Messages mid-stream `error` events carry `error.type` — a 4xx must
     // be threaded to `Upstream.status` so the fallback policy can decide
     // "don't retry" instead of always treating these as 5xx. Ref:
     // docs.anthropic.com/en/api/errors.
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let mut decoder = adapter.stream_decoder();
     let err = decoder
         .decode(&SseEvent {
@@ -3196,14 +3273,15 @@ fn messages_stream_error_preserves_provider_status() {
         }
         other => panic!("expected Upstream, got {other:?}"),
     }
+    Ok(())
 }
 
 #[test]
-fn responses_stream_error_preserves_provider_status() {
+fn responses_stream_error_preserves_provider_status() -> crate::error::Result<()> {
     // Responses `response.failed` likewise — `error.type` decides
     // `Upstream.status` so the fallback policy can tell "client did
     // something wrong" (4xx, don't retry) from "upstream broke" (5xx).
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
     let err = decoder
         .decode(&SseEvent {
@@ -3221,14 +3299,15 @@ fn responses_stream_error_preserves_provider_status() {
         }
         other => panic!("expected Upstream, got {other:?}"),
     }
+    Ok(())
 }
 
 #[test]
-fn responses_stream_top_level_error_retains_status_and_message() {
+fn responses_stream_top_level_error_retains_status_and_message() -> crate::error::Result<()> {
     // The Responses API emits a bare `error` event with the error object at
     // the top level, while `response.failed` nests it below `response`.
     // Both shapes must preserve provider diagnostics for recovery decisions.
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
     let err = decoder
         .decode(&SseEvent {
@@ -3247,11 +3326,13 @@ fn responses_stream_top_level_error_retains_status_and_message() {
         }
         other => panic!("expected Upstream, got {other:?}"),
     }
+    Ok(())
 }
 
 #[test]
-fn responses_stream_content_policy_error_is_typed_and_publicly_sanitized() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_stream_content_policy_error_is_typed_and_publicly_sanitized()
+-> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
     let err = decoder
         .decode(&SseEvent {
@@ -3273,15 +3354,16 @@ fn responses_stream_content_policy_error_is_typed_and_publicly_sanitized() {
         }
         other => panic!("expected UpstreamPolicyViolation, got {other:?}"),
     }
+    Ok(())
 }
 
 #[test]
-fn chat_encoder_role_survives_leading_response_started() {
+fn chat_encoder_role_survives_leading_response_started() -> crate::error::Result<()> {
     // Regression: a leading `ResponseStarted` (now emitted first by the
     // Chat Completions / Generate Content decoders) must NOT consume the one-shot
     // `role: assistant` marker. The role has to ride the first real
     // content chunk; otherwise a Chat Completions client never sees it.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let mut enc = adapter.stream_encoder("chatcmpl-x", "gpt-5");
 
     // ResponseStarted arrives first — must emit no frames.
@@ -3311,13 +3393,14 @@ fn chat_encoder_role_survives_leading_response_started() {
         "role must ride the first content chunk even after a leading ResponseStarted; got {chunk}"
     );
     assert_eq!(chunk["choices"][0]["delta"]["content"], "hi");
+    Ok(())
 }
 
 #[test]
-fn responses_omits_usage_when_none() {
+fn responses_omits_usage_when_none() -> crate::error::Result<()> {
     // v0 #6ae55b2 — when upstream reported no token counts, the wire shape
     // omits the `usage` key entirely. Mirrors the streaming `emit_terminal`.
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let result = GenerateResult {
         content: vec![Content::Text {
             text: "ok".to_string(),
@@ -3336,14 +3419,15 @@ fn responses_omits_usage_when_none() {
         rendered.get("usage").is_none(),
         "usage must be absent when upstream had no counts, got: {rendered}"
     );
+    Ok(())
 }
 
 #[test]
-fn chat_completions_streaming_forces_include_usage() {
+fn chat_completions_streaming_forces_include_usage() -> crate::error::Result<()> {
     // Chat Completions omits the trailing usage chunk unless the caller asks for it.
     // Settlement requires that chunk, so the outbound request injects
     // `stream_options.include_usage = true` whenever stream=true.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "hi"}],
@@ -3399,11 +3483,12 @@ fn chat_completions_streaming_forces_include_usage() {
         .insert("stream_options".to_string(), serde_json::json!("invalid"));
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["stream_options"]["include_usage"], true);
+    Ok(())
 }
 
 #[test]
-fn chat_request_fields_survive_a_native_round_trip() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_request_fields_survive_a_native_round_trip() -> crate::error::Result<()> {
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "gpt-5",
         "messages": [{"role": "user", "content": "hi"}],
@@ -3425,11 +3510,12 @@ fn chat_request_fields_survive_a_native_round_trip() {
             "native field `{field}` drifted"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn chat_extras_do_not_leak_to_other_protocols() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_extras_do_not_leak_to_other_protocols() -> crate::error::Result<()> {
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = chat
         .parse_request(serde_json::json!({
             "model": "m",
@@ -3442,7 +3528,7 @@ fn chat_extras_do_not_leak_to_other_protocols() {
         .unwrap();
 
     for protocol in [ApiProtocol::Messages, ApiProtocol::Responses] {
-        let rendered = adapter_for(protocol.clone())
+        let rendered = adapter_for(protocol.clone())?
             .render_request(&prompt)
             .unwrap();
         assert!(
@@ -3455,7 +3541,7 @@ fn chat_extras_do_not_leak_to_other_protocols() {
         );
     }
 
-    let messages = adapter_for(ApiProtocol::Messages)
+    let messages = adapter_for(ApiProtocol::Messages)?
         .render_request(&prompt)
         .unwrap();
     assert_eq!(
@@ -3463,15 +3549,16 @@ fn chat_extras_do_not_leak_to_other_protocols() {
         "portable parallel-tool control must still translate"
     );
 
-    let responses = adapter_for(ApiProtocol::Responses)
+    let responses = adapter_for(ApiProtocol::Responses)?
         .render_request(&prompt)
         .unwrap();
     assert_eq!(responses["parallel_tool_calls"], false);
+    Ok(())
 }
 
 #[test]
-fn server_supplied_extras_remain_available_after_protocol_scoping() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn server_supplied_extras_remain_available_after_protocol_scoping() -> crate::error::Result<()> {
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let mut prompt = chat
         .parse_request(serde_json::json!({
             "model": "m",
@@ -3484,16 +3571,17 @@ fn server_supplied_extras_remain_available_after_protocol_scoping() {
         serde_json::json!({"user_id": "preset-default"}),
     );
 
-    let rendered = adapter_for(ApiProtocol::Messages)
+    let rendered = adapter_for(ApiProtocol::Messages)?
         .render_request(&prompt)
         .unwrap();
     assert_eq!(rendered["metadata"]["user_id"], "preset-default");
     assert!(rendered.get("user").is_none(), "{rendered}");
+    Ok(())
 }
 
 #[test]
-fn extra_protocol_provenance_survives_canonical_serialization() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn extra_protocol_provenance_survives_canonical_serialization() -> crate::error::Result<()> {
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = chat
         .parse_request(serde_json::json!({
             "model": "m",
@@ -3503,22 +3591,23 @@ fn extra_protocol_provenance_survives_canonical_serialization() {
         .unwrap();
     let prompt: Prompt = serde_json::from_value(serde_json::to_value(prompt).unwrap()).unwrap();
 
-    let rendered = adapter_for(ApiProtocol::Messages)
+    let rendered = adapter_for(ApiProtocol::Messages)?
         .render_request(&prompt)
         .unwrap();
     assert!(rendered.get("user").is_none(), "{rendered}");
+    Ok(())
 }
 
 #[test]
-fn store_is_never_silently_discarded_cross_protocol() {
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn store_is_never_silently_discarded_cross_protocol() -> crate::error::Result<()> {
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
 
     {
         let protocol = ApiProtocol::Messages;
-        let mut false_body = minimal_request(ApiProtocol::ChatCompletions);
+        let mut false_body = minimal_request(ApiProtocol::ChatCompletions)?;
         false_body["store"] = false.into();
         let false_prompt = chat.parse_request(false_body).unwrap();
-        let rendered = adapter_for(protocol.clone())
+        let rendered = adapter_for(protocol.clone())?
             .render_request(&false_prompt)
             .unwrap();
         assert!(
@@ -3526,10 +3615,10 @@ fn store_is_never_silently_discarded_cross_protocol() {
             "store: false should be safely omitted for {protocol}: {rendered}"
         );
 
-        let mut true_body = minimal_request(ApiProtocol::ChatCompletions);
+        let mut true_body = minimal_request(ApiProtocol::ChatCompletions)?;
         true_body["store"] = true.into();
         let true_prompt = chat.parse_request(true_body).unwrap();
-        let error = adapter_for(protocol.clone())
+        let error = adapter_for(protocol.clone())?
             .render_request(&true_prompt)
             .unwrap_err();
         assert!(
@@ -3537,11 +3626,12 @@ fn store_is_never_silently_discarded_cross_protocol() {
             "store: true should fail clearly for {protocol}, got {error:?}"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn chat_completions_does_not_forward_terminus_session_id() {
-    let inbound = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_completions_does_not_forward_terminus_session_id() -> crate::error::Result<()> {
+    let inbound = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "gpt-5.6-terra",
         "messages": [{"role": "user", "content": "hi"}],
@@ -3554,7 +3644,7 @@ fn chat_completions_does_not_forward_terminus_session_id() {
         "Terminus session identity is router metadata, not an upstream model parameter"
     );
     for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
-        let rendered = adapter_for(protocol.clone())
+        let rendered = adapter_for(protocol.clone())?
             .render_request(&prompt)
             .unwrap();
         assert!(
@@ -3562,11 +3652,12 @@ fn chat_completions_does_not_forward_terminus_session_id() {
             "{protocol:?} upstream must not receive Terminus session metadata"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn responses_passes_through_uncommon_params() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_passes_through_uncommon_params() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-5",
         "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
@@ -3596,11 +3687,12 @@ fn responses_passes_through_uncommon_params() {
             "Responses `{key}` must survive parse/render"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn messages_response_roundtrip() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_response_roundtrip() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let prompt = sample_prompt();
     let json = adapter
         .render_response(&sample_result(), &prompt, "msg_1")
@@ -3613,11 +3705,12 @@ fn messages_response_roundtrip() {
     assert_eq!(json["content"][2]["type"], "tool_use");
     let parsed = adapter.parse_response(json).unwrap();
     assert_eq!(parsed.content.len(), 3);
+    Ok(())
 }
 
 #[test]
-fn messages_response_drops_unsigned_reasoning() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_response_drops_unsigned_reasoning() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let prompt = sample_prompt();
     let result = GenerateResult {
         content: vec![
@@ -3647,17 +3740,19 @@ fn messages_response_drops_unsigned_reasoning() {
     );
     assert_eq!(blocks[0]["type"], "text");
     assert_eq!(blocks[0]["text"], "visible answer");
+    Ok(())
 }
 
 #[test]
-fn responses_request_roundtrip() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_request_roundtrip() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let prompt = sample_prompt();
     let json = adapter.render_request(&prompt).unwrap();
     assert_eq!(json["model"], "test-model");
     assert_eq!(json["instructions"], "be brief");
     let parsed = adapter.parse_request(json).unwrap();
     assert_eq!(parsed.messages.len(), 1);
+    Ok(())
 }
 
 // ===== v0 bug regression suite =====
@@ -3678,8 +3773,8 @@ fn regression_276_ansi_escape_in_model_name() {
 /// #367 → #391 — deserialisation errors must be diagnosable: they carry the
 /// target type name, the serde line/column, and a body preview.
 #[test]
-fn regression_367_deser_errors_are_descriptive() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn regression_367_deser_errors_are_descriptive() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     // `messages` should be an array; a string is a type error.
     let bad = serde_json::json!({ "model": "m", "messages": "oops" });
     let err = adapter.parse_request(bad).unwrap_err();
@@ -3688,14 +3783,15 @@ fn regression_367_deser_errors_are_descriptive() {
     assert!(msg.contains("line"), "carries serde location: {msg}");
     assert!(msg.contains("preview"), "carries a body preview: {msg}");
     assert!(matches!(err, ModelError::InvalidRequest { .. }));
+    Ok(())
 }
 
 /// Preview truncation must respect UTF-8 char boundaries — slicing at byte
 /// 240 of a body whose 240th byte sits inside a multi-byte sequence used to
 /// panic on the request path.
 #[test]
-fn deser_error_preview_handles_multi_byte_utf8() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn deser_error_preview_handles_multi_byte_utf8() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     // ~120 "é" (2 bytes) gives a body well over 240 bytes whose boundary
     // would fall inside a multi-byte rune if naïvely byte-sliced.
     let pad: String = "é".repeat(200);
@@ -3704,13 +3800,14 @@ fn deser_error_preview_handles_multi_byte_utf8() {
     let msg = err.to_string();
     assert!(msg.contains("ChatRequest"), "still diagnosable: {msg}");
     assert!(msg.contains("preview"), "carries a body preview: {msg}");
+    Ok(())
 }
 
 /// #416 — a mixed text + tool_use Anthropic message must not be rejected; the
 /// blocks keep their order in the canonical representation.
 #[test]
-fn regression_416_mixed_text_and_tool_call_preserved() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn regression_416_mixed_text_and_tool_call_preserved() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude",
         "messages": [{
@@ -3729,13 +3826,14 @@ fn regression_416_mixed_text_and_tool_call_preserved() {
         matches!(content[1], Content::ToolCall { .. }),
         "tool call second — order preserved"
     );
+    Ok(())
 }
 
 /// #227 → #228 — Anthropic `system` accepts both a string and a content-block
 /// array.
 #[test]
-fn regression_227_messages_system_accepts_string_or_array() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn regression_227_messages_system_accepts_string_or_array() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
 
     let as_string = serde_json::json!({
         "model": "claude",
@@ -3755,13 +3853,14 @@ fn regression_227_messages_system_accepts_string_or_array() {
     });
     let p2 = adapter.parse_request(as_array).unwrap();
     assert_eq!(p2.system.as_deref(), Some("line one\nline two"));
+    Ok(())
 }
 
 /// #364 — `tool_result.content` accepts a string or an array; signed
 /// `thinking` blocks round-trip.
 #[test]
 fn regression_364_tool_result_array_and_thinking() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude",
         "messages": [
@@ -3817,7 +3916,7 @@ fn regression_364_tool_result_array_and_thinking() -> crate::error::Result<()> {
 #[test]
 fn messages_parse_request_rejects_unsigned_thinking_without_erasing_history()
 -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude",
         "messages": [{"role":"assistant","content":[
@@ -3842,9 +3941,9 @@ fn messages_parse_request_rejects_unsigned_thinking_without_erasing_history()
 
 /// #454-1 — reasoning content is not dropped across any of the four protocols.
 #[test]
-fn regression_454_1_reasoning_survives_all_protocols() {
+fn regression_454_1_reasoning_survives_all_protocols() -> crate::error::Result<()> {
     for proto in all_protocols() {
-        let adapter = adapter_for(proto.clone());
+        let adapter = adapter_for(proto.clone())?;
         let result = sample_result(); // has a Reasoning block
         let rendered = adapter
             .render_response(&result, &sample_prompt(), "r1")
@@ -3858,13 +3957,14 @@ fn regression_454_1_reasoning_survives_all_protocols() {
             "{proto:?}: reasoning content survived render→parse"
         );
     }
+    Ok(())
 }
 
 /// #454-4 — role mapping is total: an unknown role is an error, never a silent
 /// downgrade to `user`.
 #[test]
-fn regression_454_4_unknown_role_is_an_error() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn regression_454_4_unknown_role_is_an_error() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "model": "m",
         "messages": [{ "role": "wizard", "content": "abracadabra" }],
@@ -3872,12 +3972,13 @@ fn regression_454_4_unknown_role_is_an_error() {
     let err = adapter.parse_request(body).unwrap_err();
     assert!(matches!(err, ModelError::InvalidRequest { .. }));
     assert!(err.to_string().contains("wizard"), "names the bad role");
+    Ok(())
 }
 
 /// #454-5 — wire types omit absent values entirely; they never serialise a
 /// JSON `null`. A result with no usage must not carry a `null` usage key.
 #[test]
-fn regression_454_5_no_null_on_the_wire() {
+fn regression_454_5_no_null_on_the_wire() -> crate::error::Result<()> {
     let result = GenerateResult {
         content: vec![Content::Text {
             text: "hi".to_string(),
@@ -3890,7 +3991,7 @@ fn regression_454_5_no_null_on_the_wire() {
         provider_metadata: Default::default(),
     };
     // Chat Completions: `usage` key is absent when there is no usage.
-    let chat = adapter_for(ApiProtocol::ChatCompletions)
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?
         .render_response(&result, &sample_prompt(), "c1")
         .unwrap();
     assert!(
@@ -3910,11 +4011,12 @@ fn regression_454_5_no_null_on_the_wire() {
         stop_details: None,
         provider_metadata: Default::default(),
     };
-    let chat_empty = adapter_for(ApiProtocol::ChatCompletions)
+    let chat_empty = adapter_for(ApiProtocol::ChatCompletions)?
         .render_response(&empty, &sample_prompt(), "c2")
         .unwrap();
     assert_eq!(chat_empty["choices"][0]["message"]["content"], "");
     assert!(!chat_empty["choices"][0]["message"]["content"].is_null());
+    Ok(())
 }
 
 /// #454-3 — the Responses `input` accepts a plain string or a heterogeneous
@@ -3922,7 +4024,7 @@ fn regression_454_5_no_null_on_the_wire() {
 #[test]
 fn regression_454_3_responses_input_accepts_string_and_known_item_array() -> crate::error::Result<()>
 {
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let p1 = adapter.parse_request(serde_json::json!({"model":"gpt-5","input":"hello there"}))?;
     assert_eq!(p1.messages.len(), 1);
     assert_eq!(text_of(&p1.messages[0].content), "hello there");
@@ -3951,8 +4053,8 @@ fn regression_454_3_responses_input_accepts_string_and_known_item_array() -> cra
 /// #432 — `response.incomplete` and unknown forward-compatible events are not
 /// mis-flagged as errors by the Responses stream decoder.
 #[test]
-fn regression_432_responses_incomplete_and_unknown_events_not_errors() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn regression_432_responses_incomplete_and_unknown_events_not_errors() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
 
     // an unknown event type is ignored, not an error
@@ -3991,10 +4093,11 @@ fn regression_432_responses_incomplete_and_unknown_events_not_errors() {
         )),
         "response.incomplete → ResponseCompleted{{ status: incomplete }}"
     );
+    Ok(())
 }
 
 #[test]
-fn responses_stream_rejects_duplicate_or_post_terminal_events() {
+fn responses_stream_rejects_duplicate_or_post_terminal_events() -> crate::error::Result<()> {
     let terminal = SseEvent {
         event: Some("response.completed".to_string()),
         data: serde_json::json!({
@@ -4018,18 +4121,19 @@ fn responses_stream_rejects_duplicate_or_post_terminal_events() {
             data: "malformed nonempty trailing data".to_string(),
         },
     ] {
-        let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+        let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
         decoder.decode(&terminal).expect("first terminal is valid");
         let error = decoder
             .decode(&trailing)
             .expect_err("no event may follow a Responses terminal");
         assert!(error.to_string().contains("after its terminal"));
     }
+    Ok(())
 }
 
 #[test]
-fn responses_stream_rejects_header_body_type_mismatch() {
-    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+fn responses_stream_rejects_header_body_type_mismatch() -> crate::error::Result<()> {
+    let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     let error = decoder
         .decode(&SseEvent {
             event: Some("response.completed".to_string()),
@@ -4041,10 +4145,12 @@ fn responses_stream_rejects_header_body_type_mismatch() {
         })
         .expect_err("explicit SSE event name must agree with the JSON type");
     assert!(error.to_string().contains("event"));
+    Ok(())
 }
 
 #[test]
-fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal() {
+fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal()
+-> crate::error::Result<()> {
     let created = |id: &str| SseEvent {
         event: Some("response.created".to_string()),
         data: serde_json::json!({
@@ -4062,13 +4168,13 @@ fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal() {
         .to_string(),
     };
 
-    let mut empty = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let mut empty = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     assert!(
         empty.decode(&created("")).is_err(),
         "an empty response.created id was accepted"
     );
 
-    let mut duplicate = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let mut duplicate = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     duplicate
         .decode(&created("resp-one"))
         .expect("first created is valid");
@@ -4077,7 +4183,7 @@ fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal() {
         "a duplicate response.created event was accepted"
     );
 
-    let mut mismatch = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let mut mismatch = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     mismatch
         .decode(&created("resp-created"))
         .expect("created is valid");
@@ -4090,7 +4196,7 @@ fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal() {
         "native response ids leaked through the mismatch diagnostic: {mismatch_text}"
     );
 
-    let mut terminal_only = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let mut terminal_only = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     assert!(
         terminal_only
             .decode(&terminal("resp-terminal-only"))
@@ -4101,10 +4207,12 @@ fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal() {
         terminal_only.finish().expect("terminal-only EOF is valid").as_slice(),
         [StreamPart::ResponseCompleted { id, .. }] if id == "resp-terminal-only"
     ));
+    Ok(())
 }
 
 #[test]
-fn responses_stream_requires_matching_status_nonempty_id_and_terminal_before_eof() {
+fn responses_stream_requires_matching_status_nonempty_id_and_terminal_before_eof()
+-> crate::error::Result<()> {
     let cases = [
         serde_json::json!({
             "type": "response.completed",
@@ -4136,7 +4244,7 @@ fn responses_stream_requires_matching_status_nonempty_id_and_terminal_before_eof
         }),
     ];
     for body in cases {
-        let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+        let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
         let event = SseEvent {
             event: body["type"].as_str().map(str::to_owned),
             data: body.to_string(),
@@ -4144,7 +4252,7 @@ fn responses_stream_requires_matching_status_nonempty_id_and_terminal_before_eof
         assert!(decoder.decode(&event).is_err(), "accepted {body}");
     }
 
-    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     decoder
         .decode(&SseEvent {
             event: Some("response.output_text.delta".into()),
@@ -4160,7 +4268,7 @@ fn responses_stream_requires_matching_status_nonempty_id_and_terminal_before_eof
         "EOF without terminal was accepted"
     );
 
-    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     decoder
         .decode(&SseEvent {
             event: Some("response.some_future_event".into()),
@@ -4171,11 +4279,12 @@ fn responses_stream_requires_matching_status_nonempty_id_and_terminal_before_eof
         decoder.finish().is_err(),
         "an unknown-only stream cannot turn EOF into success"
     );
+    Ok(())
 }
 
 #[test]
-fn responses_stream_failed_event_remains_a_typed_error() {
-    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+fn responses_stream_failed_event_remains_a_typed_error() -> crate::error::Result<()> {
+    let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
     let error = decoder
         .decode(&SseEvent {
             event: Some("response.failed".into()),
@@ -4197,14 +4306,15 @@ fn responses_stream_failed_event_remains_a_typed_error() {
             ref message,
         } if message == "provider failed"
     ));
+    Ok(())
 }
 
 /// #454-2 — the Responses streaming envelope is complete: every event carries a
 /// `sequence_number`, `response.completed` carries the full `response` object,
 /// and there is no `[DONE]` sentinel.
 #[test]
-fn regression_454_2_responses_stream_envelope() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn regression_454_2_responses_stream_envelope() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut encoder = adapter.stream_encoder("resp_x", "gpt-5");
     let mut frames = Vec::new();
     frames.extend(
@@ -4255,6 +4365,7 @@ fn regression_454_2_responses_stream_envelope() {
         )),
         "Responses must not emit [DONE]"
     );
+    Ok(())
 }
 
 /// Codex-hang regression: the Responses stream must emit
@@ -4264,8 +4375,8 @@ fn regression_454_2_responses_stream_envelope() {
 /// assistant turn from `response.completed.response.output` — an empty
 /// array renders as a blank turn even though the deltas streamed fine.
 #[test]
-fn responses_stream_completed_carries_output_array() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_stream_completed_carries_output_array() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut encoder = adapter.stream_encoder("resp_h", "gpt-5");
     let mut frames = Vec::new();
     frames.extend(
@@ -4325,6 +4436,7 @@ fn responses_stream_completed_carries_output_array() {
     assert_eq!(output[0]["type"], "reasoning");
     assert_eq!(output[1]["type"], "message");
     assert_eq!(output[1]["content"][0]["text"], "answer");
+    Ok(())
 }
 
 /// Codex tool-use regression: a `ToolCallDelta` stream produces a fully
@@ -4333,8 +4445,8 @@ fn responses_stream_completed_carries_output_array() {
 /// `output_item.done` — and the item lands in `response.completed`'s
 /// `output` array with its accumulated arguments.
 #[test]
-fn responses_stream_tool_call_lifecycle() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_stream_tool_call_lifecycle() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut encoder = adapter.stream_encoder("resp_t", "gpt-5");
     let mut frames = Vec::new();
     frames.extend(
@@ -4392,14 +4504,15 @@ fn responses_stream_tool_call_lifecycle() {
     assert_eq!(output[0]["call_id"], "call_1");
     assert_eq!(output[0]["name"], "shell");
     assert_eq!(output[0]["arguments"], "{\"cmd\":\"ls\"}");
+    Ok(())
 }
 
 /// Provider response ids are request-local continuation metadata. The public
 /// Responses lifecycle always uses the gateway request id so a multi-round
 /// server-tool stream cannot expose one provider round and settle another.
 #[test]
-fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_stream_keeps_gateway_id_across_native_lifecycle() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
 
     // decode: response.completed → ResponseCompleted
     let mut decoder = adapter.stream_decoder();
@@ -4591,11 +4704,12 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
         frame,
         SseFrame::Event { event, .. } if event.as_deref() == Some("response.failed")
     )));
+    Ok(())
 }
 
 #[test]
-fn responses_stream_keeps_one_gateway_id_across_provider_rounds() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_stream_keeps_one_gateway_id_across_provider_rounds() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut encoder = adapter.stream_encoder("gateway-multi-round", "gpt-5");
     let mut frames = encoder
         .encode(&StreamPart::ResponseStarted {
@@ -4636,6 +4750,7 @@ fn responses_stream_keeps_one_gateway_id_across_provider_rounds() {
         })
         .collect::<Vec<_>>();
     assert_eq!(response_ids, ["brc_Z2F0ZXdheS1tdWx0aS1yb3VuZA"; 3]);
+    Ok(())
 }
 
 #[test]
@@ -4662,8 +4777,8 @@ fn responses_gateway_continuation_codec_is_canonical_and_bounded() {
 }
 
 #[test]
-fn responses_stream_uses_gateway_id_without_native_start() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_stream_uses_gateway_id_without_native_start() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut encoder = adapter.stream_encoder("gateway-fallback", "gpt-5");
     let frames = encoder
         .encode(&StreamPart::ResponseCompleted {
@@ -4685,11 +4800,12 @@ fn responses_stream_uses_gateway_id_without_native_start() {
         .collect::<Vec<_>>();
     let public_id = responses::encode_gateway_continuation_id("gateway-fallback").unwrap();
     assert_eq!(response_ids, [public_id.as_str(); 3]);
+    Ok(())
 }
 
 #[test]
-fn responses_created_surfaces_native_response_started() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_created_surfaces_native_response_started() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
     let parts = decoder
         .decode(&SseEvent {
@@ -4708,11 +4824,12 @@ fn responses_created_surfaces_native_response_started() {
             source_protocol: ApiProtocol::Responses,
         }]
     );
+    Ok(())
 }
 
 #[test]
-fn responses_stream_uses_gateway_id_for_chat_upstream() {
-    let mut chat_decoder = adapter_for(ApiProtocol::ChatCompletions).stream_decoder();
+fn responses_stream_uses_gateway_id_for_chat_upstream() -> crate::error::Result<()> {
+    let mut chat_decoder = adapter_for(ApiProtocol::ChatCompletions)?.stream_decoder();
     let chat_parts = chat_decoder
         .decode(&SseEvent {
             event: None,
@@ -4730,7 +4847,7 @@ fn responses_stream_uses_gateway_id_for_chat_upstream() {
     );
 
     let mut encoder =
-        adapter_for(ApiProtocol::Responses).stream_encoder("gateway-cross-protocol", "gpt-5");
+        adapter_for(ApiProtocol::Responses)?.stream_encoder("gateway-cross-protocol", "gpt-5");
     let mut frames = Vec::new();
     for part in chat_parts {
         frames.extend(encoder.encode(&part).unwrap());
@@ -4753,6 +4870,7 @@ fn responses_stream_uses_gateway_id_for_chat_upstream() {
         .collect::<Vec<_>>();
     let public_id = responses::encode_gateway_continuation_id("gateway-cross-protocol").unwrap();
     assert_eq!(response_ids, [public_id.as_str(); 3]);
+    Ok(())
 }
 
 /// Upstreams that omit the SSE `event:` line (OpenRouter, vanilla OpenAI
@@ -4761,8 +4879,9 @@ fn responses_stream_uses_gateway_id_for_chat_upstream() {
 /// field in that case instead of treating `"message"` as the event name —
 /// otherwise every delta/lifecycle frame is silently dropped as "unknown".
 #[test]
-fn responses_stream_decoder_prefers_body_type_over_default_message_event() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_stream_decoder_prefers_body_type_over_default_message_event()
+-> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
 
     let event = SseEvent {
@@ -4784,13 +4903,14 @@ fn responses_stream_decoder_prefers_body_type_over_default_message_event() {
         ),
         "body `type` must win over the SSE default `message` event name; got {parts:?}"
     );
+    Ok(())
 }
 
 /// #434 — Responses function-call stream items map `item_id` back to the
 /// canonical `call_id`, and the `.done` event does not duplicate the arguments.
 #[test]
-fn regression_434_responses_tool_stream_id_mapping() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn regression_434_responses_tool_stream_id_mapping() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
 
     // output_item.added introduces the function call (item id ≠ call id)
@@ -4839,13 +4959,14 @@ fn regression_434_responses_tool_stream_id_mapping() {
     };
     let p = decoder.decode(&done).unwrap();
     assert!(p.is_empty(), ".done must not duplicate the arguments delta");
+    Ok(())
 }
 
 /// #422 — Anthropic inbound `ping` events are ignored, never treated as errors
 /// or content. (The outbound keepalive itself is covered in `stream` tests.)
 #[test]
-fn regression_422_messages_ping_events_ignored() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn regression_422_messages_ping_events_ignored() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let mut decoder = adapter.stream_decoder();
     let ping = SseEvent {
         event: Some("ping".to_string()),
@@ -4853,14 +4974,15 @@ fn regression_422_messages_ping_events_ignored() {
     };
     let parts = decoder.decode(&ping).expect("ping is not an error");
     assert!(parts.is_empty(), "ping yields no canonical parts");
+    Ok(())
 }
 
 /// #429 — gpt-5.x style models routed through the Responses protocol round-trip
 /// correctly; the Anthropic outbound stream frames are well-formed events.
 #[test]
-fn regression_429_responses_routing_and_messages_frames() {
+fn regression_429_responses_routing_and_messages_frames() -> crate::error::Result<()> {
     // a gpt-5 prompt rendered for the Responses protocol
-    let responses = adapter_for(ApiProtocol::Responses);
+    let responses = adapter_for(ApiProtocol::Responses)?;
     let mut prompt = sample_prompt();
     prompt.model = "gpt-5.1".to_string();
     let req = responses.render_request(&prompt).unwrap();
@@ -4868,7 +4990,7 @@ fn regression_429_responses_routing_and_messages_frames() {
     assert!(req["input"].is_array(), "Responses uses an `input` array");
 
     // Messages outbound stream frames are named SSE events
-    let anthropic = adapter_for(ApiProtocol::Messages);
+    let anthropic = adapter_for(ApiProtocol::Messages)?;
     let mut enc = anthropic.stream_encoder("m1", "claude");
     let frames = enc
         .encode(&StreamPart::TextDelta {
@@ -4881,12 +5003,13 @@ fn regression_429_responses_routing_and_messages_frames() {
             .all(|f| matches!(f, SseFrame::Event { event: Some(_), .. })),
         "Anthropic frames are named events"
     );
+    Ok(())
 }
 
 /// #454 family — usage with explicit zero is `0` on the wire, not `null`; a
 /// completed-with-usage stream carries a numeric usage chunk.
 #[test]
-fn regression_454_5_usage_zero_is_numeric_not_null() {
+fn regression_454_5_usage_zero_is_numeric_not_null() -> crate::error::Result<()> {
     let result = GenerateResult {
         content: vec![Content::Text {
             text: "hi".to_string(),
@@ -4903,12 +5026,13 @@ fn regression_454_5_usage_zero_is_numeric_not_null() {
         stop_details: None,
         provider_metadata: Default::default(),
     };
-    let chat = adapter_for(ApiProtocol::ChatCompletions)
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?
         .render_response(&result, &sample_prompt(), "c1")
         .unwrap();
     assert_eq!(chat["usage"]["prompt_tokens"], 0);
     assert!(chat["usage"]["prompt_tokens"].is_number());
     assert!(!chat["usage"]["total_tokens"].is_null());
+    Ok(())
 }
 
 // ===== JsonSchema snapshot tests =====
@@ -5020,7 +5144,7 @@ fn first_file(prompt: &Prompt) -> (&str, &DataContent) {
 }
 
 #[test]
-fn image_parses_to_file_in_every_protocol() {
+fn image_parses_to_file_in_every_protocol() -> crate::error::Result<()> {
     let base64 = DataContent::Base64 {
         data: IMG_B64.to_string(),
     };
@@ -5054,7 +5178,7 @@ fn image_parses_to_file_in_every_protocol() {
         ),
     ];
     for (protocol, body) in cases {
-        let prompt = adapter_for(protocol.clone())
+        let prompt = adapter_for(protocol.clone())?
             .parse_request(body)
             .unwrap_or_else(|e| panic!("{protocol:?} parse failed: {e:?}"));
         let (media_type, data) = first_file(&prompt);
@@ -5067,17 +5191,18 @@ fn image_parses_to_file_in_every_protocol() {
             "{protocol:?} must require image_input"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn image_file_survives_cross_protocol_round_trip() {
+fn image_file_survives_cross_protocol_round_trip() -> crate::error::Result<()> {
     // The 4x4 guarantee: a canonical image renders to each protocol's native
     // shape and parses back to the same canonical file part.
     let base64 = DataContent::Base64 {
         data: IMG_B64.to_string(),
     };
     for protocol in all_protocols() {
-        let adapter = adapter_for(protocol.clone());
+        let adapter = adapter_for(protocol.clone())?;
         let rendered = adapter.render_request(&image_file_prompt()).unwrap();
         let reparsed = adapter.parse_request(rendered).unwrap_or_else(|e| {
             panic!("{protocol:?} could not re-parse its rendered image: {e:?}")
@@ -5086,11 +5211,12 @@ fn image_file_survives_cross_protocol_round_trip() {
         assert_eq!(media_type, "image/png", "{protocol:?} lost media type");
         assert_eq!(data, &base64, "{protocol:?} lost image data");
     }
+    Ok(())
 }
 
 #[test]
-fn image_file_renders_to_chat_image_url() {
-    let req = adapter_for(ApiProtocol::ChatCompletions)
+fn image_file_renders_to_chat_image_url() -> crate::error::Result<()> {
+    let req = adapter_for(ApiProtocol::ChatCompletions)?
         .render_request(&image_file_prompt())
         .unwrap();
     let part = &req["messages"][0]["content"][0];
@@ -5099,11 +5225,12 @@ fn image_file_renders_to_chat_image_url() {
         part["image_url"]["url"],
         format!("data:image/png;base64,{IMG_B64}")
     );
+    Ok(())
 }
 
 #[test]
-fn image_file_renders_to_messages_image_block() {
-    let req = adapter_for(ApiProtocol::Messages)
+fn image_file_renders_to_messages_image_block() -> crate::error::Result<()> {
+    let req = adapter_for(ApiProtocol::Messages)?
         .render_request(&image_file_prompt())
         .unwrap();
     let block = &req["messages"][0]["content"][0];
@@ -5111,17 +5238,18 @@ fn image_file_renders_to_messages_image_block() {
     assert_eq!(block["source"]["type"], "base64");
     assert_eq!(block["source"]["media_type"], "image/png");
     assert_eq!(block["source"]["data"], IMG_B64);
+    Ok(())
 }
 
 #[test]
-fn audio_round_trips_through_chat_completions() {
+fn audio_round_trips_through_chat_completions() -> crate::error::Result<()> {
     let body = serde_json::json!({
         "model": "m",
         "messages": [{ "role": "user", "content": [
             { "type": "input_audio", "input_audio": { "data": IMG_B64, "format": "mp3" } }
         ]}]
     });
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = adapter.parse_request(body).unwrap();
     let (media_type, _) = first_file(&prompt);
     assert_eq!(media_type, "audio/mp3");
@@ -5135,6 +5263,7 @@ fn audio_round_trips_through_chat_completions() {
     assert_eq!(part["type"], "input_audio");
     assert_eq!(part["input_audio"]["format"], "mp3");
     assert_eq!(part["input_audio"]["data"], IMG_B64);
+    Ok(())
 }
 
 #[test]
@@ -5166,7 +5295,7 @@ fn unnamed_pdf_file_renders_to_messages_document_block() -> crate::error::Result
     if let Content::File { filename, .. } = &mut prompt.messages[0].content[0] {
         *filename = None;
     }
-    let req = adapter_for(ApiProtocol::Messages).render_request(&prompt)?;
+    let req = adapter_for(ApiProtocol::Messages)?.render_request(&prompt)?;
     let block = &req["messages"][0]["content"][0];
     assert_eq!(block["type"], "document");
     assert_eq!(block["source"]["media_type"], "application/pdf");
@@ -5175,14 +5304,14 @@ fn unnamed_pdf_file_renders_to_messages_document_block() -> crate::error::Result
 }
 
 #[test]
-fn image_url_parses_to_url_data_content() {
+fn image_url_parses_to_url_data_content() -> crate::error::Result<()> {
     let body = serde_json::json!({
         "model": "m",
         "messages": [{ "role": "user", "content": [
             { "type": "image_url", "image_url": { "url": "https://example.invalid/a.png" } }
         ]}]
     });
-    let prompt = adapter_for(ApiProtocol::ChatCompletions)
+    let prompt = adapter_for(ApiProtocol::ChatCompletions)?
         .parse_request(body)
         .unwrap();
     let (_, data) = first_file(&prompt);
@@ -5192,16 +5321,17 @@ fn image_url_parses_to_url_data_content() {
             url: "https://example.invalid/a.png".to_string(),
         }
     );
+    Ok(())
 }
 
 #[test]
-fn response_modalities_round_trip_through_chat_completions() {
+fn response_modalities_round_trip_through_chat_completions() -> crate::error::Result<()> {
     let body = serde_json::json!({
         "model": "m",
         "messages": [{ "role": "user", "content": "draw a cat" }],
         "modalities": ["text", "image"]
     });
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = adapter.parse_request(body).unwrap();
     assert_eq!(
         prompt.params.response_modalities,
@@ -5214,11 +5344,12 @@ fn response_modalities_round_trip_through_chat_completions() {
     );
     let req = adapter.render_request(&prompt).unwrap();
     assert_eq!(req["modalities"], serde_json::json!(["text", "image"]));
+    Ok(())
 }
 
 #[test]
-fn generated_image_renders_into_chat_response_best_effort() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn generated_image_renders_into_chat_response_best_effort() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let result = GenerateResult {
         content: vec![Content::File {
             media_type: "image/png".to_string(),
@@ -5243,6 +5374,7 @@ fn generated_image_renders_into_chat_response_best_effort() {
         part["image_url"]["url"],
         format!("data:image/png;base64,{IMG_B64}")
     );
+    Ok(())
 }
 
 // ===== structured tool results (LanguageModelV3 ToolResultOutput parity) =====
@@ -5295,19 +5427,22 @@ fn first_tool_result(prompt: &Prompt) -> (&str, Option<&str>, &ToolResultOutput)
 
 /// Render `output` through `protocol` as a tool-result request, re-parse it, and
 /// return the canonical output that survived the round trip.
-fn round_trip_tool_output(protocol: ApiProtocol, output: ToolResultOutput) -> ToolResultOutput {
-    let adapter = adapter_for(protocol.clone());
+fn round_trip_tool_output(
+    protocol: ApiProtocol,
+    output: ToolResultOutput,
+) -> crate::error::Result<ToolResultOutput> {
+    let adapter = adapter_for(protocol.clone())?;
     let rendered = adapter
         .render_request(&tool_result_prompt("call_1", None, output))
         .unwrap_or_else(|e| panic!("{protocol:?} render_request: {e}"));
     let reparsed = adapter
         .parse_request(rendered)
         .unwrap_or_else(|e| panic!("{protocol:?} parse_request: {e}"));
-    first_tool_result(&reparsed).2.clone()
+    Ok(first_tool_result(&reparsed).2.clone())
 }
 
 #[test]
-fn tool_result_text_round_trips_through_string_capable_protocols() {
+fn tool_result_text_round_trips_through_string_capable_protocols() -> crate::error::Result<()> {
     // Chat Completions, Messages, and Responses all carry a string tool-result
     // body, so a Text output survives a round trip unchanged. Generate Content
     // is excluded: its `functionResponse.response` is always a JSON object, so
@@ -5321,15 +5456,16 @@ fn tool_result_text_round_trips_through_string_capable_protocols() {
             value: "the result is 42".to_string(),
         };
         assert_eq!(
-            round_trip_tool_output(protocol.clone(), output.clone()),
+            round_trip_tool_output(protocol.clone(), output.clone())?,
             output,
             "{protocol:?} lost a Text tool result"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn tool_result_json_degrades_to_text_on_string_wires() {
+fn tool_result_json_degrades_to_text_on_string_wires() -> crate::error::Result<()> {
     // Neither OpenAI Chat Completions (`tool` message `content`) nor OpenAI
     // Responses (`function_call_output.output`) has a slot for a bare JSON value —
     // both are string (or part-array) slots. A Json output is therefore
@@ -5341,7 +5477,7 @@ fn tool_result_json_degrades_to_text_on_string_wires() {
         value: serde_json::json!({ "celsius": 21, "unit": "C" }),
     };
     for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
-        let back = round_trip_tool_output(protocol.clone(), output.clone());
+        let back = round_trip_tool_output(protocol.clone(), output.clone())?;
         assert_eq!(
             back,
             ToolResultOutput::Text {
@@ -5350,17 +5486,18 @@ fn tool_result_json_degrades_to_text_on_string_wires() {
             "{protocol:?} Json tool result must degrade to a stringified Text output"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn tool_result_json_degrades_to_text_on_anthropic() {
+fn tool_result_json_degrades_to_text_on_anthropic() -> crate::error::Result<()> {
     // Anthropic's tool_result body is a string (or block array), with no slot
     // for a bare JSON value — so a Json output degrades losslessly to its
     // stringified form rather than being dropped.
     let output = ToolResultOutput::Json {
         value: serde_json::json!({ "k": 1 }),
     };
-    let back = round_trip_tool_output(ApiProtocol::Messages, output.clone());
+    let back = round_trip_tool_output(ApiProtocol::Messages, output.clone())?;
     assert_eq!(
         back,
         ToolResultOutput::Text {
@@ -5368,30 +5505,32 @@ fn tool_result_json_degrades_to_text_on_anthropic() {
         },
         "Anthropic Json tool result degrades to a stringified Text output"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_result_error_text_round_trips_through_anthropic() {
+fn tool_result_error_text_round_trips_through_anthropic() -> crate::error::Result<()> {
     // Anthropic is the only request protocol with a native error flag
     // (`tool_result.is_error`); ErrorText must survive a round trip through it.
     let output = ToolResultOutput::ErrorText {
         value: "tool exploded".to_string(),
     };
     assert_eq!(
-        round_trip_tool_output(ApiProtocol::Messages, output.clone()),
+        round_trip_tool_output(ApiProtocol::Messages, output.clone())?,
         output,
         "Anthropic lost an ErrorText tool result"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_result_error_json_round_trips_through_anthropic() {
+fn tool_result_error_json_round_trips_through_anthropic() -> crate::error::Result<()> {
     // Anthropic's error body is a string, so ErrorJson round-trips as ErrorText
     // (the flag survives, the structure flattens — a lossless degrade).
     let output = ToolResultOutput::ErrorJson {
         value: serde_json::json!({ "code": "E_BOOM", "retryable": false }),
     };
-    let back = round_trip_tool_output(ApiProtocol::Messages, output.clone());
+    let back = round_trip_tool_output(ApiProtocol::Messages, output.clone())?;
     assert_eq!(
         back,
         ToolResultOutput::ErrorText {
@@ -5399,13 +5538,14 @@ fn tool_result_error_json_round_trips_through_anthropic() {
         },
         "Anthropic ErrorJson keeps the error flag, flattening to ErrorText"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_result_is_error_renders_anthropic_flag() {
+fn tool_result_is_error_renders_anthropic_flag() -> crate::error::Result<()> {
     // The rendered Anthropic wire must carry `is_error: true` for an error
     // output and omit it otherwise.
-    let err = adapter_for(ApiProtocol::Messages)
+    let err = adapter_for(ApiProtocol::Messages)?
         .render_request(&tool_result_prompt(
             "t1",
             None,
@@ -5419,7 +5559,7 @@ fn tool_result_is_error_renders_anthropic_flag() {
     assert_eq!(err_block["is_error"], serde_json::Value::Bool(true));
     assert_eq!(err_block["content"], "bad");
 
-    let ok = adapter_for(ApiProtocol::Messages)
+    let ok = adapter_for(ApiProtocol::Messages)?
         .render_request(&tool_result_prompt(
             "t1",
             None,
@@ -5432,10 +5572,11 @@ fn tool_result_is_error_renders_anthropic_flag() {
         ok["messages"][0]["content"][0].get("is_error").is_none(),
         "a non-error tool result must omit the is_error flag"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_result_content_round_trips_through_anthropic() {
+fn tool_result_content_round_trips_through_anthropic() -> crate::error::Result<()> {
     // A multimodal (content-variant) tool result: text + an image part survive a
     // round trip through Anthropic's tool_result block array.
     let output = ToolResultOutput::Content {
@@ -5452,14 +5593,15 @@ fn tool_result_content_round_trips_through_anthropic() {
         ],
     };
     assert_eq!(
-        round_trip_tool_output(ApiProtocol::Messages, output.clone()),
+        round_trip_tool_output(ApiProtocol::Messages, output.clone())?,
         output,
         "Anthropic lost a multimodal Content tool result"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_result_content_renders_anthropic_image_block() {
+fn tool_result_content_renders_anthropic_image_block() -> crate::error::Result<()> {
     // The rendered Anthropic wire carries the multimodal result as a block
     // array with a `text` block and an `image` block.
     let output = ToolResultOutput::Content {
@@ -5475,7 +5617,7 @@ fn tool_result_content_renders_anthropic_image_block() {
             },
         ],
     };
-    let req = adapter_for(ApiProtocol::Messages)
+    let req = adapter_for(ApiProtocol::Messages)?
         .render_request(&tool_result_prompt("t1", None, output))
         .unwrap();
     let blocks = &req["messages"][0]["content"][0]["content"];
@@ -5485,6 +5627,7 @@ fn tool_result_content_renders_anthropic_image_block() {
     assert_eq!(blocks[1]["source"]["type"], "base64");
     assert_eq!(blocks[1]["source"]["media_type"], "image/png");
     assert_eq!(blocks[1]["source"]["data"], IMG_B64);
+    Ok(())
 }
 
 #[test]
@@ -5533,9 +5676,9 @@ fn tool_result_content_rejects_non_image_media_on_anthropic() -> crate::error::R
 /// the fix `tool_choice` rode `extra` opaquely and broke tool use on
 /// non-Anthropic models while plain-text generation still worked.
 #[test]
-fn regression_547_messages_tool_choice_translates_to_chat() {
-    let inbound = adapter_for(ApiProtocol::Messages);
-    let outbound = adapter_for(ApiProtocol::ChatCompletions);
+fn regression_547_messages_tool_choice_translates_to_chat() -> crate::error::Result<()> {
+    let inbound = adapter_for(ApiProtocol::Messages)?;
+    let outbound = adapter_for(ApiProtocol::ChatCompletions)?;
 
     // auto / any / none map to the bare strings; a forced tool maps to the
     // nested `{type:function, function:{name}}` object.
@@ -5579,6 +5722,7 @@ fn regression_547_messages_tool_choice_translates_to_chat() {
         // The translated value must not leak the inbound object shape.
         assert_ne!(rendered["tool_choice"], anthropic);
     }
+    Ok(())
 }
 
 /// `tool_choice` is canonical, so it round-trips across every inbound→outbound
@@ -5586,10 +5730,10 @@ fn regression_547_messages_tool_choice_translates_to_chat() {
 /// promotion + re-rendering for a forced-tool choice (the variant that differs
 /// most between protocols).
 #[test]
-fn tool_choice_round_trips_across_protocol_matrix() {
+fn tool_choice_round_trips_across_protocol_matrix() -> crate::error::Result<()> {
     // Native `tool_choice` (or, for Google, `toolConfig`) that forces tool "X".
-    fn force_tool_field(p: ApiProtocol) -> (&'static str, serde_json::Value) {
-        match p {
+    fn force_tool_field(p: ApiProtocol) -> crate::error::Result<(&'static str, serde_json::Value)> {
+        Ok(match p {
             ApiProtocol::Messages => (
                 "tool_choice",
                 serde_json::json!({ "type": "tool", "name": "X" }),
@@ -5602,9 +5746,12 @@ fn tool_choice_round_trips_across_protocol_matrix() {
                 "tool_choice",
                 serde_json::json!({ "type": "function", "name": "X" }),
             ),
-
-            ApiProtocol::Custom(_) => unreachable!(),
-        }
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+                return Err(ModelError::invalid_request(
+                    "generation fixture requires a generation protocol",
+                ));
+            }
+        })
     }
 
     // Did the outbound request force exactly tool "X"?
@@ -5620,18 +5767,17 @@ fn tool_choice_round_trips_across_protocol_matrix() {
             ApiProtocol::Responses => {
                 req["tool_choice"]["type"] == "function" && req["tool_choice"]["name"] == "X"
             }
-
-            ApiProtocol::Custom(_) => unreachable!(),
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions => false,
         }
     }
 
     for from in all_protocols() {
         for to in all_protocols() {
-            let inbound = adapter_for(from.clone());
-            let outbound = adapter_for(to.clone());
+            let inbound = adapter_for(from.clone())?;
+            let outbound = adapter_for(to.clone())?;
 
-            let mut body = minimal_request(from.clone());
-            let (field, value) = force_tool_field(from.clone());
+            let mut body = minimal_request(from.clone())?;
+            let (field, value) = force_tool_field(from.clone())?;
             body[field] = value;
 
             let prompt = inbound
@@ -5652,10 +5798,11 @@ fn tool_choice_round_trips_across_protocol_matrix() {
             );
         }
     }
+    Ok(())
 }
 
 #[test]
-fn tool_result_content_round_trips_through_chat_completions() {
+fn tool_result_content_round_trips_through_chat_completions() -> crate::error::Result<()> {
     // OpenAI Chat Completions carries a multimodal tool result as a content-part
     // array (text + image_url), so a Content output survives there too.
     let output = ToolResultOutput::Content {
@@ -5672,10 +5819,11 @@ fn tool_result_content_round_trips_through_chat_completions() {
         ],
     };
     assert_eq!(
-        round_trip_tool_output(ApiProtocol::ChatCompletions, output.clone()),
+        round_trip_tool_output(ApiProtocol::ChatCompletions, output.clone())?,
         output,
         "Chat Completions lost a multimodal Content tool result"
     );
+    Ok(())
 }
 
 #[test]
@@ -5685,7 +5833,7 @@ fn tool_result_json_renders_responses_string_without_accepting_error_status_loss
     let output = ToolResultOutput::Json {
         value: value.clone(),
     };
-    let req = adapter_for(ApiProtocol::Responses)
+    let req = adapter_for(ApiProtocol::Responses)?
         .render_request(&tool_result_prompt("c1", None, output))?;
     assert_eq!(req["input"][0]["output"], value.to_string());
     let report = request_projection_report(
@@ -5699,7 +5847,7 @@ fn tool_result_json_renders_responses_string_without_accepting_error_status_loss
     Ok(())
 }
 #[test]
-fn tool_result_content_round_trips_through_responses() {
+fn tool_result_content_round_trips_through_responses() -> crate::error::Result<()> {
     // A multimodal Content tool result (text + inline image + inline non-image
     // file) survives a round trip through the Responses
     // `function_call_output.output` part array. The wire has a real multimodal
@@ -5728,14 +5876,15 @@ fn tool_result_content_round_trips_through_responses() {
         ],
     };
     assert_eq!(
-        round_trip_tool_output(ApiProtocol::Responses, output.clone()),
+        round_trip_tool_output(ApiProtocol::Responses, output.clone())?,
         output,
         "Responses lost a multimodal Content tool result"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_result_content_responses_file_url_round_trips_as_url() {
+fn tool_result_content_responses_file_url_round_trips_as_url() -> crate::error::Result<()> {
     // A non-image file delivered by URL renders as `input_file.file_data` =
     // the URL, and re-parses as a URL-form Media part. The media subtype is not
     // carried on the wire (a bare URL has no type hint), so it degrades to the
@@ -5749,7 +5898,7 @@ fn tool_result_content_responses_file_url_round_trips_as_url() {
             },
         }],
     };
-    let back = round_trip_tool_output(ApiProtocol::Responses, output);
+    let back = round_trip_tool_output(ApiProtocol::Responses, output)?;
     assert_eq!(
         back,
         ToolResultOutput::Content {
@@ -5762,10 +5911,11 @@ fn tool_result_content_responses_file_url_round_trips_as_url() {
         },
         "a URL-form file part round-trips as a URL, degrading only its subtype"
     );
+    Ok(())
 }
 
 #[test]
-fn tool_result_content_renders_responses_part_array() {
+fn tool_result_content_renders_responses_part_array() -> crate::error::Result<()> {
     // The rendered Responses wire carries the multimodal result as a part array:
     // text → input_text, image/* → input_image (image_url), other media →
     // input_file (file_data). It must NOT collapse to a string.
@@ -5789,7 +5939,7 @@ fn tool_result_content_renders_responses_part_array() {
             },
         ],
     };
-    let req = adapter_for(ApiProtocol::Responses)
+    let req = adapter_for(ApiProtocol::Responses)?
         .render_request(&tool_result_prompt("c1", None, output))
         .unwrap();
     let wire_output = req["input"]
@@ -5811,10 +5961,11 @@ fn tool_result_content_renders_responses_part_array() {
     );
     assert_eq!(parts[2]["type"], "input_file");
     assert_eq!(parts[2]["file_data"], "https://example.invalid/a.pdf");
+    Ok(())
 }
 
 #[test]
-fn tool_result_content_file_id_round_trips_through_responses() {
+fn tool_result_content_file_id_round_trips_through_responses() -> crate::error::Result<()> {
     // A provider file reference (V3 `file-id` / `image-file-id`) rides the
     // Responses wire as an `input_image` / `input_file` part whose payload is
     // `file_id`. It round-trips as a `FileId` content part. This is the only wire
@@ -5834,7 +5985,7 @@ fn tool_result_content_file_id_round_trips_through_responses() {
         ],
     };
     // Assert the wire shape first.
-    let req = adapter_for(ApiProtocol::Responses)
+    let req = adapter_for(ApiProtocol::Responses)?
         .render_request(&tool_result_prompt("c1", None, output.clone()))
         .unwrap();
     let parts = req["input"]
@@ -5853,10 +6004,11 @@ fn tool_result_content_file_id_round_trips_through_responses() {
 
     // Then the full round trip.
     assert_eq!(
-        round_trip_tool_output(ApiProtocol::Responses, output.clone()),
+        round_trip_tool_output(ApiProtocol::Responses, output.clone())?,
         output,
         "Responses lost a FileId tool-result content part"
     );
+    Ok(())
 }
 
 #[test]
@@ -5959,8 +6111,8 @@ fn tool_result_without_tool_name_omits_the_field() {
 /// Anthropic `server_tool_use` response blocks parse as provider-executed tool
 /// calls; ordinary `tool_use` blocks do not.
 #[test]
-fn messages_parse_response_marks_server_tool_use_provider_executed() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_parse_response_marks_server_tool_use_provider_executed() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "content": [
@@ -5987,13 +6139,14 @@ fn messages_parse_response_marks_server_tool_use_provider_executed() {
         vec![("get_weather", false), ("web_search", true)],
         "client tool_use is not provider-executed; server_tool_use is"
     );
+    Ok(())
 }
 
 /// A provider-executed canonical call renders back as an Anthropic
 /// `server_tool_use` block; a client call renders as `tool_use`.
 #[test]
-fn messages_renders_provider_executed_as_server_tool_use() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_renders_provider_executed_as_server_tool_use() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let result = GenerateResult {
         content: vec![
             Content::ToolCall {
@@ -6025,13 +6178,14 @@ fn messages_renders_provider_executed_as_server_tool_use() {
     assert_eq!(blocks[0]["type"], "tool_use");
     assert_eq!(blocks[1]["type"], "server_tool_use");
     assert_eq!(blocks[1]["name"], "web_search");
+    Ok(())
 }
 
 /// A full Anthropic server-tool round-trip preserves the `server_tool_use`
 /// block type via the `provider_executed` flag.
 #[test]
-fn messages_server_tool_use_round_trips() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_server_tool_use_round_trips() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "content": [
@@ -6045,6 +6199,7 @@ fn messages_server_tool_use_round_trips() {
         .unwrap();
     assert_eq!(rendered["content"][0]["type"], "server_tool_use");
     assert_eq!(rendered["content"][0]["id"], "srvtoolu_1");
+    Ok(())
 }
 
 // ===== A2: Anthropic MCP (`mcp_tool_use` / `mcp_tool_result`) =====
@@ -6052,8 +6207,8 @@ fn messages_server_tool_use_round_trips() {
 /// An Anthropic `mcp_tool_use` block parses to a `dynamic`, provider-executed
 /// `ToolCall` whose `server_name` is preserved in `provider_metadata`.
 #[test]
-fn messages_parses_mcp_tool_use_as_dynamic_with_server_name() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_parses_mcp_tool_use_as_dynamic_with_server_name() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "content": [
@@ -6091,6 +6246,7 @@ fn messages_parses_mcp_tool_use_as_dynamic_with_server_name() {
     let anthropic = call.4.get("anthropic").and_then(|v| v.as_object()).unwrap();
     assert_eq!(anthropic["type"], "mcp-tool-use");
     assert_eq!(anthropic["serverName"], "docs-server");
+    Ok(())
 }
 
 /// A full Anthropic MCP round-trip: an `mcp_tool_use` call followed by its inline
@@ -6098,8 +6254,8 @@ fn messages_parses_mcp_tool_use_as_dynamic_with_server_name() {
 /// and renders back to the SAME two blocks, preserving `server_name`, the tool
 /// args, and the inline result content (the A2 fidelity goal).
 #[test]
-fn messages_mcp_tool_use_and_result_round_trip() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_mcp_tool_use_and_result_round_trip() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "content": [
@@ -6147,12 +6303,13 @@ fn messages_mcp_tool_use_and_result_round_trip() {
         blocks[1]["content"],
         serde_json::json!([{ "type": "text", "text": "found 3 docs" }])
     );
+    Ok(())
 }
 
 /// An `mcp_tool_result` carrying `is_error: true` round-trips as an error result.
 #[test]
-fn messages_mcp_tool_result_error_round_trips() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_mcp_tool_result_error_round_trips() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_1",
         "content": [
@@ -6185,6 +6342,7 @@ fn messages_mcp_tool_result_error_round_trips() {
     assert_eq!(rendered["content"][1]["type"], "mcp_tool_result");
     assert_eq!(rendered["content"][1]["is_error"], true);
     assert_eq!(rendered["content"][1]["content"], "boom");
+    Ok(())
 }
 
 /// An Anthropic **request** echoing an assistant turn with `mcp_tool_use` +
@@ -6192,8 +6350,8 @@ fn messages_mcp_tool_result_error_round_trips() {
 /// assistant turn (it is NOT split into a request-side `tool_result`) and
 /// re-renders as an `mcp_tool_result` block.
 #[test]
-fn messages_request_mcp_blocks_round_trip_in_assistant_turn() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_request_mcp_blocks_round_trip_in_assistant_turn() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "model": "claude",
         "max_tokens": 100,
@@ -6257,6 +6415,7 @@ fn messages_request_mcp_blocks_round_trip_in_assistant_turn() {
         blocks[1]["content"],
         serde_json::json!([{ "type": "text", "text": "ok" }])
     );
+    Ok(())
 }
 
 // ===== A1: Responses MCP (`mcp_call`) + `local_shell_call` =====
@@ -6266,8 +6425,8 @@ fn messages_request_mcp_blocks_round_trip_in_assistant_turn() {
 /// renders back to a SINGLE `mcp_call` item that preserves the inline result —
 /// the A1 fidelity goal (the inline result was previously dropped).
 #[test]
-fn responses_mcp_call_round_trips_with_inline_result() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_mcp_call_round_trips_with_inline_result() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -6326,13 +6485,14 @@ fn responses_mcp_call_round_trips_with_inline_result() {
             .all(|i| i["type"] != "function_call" && i["type"] != "function_call_output"),
         "the dynamic call/result must not leak as plain function items"
     );
+    Ok(())
 }
 
 /// An `mcp_call` carrying an inline `error` (instead of `output`) round-trips the
 /// error faithfully on the single recombined `mcp_call` item.
 #[test]
-fn responses_mcp_call_round_trips_inline_error() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_mcp_call_round_trips_inline_error() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -6362,6 +6522,7 @@ fn responses_mcp_call_round_trips_inline_error() {
         item.get("output").is_none(),
         "no output key when only error"
     );
+    Ok(())
 }
 
 /// A `dynamic` provider-executed MCP `ToolCall` that reaches the Responses render
@@ -6370,8 +6531,8 @@ fn responses_mcp_call_round_trips_inline_error() {
 /// must degrade to a VALID `function_call` item — never to an `mcp.<name>_call` /
 /// `<name>_call` item, which is not a Responses output item type.
 #[test]
-fn responses_unpaired_dynamic_mcp_call_degrades_to_function_call() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_unpaired_dynamic_mcp_call_degrades_to_function_call() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let result = GenerateResult {
         content: vec![Content::ToolCall {
             // The `mcp.` prefix is what `parse_mcp_call` stamps on an MCP tool
@@ -6411,6 +6572,7 @@ fn responses_unpaired_dynamic_mcp_call_degrades_to_function_call() {
             && i["type"] != "mcp_call"),
         "no invalid `<name>_call` (or `mcp_call`) item for an unpaired dynamic MCP call"
     );
+    Ok(())
 }
 
 /// Multiple `mcp_call`s interleaved with a regular `function_call` in one Responses
@@ -6420,8 +6582,8 @@ fn responses_unpaired_dynamic_mcp_call_degrades_to_function_call() {
 /// `function_call_output` — that is an input item, exercised by the request-side
 /// test below).
 #[test]
-fn responses_interleaved_mcp_calls_recombine_per_call_id() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_interleaved_mcp_calls_recombine_per_call_id() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -6495,6 +6657,7 @@ fn responses_interleaved_mcp_calls_recombine_per_call_id() {
         3,
         "two mcp_calls + one independent function_call, none dropped/duplicated"
     );
+    Ok(())
 }
 
 /// On the REQUEST (input) wire, a regular `function_call` + its
@@ -6505,7 +6668,7 @@ fn responses_interleaved_mcp_calls_recombine_per_call_id() {
 #[test]
 fn responses_request_rejects_dynamic_mcp_without_mutating_client_pair() -> crate::error::Result<()>
 {
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let prompt = Prompt {
         model: "test-model".to_string(),
         system: None,
@@ -6590,8 +6753,8 @@ fn responses_request_rejects_dynamic_mcp_without_mutating_client_pair() -> crate
 /// `local_shell` whose `action` is preserved, and renders back to a
 /// `local_shell_call` item (same-protocol round-trip of the call).
 #[test]
-fn responses_local_shell_call_round_trips() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_local_shell_call_round_trips() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -6654,6 +6817,7 @@ fn responses_local_shell_call_round_trips() {
     );
     assert_eq!(item["action"]["command"], serde_json::json!(["echo", "hi"]));
     assert_eq!(item["action"]["timeout_ms"], 1000);
+    Ok(())
 }
 
 // ===== cross-protocol degrade =====
@@ -6663,9 +6827,9 @@ fn responses_local_shell_call_round_trips() {
 /// the call survives with its name + args, but the MCP server identity — which
 /// has no slot on that wire — is dropped.
 #[test]
-fn dynamic_mcp_call_degrades_to_plain_tool_call_cross_protocol() {
-    let messages = adapter_for(ApiProtocol::Messages);
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn dynamic_mcp_call_degrades_to_plain_tool_call_cross_protocol() -> crate::error::Result<()> {
+    let messages = adapter_for(ApiProtocol::Messages)?;
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
     // Parse an Anthropic MCP call into the canonical IR.
     let body = serde_json::json!({
         "id": "msg_1",
@@ -6698,6 +6862,7 @@ fn dynamic_mcp_call_degrades_to_plain_tool_call_cross_protocol() {
         !serialized.contains("docs-server") && !serialized.contains("server_name"),
         "MCP server identity must not leak onto a non-MCP wire: {serialized}"
     );
+    Ok(())
 }
 
 /// The new `dynamic` flag is omitted from JSON when false (V3
@@ -6759,8 +6924,8 @@ fn dynamic_flag_serde_defaults() {
 /// OpenAI Responses built-in tool output items parse as provider-executed tool
 /// calls; a `function_call` item does not.
 #[test]
-fn responses_parse_response_marks_server_tools_provider_executed() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_parse_response_marks_server_tools_provider_executed() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -6794,13 +6959,14 @@ fn responses_parse_response_marks_server_tools_provider_executed() {
     let ci_input: serde_json::Value = serde_json::from_str(calls[3].2).unwrap();
     assert_eq!(ci_input["code"], "print(1)");
     assert_eq!(ci_input["containerId"], "cntr_1");
+    Ok(())
 }
 
 /// On the Responses *request* (input) side a provider-executed call is NOT
 /// re-emitted as a client `function_call` item — the provider already ran it.
 #[test]
 fn responses_render_request_rejects_provider_executed_call_omission() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let prompt = Prompt {
         model: "gpt-5".to_string(),
         system: None,
@@ -6854,8 +7020,8 @@ fn responses_render_request_rejects_provider_executed_call_omission() -> crate::
 /// On the Responses *response* (output) side a provider-executed call is
 /// reproduced as its native server-tool output item, keyed by `id`.
 #[test]
-fn responses_render_response_reproduces_server_tool_item() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_render_response_reproduces_server_tool_item() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let result = GenerateResult {
         content: vec![Content::ToolCall {
             id: "ws_1".to_string(),
@@ -6884,6 +7050,7 @@ fn responses_render_response_reproduces_server_tool_item() {
         output.iter().all(|i| i["type"] != "function_call"),
         "a provider-executed call must not render as function_call"
     );
+    Ok(())
 }
 
 /// `image_generation_call` and `computer_call` output items are parsed as
@@ -6893,8 +7060,8 @@ fn responses_render_response_reproduces_server_tool_item() {
 /// by their dedicated round-trip tests — so this test no longer asserts they are
 /// dropped.)
 #[test]
-fn responses_parses_and_reproduces_image_and_computer_calls() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_parses_and_reproduces_image_and_computer_calls() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -6943,6 +7110,7 @@ fn responses_parses_and_reproduces_image_and_computer_calls() {
         output.iter().all(|i| i["type"] != "function_call"),
         "provider-executed calls must not render as function_call: {rendered}"
     );
+    Ok(())
 }
 
 /// `provider_executed` defaults to false and is omitted from the serialized
@@ -6981,9 +7149,9 @@ fn tool_call_provider_executed_omitted_when_false() {
 /// `tool_choice` must not drop it — it translates both ways and survives an
 /// Anthropic round-trip.
 #[test]
-fn tool_choice_preserves_parallel_tool_use_control() {
-    let messages = adapter_for(ApiProtocol::Messages);
-    let chat = adapter_for(ApiProtocol::ChatCompletions);
+fn tool_choice_preserves_parallel_tool_use_control() -> crate::error::Result<()> {
+    let messages = adapter_for(ApiProtocol::Messages)?;
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
 
     // Anthropic → OpenAI: nested flag becomes the top-level boolean.
     let anthropic_req = serde_json::json!({
@@ -7024,6 +7192,7 @@ fn tool_choice_preserves_parallel_tool_use_control() {
         round_trip["tool_choice"]["disable_parallel_tool_use"], true,
         "Anthropic round-trip must not drop disable_parallel_tool_use"
     );
+    Ok(())
 }
 
 /// A `tool_choice` shape an adapter can't map to the canonical slot (e.g. a
@@ -7031,8 +7200,8 @@ fn tool_choice_preserves_parallel_tool_use_control() {
 /// passes through verbatim on a same-protocol round-trip — never silently
 /// dropped or mangled.
 #[test]
-fn unmapped_tool_choice_passes_through_unchanged() {
-    let responses = adapter_for(ApiProtocol::Responses);
+fn unmapped_tool_choice_passes_through_unchanged() -> crate::error::Result<()> {
+    let responses = adapter_for(ApiProtocol::Responses)?;
     let exotic = serde_json::json!({ "type": "allowed_tools", "mode": "auto", "tools": [] });
     let req = serde_json::json!({
         "model": "m",
@@ -7049,6 +7218,7 @@ fn unmapped_tool_choice_passes_through_unchanged() {
         rendered["tool_choice"], exotic,
         "an unmapped tool_choice must pass through verbatim"
     );
+    Ok(())
 }
 
 // ===== Part C: typed tools (V3 function `strict` + provider-defined tools) =====
@@ -7070,20 +7240,20 @@ fn prompt_with_tools(tools: Vec<Tool>) -> Prompt {
 
 /// Render a tool list through `protocol` and parse it back through the same
 /// protocol — the same-protocol fidelity contract. Returns the recovered tools.
-fn round_trip_tools(protocol: &ApiProtocol, tools: Vec<Tool>) -> Vec<Tool> {
-    let adapter = adapter_for(protocol.clone());
+fn round_trip_tools(protocol: &ApiProtocol, tools: Vec<Tool>) -> crate::error::Result<Vec<Tool>> {
+    let adapter = adapter_for(protocol.clone())?;
     let prompt = prompt_with_tools(tools);
     let rendered = adapter.render_request(&prompt).unwrap();
-    adapter.parse_request(rendered).unwrap().tools
+    Ok(adapter.parse_request(rendered)?.tools)
 }
 
 /// The raw `tools` JSON a protocol renders for a tool list (for native-shape
 /// assertions).
-fn rendered_tools_json(protocol: &ApiProtocol, tools: Vec<Tool>) -> serde_json::Value {
-    adapter_for(protocol.clone())
-        .render_request(&prompt_with_tools(tools))
-        .unwrap()["tools"]
-        .clone()
+fn rendered_tools_json(
+    protocol: &ApiProtocol,
+    tools: Vec<Tool>,
+) -> crate::error::Result<serde_json::Value> {
+    Ok(adapter_for(protocol.clone())?.render_request(&prompt_with_tools(tools))?["tools"].clone())
 }
 
 // --- function-tool `strict` ---
@@ -7091,7 +7261,7 @@ fn rendered_tools_json(protocol: &ApiProtocol, tools: Vec<Tool>) -> serde_json::
 /// A function tool's `strict` flag survives a same-protocol round-trip on the
 /// two protocols whose wire has a `strict` slot (Chat Completions, Responses).
 #[test]
-fn function_tool_strict_round_trips_on_openai_protocols() {
+fn function_tool_strict_round_trips_on_openai_protocols() -> crate::error::Result<()> {
     for protocol in &[ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
         let tools = round_trip_tools(
             protocol,
@@ -7102,7 +7272,7 @@ fn function_tool_strict_round_trips_on_openai_protocols() {
                 strict: Some(true),
                 provider_metadata: Default::default(),
             }],
-        );
+        )?;
         assert_eq!(
             tools,
             vec![Tool::Function {
@@ -7115,11 +7285,12 @@ fn function_tool_strict_round_trips_on_openai_protocols() {
             "{protocol:?} must preserve function-tool strict"
         );
     }
+    Ok(())
 }
 
 /// Chat Completions renders `strict` under `function`; Responses renders it flat.
 #[test]
-fn function_tool_strict_renders_in_native_position() {
+fn function_tool_strict_renders_in_native_position() -> crate::error::Result<()> {
     let tool = Tool::Function {
         name: "f".to_string(),
         description: None,
@@ -7127,18 +7298,19 @@ fn function_tool_strict_renders_in_native_position() {
         strict: Some(true),
         provider_metadata: Default::default(),
     };
-    let chat = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool.clone()]);
+    let chat = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool.clone()])?;
     assert_eq!(chat[0]["type"], "function");
     assert_eq!(chat[0]["function"]["strict"], true);
 
-    let responses = rendered_tools_json(&ApiProtocol::Responses, vec![tool]);
+    let responses = rendered_tools_json(&ApiProtocol::Responses, vec![tool])?;
     assert_eq!(responses[0]["type"], "function");
     assert_eq!(responses[0]["strict"], true);
+    Ok(())
 }
 
 /// `strict` is omitted (not emitted as `false`/`null`) when unset.
 #[test]
-fn function_tool_strict_omitted_when_absent() {
+fn function_tool_strict_omitted_when_absent() -> crate::error::Result<()> {
     let tool = Tool::Function {
         name: "f".to_string(),
         description: None,
@@ -7146,16 +7318,17 @@ fn function_tool_strict_omitted_when_absent() {
         strict: None,
         provider_metadata: Default::default(),
     };
-    let chat = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool.clone()]);
+    let chat = rendered_tools_json(&ApiProtocol::ChatCompletions, vec![tool.clone()])?;
     assert!(
         chat[0]["function"].get("strict").is_none(),
         "absent strict must be omitted: {chat}"
     );
-    let responses = rendered_tools_json(&ApiProtocol::Responses, vec![tool]);
+    let responses = rendered_tools_json(&ApiProtocol::Responses, vec![tool])?;
     assert!(
         responses[0].get("strict").is_none(),
         "absent strict must be omitted: {responses}"
     );
+    Ok(())
 }
 
 /// Explicit strict flags are refused on wires that omit them; the native
@@ -7179,7 +7352,7 @@ fn function_tool_strict_refused_on_anthropic_and_gemini() -> crate::error::Resul
         if let Tool::Function { strict, .. } = &mut prompt.tools[0] {
             *strict = None;
         }
-        let adapter = adapter_for(protocol);
+        let adapter = adapter_for(protocol)?;
         let rendered = adapter.render_request(&prompt)?;
         assert_eq!(adapter.parse_request(rendered)?.tools, prompt.tools);
     }
@@ -7190,7 +7363,7 @@ fn function_tool_strict_refused_on_anthropic_and_gemini() -> crate::error::Resul
 /// Every Responses server tool round-trips losslessly (id `openai.<type>` +
 /// verbatim args), covering the full documented set.
 #[test]
-fn responses_provider_defined_tools_round_trip() {
+fn responses_provider_defined_tools_round_trip() -> crate::error::Result<()> {
     let cases = vec![
         Tool::ProviderDefined {
             id: "openai.web_search_preview".to_string(),
@@ -7224,14 +7397,15 @@ fn responses_provider_defined_tools_round_trip() {
         },
     ];
     for tool in cases {
-        let round_tripped = round_trip_tools(&ApiProtocol::Responses, vec![tool.clone()]);
+        let round_tripped = round_trip_tools(&ApiProtocol::Responses, vec![tool.clone()])?;
         assert_eq!(round_tripped, vec![tool.clone()], "round-trip for {tool:?}");
     }
+    Ok(())
 }
 
 /// Responses renders a server tool flat as `{type:<tool>, …args}`.
 #[test]
-fn responses_provider_defined_renders_flat_native_shape() {
+fn responses_provider_defined_renders_flat_native_shape() -> crate::error::Result<()> {
     let rendered = rendered_tools_json(
         &ApiProtocol::Responses,
         vec![Tool::ProviderDefined {
@@ -7240,18 +7414,19 @@ fn responses_provider_defined_renders_flat_native_shape() {
             args: serde_json::json!({ "search_context_size": "low" }),
             provider_metadata: Default::default(),
         }],
-    );
+    )?;
     assert_eq!(rendered[0]["type"], "web_search_preview");
     assert_eq!(rendered[0]["search_context_size"], "low");
     // No function-only keys leak onto a server tool.
     assert!(rendered[0].get("parameters").is_none());
+    Ok(())
 }
 
 /// Codex 0.145+ groups multi-agent functions in a Responses namespace tool.
 /// Its explicit name is distinct from the `namespace` type and is required by
 /// the Codex backend, so same-protocol routing must preserve it.
 #[test]
-fn responses_namespace_tool_round_trips_explicit_name() {
+fn responses_namespace_tool_round_trips_explicit_name() -> crate::error::Result<()> {
     let request = serde_json::json!({
         "model": "m",
         "input": "hi",
@@ -7266,7 +7441,7 @@ fn responses_namespace_tool_round_trips_explicit_name() {
             }]
         }]
     });
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let prompt = adapter.parse_request(request).unwrap();
     let rendered = adapter.render_request(&prompt).unwrap();
     let namespace = &rendered["tools"][0];
@@ -7278,13 +7453,14 @@ fn responses_namespace_tool_round_trips_explicit_name() {
         "Tools for spawning and managing sub-agents."
     );
     assert_eq!(namespace["tools"][0]["name"], "spawn_agent");
+    Ok(())
 }
 
 /// Every Anthropic server tool round-trips losslessly (an `anthropic.<version>`
 /// id with a stable `name` and verbatim args), covering web search, code
 /// execution, and computer use.
 #[test]
-fn messages_provider_defined_tools_round_trip() {
+fn messages_provider_defined_tools_round_trip() -> crate::error::Result<()> {
     let cases = vec![
         Tool::ProviderDefined {
             id: "anthropic.web_search_20250305".to_string(),
@@ -7306,14 +7482,15 @@ fn messages_provider_defined_tools_round_trip() {
         },
     ];
     for tool in cases {
-        let round_tripped = round_trip_tools(&ApiProtocol::Messages, vec![tool.clone()]);
+        let round_tripped = round_trip_tools(&ApiProtocol::Messages, vec![tool.clone()])?;
         assert_eq!(round_tripped, vec![tool.clone()], "round-trip for {tool:?}");
     }
+    Ok(())
 }
 
 /// Anthropic renders a server tool as `{type:<version>, name, …args}`.
 #[test]
-fn messages_provider_defined_renders_versioned_native_shape() {
+fn messages_provider_defined_renders_versioned_native_shape() -> crate::error::Result<()> {
     let rendered = rendered_tools_json(
         &ApiProtocol::Messages,
         vec![Tool::ProviderDefined {
@@ -7322,16 +7499,17 @@ fn messages_provider_defined_renders_versioned_native_shape() {
             args: serde_json::json!({ "max_uses": 3 }),
             provider_metadata: Default::default(),
         }],
-    );
+    )?;
     assert_eq!(rendered[0]["type"], "web_search_20250305");
     assert_eq!(rendered[0]["name"], "web_search");
     assert_eq!(rendered[0]["max_uses"], 3);
+    Ok(())
 }
 
 /// A Responses array mixing a function tool and a server tool keeps both, in
 /// order, with the function/provider split intact.
 #[test]
-fn responses_mixed_function_and_server_tools_round_trip() {
+fn responses_mixed_function_and_server_tools_round_trip() -> crate::error::Result<()> {
     let tools = vec![
         Tool::Function {
             name: "get_weather".to_string(),
@@ -7347,8 +7525,9 @@ fn responses_mixed_function_and_server_tools_round_trip() {
             provider_metadata: Default::default(),
         },
     ];
-    let round_tripped = round_trip_tools(&ApiProtocol::Responses, tools.clone());
+    let round_tripped = round_trip_tools(&ApiProtocol::Responses, tools.clone())?;
     assert_eq!(round_tripped, tools);
+    Ok(())
 }
 
 // --- provider-defined tools: cross-protocol faithful passthrough ---
@@ -7428,7 +7607,7 @@ fn responses_server_tools_refuse_chat_omission() -> crate::error::Result<()> {
             { "type": "namespace", "name": "multi_agent_v1", "tools": [], "description": "x" }
         ]
     });
-    let prompt = adapter_for(ApiProtocol::Responses).parse_request(responses_req)?;
+    let prompt = adapter_for(ApiProtocol::Responses)?.parse_request(responses_req)?;
     let original = prompt.clone();
     let report = request_projection_report(ApiProtocol::ChatCompletions, &prompt)?;
     assert!(report.issues.iter().all(|issue| issue.reason
@@ -7449,7 +7628,7 @@ fn messages_server_tools_refuse_chat_omission() -> crate::error::Result<()> {
             { "type": "web_search_20250305", "name": "web_search", "max_uses": 3 }
         ]
     });
-    let prompt = adapter_for(ApiProtocol::Messages).parse_request(messages_req)?;
+    let prompt = adapter_for(ApiProtocol::Messages)?.parse_request(messages_req)?;
     let original = prompt.clone();
     let report = request_projection_report(ApiProtocol::ChatCompletions, &prompt)?;
     assert!(report.issues.iter().all(|issue| issue.reason
@@ -9007,8 +9186,8 @@ fn openai_image_detail_crosses_chat_to_responses() {
 /// MCP server identity lifted into `provider_metadata["openai"]`, and renders
 /// back to the identical output item (same-protocol round trip).
 #[test]
-fn responses_mcp_approval_request_round_trips() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_mcp_approval_request_round_trips() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -9073,6 +9252,7 @@ fn responses_mcp_approval_request_round_trips() {
         !openai.contains_key("itemId"),
         "coinciding id must not be stored as itemId: {openai:?}"
     );
+    Ok(())
 }
 
 /// A Responses `mcp_approval_request` with an `approval_request_id` *distinct*
@@ -9081,8 +9261,8 @@ fn responses_mcp_approval_request_round_trips() {
 /// render so the two-id form round-trips losslessly (mirroring the AI SDK
 /// reference's `approval_request_id ?? id` choice while not dropping the raw id).
 #[test]
-fn responses_mcp_approval_request_prefers_approval_request_id() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_mcp_approval_request_prefers_approval_request_id() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_1",
         "status": "completed",
@@ -9130,13 +9310,14 @@ fn responses_mcp_approval_request_prefers_approval_request_id() {
     assert_eq!(item["approval_request_id"], "mcpr_real");
     assert_eq!(item["server_label"], "dmcp");
     assert_eq!(item["name"], "roll");
+    Ok(())
 }
 
 /// An approved `mcp_approval_response` input item round-trips through Responses as
 /// a `Content::ToolApprovalResponse` (and emits NO paired execution-denied).
 #[test]
-fn responses_mcp_approval_response_approved_round_trips() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_mcp_approval_response_approved_round_trips() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-5",
         "input": [
@@ -9179,6 +9360,7 @@ fn responses_mcp_approval_response_approved_round_trips() {
         .expect("mcp_approval_response re-emitted");
     assert_eq!(item["approval_request_id"], "mcpr_abc");
     assert_eq!(item["approve"], true);
+    Ok(())
 }
 
 /// A denied `mcp_approval_response` parses into the approval-response part PLUS a
@@ -9186,8 +9368,8 @@ fn responses_mcp_approval_response_approved_round_trips() {
 /// back to a single `mcp_approval_response` — the denial is NOT duplicated as a
 /// `function_call_output`, matching the AI SDK's execution-denied skip rule.
 #[test]
-fn responses_mcp_approval_response_denied_pairs_execution_denied() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_mcp_approval_response_denied_pairs_execution_denied() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-5",
         "input": [
@@ -9255,14 +9437,15 @@ fn responses_mcp_approval_response_denied_pairs_execution_denied() {
         denial_outputs, 0,
         "an approval-paired execution-denied is not also emitted as a string: {rendered}"
     );
+    Ok(())
 }
 
 /// A full approve handshake: the assistant's `mcp_approval_request` is answered
 /// by an approved `mcp_approval_response`, and the tool's actual output rides as
 /// an ordinary `function_call_output`. Both legs survive a same-protocol route.
 #[test]
-fn responses_approval_then_tool_runs_full_handshake() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_approval_then_tool_runs_full_handshake() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-5",
         "input": [
@@ -9292,6 +9475,7 @@ fn responses_approval_then_tool_runs_full_handshake() {
         .expect("the approved tool's output survives");
     assert_eq!(out["call_id"], "mcpr_abc");
     assert_eq!(out["output"], "4");
+    Ok(())
 }
 
 /// An unpaired denial has no native status slot and cannot become ordinary text.
@@ -9440,8 +9624,8 @@ fn raw_finish(result: &GenerateResult, provider_id: &str) -> Option<String> {
 }
 
 #[test]
-fn messages_stop_sequence_raw_round_trips() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_stop_sequence_raw_round_trips() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     // `stop_sequence` maps to the unified `Stop`, which would otherwise render
     // back as `end_turn` and lose the distinction.
     let body = serde_json::json!({
@@ -9465,11 +9649,12 @@ fn messages_stop_sequence_raw_round_trips() {
         .render_response(&result, &sample_prompt(), "msg_1")
         .unwrap();
     assert_eq!(rendered["stop_reason"], "stop_sequence");
+    Ok(())
 }
 
 #[test]
-fn messages_end_turn_raw_is_not_stashed() {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_end_turn_raw_is_not_stashed() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     // `end_turn` → `Stop` → renders `end_turn`: lossless, so nothing is stashed.
     let body = serde_json::json!({
         "id": "msg_1",
@@ -9490,11 +9675,12 @@ fn messages_end_turn_raw_is_not_stashed() {
         .render_response(&result, &sample_prompt(), "msg_1")
         .unwrap();
     assert_eq!(rendered["stop_reason"], "end_turn");
+    Ok(())
 }
 
 #[test]
-fn chat_completions_function_call_raw_round_trips() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_completions_function_call_raw_round_trips() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     // The legacy `function_call` reason maps to `ToolCalls`, which renders back
     // as `tool_calls`; the original string must survive via the stash.
     let body = serde_json::json!({
@@ -9518,11 +9704,12 @@ fn chat_completions_function_call_raw_round_trips() {
         .render_response(&result, &sample_prompt(), "chatcmpl-1")
         .unwrap();
     assert_eq!(rendered["choices"][0]["finish_reason"], "function_call");
+    Ok(())
 }
 
 #[test]
-fn chat_completions_stop_raw_is_not_stashed() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_completions_stop_raw_is_not_stashed() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "id": "chatcmpl-1",
         "object": "chat.completion",
@@ -9541,13 +9728,14 @@ fn chat_completions_stop_raw_is_not_stashed() {
         .render_response(&result, &sample_prompt(), "chatcmpl-1")
         .unwrap();
     assert_eq!(rendered["choices"][0]["finish_reason"], "stop");
+    Ok(())
 }
 
 // ===== response_format `description` (V3 `responseFormat.description`) =====
 
 #[test]
-fn responses_inbound_promotes_json_schema_description() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_inbound_promotes_json_schema_description() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "model": "gpt-4o",
         "input": "weather?",
@@ -9570,11 +9758,12 @@ fn responses_inbound_promotes_json_schema_description() {
         }
         other => panic!("expected JsonSchema, got {other:?}"),
     }
+    Ok(())
 }
 
 #[test]
-fn responses_outbound_renders_json_schema_description() {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_outbound_renders_json_schema_description() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let prompt = Prompt {
         response_format: Some(ResponseFormat::JsonSchema {
             name: Some("weather".to_string()),
@@ -9589,11 +9778,12 @@ fn responses_outbound_renders_json_schema_description() {
         rendered["text"]["format"]["description"],
         "Structured weather report"
     );
+    Ok(())
 }
 
 #[test]
-fn chat_completions_outbound_renders_json_schema_description() {
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+fn chat_completions_outbound_renders_json_schema_description() -> crate::error::Result<()> {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let prompt = Prompt {
         response_format: Some(ResponseFormat::JsonSchema {
             name: Some("weather".to_string()),
@@ -9608,15 +9798,16 @@ fn chat_completions_outbound_renders_json_schema_description() {
         rendered["response_format"]["json_schema"]["description"],
         "Structured weather report"
     );
+    Ok(())
 }
 
 #[test]
-fn json_schema_description_round_trips_openai_family() {
+fn json_schema_description_round_trips_openai_family() -> crate::error::Result<()> {
     // A description survives a same-protocol render→parse hop on both OpenAI
     // wires (Chat Completions and Responses), and is dropped on the
     // Anthropic/Google wires that carry no schema description.
     for proto in [ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
-        let adapter = adapter_for(proto.clone());
+        let adapter = adapter_for(proto.clone())?;
         let prompt = Prompt {
             response_format: Some(ResponseFormat::JsonSchema {
                 name: Some("weather".to_string()),
@@ -9639,6 +9830,7 @@ fn json_schema_description_round_trips_openai_family() {
             other => panic!("{proto:?}: expected JsonSchema, got {other:?}"),
         }
     }
+    Ok(())
 }
 
 // ===== regression: empty-string continuation tool-name fragments tool calls =====
@@ -9653,8 +9845,10 @@ fn json_schema_description_round_trips_openai_family() {
 
 /// Encode a canonical stream into Responses SSE and return the `function_call`
 /// items present in the terminal `response.completed.output` array.
-fn responses_encode_tool_items(parts: &[StreamPart]) -> Vec<serde_json::Value> {
-    let adapter = adapter_for(ApiProtocol::Responses);
+fn responses_encode_tool_items(
+    parts: &[StreamPart],
+) -> crate::error::Result<Vec<serde_json::Value>> {
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut encoder = adapter.stream_encoder("resp_repro", "kimi");
     let mut frames = Vec::new();
     for p in parts {
@@ -9669,19 +9863,19 @@ fn responses_encode_tool_items(parts: &[StreamPart]) -> Vec<serde_json::Value> {
             _ => None,
         })
         .expect("response.completed present");
-    completed["response"]["output"]
+    Ok(completed["response"]["output"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|i| i["type"] == "function_call")
         .cloned()
-        .collect()
+        .collect())
 }
 
 /// Decoder normalizes an empty continuation `name` to `None` so the canonical
 /// IR never carries `Some("")` as a (non-)name announcement.
 #[test]
-fn chat_decode_empty_continuation_name_normalized_to_none() {
+fn chat_decode_empty_continuation_name_normalized_to_none() -> crate::error::Result<()> {
     let parts = decode_stream(
         ApiProtocol::ChatCompletions,
         &[
@@ -9708,7 +9902,7 @@ fn chat_decode_empty_continuation_name_normalized_to_none() {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ),
         ],
-    );
+    )?;
     let names: Vec<Option<String>> = parts
         .iter()
         .filter_map(|p| match p {
@@ -9719,12 +9913,13 @@ fn chat_decode_empty_continuation_name_normalized_to_none() {
     assert_eq!(names[0].as_deref(), Some("exec_command"));
     assert_eq!(names[1], None, "empty continuation name normalized to None");
     assert_eq!(names[2], None, "empty continuation name normalized to None");
+    Ok(())
 }
 
 /// End-to-end (chat upstream → Responses client): an empty-name continuation
 /// stream re-encodes to exactly ONE function_call item with the full arguments.
 #[test]
-fn responses_encode_empty_continuation_name_single_tool_call() {
+fn responses_encode_empty_continuation_name_single_tool_call() -> crate::error::Result<()> {
     let parts = decode_stream(
         ApiProtocol::ChatCompletions,
         &[
@@ -9751,8 +9946,8 @@ fn responses_encode_empty_continuation_name_single_tool_call() {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ),
         ],
-    );
-    let items = responses_encode_tool_items(&parts);
+    )?;
+    let items = responses_encode_tool_items(&parts)?;
     assert_eq!(
         items.len(),
         1,
@@ -9761,13 +9956,14 @@ fn responses_encode_empty_continuation_name_single_tool_call() {
     assert_eq!(items[0]["name"], "exec_command");
     assert_eq!(items[0]["call_id"], "functions.exec_command:0");
     assert_eq!(items[0]["arguments"], "{\"cmd\":\"ls\"}");
+    Ok(())
 }
 
 /// Encoder defense-in-depth: even if a `Some("")` continuation name reaches the
 /// Responses encoder directly (any protocol decoder / future upstream), it is
 /// treated as a continuation, not a new call.
 #[test]
-fn responses_encoder_treats_empty_name_delta_as_continuation() {
+fn responses_encoder_treats_empty_name_delta_as_continuation() -> crate::error::Result<()> {
     let id = "functions.exec_command:0".to_string();
     let parts = vec![
         StreamPart::ToolCallDelta {
@@ -9792,7 +9988,7 @@ fn responses_encoder_treats_empty_name_delta_as_continuation() {
             reason: FinishReason::ToolCalls,
         },
     ];
-    let items = responses_encode_tool_items(&parts);
+    let items = responses_encode_tool_items(&parts)?;
     assert_eq!(
         items.len(),
         1,
@@ -9800,6 +9996,7 @@ fn responses_encoder_treats_empty_name_delta_as_continuation() {
     );
     assert_eq!(items[0]["name"], "exec_command");
     assert_eq!(items[0]["arguments"], "{\"cmd\":\"ls\"}");
+    Ok(())
 }
 
 /// The empty-name continuation chunks used by the Codex repro, reused to prove
@@ -9833,8 +10030,10 @@ fn empty_continuation_name_chat_events() -> Vec<(&'static str, serde_json::Value
 
 /// Encode a canonical stream as Anthropic Messages SSE and return one
 /// `(name, accumulated_input_json)` per `tool_use` block (keyed by block index).
-fn messages_encode_tool_blocks(parts: &[StreamPart]) -> Vec<(String, String)> {
-    let adapter = adapter_for(ApiProtocol::Messages);
+fn messages_encode_tool_blocks(
+    parts: &[StreamPart],
+) -> crate::error::Result<Vec<(String, String)>> {
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let mut encoder = adapter.stream_encoder("msg_repro", "claude");
     let mut frames = Vec::new();
     for p in parts {
@@ -9864,19 +10063,19 @@ fn messages_encode_tool_blocks(parts: &[StreamPart]) -> Vec<(String, String)> {
             }
         }
     }
-    blocks.into_values().collect()
+    Ok(blocks.into_values().collect())
 }
 
 /// Anthropic path (e.g. headless Claude Code): an empty-name continuation
 /// stream re-encodes to exactly ONE `tool_use` block with the full input,
 /// rather than one empty-named block per delta.
 #[test]
-fn messages_encode_empty_continuation_name_single_tool_use() {
+fn messages_encode_empty_continuation_name_single_tool_use() -> crate::error::Result<()> {
     let parts = decode_stream(
         ApiProtocol::ChatCompletions,
         &empty_continuation_name_chat_events(),
-    );
-    let blocks = messages_encode_tool_blocks(&parts);
+    )?;
+    let blocks = messages_encode_tool_blocks(&parts)?;
     assert_eq!(
         blocks.len(),
         1,
@@ -9884,12 +10083,13 @@ fn messages_encode_empty_continuation_name_single_tool_use() {
     );
     assert_eq!(blocks[0].0, "exec_command");
     assert_eq!(blocks[0].1, "{\"cmd\":\"ls\"}");
+    Ok(())
 }
 
 /// Messages encoder defense-in-depth: a `Some("")` continuation reaching the
 /// encoder directly is a continuation, not a new tool_use block.
 #[test]
-fn messages_encoder_treats_empty_name_delta_as_continuation() {
+fn messages_encoder_treats_empty_name_delta_as_continuation() -> crate::error::Result<()> {
     let id = "functions.exec_command:0".to_string();
     let parts = vec![
         StreamPart::ToolCallDelta {
@@ -9914,7 +10114,7 @@ fn messages_encoder_treats_empty_name_delta_as_continuation() {
             reason: FinishReason::ToolCalls,
         },
     ];
-    let blocks = messages_encode_tool_blocks(&parts);
+    let blocks = messages_encode_tool_blocks(&parts)?;
     assert_eq!(
         blocks.len(),
         1,
@@ -9922,6 +10122,7 @@ fn messages_encoder_treats_empty_name_delta_as_continuation() {
     );
     assert_eq!(blocks[0].0, "exec_command");
     assert_eq!(blocks[0].1, "{\"cmd\":\"ls\"}");
+    Ok(())
 }
 
 // ===== server-side tool loop: ServerToolCall / ServerToolResult rendering =====
@@ -9947,8 +10148,8 @@ fn server_tool_call_parts() -> [StreamPart; 2] {
 }
 
 #[test]
-fn messages_encodes_server_tool_call_and_result_blocks() {
-    let events = encode_stream_events(ApiProtocol::Messages, &server_tool_call_parts());
+fn messages_encodes_server_tool_call_and_result_blocks() -> crate::error::Result<()> {
+    let events = encode_stream_events(ApiProtocol::Messages, &server_tool_call_parts())?;
     // An `mcp_tool_use` content block carrying the server_name.
     assert!(
         events.iter().any(|(ev, d)| ev == "content_block_start"
@@ -9974,11 +10175,12 @@ fn messages_encodes_server_tool_call_and_result_blocks() {
                 == Some("c1")),
         "expected an mcp_tool_result block: {events:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn responses_encodes_mcp_call_output_item() {
-    let events = encode_stream_events(ApiProtocol::Responses, &server_tool_call_parts());
+fn responses_encodes_mcp_call_output_item() -> crate::error::Result<()> {
+    let events = encode_stream_events(ApiProtocol::Responses, &server_tool_call_parts())?;
     let item = events
         .iter()
         .find(|(ev, d)| {
@@ -9999,6 +10201,7 @@ fn responses_encodes_mcp_call_output_item() {
         item.pointer("/item/server_label").and_then(|v| v.as_str()),
         Some("docs")
     );
+    Ok(())
 }
 
 /// Regression #560: some OpenAI-compatible upstreams (e.g. DeepSeek / Kimi)
@@ -10011,7 +10214,7 @@ fn responses_encodes_mcp_call_output_item() {
 /// `AI_InvalidResponseDataError: Expected 'function.name' to be a string`.
 /// <https://github.com/anomalyco/opencode/issues/24137>
 #[test]
-fn chat_encode_late_tool_name_first_chunk_carries_name() {
+fn chat_encode_late_tool_name_first_chunk_carries_name() -> crate::error::Result<()> {
     let parts = decode_stream(
         ApiProtocol::ChatCompletions,
         &[
@@ -10041,8 +10244,8 @@ fn chat_encode_late_tool_name_first_chunk_carries_name() {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ),
         ],
-    );
-    let events = encode_stream_events(ApiProtocol::ChatCompletions, &parts);
+    )?;
+    let events = encode_stream_events(ApiProtocol::ChatCompletions, &parts)?;
 
     // Every emitted `tool_calls[]` delta, in wire order.
     let tool_deltas: Vec<serde_json::Value> = events
@@ -10070,15 +10273,16 @@ fn chat_encode_late_tool_name_first_chunk_carries_name() {
         args, "{\"cmd\":\"ls\"}",
         "argument fragments survive the hold-until-name buffering: {tool_deltas:?}"
     );
+    Ok(())
 }
 
 #[test]
-fn coarse_wires_drop_server_tool_activity() {
+fn coarse_wires_drop_server_tool_activity() -> crate::error::Result<()> {
     // Chat Completions and Generate Content have no server-tool / MCP stream
     // form; the activity is dropped (the final answer still streams).
     {
         let proto = ApiProtocol::ChatCompletions;
-        let events = encode_stream_events(proto.clone(), &server_tool_call_parts());
+        let events = encode_stream_events(proto.clone(), &server_tool_call_parts())?;
         assert!(
             !events.iter().any(|(_, d)| {
                 let s = d.to_string();
@@ -10089,6 +10293,7 @@ fn coarse_wires_drop_server_tool_activity() {
             "coarse wire {proto:?} must drop server-tool activity: {events:?}"
         );
     }
+    Ok(())
 }
 
 #[test]
@@ -10101,7 +10306,7 @@ fn responses_additional_tools_preserve_namespaces_and_custom_grammars() -> crate
             {"type": "function", "name": "read_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}
         ]
     }]);
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let prompt = adapter.parse_request(serde_json::json!({
         "model": "m", "input": [
             {"type": "additional_tools", "id": "tools-1", "role": "developer", "tools": tools},
@@ -10123,7 +10328,7 @@ fn responses_additional_tools_preserve_namespaces_and_custom_grammars() -> crate
 
 #[test]
 fn responses_custom_tool_calls_and_results_round_trip() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     for (kind, field, arguments) in [
         (
             "custom_tool_call",
@@ -10151,7 +10356,7 @@ fn responses_custom_tool_calls_and_results_round_trip() -> crate::error::Result<
 
 #[test]
 fn responses_custom_tool_stream_preserves_type_namespace_and_text() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::Responses);
+    let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
     let mut encoder = adapter.stream_encoder("r1", "m");
     let mut frames = Vec::new();
@@ -10289,7 +10494,7 @@ fn history_projection_chat_rejects_unrepresentable_tool_message() {
 #[test]
 fn outbound_adapters_extract_response_id() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Chat Completions: top-level `id` (`chatcmpl-...`).
-    let openai_chat = adapter_for(ApiProtocol::ChatCompletions);
+    let openai_chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "id": "chatcmpl-abc123",
         "object": "chat.completion",
@@ -10303,7 +10508,7 @@ fn outbound_adapters_extract_response_id() -> std::result::Result<(), Box<dyn st
     );
 
     // Messages: top-level `id` (`msg_...`).
-    let anthropic = adapter_for(ApiProtocol::Messages);
+    let anthropic = adapter_for(ApiProtocol::Messages)?;
     let body = serde_json::json!({
         "id": "msg_01ABC",
         "type": "message",
@@ -10318,7 +10523,7 @@ fn outbound_adapters_extract_response_id() -> std::result::Result<(), Box<dyn st
     );
 
     // Responses: top-level `id` (`resp_...`).
-    let responses = adapter_for(ApiProtocol::Responses);
+    let responses = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
         "id": "resp_abc789",
         "object": "response",
@@ -10332,7 +10537,7 @@ fn outbound_adapters_extract_response_id() -> std::result::Result<(), Box<dyn st
     );
 
     // Absent id: graceful None.
-    let openai_chat = adapter_for(ApiProtocol::ChatCompletions);
+    let openai_chat = adapter_for(ApiProtocol::ChatCompletions)?;
     let body = serde_json::json!({
         "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
     });
@@ -10353,7 +10558,7 @@ fn streaming_decoders_emit_response_started_once()
     // Responses is unaffected (it carries the id on `ResponseCompleted`).
 
     // Chat Completions: top-level `id` repeats on every chunk → emit once.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let mut dec = adapter.stream_decoder();
     let first = dec
         .decode(&SseEvent {
@@ -10388,7 +10593,7 @@ fn streaming_decoders_emit_response_started_once()
     );
 
     // Messages: `message_start` carries `message.id` (fires once).
-    let adapter = adapter_for(ApiProtocol::Messages);
+    let adapter = adapter_for(ApiProtocol::Messages)?;
     let mut dec = adapter.stream_decoder();
     let parts = dec.decode(&SseEvent {
         event: Some("message_start".to_string()),
@@ -10424,15 +10629,15 @@ fn raw_extras_are_scoped_to_their_inbound_protocol()
     ];
 
     for (source, field, value) in cases {
-        let mut body = minimal_request(source.clone());
+        let mut body = minimal_request(source.clone())?;
         body[field] = value;
-        let prompt = adapter_for(source.clone()).parse_request(body)?;
+        let prompt = adapter_for(source.clone())?.parse_request(body)?;
 
         for target in all_protocols()
             .into_iter()
             .filter(|target| target != &source)
         {
-            let rendered = adapter_for(target.clone()).render_request(&prompt)?;
+            let rendered = adapter_for(target.clone())?.render_request(&prompt)?;
             assert!(
                 rendered.get(field).is_none(),
                 "{source} extra `{field}` leaked to {target}: {rendered}"
@@ -10467,7 +10672,7 @@ fn extra_passthrough_field_is_not_in_schema() -> std::result::Result<(), Box<dyn
 fn parsed_sampling_params_are_not_duplicated_in_extra()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Chat Completions: seed / stop / penalties leave `extra`.
-    let chat = adapter_for(ApiProtocol::ChatCompletions).parse_request(serde_json::json!({
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?.parse_request(serde_json::json!({
         "model": "gpt-5",
         "messages": [{"role": "user", "content": "hi"}],
         "seed": 7,
@@ -10483,7 +10688,7 @@ fn parsed_sampling_params_are_not_duplicated_in_extra()
     }
 
     // Anthropic: top_k / stop_sequences leave `extra`.
-    let anthropic = adapter_for(ApiProtocol::Messages).parse_request(serde_json::json!({
+    let anthropic = adapter_for(ApiProtocol::Messages)?.parse_request(serde_json::json!({
         "model": "claude-opus-4-8",
         "max_tokens": 16,
         "messages": [{"role": "user", "content": "hi"}],

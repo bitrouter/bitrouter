@@ -26,6 +26,12 @@ pub enum ModelError {
         /// Provider-reported usage retained even when continuity validation fails.
         usage: Option<Box<crate::types::Usage>>,
     },
+    /// Completed Decisions response: fail delivery without retrying model work.
+    #[error("invalid decision response: {failure}")]
+    DecisionResponse {
+        /// Redacted diagnostics and independently validated accounting evidence.
+        failure: crate::decisions::DecisionResponseFailure,
+    },
     /// A provider reported a failure, including its native status.
     #[error("model provider error ({status}): {message}")]
     Provider {
@@ -89,6 +95,19 @@ pub enum ModelError {
 }
 
 impl ModelError {
+    /// Usage retained from a completed invalid Decisions response.
+    pub fn decision_usage(&self) -> Option<&crate::types::Usage> {
+        match self {
+            Self::DecisionResponse { failure } => failure.usage.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Whether a complete decision response failed and must not be replayed.
+    pub fn is_completed_decision_failure(&self) -> bool {
+        matches!(self, Self::DecisionResponse { .. })
+    }
+
     /// Construct an authentication/transport configuration failure.
     pub fn configuration(message: impl Into<String>) -> Self {
         Self::Configuration {

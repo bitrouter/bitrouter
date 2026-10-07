@@ -157,17 +157,20 @@ impl ServerToolLoop {
 
         loop {
             let mut result = upstream.run(&working).await?;
-            if let Some(usage) = &result.result.usage {
+            let generation = result.result.generation_mut().ok_or_else(|| {
+                BitrouterError::internal("server tool loop requires a generation result")
+            })?;
+            if let Some(usage) = &generation.usage {
                 add_usage(&mut total, usage);
                 had_usage = true;
             }
 
-            match classify_turn(&result.result.content, &owned) {
+            match classify_turn(&generation.content, &owned) {
                 TurnDisposition::Done | TurnDisposition::HandBack => {
                     if had_usage {
-                        result.result.usage = Some(total);
+                        generation.usage = Some(total);
                     }
-                    record_provider_calls(&mut server_calls, &result.result.content);
+                    record_provider_calls(&mut server_calls, &generation.content);
                     result.server_tool_calls = std::mem::take(&mut server_calls);
                     return Ok(ServerToolLoopOutcome {
                         result,
@@ -180,11 +183,11 @@ impl ServerToolLoop {
                     {
                         result.server_tool_calls = std::mem::take(&mut server_calls);
                         return Ok(ServerToolLoopOutcome {
-                            result: truncate(result, total, had_usage, "max_tool_iterations"),
+                            result: truncate(result, total, had_usage, "max_tool_iterations")?,
                             provider_terminal_exposed: false,
                         });
                     }
-                    record_provider_calls(&mut server_calls, &result.result.content);
+                    record_provider_calls(&mut server_calls, &generation.content);
                     let (tool_results, had_error) = self.execute_calls(&calls, ctx).await;
                     // v1: status uses the turn's aggregate error flag, not per-call.
                     // Denied calls and a single failing call among siblings are both
@@ -204,12 +207,12 @@ impl ServerToolLoop {
                         });
                     }
                     consecutive_errors = if had_error { consecutive_errors + 1 } else { 0 };
-                    append_turn(&mut working, result.result.content.clone(), tool_results);
+                    append_turn(&mut working, generation.content.clone(), tool_results);
                     rounds += 1;
                     if consecutive_errors >= self.config.max_consecutive_errors {
                         result.server_tool_calls = std::mem::take(&mut server_calls);
                         return Ok(ServerToolLoopOutcome {
-                            result: truncate(result, total, had_usage, "tool_errors"),
+                            result: truncate(result, total, had_usage, "tool_errors")?,
                             provider_terminal_exposed: false,
                         });
                     }
@@ -394,12 +397,15 @@ fn truncate(
     total: Usage,
     had_usage: bool,
     reason: &str,
-) -> ExecutionResult {
+) -> Result<ExecutionResult> {
+    let generation = result.result.generation_mut().ok_or_else(|| {
+        BitrouterError::internal("server tool truncation requires a generation result")
+    })?;
     if had_usage {
-        result.result.usage = Some(total);
+        generation.usage = Some(total);
     }
-    result.result.finish_reason = Some(FinishReason::Other(reason.to_string()));
-    result
+    generation.finish_reason = Some(FinishReason::Other(reason.to_string()));
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -580,7 +586,7 @@ mod tests {
             provider_id: "p".to_string(),
             model_id: "m".to_string(),
             account_label: None,
-            result: GenerateResult {
+            result: (GenerateResult {
                 content,
                 usage: Some(Usage {
                     prompt_tokens: 1,
@@ -595,7 +601,8 @@ mod tests {
                 response_id: None,
                 stop_details: None,
                 provider_metadata: ProviderMetadata::new(),
-            },
+            })
+            .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
@@ -632,7 +639,14 @@ mod tests {
         assert!(seen.iter().all(|prompt| prompt.tools.is_empty()));
         assert!(result.server_tool_calls.is_empty());
         assert!(matches!(
-            result.result.content.first(),
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .content
+                .first(),
             Some(Content::ToolCall { .. })
         ));
         Ok(())
@@ -771,7 +785,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executes_router_call_then_returns_text() {
+    async fn executes_router_call_then_returns_text()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
         let upstream = ScriptedUpstream::new(vec![
             exec(vec![tool_call("search")]),
@@ -793,14 +808,29 @@ mod tests {
                 .any(|m| matches!(m.role, Role::Tool))
         );
         assert!(
-            matches!(&result.result.content[0], Content::Text { text, .. } if text == "the answer")
+            matches!(&result.result.generation().ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?.content[0], Content::Text { text, .. } if text == "the answer")
         );
         // usage summed across the two iterations.
-        assert_eq!(result.result.usage.unwrap().prompt_tokens, 2);
+        assert_eq!(
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .usage
+                .as_ref()
+                .ok_or_else(|| crate::error::BitrouterError::internal("usage fixture missing"))?
+                .prompt_tokens,
+            2
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn hands_back_a_mixed_turn_without_executing() {
+    async fn hands_back_a_mixed_turn_without_executing()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
         let upstream = ScriptedUpstream::new(vec![exec(vec![
             tool_call("search"),
@@ -812,13 +842,22 @@ mod tests {
             .unwrap();
         assert_eq!(upstream.seen().len(), 1);
         assert!(matches!(
-            &result.result.content[0],
+            &result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .content[0],
             Content::ToolCall { .. }
         ));
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn tool_error_is_fed_back_and_loop_continues() {
+    async fn tool_error_is_fed_back_and_loop_continues()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let loop_ = loop_with(&["search"], true, ServerToolLoopConfig::default());
         let upstream = ScriptedUpstream::new(vec![
             exec(vec![tool_call("search")]),
@@ -843,12 +882,15 @@ mod tests {
             })
         ));
         assert!(
-            matches!(&result.result.content[0], Content::Text { text, .. } if text == "recovered")
+            matches!(&result.result.generation().ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?.content[0], Content::Text { text, .. } if text == "recovered")
         );
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn terminates_at_max_iterations() {
+    async fn terminates_at_max_iterations()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let config = ServerToolLoopConfig {
             max_iterations: 1,
             ..Default::default()
@@ -865,9 +907,17 @@ mod tests {
         // round 0 executes (rounds 0 < 1), round 1 hits the cap.
         assert_eq!(upstream.seen().len(), 2);
         assert_eq!(
-            result.result.finish_reason,
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .finish_reason,
             Some(FinishReason::Other("max_tool_iterations".to_string()))
         );
+
+        Ok(())
     }
 
     #[tokio::test]

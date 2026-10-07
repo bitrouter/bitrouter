@@ -248,7 +248,7 @@ pub struct ServerToolDeclarationsHook;
 #[async_trait]
 impl PreRequestHook for ServerToolDeclarationsHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        let decls = ServerToolDeclarations::from_prompt(ctx.prompt());
+        let decls = ServerToolDeclarations::from_prompt(ctx.require_generation_prompt()?);
         if !decls.is_empty()
             && let Ok(value) = serde_json::to_value(&decls)
         {

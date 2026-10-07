@@ -571,7 +571,13 @@ fn assemble(
 ) -> RouteReport {
     let estimated_cost = chain
         .first()
-        .and_then(|h| pricing.resolve(&h.provider, &h.service_id))
+        .and_then(|hop| {
+            serde_json::from_value::<bitrouter_ai::types::ApiProtocol>(serde_json::Value::String(
+                hop.api_protocol.clone(),
+            ))
+            .ok()
+            .and_then(|protocol| pricing.resolve(&hop.provider, &hop.service_id, &protocol))
+        })
         .filter(|p| !p.is_unconfigured())
         .map(|p| estimated_cost(&p));
     RouteReport {
@@ -932,6 +938,7 @@ policies:
         assert!(!flat.note.contains("context_tiers"), "note: {}", flat.note);
 
         let tiered = estimated_cost(&ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.0),
             output_micro_usd_per_token: Some(2.0),
             cache_read_micro_usd_per_token: None,

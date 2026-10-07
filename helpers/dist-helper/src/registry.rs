@@ -1202,6 +1202,7 @@ fn models_dev_plan_for_provider(
             provider_model_id: model_id.clone(),
             api_protocol: None,
             pricing,
+            pricing_by_protocol: BTreeMap::new(),
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
@@ -1256,6 +1257,7 @@ fn v1_models_plan_for_provider(
             provider_model_id: model.id,
             api_protocol: None,
             pricing,
+            pricing_by_protocol: BTreeMap::new(),
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
@@ -1835,6 +1837,17 @@ fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
                 "api_protocol".to_string(),
                 serde_json::to_value(api_protocol).context("serializing api_protocol")?,
             );
+            if !model.pricing_by_protocol.is_empty() {
+                let prices = model
+                    .pricing_by_protocol
+                    .iter()
+                    .map(|(protocol, pricing)| (protocol.runtime_key(), pricing))
+                    .collect::<BTreeMap<_, _>>();
+                obj.insert(
+                    "pricing_by_protocol".into(),
+                    serde_json::to_value(prices).context("serializing protocol tariffs")?,
+                );
+            }
             if let Some(pricing) = &model.pricing {
                 obj.insert(
                     "pricing".to_string(),
@@ -2328,6 +2341,14 @@ fn validate_provider<'a>(
         if let Some(pricing) = &model.pricing {
             validate_pricing(pricing, &file, &model.id, issues);
         }
+        for (protocol, pricing) in &model.pricing_by_protocol {
+            validate_pricing(
+                pricing,
+                &file,
+                &format!("{}:{}", model.id, protocol.source_key()),
+                issues,
+            );
+        }
         if let Some(reasoning_effort) = &model.reasoning_effort {
             if !model.capabilities.contains(&Capability::Reasoning) {
                 issues.push(format!(
@@ -2355,7 +2376,7 @@ fn validate_provider<'a>(
     match data.billing {
         Billing::Subscription => {
             for model in &data.models {
-                if model.pricing.is_some() {
+                if model.pricing.is_some() || !model.pricing_by_protocol.is_empty() {
                     issues.push(format!(
                         "{file}: subscription provider must not set per-token pricing (model '{}')",
                         model.id
@@ -2365,7 +2386,7 @@ fn validate_provider<'a>(
         }
         Billing::UsageToken => {
             for model in &data.models {
-                if model.pricing.is_none() {
+                if model.pricing.is_none() && model.pricing_by_protocol.is_empty() {
                     issues.push(format!(
                         "{file}: usage_token provider must set pricing for every model (model '{}')",
                         model.id
@@ -3136,17 +3157,6 @@ fn validate_pricing(pricing: &ModelPricing, file: &str, model_id: &str, issues: 
             ));
         }
         prev = Some(tier.above_input_tokens);
-        if tier
-            .input_tokens
-            .as_ref()
-            .and_then(|p| p.no_cache)
-            .is_none()
-            || tier.output_tokens.as_ref().and_then(|p| p.text).is_none()
-        {
-            issues.push(format!(
-                "{file}: model '{model_id}' context tier must set no_cache and text rates"
-            ));
-        }
     }
 }
 
@@ -3366,6 +3376,7 @@ fn pricing_from_cost(cost: Option<&ModelsDevCost>) -> Option<ModelPricing> {
         return None;
     }
     Some(ModelPricing {
+        endpoint_profile: None,
         input_tokens: Some(input),
         output_tokens: Some(output),
         context_tiers: Vec::new(),
@@ -3389,7 +3400,7 @@ fn append_models_to_provider(path: &Path, adds: &[ProviderModel]) -> Result<()> 
         .with_context(|| format!("locating models list in {}", path.display()))?;
     let mut append = String::new();
     for model in adds {
-        append.push_str(&render_model_append(model));
+        append.push_str(&render_model_append(model)?);
     }
     raw.insert_str(insert_at, &append);
     let parsed: ProviderFile = serde_saphyr::from_str(&raw)
@@ -3428,37 +3439,15 @@ fn models_insert_offset(raw: &str) -> Result<usize> {
     Ok(insert_at.unwrap_or(raw.len()))
 }
 
-fn render_model_append(model: &ProviderModel) -> String {
-    let mut out = format!(
-        "  - id: {}\n    provider_model_id: {}\n",
-        model.id, model.provider_model_id
-    );
-    if let Some(pricing) = &model.pricing {
-        out.push_str("    pricing:\n");
-        if let Some(input) = &pricing.input_tokens
-            && (input.no_cache.is_some()
-                || input.cache_read.is_some()
-                || input.cache_write.is_some())
-        {
-            out.push_str("      input_tokens:\n");
-            if let Some(v) = input.no_cache {
-                out.push_str(&format!("        no_cache: {v}\n"));
-            }
-            if let Some(v) = input.cache_read {
-                out.push_str(&format!("        cache_read: {v}\n"));
-            }
-            if let Some(v) = input.cache_write {
-                out.push_str(&format!("        cache_write: {v}\n"));
-            }
-        }
-        if let Some(output) = &pricing.output_tokens
-            && let Some(v) = output.text
-        {
-            out.push_str("      output_tokens:\n");
-            out.push_str(&format!("        text: {v}\n"));
-        }
+fn render_model_append(model: &ProviderModel) -> Result<String> {
+    let yaml = serde_saphyr::to_string(model).context("serializing appended provider model")?;
+    let mut lines = yaml.lines();
+    let first = lines.next().context("serialized provider model is empty")?;
+    let mut out = format!("  - {first}\n");
+    for line in lines {
+        out.push_str(&format!("    {line}\n"));
     }
-    out
+    Ok(out)
 }
 
 fn dist_dir(root: &Path) -> PathBuf {
@@ -3914,6 +3903,9 @@ struct ProviderModel {
     api_protocol: Option<ProtocolList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pricing: Option<ModelPricing>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pricing_by_protocol: BTreeMap<ApiProtocol, ModelPricing>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rate_limits: Option<RateLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3959,6 +3951,7 @@ enum ApiProtocol {
     Openai,
     Anthropic,
     Responses,
+    Decisions,
 }
 
 impl ApiProtocol {
@@ -3967,6 +3960,7 @@ impl ApiProtocol {
             Self::Openai => "openai",
             Self::Anthropic => "anthropic",
             Self::Responses => "responses",
+            Self::Decisions => "decisions",
         }
     }
 
@@ -3975,6 +3969,7 @@ impl ApiProtocol {
             Self::Openai => "chat_completions",
             Self::Anthropic => "messages",
             Self::Responses => "responses",
+            Self::Decisions => "decisions",
         }
     }
 }
@@ -4135,6 +4130,8 @@ struct RateLimits {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     input_tokens: Option<InputTokenPricing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4776,6 +4773,7 @@ auto_sync:
             provider_model_id: "two".to_string(),
             api_protocol: None,
             pricing: None,
+            pricing_by_protocol: BTreeMap::new(),
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
@@ -6100,5 +6098,79 @@ families:
         let path = root.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents.trim_start()).unwrap();
+    }
+    #[test]
+    fn protocol_tariffs_translate_runtime_keys_and_survive_model_append() -> Result<()> {
+        let source = r#"
+name: fixture
+display_name: Fixture
+status: active
+api_protocol:
+  - "*": [openai, responses, decisions]
+models:
+  - id: fixture/model
+    provider_model_id: native
+    pricing:
+      input_tokens: {no_cache: 2}
+      output_tokens: {text: 9}
+    pricing_by_protocol:
+      openai:
+        input_tokens: {no_cache: 1}
+      decisions:
+        endpoint_profile: openai_global
+        input_tokens: {no_cache: 0.1, cache_read: 0, cache_write: 0}
+        output_tokens: {text: 0}
+        context_tiers:
+          - above_input_tokens: 272000
+            input_tokens: {no_cache: 0.2}
+"#;
+        let provider: ProviderFile = serde_saphyr::from_str(source)?;
+        let pricing = provider
+            .models
+            .first()
+            .and_then(|model| model.pricing_by_protocol.get(&ApiProtocol::Decisions))
+            .context("source tariff missing")?;
+        let mut issues = Vec::new();
+        validate_pricing(pricing, "fixture.yaml", "fixture/model", &mut issues);
+        assert!(issues.is_empty(), "{issues:?}");
+        let models = resolved_models(&provider)?;
+        let model = models.first().context("resolved model missing")?;
+        assert_eq!(
+            model["pricing_by_protocol"]["chat_completions"]["input_tokens"]["no_cache"],
+            1.0
+        );
+        assert_eq!(
+            model["pricing_by_protocol"]["decisions"]["output_tokens"]["text"],
+            0.0
+        );
+        assert!(model["pricing_by_protocol"].get("openai").is_none());
+        assert_eq!(
+            model["pricing_by_protocol"]["decisions"]["endpoint_profile"],
+            "openai_global"
+        );
+        let model = provider.models.first().context("source model missing")?;
+        let append = render_model_append(model)?;
+        let parsed: ProviderFile = serde_saphyr::from_str(&format!(
+            "name: fixture\ndisplay_name: Fixture\nstatus: active\nmodels:\n{append}"
+        ))?;
+        let parsed = parsed.models.first().context("appended model missing")?;
+        let tariff = parsed
+            .pricing_by_protocol
+            .get(&ApiProtocol::Decisions)
+            .context("native tariff lost during append")?;
+        assert_eq!(
+            tariff.endpoint_profile,
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+        );
+        let tier = tariff
+            .context_tiers
+            .first()
+            .context("context tier lost during append")?;
+        assert_eq!(tier.above_input_tokens, 272000);
+        assert_eq!(
+            tier.input_tokens.as_ref().and_then(|input| input.no_cache),
+            Some(0.2)
+        );
+        Ok(())
     }
 }

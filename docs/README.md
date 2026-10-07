@@ -15,6 +15,17 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`BITROUTER_AI_REFACTOR_PROGRESS.md`](BITROUTER_AI_REFACTOR_PROGRESS.md) —
   Implemented extraction batches, breaking import migration, validation evidence
   and remaining work against the AI spec.
+- [`DECISIONS_API_SPEC.md`](DECISIONS_API_SPEC.md) — **v0.2, design direction
+  accepted; implemented and verified locally, in CI and with bounded API-key calls.**
+  First-class OpenAI Decisions support
+  stacked on #962: typed calls, operation-compatible routing, shared lifecycle
+  and protocol pricing. Decision-driven routing policy remains a separate PR.
+- [`DECISIONS_API_PROGRESS.md`](DECISIONS_API_PROGRESS.md) — Local batch evidence
+  and remaining gateway/provider acceptance for the stacked Decisions change.
+- [`DECISIONS_API_MIGRATION.md`](DECISIONS_API_MIGRATION.md) — Alpha payload,
+  hook and pricing migration, with the read-only external Cloud inventory.
+- [`DECISIONS_API_ACCEPTANCE.md`](DECISIONS_API_ACCEPTANCE.md) — Requirement-by-requirement
+  local/hosted/live evidence and qualified provider/Cloud delivery boundaries.
 - [`GEMINI_PROTOCOL_RETIREMENT_SPEC.md`](GEMINI_PROTOCOL_RETIREMENT_SPEC.md) —
   **approved; implementation in progress.** Removes native Gemini Generate Content ingress and
   upstream support, retains metered Gemini through Chat Completions, and defines

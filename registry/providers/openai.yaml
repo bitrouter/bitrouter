@@ -148,6 +148,25 @@ models:
         text: 50
   - id: openai/gpt-6-luna
     provider_model_id: gpt-6-luna
+    # Native endpoint support and input-only tariff: Decisions guide, verified
+    # 2026-10-06. The >272K whole-input multiplier comes from the model page.
+    # Cached subsets remain unavailable in metering until their basis is verified.
+    # https://developers.openai.com/api/docs/guides/decisions
+    # https://developers.openai.com/api/docs/models/gpt-6-luna
+    api_protocol: [openai, responses, decisions]
+    pricing_by_protocol:
+      decisions:
+        endpoint_profile: openai_global
+        input_tokens:
+          no_cache: 0.10
+          cache_read: 0
+          cache_write: 0
+        output_tokens:
+          text: 0
+        context_tiers:
+          - above_input_tokens: 272000
+            input_tokens:
+              no_cache: 0.20
     pricing:
       input_tokens:
         no_cache: 0.1

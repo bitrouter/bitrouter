@@ -19,9 +19,12 @@ struct CountRequests(Arc<AtomicUsize>);
 impl PreRequestHook for CountRequests {
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        assert!(ctx.prompt().tools.is_empty());
-        assert_eq!(ctx.prompt().tool_choice, Some(ToolChoice::None));
-        assert!(ctx.prompt().params.max_tokens.is_none());
+        assert!(ctx.require_generation_prompt()?.tools.is_empty());
+        assert_eq!(
+            ctx.require_generation_prompt()?.tool_choice,
+            Some(ToolChoice::None)
+        );
+        assert!(ctx.require_generation_prompt()?.params.max_tokens.is_none());
         assert!(!ctx.headers().contains_key("x-bitrouter-controller-id"));
         Ok(HookDecision::Allow)
     }

@@ -3295,8 +3295,9 @@ impl ModelSelector for PolicyRuntime {
                 ))
             })?;
             let input_model = ctx.model().to_string();
-            let input_effort = ctx.prompt().params.reasoning_effort;
-            let mut decision = router.candidate_for_guarded_policy(ctx.prompt(), ctx.headers());
+            let input_effort = ctx.require_generation_prompt()?.params.reasoning_effort;
+            let mut decision = router
+                .candidate_for_guarded_policy(ctx.require_generation_prompt()?, ctx.headers());
             let projection = RouteProjection::parse_key(&decision.observed_route_projection)
                 .ok_or_else(|| {
                     bitrouter_sdk::BitrouterError::internal(
@@ -3343,7 +3344,7 @@ impl ModelSelector for PolicyRuntime {
                 experiment: decision.experiment.clone(),
                 route_measurement: decision.route_measurement.clone(),
                 policy: guard.clone(),
-                carries_tools: !ctx.prompt().tools.is_empty(),
+                carries_tools: !ctx.require_generation_prompt()?.tools.is_empty(),
                 tool_use_tier: decision.tool_use_tier(),
                 tool_safe_tiers: decision.tool_safe_tiers(),
             };
@@ -3352,7 +3353,7 @@ impl ModelSelector for PolicyRuntime {
                     ctx.caller().user_id(),
                     ctx.request_id(),
                     inbound_protocol,
-                    ctx.prompt(),
+                    ctx.require_generation_prompt()?,
                     &captured_at,
                     guarded_input,
                 )
@@ -3409,10 +3410,10 @@ impl ModelSelector for PolicyRuntime {
             if let Some(target) = selected {
                 ctx.set_model(target.model());
                 if let Some(effort) = target.effort() {
-                    ctx.set_policy_reasoning_effort(effort);
+                    ctx.set_policy_reasoning_effort(effort)?;
                 }
                 if let Some(effort) = pinned_continuation_effort(ctx) {
-                    ctx.set_policy_reasoning_effort_override(effort);
+                    ctx.set_policy_reasoning_effort_override(effort)?;
                 }
                 mark_predictive_single_target(&route_projection, ctx);
             }
@@ -3420,8 +3421,9 @@ impl ModelSelector for PolicyRuntime {
             return Ok(());
         }
         let input_model = ctx.model().to_string();
-        let input_effort = ctx.prompt().params.reasoning_effort;
-        let mut decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        let input_effort = ctx.require_generation_prompt()?.params.reasoning_effort;
+        let mut decision =
+            router.decision_for_bound_policy(ctx.require_generation_prompt()?, ctx.headers());
         if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
             && let Some(adjustment) = plan.adjustment.as_ref()
         {
@@ -3439,10 +3441,10 @@ impl ModelSelector for PolicyRuntime {
         if let Some(target) = selected {
             ctx.set_model(target.model());
             if let Some(effort) = target.effort() {
-                ctx.set_policy_reasoning_effort(effort);
+                ctx.set_policy_reasoning_effort(effort)?;
             }
             if let Some(effort) = pinned_continuation_effort(ctx) {
-                ctx.set_policy_reasoning_effort_override(effort);
+                ctx.set_policy_reasoning_effort_override(effort)?;
             }
             mark_predictive_single_target(&route_projection, ctx);
         }

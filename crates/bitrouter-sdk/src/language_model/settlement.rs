@@ -18,12 +18,16 @@ use crate::language_model::timing::FirstTokenKind;
 use crate::language_model::types::RoutingTarget;
 use bitrouter_ai::auth::ContinuationAuthority;
 use bitrouter_ai::protocol::responses::CausalPrefixCommitment;
-use bitrouter_ai::types::{ApiProtocol, FinishReason, ReasoningEffort, UsageOrigin};
+use bitrouter_ai::types::{
+    ApiProtocol, FinishReason, ModelOperation, ReasoningEffort, UsageOrigin,
+};
 
 /// Success-only lifecycle data supplied to required finalizers before a
 /// response is allowed to advertise successful completion.
 #[derive(Clone)]
 pub struct RequiredFinalizationContext {
+    /// Actual operation derived from the typed input.
+    pub operation: ModelOperation,
     /// Stable gateway request and public Responses continuation identity.
     pub request_id: String,
     /// Process-unique request attempt used to own provisional finalizer state.
@@ -288,6 +292,8 @@ pub trait RequiredFinalizer: Send + Sync {
 /// that need those compute them inside their own [`SettlementRecorder`]
 /// impls.
 pub struct SettlementContext {
+    /// Actual operation derived from the typed input.
+    pub operation: ModelOperation,
     /// The request id.
     pub request_id: String,
     /// The caller.
@@ -418,6 +424,7 @@ mod tests {
 
     fn make_settlement_context() -> SettlementContext {
         SettlementContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: "test-req".into(),
             caller: CallerContext::local(),
             target: None,

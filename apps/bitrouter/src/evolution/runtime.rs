@@ -459,7 +459,9 @@ impl EvolutionRuntime {
                 ctx.request_id(),
                 DecisionContext {
                     selector: ctx.model().to_owned(),
-                    fingerprint: crate::policy_table_router::PolicyTable::fingerprint(ctx.prompt()),
+                    fingerprint: crate::policy_table_router::PolicyTable::fingerprint(
+                        ctx.require_generation_prompt()?,
+                    ),
                 },
                 &dependencies,
                 bypass,

@@ -13,6 +13,7 @@ pub mod auth;
 pub mod catalog;
 pub mod client;
 pub mod conversion;
+pub mod decisions;
 pub mod diagnostics;
 pub mod error;
 pub mod protocol;

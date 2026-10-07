@@ -102,8 +102,7 @@ fn rate_limit_presentation_survives_all_sse_codecs() -> bitrouter_sdk::Result<()
                 assert!(wire.contains("rate_limit_error"), "{wire}");
             }
             ApiProtocol::Responses => assert!(wire.contains("response.failed"), "{wire}"),
-
-            ApiProtocol::Custom(_) => {}
+            ApiProtocol::Decisions | ApiProtocol::Custom(_) => {}
         }
     }
     Ok(())

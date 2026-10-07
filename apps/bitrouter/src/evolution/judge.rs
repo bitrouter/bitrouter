@@ -79,8 +79,12 @@ pub async fn evaluate(
         .execute(request)
         .await
         .context("executing checkpoint judge")?;
+    let generation = response
+        .result
+        .generation()
+        .context("judge returned a non-generation result")?;
     let mut text = String::new();
-    for content in &response.result.content {
+    for content in &generation.content {
         match content {
             Content::Text { text: part, .. } => text.push_str(part),
             Content::Reasoning { .. } => {}
@@ -95,7 +99,7 @@ pub async fn evaluate(
         model: model.into(),
         judge_version: JUDGE_VERSION.into(),
         input_digest,
-        usage: response.result.usage,
+        usage: generation.usage.clone(),
         evaluation,
     })
 }

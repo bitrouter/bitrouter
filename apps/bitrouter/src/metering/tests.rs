@@ -30,10 +30,27 @@ async fn pool() -> DatabaseConnection {
 }
 
 fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
-    SettlementContext {
+    let mut context = SettlementContext {
+        operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: format!("r-{api_key}-{prompt}-{completion}"),
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
-        target: None,
+        target: Some(bitrouter_sdk::language_model::types::RoutingTarget {
+            provider_name: "openai".into(),
+            service_id: "gpt-5".into(),
+            api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,
+            api_base: "https://fixture.invalid/v1".into(),
+            api_key: String::new(),
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            chat_google_extensions: false,
+            reasoning_effort: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+            headers: Vec::new(),
+        }),
         model_id: "gpt-5".into(),
         reasoning_effort: None,
         provider_id: "openai".into(),
@@ -58,6 +75,16 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         finish_reason: None,
         error: None,
         events: bitrouter_sdk::EventBus::new(),
+    };
+    freeze_tariff(&mut context, &pricing());
+    context
+}
+
+fn freeze_tariff(context: &mut SettlementContext, pricing: &PricingTable) {
+    if let Some(target) = &context.target {
+        let mut anchored = pricing.clone();
+        anchored.configure_endpoint(&target.provider_name, None, &target.api_base);
+        context.emit(anchored.snapshot(target));
     }
 }
 
@@ -292,6 +319,7 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
     let store = MeteringStore::new(pool);
     let recorder = MeteringRecorder::new(store.clone(), Arc::new(PricingTable::new()));
     let mut settlement = ctx("unknown", 0, 0);
+    settlement.target = None;
     settlement.provider_id.clear();
     settlement.model_id.clear();
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
@@ -381,7 +409,7 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
         "gpt-5",
         ModelPricing::cache_aware(Some(2.0), Some(0.2), Some(2.5), Some(10.0)),
     );
-    let recorder = MeteringRecorder::new(store.clone(), Arc::new(table));
+    let recorder = MeteringRecorder::new(store.clone(), Arc::new(table.clone()));
     let raw = serde_json::json!({
         "prompt_tokens": 100,
         "completion_tokens": 30,
@@ -389,6 +417,7 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
         "cache_write_tokens": 20
     });
     let mut settlement = ctx("cache", 100, 30);
+    freeze_tariff(&mut settlement, &table);
     settlement.reasoning_tokens = 10;
     settlement.cache_read_tokens = 40;
     settlement.cache_write_tokens = 20;
@@ -423,8 +452,10 @@ async fn recorder_marks_charge_unknown_when_pricing_is_missing() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
     let empty = Arc::new(PricingTable::new());
-    let recorder = MeteringRecorder::new(store.clone(), empty);
-    recorder.record(&mut ctx("k1", 10, 5)).await?;
+    let recorder = MeteringRecorder::new(store.clone(), empty.clone());
+    let mut settlement = ctx("k1", 10, 5);
+    freeze_tariff(&mut settlement, &empty);
+    recorder.record(&mut settlement).await?;
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 0);
     // The row was still written — count is 1.

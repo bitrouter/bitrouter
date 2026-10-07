@@ -2,6 +2,7 @@
 //! `App::builder().language_model(|lm| ...)`; also driven directly by `Plugin`
 //! convenience packages.
 
+use std::any::{TypeId, type_name};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,27 +11,29 @@ use crate::language_model::executor::Executor;
 use crate::language_model::hooks::{
     ExecutionHook, ObserveHook, PreRequestHook, RouteHook, StreamHook,
 };
+use crate::language_model::operations::{HookRegistration, HookStage, OperationScope};
 use crate::language_model::pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 use crate::language_model::request_checks::RequestCheckerRunner;
 use crate::language_model::routing::ModelSelector;
 use crate::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy, RoutingTable};
 use crate::language_model::server_tools::loop_controller::ServerToolLoop;
 use crate::language_model::settlement::{RequiredFinalizer, SettlementRecorder};
+use bitrouter_ai::types::ModelOperation;
 
 /// Builds a [`Pipeline`] for the `language_model` protocol. Every method takes
 /// `&mut self` and returns `&mut Self`, so it composes both inside the
 /// `App::builder().language_model(|lm| ...)` closure and in `Plugin::install`.
 pub struct PipelineBuilder {
-    pre_resolution_hooks: Vec<Arc<dyn PreRequestHook>>,
-    router_preparation_hooks: Vec<Arc<dyn PreRequestHook>>,
-    pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
-    route_hooks: Vec<Arc<dyn RouteHook>>,
-    model_selectors: Vec<Arc<dyn ModelSelector>>,
-    execution_hooks: Vec<Arc<dyn ExecutionHook>>,
+    pre_resolution_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
+    router_preparation_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
+    pre_request_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
+    route_hooks: Vec<HookRegistration<dyn RouteHook>>,
+    model_selectors: Vec<HookRegistration<dyn ModelSelector>>,
+    execution_hooks: Vec<HookRegistration<dyn ExecutionHook>>,
     stream_hooks: Vec<Arc<dyn StreamHook>>,
-    settlement_recorders: Vec<Arc<dyn SettlementRecorder>>,
-    required_finalizers: Vec<Arc<dyn RequiredFinalizer>>,
-    observe_hooks: Vec<Arc<dyn ObserveHook>>,
+    settlement_recorders: Vec<HookRegistration<dyn SettlementRecorder>>,
+    required_finalizers: Vec<HookRegistration<dyn RequiredFinalizer>>,
+    observe_hooks: Vec<HookRegistration<dyn ObserveHook>>,
     routing_table: Option<Arc<dyn RoutingTable>>,
     fallback_policy: Option<Arc<dyn FallbackPolicy>>,
     executor: Option<Arc<dyn Executor>>,
@@ -38,6 +41,15 @@ pub struct PipelineBuilder {
     keepalive_interval: Duration,
     fallback_backoff: Vec<Duration>,
     request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
+    served_operations: OperationScope,
+    requirements: Vec<HookRequirement>,
+}
+
+struct HookRequirement {
+    stage: HookStage,
+    type_id: TypeId,
+    name: &'static str,
+    operations: OperationScope,
 }
 
 impl PipelineBuilder {
@@ -61,7 +73,31 @@ impl PipelineBuilder {
             keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: Vec::new(),
             request_checker_runner: None,
+            served_operations: OperationScope::Generation,
+            requirements: Vec::new(),
         }
+    }
+
+    /// Enable operations only after migrating the host's required protections.
+    pub fn served_operations(&mut self, operations: OperationScope) -> &mut Self {
+        self.served_operations = operations;
+        self
+    }
+
+    /// Declare required protection independently of whether it was registered.
+    /// The concrete type and stage must match an applicable registration.
+    pub fn require_hook<H: 'static>(
+        &mut self,
+        stage: HookStage,
+        operations: OperationScope,
+    ) -> &mut Self {
+        self.requirements.push(HookRequirement {
+            stage,
+            type_id: TypeId::of::<H>(),
+            name: type_name::<H>(),
+            operations,
+        });
+        self
     }
 
     /// Set the routing table (required).
@@ -116,8 +152,21 @@ impl PipelineBuilder {
     ///
     /// Requests without checks retain the legacy SDK order: ordinary hooks
     /// run before the final selector's defaults and may rewrite the selector.
-    pub fn pre_request_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
-        self.pre_request_hooks.push(Arc::new(hook));
+    pub fn pre_request_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
+        self.pre_request_hook_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn pre_request_hook_for<H: PreRequestHook + 'static>(
+        &mut self,
+        hook: H,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.pre_request_hooks.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
@@ -125,8 +174,21 @@ impl PipelineBuilder {
     /// binding, defaults, and native request checks.
     /// Production uses this narrow stage for local declarations, auth, session
     /// selector normalization, and continuation preflight.
-    pub fn pre_resolution_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
-        self.pre_resolution_hooks.push(Arc::new(hook));
+    pub fn pre_resolution_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
+        self.pre_resolution_hook_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn pre_resolution_hook_for<H: PreRequestHook + 'static>(
+        &mut self,
+        hook: H,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.pre_resolution_hooks.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
@@ -136,8 +198,21 @@ impl PipelineBuilder {
     /// A selector rewrite changes effective defaults, preferences, and policy,
     /// but never replaces the ingress router identity or checker bindings. A
     /// request without frozen checks cannot gain checks through a rewrite.
-    pub fn router_preparation_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
-        self.router_preparation_hooks.push(Arc::new(hook));
+    pub fn router_preparation_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
+        self.router_preparation_hook_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn router_preparation_hook_for<H: PreRequestHook + 'static>(
+        &mut self,
+        hook: H,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.router_preparation_hooks.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
@@ -148,21 +223,60 @@ impl PipelineBuilder {
     }
 
     /// Register a Stage-2 route hook (runs in registration order).
-    pub fn route_hook(&mut self, hook: impl RouteHook + 'static) -> &mut Self {
-        self.route_hooks.push(Arc::new(hook));
+    pub fn route_hook<H: RouteHook + 'static>(&mut self, hook: H) -> &mut Self {
+        self.route_hook_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn route_hook_for<H: RouteHook + 'static>(
+        &mut self,
+        hook: H,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.route_hooks.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
     /// Register an effective-model selector. It runs only when Stage-0 resolves
     /// a preset with a `policy` binding, before Strategy 1/2/3 routing.
-    pub fn model_selector(&mut self, selector: Arc<dyn ModelSelector>) -> &mut Self {
-        self.model_selectors.push(selector);
+    pub fn model_selector<H: ModelSelector + 'static>(&mut self, hook: Arc<H>) -> &mut Self {
+        self.model_selector_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn model_selector_for<H: ModelSelector + 'static>(
+        &mut self,
+        hook: Arc<H>,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.model_selectors.push(HookRegistration::new(
+            hook,
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
     /// Register a Stage-3 execution hook.
-    pub fn execution_hook(&mut self, hook: impl ExecutionHook + 'static) -> &mut Self {
-        self.execution_hooks.push(Arc::new(hook));
+    pub fn execution_hook<H: ExecutionHook + 'static>(&mut self, hook: H) -> &mut Self {
+        self.execution_hook_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn execution_hook_for<H: ExecutionHook + 'static>(
+        &mut self,
+        hook: H,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.execution_hooks.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
@@ -174,24 +288,60 @@ impl PipelineBuilder {
     }
 
     /// Register a `SettlementRecorder` into the always-run list.
-    pub fn settlement_recorder(
+    pub fn settlement_recorder<H: SettlementRecorder + 'static>(&mut self, hook: H) -> &mut Self {
+        self.settlement_recorder_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn settlement_recorder_for<H: SettlementRecorder + 'static>(
         &mut self,
-        recorder: impl SettlementRecorder + 'static,
+        hook: H,
+        supported_operations: OperationScope,
     ) -> &mut Self {
-        self.settlement_recorders.push(Arc::new(recorder));
+        self.settlement_recorders.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
     /// Register a success-critical finalizer whose errors prevent a successful
     /// response terminal from reaching the caller.
-    pub fn required_finalizer(&mut self, finalizer: impl RequiredFinalizer + 'static) -> &mut Self {
-        self.required_finalizers.push(Arc::new(finalizer));
+    pub fn required_finalizer<H: RequiredFinalizer + 'static>(&mut self, hook: H) -> &mut Self {
+        self.required_finalizer_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn required_finalizer_for<H: RequiredFinalizer + 'static>(
+        &mut self,
+        hook: H,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.required_finalizers.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
     /// Register a cross-cutting `ObserveHook`.
-    pub fn observe_hook(&mut self, hook: impl ObserveHook + 'static) -> &mut Self {
-        self.observe_hooks.push(Arc::new(hook));
+    pub fn observe_hook<H: ObserveHook + 'static>(&mut self, hook: H) -> &mut Self {
+        self.observe_hook_for(hook, OperationScope::Generation)
+    }
+
+    /// Register explicit operation support for this stage.
+    pub fn observe_hook_for<H: ObserveHook + 'static>(
+        &mut self,
+        hook: H,
+        supported_operations: OperationScope,
+    ) -> &mut Self {
+        self.observe_hooks.push(HookRegistration::new(
+            Arc::new(hook),
+            supported_operations,
+            TypeId::of::<H>(),
+        ));
         self
     }
 
@@ -204,6 +354,50 @@ impl PipelineBuilder {
     /// Finalise into a [`Pipeline`]. Fails if the routing table or executor is
     /// missing.
     pub fn build(self) -> Result<Pipeline> {
+        for requirement in &self.requirements {
+            for operation in [ModelOperation::Generation, ModelOperation::Decisions] {
+                if !self.served_operations.contains(operation)
+                    || !requirement.operations.contains(operation)
+                {
+                    continue;
+                }
+                let installed = match requirement.stage {
+                    HookStage::PreResolution => {
+                        covers(&self.pre_resolution_hooks, requirement.type_id, operation)
+                    }
+                    HookStage::RouterPreparation => covers(
+                        &self.router_preparation_hooks,
+                        requirement.type_id,
+                        operation,
+                    ),
+                    HookStage::PreRequest => {
+                        covers(&self.pre_request_hooks, requirement.type_id, operation)
+                    }
+                    HookStage::Route => covers(&self.route_hooks, requirement.type_id, operation),
+                    HookStage::ModelSelection => {
+                        covers(&self.model_selectors, requirement.type_id, operation)
+                    }
+                    HookStage::Execution => {
+                        covers(&self.execution_hooks, requirement.type_id, operation)
+                    }
+                    HookStage::Settlement => {
+                        covers(&self.settlement_recorders, requirement.type_id, operation)
+                    }
+                    HookStage::Finalization => {
+                        covers(&self.required_finalizers, requirement.type_id, operation)
+                    }
+                    HookStage::Observation => {
+                        covers(&self.observe_hooks, requirement.type_id, operation)
+                    }
+                };
+                if !installed {
+                    return Err(BitrouterError::internal(format!(
+                        "required hook '{}' at {:?} does not cover {operation:?}",
+                        requirement.name, requirement.stage
+                    )));
+                }
+            }
+        }
         if self.required_finalizers.len() > 1 {
             return Err(BitrouterError::internal(
                 "language_model pipeline: at most one required finalizer is supported; compose atomic success-critical work behind one finalizer",
@@ -239,8 +433,19 @@ impl PipelineBuilder {
             pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             detached_executions: tokio_util::task::TaskTracker::new(),
             request_checker_runner: self.request_checker_runner,
+            served_operations: self.served_operations,
         })
     }
+}
+
+fn covers<T: ?Sized>(
+    hooks: &[HookRegistration<T>],
+    type_id: TypeId,
+    operation: ModelOperation,
+) -> bool {
+    hooks
+        .iter()
+        .any(|hook| hook.type_id == type_id && hook.supports(operation))
 }
 
 impl Default for PipelineBuilder {
