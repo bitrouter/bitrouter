@@ -231,6 +231,13 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
             api_protocol: Some(m.api_protocol.to_protocol_list()),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
+            pricing_by_protocol: m
+                .pricing_by_protocol
+                .iter()
+                .map(|(protocol, pricing)| {
+                    (protocol.clone(), map_pricing(pricing).unwrap_or_default())
+                })
+                .collect(),
             capabilities: m.capabilities.clone(),
             reasoning_effort: m.reasoning_effort.clone(),
             compatibility: m.compatibility.clone(),
@@ -301,6 +308,7 @@ mod tests {
                 id: "deepseek/deepseek-v3.2".to_string(),
                 provider_model_id: "deepseek-v3.2".to_string(),
                 api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
+                pricing_by_protocol: std::collections::HashMap::new(),
                 pricing: Some(RegistryPricing {
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
@@ -747,6 +755,7 @@ mod tests {
                 api_protocol: None,
                 rate_limits: None,
                 pricing: None,
+                pricing_by_protocol: std::collections::HashMap::new(),
                 capabilities: Vec::new(),
                 reasoning_effort: None,
                 compatibility: Default::default(),
@@ -878,6 +887,37 @@ mod tests {
             assert_eq!(cloud_models, 0);
             Ok(())
         })?;
+        Ok(())
+    }
+    #[test]
+    fn registry_protocol_tariffs_keep_missing_buckets_and_empty_overrides() -> anyhow::Result<()> {
+        let mut registry = provider("fixture");
+        let model = registry.models.first_mut().context("model missing")?;
+        model.id = "fixture/model".into();
+        model.provider_model_id = "native".into();
+        model.pricing_by_protocol.insert(
+            ApiProtocol::Decisions,
+            serde_json::from_value(
+                serde_json::json!({"input_tokens":{"no_cache":0.1},"output_tokens":{"text":0.0}}),
+            )?,
+        );
+        model.pricing_by_protocol.insert(
+            ApiProtocol::Responses,
+            serde_json::from_value(serde_json::json!({}))?,
+        );
+        let models = build_models(&registry);
+        let mapped = models.first().context("mapped model missing")?;
+        let native = mapped
+            .pricing_for(&ApiProtocol::Decisions)
+            .context("native override missing")?;
+        assert_eq!(native.input_micro_usd_per_token, Some(0.1));
+        assert_eq!(native.cache_read_micro_usd_per_token, None);
+        assert_eq!(native.output_micro_usd_per_token, Some(0.0));
+        let empty = mapped
+            .pricing_for(&ApiProtocol::Responses)
+            .context("empty explicit override was dropped")?;
+        assert_eq!(empty.input_micro_usd_per_token, None);
+        assert_eq!(empty.output_micro_usd_per_token, None);
         Ok(())
     }
 }

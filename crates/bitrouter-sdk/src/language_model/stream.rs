@@ -15,7 +15,9 @@ use tokio::time::{Instant, Sleep};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::StreamContext;
 use crate::language_model::hooks::{ObserveHook, StreamHook};
-use bitrouter_ai::types::{StreamPart, Usage};
+use bitrouter_ai::types::{ApiProtocol, StreamPart, Usage};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 /// Stable identifier for the SDK's character-count fallback estimator.
 pub const STREAM_USAGE_ESTIMATOR_VERSION: &str = "bitrouter-sdk/stream-char-div-ceil-4-v1";
@@ -212,7 +214,7 @@ where
 /// Rates are micro-USD per token. This type deliberately performs no billing:
 /// it only gives the stream normalizer enough information to choose the most
 /// conservative snapshot when an upstream emits conflicting cumulative usage.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UsagePricingBracket {
     /// Uncached prompt-token rate.
     pub input_micro_usd_per_token: Option<f64>,
@@ -228,7 +230,7 @@ pub struct UsagePricingBracket {
 
 /// A higher context-pricing bracket. The greatest threshold strictly below
 /// the reported prompt-token count wins.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UsagePricingTier {
     /// Exclusive lower bound for selecting this tier.
     pub above_input_tokens: u64,
@@ -237,12 +239,59 @@ pub struct UsagePricingTier {
 }
 
 /// Route-local pricing used only for conservative stream-usage selection.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UsagePricing {
     /// Pricing for the lowest context range.
     pub base: UsagePricingBracket,
     /// Optional higher context brackets.
     pub context_tiers: Vec<UsagePricingTier>,
+}
+
+/// Content-free identity of the effective target for a frozen price projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PricingTargetKey {
+    /// Configured provider identity.
+    pub provider: String,
+    /// Selected native model id.
+    pub model: String,
+    /// Actual selected wire.
+    pub protocol: ApiProtocol,
+    /// Digest of the effective endpoint, never its credential-bearing URL.
+    pub endpoint_digest: String,
+}
+
+impl PricingTargetKey {
+    /// Capture the selected endpoint after per-request overrides.
+    pub fn from_target(target: &crate::language_model::types::RoutingTarget) -> Self {
+        Self {
+            provider: target.provider_name.clone(),
+            model: target.service_id.clone(),
+            protocol: target.api_protocol.clone(),
+            endpoint_digest: format!(
+                "sha256:{}",
+                Sha256::digest(target.effective_api_base().as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            ),
+        }
+    }
+}
+
+/// Host-owned rates projected into the SDK's stream usage selector. A frozen
+/// unknown entry disables live lookup; hosts without snapshots retain table lookup.
+#[derive(Debug, Clone, Serialize)]
+pub struct UsagePricingSnapshot {
+    /// Exact target to which these rates apply.
+    pub target: PricingTargetKey,
+    /// Available route-local rates, or explicit unavailability.
+    pub pricing: Option<UsagePricing>,
+}
+
+impl crate::event::PipelineEvent for UsagePricingSnapshot {
+    fn event_name(&self) -> &'static str {
+        "pricing.usage_snapshot"
+    }
 }
 
 impl UsagePricing {

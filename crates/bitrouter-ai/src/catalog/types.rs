@@ -16,7 +16,7 @@
 //! are ignored (no `deny_unknown_fields`) so the registry can add fields
 //! without breaking this consumer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 
@@ -54,6 +54,8 @@ pub enum RegistryProtocol {
     Google,
     /// OpenAI Responses.
     Responses,
+    /// Native Decisions.
+    Decisions,
     /// Google Antigravity Code Assist — Gemini `generateContent` retargeted at
     /// `cloudcode-pa.googleapis.com/v1internal:*` (custom protocol, registered
     /// by `bitrouter_ai::providers::antigravity`).
@@ -68,6 +70,7 @@ impl RegistryProtocol {
             RegistryProtocol::Anthropic => ApiProtocol::Messages,
             RegistryProtocol::Google => ApiProtocol::GenerateContent,
             RegistryProtocol::Responses => ApiProtocol::Responses,
+            RegistryProtocol::Decisions => ApiProtocol::Decisions,
             // Matches the protocol the antigravity adapter registers under
             // (`bitrouter_ai::providers::antigravity::protocol::PROTOCOL`).
             RegistryProtocol::Antigravity => {
@@ -340,6 +343,10 @@ pub struct RegistryModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<RegistryPricing>,
+    /// Independent protocol tariffs; dist keys use runtime protocol names.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub pricing_by_protocol: HashMap<ApiProtocol, RegistryPricing>,
+
     /// Resolved rate limits for this (provider, model) pair, if any.
     #[serde(default)]
     pub rate_limits: Option<RegistryRateLimits>,

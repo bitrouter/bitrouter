@@ -383,6 +383,7 @@ fn computed_usage(
         final_charge_micro_usd: Some(charge_micro_usd),
         charge_status: ChargeStatus::Computed,
         charge_evidence: Some(ChargeEvidence {
+            tariff_snapshot: None,
             status: ChargeStatus::Computed,
             charge_micro_usd: Some(charge_micro_usd as i64),
             normalized_usage: normalized,

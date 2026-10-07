@@ -254,6 +254,57 @@ impl FallbackPolicy for RetryAll {
 }
 
 #[tokio::test]
+async fn custom_executor_malformed_native_success_keeps_usage_and_cannot_retry() -> TestResult {
+    let request = request()?;
+    let valid = DecisionsCodec::parse_response(native_response(true), &request)?;
+    let mut invalid = valid.clone();
+    match invalid.answers.first_mut() {
+        Some(bitrouter_ai::decisions::DecisionAnswer::Predicate { probability, .. }) => {
+            *probability = 2.0;
+        }
+        _ => return Err("missing predicate fixture".into()),
+    }
+    let (sender, mut settled) = mpsc::unbounded_channel();
+    let mut builder = builder(vec![
+        target(
+            "https://fixture.invalid/v1",
+            "primary",
+            ApiProtocol::Decisions,
+        ),
+        target(
+            "https://fixture.invalid/v1",
+            "fallback",
+            ApiProtocol::Decisions,
+        ),
+    ])?;
+    builder
+        .executor(Arc::new(MockExecutor::new(vec![
+            MockResponse::Decisions(invalid),
+            MockResponse::Decisions(valid),
+        ])))
+        .fallback_policy(Arc::new(RetryAll))
+        .settlement_recorder_for(Record(sender), OperationScope::Both);
+    let pipeline = builder.build()?;
+    let outcome = pipeline
+        .execute(PipelineRequest::new_decisions(
+            "test",
+            CallerContext::local(),
+            request,
+        ))
+        .await;
+    assert!(matches!(
+        outcome,
+        Err(BitrouterError::UpstreamInvalidResponse { .. })
+    ));
+    let evidence = settled.recv().await.ok_or("missing settlement")?;
+    assert_eq!(evidence.input_tokens, 10);
+    assert_eq!(evidence.origin, UsageOrigin::ProviderReported);
+    assert!(evidence.failed);
+    assert!(settled.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_gateway_projects_selected_model_and_preserves_wire() -> TestResult {
     let fixture = Fixture::start(vec![(StatusCode::OK, native_response(true))], false).await?;
     let (settled_tx, mut settled) = mpsc::unbounded_channel();
@@ -496,6 +547,168 @@ impl RoutingTable for BoundTable {
         self.routes.reload().await
     }
 }
+
+struct LivePrices {
+    routes: StaticRoutingTable,
+    lookups: Arc<AtomicUsize>,
+}
+#[async_trait]
+impl RoutingTable for LivePrices {
+    async fn route_chain(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        caller: &CallerContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        self.routes.route_chain(model, prefs, caller).await
+    }
+    fn list_models(&self) -> Vec<ModelInfo> {
+        self.routes.list_models()
+    }
+    fn model_info(&self, model: &str) -> Option<ModelInfo> {
+        self.routes.model_info(model)
+    }
+    async fn reload(&self) -> Result<()> {
+        self.routes.reload().await
+    }
+    fn usage_pricing(
+        &self,
+        _model: &str,
+        _target: &RoutingTarget,
+    ) -> Option<bitrouter_sdk::language_model::stream::UsagePricing> {
+        self.lookups.fetch_add(1, Ordering::SeqCst);
+        Some(bitrouter_sdk::language_model::stream::UsagePricing {
+            base: bitrouter_sdk::language_model::stream::UsagePricingBracket {
+                input_micro_usd_per_token: Some(1.0),
+                output_micro_usd_per_token: Some(100.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+}
+
+struct FrozenProjection(Option<bitrouter_sdk::language_model::stream::UsagePricing>);
+#[async_trait]
+impl bitrouter_sdk::language_model::hooks::RouteHook for FrozenProjection {
+    async fn after_resolve(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        let target = chain
+            .first()
+            .ok_or_else(|| BitrouterError::internal("missing test target"))?;
+        ctx.emit(
+            bitrouter_sdk::language_model::stream::UsagePricingSnapshot {
+                target: bitrouter_sdk::language_model::stream::PricingTargetKey::from_target(
+                    target,
+                ),
+                pricing: self.0.clone(),
+            },
+        );
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn stream_usage_uses_frozen_rates_and_unknown_disables_live_lookup() -> TestResult {
+    use bitrouter_ai::types::{FinishReason, Message, Prompt, Role, StreamPart, Usage};
+    use bitrouter_sdk::language_model::stream::{UsagePricing, UsagePricingBracket};
+    use futures::TryStreamExt;
+    for pricing in [
+        Some(UsagePricing {
+            base: UsagePricingBracket {
+                input_micro_usd_per_token: Some(10.0),
+                output_micro_usd_per_token: Some(1.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        None,
+    ] {
+        let (expected_input, expected_output) = if pricing.is_some() {
+            (100, 1)
+        } else {
+            (10, 10)
+        };
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let table = LivePrices {
+            routes: StaticRoutingTable::new(),
+            lookups: lookups.clone(),
+        };
+        table.routes.insert(
+            "test",
+            vec![target(
+                "https://fixture.invalid/v1",
+                "fixture",
+                ApiProtocol::ChatCompletions,
+            )],
+        );
+        let executor = MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::Usage {
+                usage: Usage {
+                    prompt_tokens: 100,
+                    completion_tokens: 1,
+                    origin: UsageOrigin::ProviderReported,
+                    ..Default::default()
+                },
+            },
+            StreamPart::Usage {
+                usage: Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 10,
+                    origin: UsageOrigin::ProviderReported,
+                    ..Default::default()
+                },
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])]);
+        let (sender, mut settled) = mpsc::unbounded_channel();
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(table))
+            .executor(Arc::new(executor))
+            .route_hook(FrozenProjection(pricing))
+            .settlement_recorder(Record(sender));
+        let pipeline = Arc::new(builder.build()?);
+        let prompt = Prompt {
+            model: "test".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "test")],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let parts = pipeline
+            .clone()
+            .execute_stream(PipelineRequest::new("test", CallerContext::local(), prompt))
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let usage = parts
+            .iter()
+            .find_map(|part| match part {
+                StreamPart::Usage { usage } => Some(usage),
+                _ => None,
+            })
+            .ok_or("missing usage")?;
+        assert_eq!(usage.prompt_tokens, expected_input);
+        assert_eq!(usage.completion_tokens, expected_output);
+        let evidence = tokio::time::timeout(Duration::from_secs(2), settled.recv())
+            .await?
+            .ok_or("missing settlement")?;
+        assert_eq!(evidence.input_tokens, expected_input);
+        assert_eq!(lookups.load(Ordering::SeqCst), 0);
+        pipeline.drain_required_pending_settlements().await?;
+    }
+    Ok(())
+}
 struct Checker {
     operations: OperationScope,
     inputs: mpsc::UnboundedSender<Input>,
@@ -706,4 +919,55 @@ async fn client_disconnect_and_shutdown_join_admitted_work_and_settlement() -> T
     assert_eq!(fixture.requests().len(), 1);
     assert!(settled.try_recv().is_err());
     fixture.stop().await
+}
+
+#[test]
+fn protocol_tariff_overrides_are_independent_and_usage_pricing_uses_the_wire() -> TestResult {
+    let config: Config = serde_json::from_value(json!({"providers":{"native":{
+        "active":true,"api_base":"https://fixture.invalid/v1",
+        "models":[{"id":"test","provider_model_id":"native-test",
+            "pricing":{"input_micro_usd_per_token":2.0,"output_micro_usd_per_token":9.0,"cache_read_micro_usd_per_token":0.2},
+            "pricing_by_protocol":{
+                "responses":{"input_micro_usd_per_token":0.5},
+                "decisions":{"input_micro_usd_per_token":0.1,"cache_read_micro_usd_per_token":0.0,"cache_write_micro_usd_per_token":0.0,"output_micro_usd_per_token":0.0}
+            }}]
+    }}}))?;
+    let model = config
+        .providers
+        .get("native")
+        .and_then(|provider| provider.models.first())
+        .ok_or("model missing")?;
+    let generation = model
+        .pricing_for(&ApiProtocol::ChatCompletions)
+        .ok_or("generation pricing missing")?;
+    assert_eq!(generation.output_micro_usd_per_token, Some(9.0));
+    let response = model
+        .pricing_for(&ApiProtocol::Responses)
+        .ok_or("response tariff missing")?;
+    assert_eq!(response.input_micro_usd_per_token, Some(0.5));
+    assert_eq!(response.output_micro_usd_per_token, None);
+    assert_eq!(response.cache_read_micro_usd_per_token, None);
+    let mut without_native = model.clone();
+    without_native
+        .pricing_by_protocol
+        .remove(&ApiProtocol::Decisions);
+    assert!(
+        without_native
+            .pricing_for(&ApiProtocol::Decisions)
+            .is_none()
+    );
+    let table = ConfigRoutingTable::from_config(config);
+    let prices = table
+        .usage_pricing(
+            "test",
+            &target(
+                "https://fixture.invalid/v1",
+                "native",
+                ApiProtocol::Responses,
+            ),
+        )
+        .ok_or("stream pricing missing")?;
+    assert_eq!(prices.base.input_micro_usd_per_token, Some(0.5));
+    assert_eq!(prices.base.output_micro_usd_per_token, None);
+    Ok(())
 }

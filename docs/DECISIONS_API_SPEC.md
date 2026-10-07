@@ -526,6 +526,18 @@ target in the admitted chain and preserve the matching snapshot for the actual
 attempt. Known-price admission, metering and evaluation consume that same
 evidence; they cannot independently read different configuration versions.
 
+Implementation uses the read-only `RouteHook::after_resolve` callback after
+all mutable route hooks and operation/effort filtering. The application registers
+`CaptureTariffs` for both operations as an independently required route hook.
+Custom hosts installing `MeteringRecorder` also install its `tariff_capture`
+hook. SDK-only hosts may retain their existing routing-table pricing lookup.
+
+`server.require_known_pricing` defaults to false and is restart-required.
+Enabling it denies admitted chains without guaranteed price coverage before
+I/O. Decisions cannot satisfy that requirement while future cache counters have
+an unverified billing basis; the normal historical spend/rate policies remain
+shared by both operations.
+
 A snapshot contains outbound protocol, effective rates/tiers and version,
 endpoint tariff profile and any confirmed billing basis. Validate the effective
 endpoint after `api_base_override`; provider/model/protocol alone cannot
@@ -584,6 +596,13 @@ Metering records freeze the outbound protocol, effective tariff/version and
 normalized usage used in the calculation. An old record lacking protocol/tariff
 evidence remains legacy or unknown; no retrospective Decisions rate is assigned
 from its model name.
+Explicit offline overrides and authoritative reconciliation retain the original
+admission snapshot. Their effective rates, pricing source and calculation/receipt
+version describe the correction separately. An override does not resolve native
+cache billing; an authenticated receipt may establish that request's final cost.
+Legacy evidence deserializes with an absent snapshot. Corrupt stored evidence
+must fail reconciliation rather than discard its protocol identity.
+
 Preserve existing precision/rounding and separate upstream cost from any
 deployment-owned customer fee. Schema/storage migrations must retain old rows.
 

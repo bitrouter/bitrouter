@@ -725,8 +725,7 @@ impl RoutingTable for ConfigRoutingTable {
             .providers
             .get(&target.provider_name)?
             .model_config(&target.service_id)?
-            .pricing
-            .as_ref()
+            .pricing_for(&target.api_protocol)
             .map(usage_pricing)
     }
 

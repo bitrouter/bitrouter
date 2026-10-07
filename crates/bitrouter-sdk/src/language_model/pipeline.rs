@@ -801,10 +801,20 @@ impl Pipeline {
         self.observe_after(Phase::Execution, &ctx).await;
 
         let mut stream_context = ctx.stream_context();
-        stream_context.accumulated_usage.set_pricing(
-            self.routing_table
+        let target_key =
+            crate::language_model::stream::PricingTargetKey::from_target(&upstream.target);
+        let frozen = ctx
+            .get_events::<crate::language_model::stream::UsagePricingSnapshot>()
+            .into_iter()
+            .rev()
+            .find(|snapshot| snapshot.target == target_key);
+        let pricing = match frozen {
+            Some(snapshot) => snapshot.pricing.clone(),
+            None => self
+                .routing_table
                 .usage_pricing(ctx.model(), &upstream.target),
-        );
+        };
+        stream_context.accumulated_usage.set_pricing(pricing);
         let processor = StreamProcessor::new(
             self.stream_hooks.clone(),
             applicable(&self.observe_hooks, ModelOperation::Generation),
@@ -1353,6 +1363,13 @@ impl Pipeline {
                 ctx.model()
             )));
         }
+        for hook in self
+            .route_hooks
+            .iter()
+            .filter(|hook| hook.supports(operation))
+        {
+            hook.after_resolve(&chain, ctx).await?;
+        }
         ctx.route_chain = Some(chain.clone());
         Ok(chain)
     }
@@ -1404,6 +1421,19 @@ impl Pipeline {
                     return Err(BitrouterError::UpstreamInvalidResponse {
                         message: "executor result operation mismatch".into(),
                     });
+                }
+                if let (ExecutionInput::Decisions(request), Some(native)) =
+                    (&input, result.result.decisions())
+                {
+                    // Custom executors must satisfy the same native contract as
+                    // HTTP executors before any success hook or settlement runs.
+                    bitrouter_ai::protocol::decisions::DecisionsCodec::render_response(
+                        native, request,
+                    )
+                    .map_err(|error| {
+                        ctx.record_decision_failure_usage(error.decision_usage().cloned());
+                        BitrouterError::from(error)
+                    })?;
                 }
                 Ok(result)
             });

@@ -571,7 +571,13 @@ fn assemble(
 ) -> RouteReport {
     let estimated_cost = chain
         .first()
-        .and_then(|h| pricing.resolve(&h.provider, &h.service_id))
+        .and_then(|hop| {
+            serde_json::from_value::<bitrouter_ai::types::ApiProtocol>(serde_json::Value::String(
+                hop.api_protocol.clone(),
+            ))
+            .ok()
+            .and_then(|protocol| pricing.resolve(&hop.provider, &hop.service_id, &protocol))
+        })
         .filter(|p| !p.is_unconfigured())
         .map(|p| estimated_cost(&p));
     RouteReport {

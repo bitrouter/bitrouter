@@ -65,7 +65,8 @@ use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvid
 use crate::eval::EvalService;
 use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
 use crate::eval::store::EvalStore;
-use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
+use crate::metering::tariff::CaptureTariffs;
+use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
 use crate::trajectory::publisher::TrajectoryOutboxPublisher;
@@ -556,7 +557,7 @@ async fn assemble_app(
     let executor_for_reload = executor.clone();
 
     // ---- pricing, metering, policy — all derived from config ----
-    let pricing = Arc::new(build_pricing_table(config));
+    let pricing = Arc::new(build_pricing_table(&routing_table.snapshot_config()));
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
@@ -717,6 +718,10 @@ async fn assemble_app(
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
             .executor(executor.clone())
+            .route_hook(CaptureTariffs::new(
+                pricing.clone(),
+                config.server.require_known_pricing,
+            ))
             .settlement_recorder(
                 MeteringRecorder::new(metering_store.clone(), pricing.clone())
                     .with_reconciliation_provider("bitrouter"),
@@ -844,7 +849,6 @@ async fn assemble_app(
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
     let eval_store_for_recorder = eval_service.store().clone();
-    let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     let acp_runtime_for_session = Arc::clone(&acp_runtime);
@@ -863,6 +867,7 @@ async fn assemble_app(
             );
             lm.require_hook::<PolicyHook>(HookStage::PreRequest, OperationScope::Both);
             lm.require_hook::<MeteringRecorder>(HookStage::Settlement, OperationScope::Both);
+            lm.require_hook::<CaptureTariffs>(HookStage::Route, OperationScope::Both);
             lm.require_hook::<ContinuationRuntime>(
                 HookStage::Finalization,
                 OperationScope::Generation,
@@ -880,6 +885,13 @@ async fn assemble_app(
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             lm.route_hook(evolution_for_hooks.clone());
+            let metering_recorder =
+                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
+                    .with_reconciliation_provider("bitrouter");
+            lm.route_hook_for(
+                metering_recorder.tariff_capture(config.server.require_known_pricing),
+                OperationScope::Both,
+            );
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
@@ -923,18 +935,11 @@ async fn assemble_app(
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
             // for spend caps.
-            lm.settlement_recorder_for(
-                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
-                    .with_reconciliation_provider("bitrouter"),
-                OperationScope::Both,
-            );
+            lm.settlement_recorder_for(metering_recorder, OperationScope::Both);
             lm.settlement_recorder(evolution_for_hooks);
             lm.settlement_recorder(judge_costs);
-            let eval_recorder = EvalSettlementRecorder::new(
-                eval_store_for_recorder,
-                pending_eval_decisions,
-                pricing_for_eval,
-            );
+            let eval_recorder =
+                EvalSettlementRecorder::new(eval_store_for_recorder, pending_eval_decisions);
             let eval_recorder = match trajectory_for_eval {
                 Some(trajectory) => eval_recorder.with_trajectory(trajectory),
                 None => eval_recorder,
@@ -1467,32 +1472,32 @@ fn build_auth_appliers(
 pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
     let mut table = PricingTable::new();
     for (provider_id, provider) in &config.providers {
+        table.configure_endpoint(provider_id, None, &provider.api_base);
+        for (protocol, endpoint) in &provider.protocol_endpoints {
+            if let Ok(protocol) =
+                serde_json::from_value(serde_json::Value::String(protocol.clone()))
+            {
+                table.configure_endpoint(provider_id, Some(protocol), endpoint);
+            }
+        }
         for model in &provider.models {
-            if let Some(pricing) = &model.pricing {
-                let mut model_pricing = ModelPricing::cache_aware(
-                    pricing.input_micro_usd_per_token,
-                    pricing.cache_read_micro_usd_per_token,
-                    pricing.cache_write_micro_usd_per_token,
-                    pricing.output_micro_usd_per_token,
-                );
-                // Carry context brackets through with absent rates intact;
-                // resolution inherits each omitted bucket from the base tier.
-                model_pricing.context_tiers = pricing
-                    .context_tiers
-                    .iter()
-                    .map(|t| ContextTier {
-                        above_input_tokens: t.above_input_tokens,
-                        input_micro_usd_per_token: t.input_micro_usd_per_token,
-                        cache_read_micro_usd_per_token: t.cache_read_micro_usd_per_token,
-                        cache_write_micro_usd_per_token: t.cache_write_micro_usd_per_token,
-                        output_micro_usd_per_token: t.output_micro_usd_per_token,
-                    })
-                    .collect();
-                table.insert(provider_id.clone(), model.id.clone(), model_pricing.clone());
-                if let Some(native_id) = model.provider_model_id.as_deref()
-                    && native_id != model.id
-                {
-                    table.insert(provider_id.clone(), native_id, model_pricing);
+            let aliases = std::iter::once(model.id.as_str()).chain(
+                model
+                    .provider_model_id
+                    .as_deref()
+                    .filter(|native| *native != model.id),
+            );
+            for alias in aliases {
+                if let Some(pricing) = &model.pricing {
+                    table.insert(provider_id, alias, ModelPricing::from(pricing));
+                }
+                for (protocol, pricing) in &model.pricing_by_protocol {
+                    table.insert_for_protocol(
+                        provider_id,
+                        alias,
+                        protocol.clone(),
+                        ModelPricing::from(pricing),
+                    );
                 }
             }
         }
@@ -1524,13 +1529,21 @@ providers:
         let pricing = build_pricing_table(&config);
         assert_eq!(
             pricing
-                .resolve("example", "example/canonical-model")
+                .resolve(
+                    "example",
+                    "example/canonical-model",
+                    &bitrouter_ai::types::ApiProtocol::ChatCompletions
+                )
                 .and_then(|entry| entry.input_micro_usd_per_token),
             Some(1.25)
         );
         assert_eq!(
             pricing
-                .resolve("example", "native-model")
+                .resolve(
+                    "example",
+                    "native-model",
+                    &bitrouter_ai::types::ApiProtocol::ChatCompletions
+                )
                 .and_then(|entry| entry.input_micro_usd_per_token),
             Some(1.25)
         );

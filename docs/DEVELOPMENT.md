@@ -109,11 +109,39 @@ presentation.
 Model semantic types, wire codecs, authentication contracts and credential values
 have one owner in **`bitrouter-ai`**. The SDK, provider integrations and application
 consumers depend directly on AI; AI has no SDK, application or agent-runtime
-dependency. AI owns four-protocol codecs, SSE framing and selected-model HTTP
+dependency. AI owns generation codecs, the native Decisions codec, SSE framing and selected-model HTTP
 invocation (`ModelClient` and `HttpTimeouts`); its errors carry domain facts rather
 than gateway status policy. Explicitly registered `AuthApplier`s can shape a body,
 authenticate and recover the same selected account once after a 401. `ModelClient`
 performs no implicit catalog loading, account selection, login or routing fallback.
+
+Native Decisions uses `DecisionRequest`/`DecisionResult` and
+`ModelClient::decide`. SDK envelopes distinguish `PipelineInput::Generation`
+from `PipelineInput::Decisions`, and the output variants likewise retain their
+semantic operation. The HTTP gateway serves `POST /v1/decisions` through the
+shared execution, delivery and settlement lifecycle. Streaming and generative
+continuation/tool defaults are rejected or scoped before native dispatch.
+
+Routing selects a compatible operation before preferred-protocol matching.
+`ModelTarget.api_protocol` determines the AI client's outbound wire. Existing
+generation calls prefer a supported inbound wire or the first configured
+generation wire; the enum/unknown-host fallback is Chat Completions.
+
+Route hooks may capture evidence in `after_resolve`, after every mutable
+`resolve` hook and operation/effort filtering. App-owned `CaptureTariffs` freezes
+each effective target's independent protocol tariff and endpoint profile here.
+Metering and evaluation use that snapshot; `UsagePricingSnapshot` projects the
+same rates to the SDK's conservative stream usage selection. Unknown frozen
+prices disable live price lookup. Custom hosts composing `MeteringRecorder`
+must also install `recorder.tariff_capture(require_known)` at the route stage.
+
+`server.require_known_pricing` is opt-in and restart-required. It rejects routes
+without guaranteed price coverage before I/O, including native Decisions while
+cache billing remains unverified. Prices and endpoint profile anchors also
+require restart. Native nonzero cache usage retains counters and raw evidence
+with an unavailable cost. See [Decisions specification](DECISIONS_API_SPEC.md)
+and the shipped [setup reference](../skills/bitrouter/references/decisions.md).
+
 Codex subscription `generate` calls use upstream SSE and AI's canonical stream
 collector; the SDK shares that collector and retains its gateway request policy
 and execution envelope. Collection requires a terminal and consumes through EOF

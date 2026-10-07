@@ -976,6 +976,9 @@ pub struct ServerConfig {
     /// a synthesised local caller. Code default is **`false`** — only the
     /// config file produced by `bro init` writes `true`.
     pub skip_auth: bool,
+    /// Deny dispatch when any routed tariff cannot guarantee complete known-price
+    /// coverage. Decisions caching remains unverified and fails this admission.
+    pub require_known_pricing: bool,
 }
 
 impl Default for ServerConfig {
@@ -985,6 +988,7 @@ impl Default for ServerConfig {
             control_socket: "./bitrouter.sock".to_string(),
             log_level: "info".to_string(),
             skip_auth: false,
+            require_known_pricing: false,
         }
     }
 }
@@ -1497,6 +1501,11 @@ pub struct ProviderModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
+    /// Independent complete tariffs by outbound wire. Missing buckets never inherit
+    /// ordinary generation rates; Decisions requires its own tariff.
+    #[serde(default)]
+    pub pricing_by_protocol: HashMap<ApiProtocol, PricingConfig>,
+
     /// Features this concrete provider/model route explicitly advertises.
     /// An empty list means unknown, not unsupported. Runtime routing preserves
     /// legacy unknown entries; policy code that grants a capability-specific
@@ -1510,6 +1519,19 @@ pub struct ProviderModel {
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
+}
+
+impl ProviderModel {
+    /// Exact wire override, otherwise ordinary pricing for generation only.
+    pub fn pricing_for(&self, protocol: &ApiProtocol) -> Option<&PricingConfig> {
+        self.pricing_by_protocol.get(protocol).or_else(|| {
+            if protocol.operation() == bitrouter_ai::types::ModelOperation::Generation {
+                self.pricing.as_ref()
+            } else {
+                None
+            }
+        })
+    }
 }
 
 /// An explicit virtual-model definition (Strategy 2).
@@ -2120,6 +2142,7 @@ pub async fn discover_models(config: &mut Config) {
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,
+                        pricing_by_protocol: HashMap::new(),
                         capabilities: Vec::new(),
                         reasoning_effort: None,
                         compatibility: ModelCompatibility::default(),

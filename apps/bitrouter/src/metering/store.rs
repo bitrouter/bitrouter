@@ -30,8 +30,7 @@ use crate::cloud::settlement::{SettlementReceipt, SettlementState};
 use crate::metering::db::{ReconciliationStatus, RequestMetric};
 use crate::metering::entities::requests;
 use crate::metering::pricing::{
-    ChargeEvidence, ChargeStatus, ModelPricing, PricingSource, calculate_charge_evidence,
-    unavailable_charge_evidence,
+    ChargeEvidence, ChargeStatus, ModelPricing, PricingSource, unavailable_charge_evidence,
 };
 
 /// A rolling time window for usage queries.
@@ -165,7 +164,14 @@ impl MeteringUsageRecord {
                 price.cache_write_micro_usd_per_token,
                 Some(price.output_micro_usd_per_token),
             );
-            let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Override);
+            let evidence = super::tariff::override_charge_evidence(
+                &usage,
+                &pricing,
+                record
+                    .charge_evidence
+                    .as_ref()
+                    .and_then(|evidence| evidence.tariff_snapshot.as_ref()),
+            );
             if evidence.status != ChargeStatus::Computed {
                 record.charge_status = evidence.status;
                 record.charge_evidence = Some(evidence);
@@ -1052,6 +1058,7 @@ impl MeteringStore {
                     receipt.request_id
                 ))
             })?;
+        let admitted_tariff = stored_tariff(&row)?;
         let current = ReconciliationStatus::from_persisted(&row.reconciliation_status);
         if current != ReconciliationStatus::Pending {
             return Err(BitrouterError::bad_request(format!(
@@ -1064,7 +1071,7 @@ impl MeteringStore {
             BitrouterError::internal(format!("serialize authoritative receipt: {error}"))
         })?;
         let usage = authoritative_usage(receipt, receipt_json.clone())?;
-        let (status, charge_status, evidence, provider_id, model_id) = match receipt.state {
+        let (status, charge_status, mut evidence, provider_id, model_id) = match receipt.state {
             SettlementState::Pending => return Ok(ReconciliationStatus::Pending),
             SettlementState::NotCharged => {
                 if usage.prompt_tokens != 0 || usage.completion_tokens != 0 {
@@ -1128,6 +1135,7 @@ impl MeteringStore {
                         )
                     })?;
                     ChargeEvidence {
+                        tariff_snapshot: None,
                         status: ChargeStatus::Computed,
                         charge_micro_usd: Some(charge),
                         normalized_usage: usage.normalized_buckets().map_err(|error| {
@@ -1163,7 +1171,11 @@ impl MeteringStore {
                                 price.cache_write_micro_usd_per_token,
                                 Some(price.output_micro_usd_per_token),
                             );
-                            calculate_charge_evidence(&usage, &pricing, PricingSource::Override)
+                            super::tariff::override_charge_evidence(
+                                &usage,
+                                &pricing,
+                                admitted_tariff.as_ref(),
+                            )
                         })
                         .filter(|evidence| {
                             evidence.status == ChargeStatus::Computed
@@ -1202,6 +1214,7 @@ impl MeteringStore {
                 )
             }
         };
+        evidence.tariff_snapshot = admitted_tariff;
         let raw_json = serde_json::to_string(&receipt_json).map_err(|error| {
             BitrouterError::internal(format!("serialize authoritative usage: {error}"))
         })?;
@@ -1242,7 +1255,8 @@ impl MeteringStore {
         receipt_json: serde_json::Value,
         reason: &str,
     ) -> Result<ReconciliationStatus> {
-        let evidence = unavailable_charge_evidence(usage, reason);
+        let mut evidence = unavailable_charge_evidence(usage, reason);
+        evidence.tariff_snapshot = stored_tariff(&row)?;
         let evidence_json = serde_json::to_string(&evidence).map_err(|error| {
             BitrouterError::internal(format!("serialize unknown reconciliation: {error}"))
         })?;
@@ -1546,4 +1560,18 @@ fn window_start(window: TimeWindow) -> DateTime<Utc> {
             .unwrap_or(now),
         TimeWindow::Custom { start, .. } => start,
     }
+}
+
+/// Preserve the original admitted wire/profile through authoritative correction.
+/// Legacy evidence simply has no snapshot; corrupt evidence is not reinterpreted.
+fn stored_tariff(row: &requests::Model) -> Result<Option<super::tariff::FrozenTariff>> {
+    row.charge_evidence_json
+        .as_deref()
+        .map(|json| {
+            serde_json::from_str::<ChargeEvidence>(json)
+                .map(|evidence| evidence.tariff_snapshot)
+                .map_err(|_| BitrouterError::internal("stored charge evidence is invalid"))
+        })
+        .transpose()
+        .map(Option::flatten)
 }

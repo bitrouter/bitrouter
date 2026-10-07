@@ -1184,7 +1184,6 @@ mod tests {
         EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
         ExperimentAssignmentUnit,
     };
-    use crate::metering::PricingTable;
     use crate::optimization::exploration::{OptimizationGate, RouteExploration};
     use crate::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
     use crate::policy_lock::{PolicyLock, semantic_digest};
@@ -2791,8 +2790,7 @@ mod tests {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let store = EvalStore::new(db);
-        let recorder =
-            EvalSettlementRecorder::new(store.clone(), pending, Arc::new(PricingTable::new()));
+        let recorder = EvalSettlementRecorder::new(store.clone(), pending);
         let mut settlement = SettlementContext {
             operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: "request-unified-v1".into(),

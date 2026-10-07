@@ -94,13 +94,110 @@ baseline. Application-specific Decisions authorization/budget/reserved-ID cases,
 full pricing/registry acceptance, external consumers, hosted CI and live OpenAI
 verification remain part of the complete feature audit.
 
+## D3: protocol tariff data and lookup foundation
+
+Working-tree progress after D2 commit `9e966830`:
+
+- Runtime and AI catalog models parse independent `pricing_by_protocol` maps.
+  Exact overrides win; generation may use ordinary pricing when its override is
+  absent; Decisions cannot use that fallback. An empty explicit override stays
+  present and its missing buckets do not inherit ordinary rates.
+- Registry source supports the Decisions token and independent tariffs. Dist
+  generation translates tariff keys into runtime names. Source append/sync
+  serialization preserves protocol maps and context tiers.
+- Application registry mapping and pricing-table assembly retain canonical/native
+  aliases for each override. Assembly reads its effective routing configuration.
+- SDK stream usage pricing, metering, evaluation and route previews select the
+  actual outbound wire. Native nonzero-cache usage is provisionally unavailable
+  until the cache-billing interpretation is verified. Missing target/protocol
+  evidence is unavailable rather than reconstructed from the model name.
+- Restart-required pricing signatures include protocol overrides.
+
+Current local evidence:
+
+- Strict all-feature workspace Clippy, including tests: passed for these changes.
+- Four targeted tariff tests passed (independent/missing buckets, no native
+  generation fallback, 272,000/272,001 threshold, registry mapping/key translation
+  and append preservation), run `b386fb37-9ca5-4749-9db4-1d4556219fe2`.
+- Wider pricing, metering, evaluation and registry subset: **189 passed**,
+  run `985061df-8f42-4b95-83e1-b8bc3e396ab2`. Standalone metering fixtures now
+  provide explicit serving-target/protocol evidence instead of implying it from
+  model names. This is a targeted subset, not a new full-workspace acceptance run.
+
+### Frozen tariff implementation
+
+Implemented locally after the foundation checks:
+
+- Read-only `RouteHook::after_resolve` captures each effective target after every
+  mutable route hook and operation/effort filter. App assembly independently
+  requires `CaptureTariffs` for both operations and composes capture from the
+  same metering recorder's assembly-time table.
+- `TargetTariffSnapshot` retains protocol, effective endpoint profile, complete
+  rates/tiers, version and the native zero-cache billing condition. Effective
+  cross-profile endpoint overrides make cost unavailable; custom URLs are
+  represented by digests.
+- Metering and evaluation call one settlement calculation over the matching
+  snapshot. SDK streaming consumes its `UsagePricingSnapshot` projection;
+  explicit frozen unknown prices disable live table lookup.
+- Opt-in `server.require_known_pricing` rejects incomplete coverage before I/O,
+  including native cache uncertainty. Its default is false. Tariffs, configured
+  endpoint profiles and this requirement are restart-required.
+- Charge evidence uses an optional frozen snapshot for backward-compatible
+  deserialization. Exports/overrides retain it and cannot bypass the native cache
+  gate. Authoritative correction retains the original admission evidence;
+  corrupt stored evidence fails reconciliation.
+- Custom executor native results are validated before success hooks; malformed
+  typed success retains usable usage and cannot retry through custom fallback.
+- Shipped skill/setup reference, development guide and explicit alpha migration
+  inventory were updated. The skill entrypoint remains under 200 lines.
+
+Current validation:
+
+- All-feature workspace selected regressions: **119 passed**, run
+  `fe5c5b3e-f729-4694-bc5e-0c5de261654a`. This includes actual HTTP upstream /
+  native gateway / SQLite accounting for valid, malformed, refusal and cached
+  outputs; final-route capture; shared eval evidence; SDK stream frozen/unknown
+  prices; cache-gated exports; thresholds/profiles; reload policy and legacy
+  metering. This is a targeted subset, not full-workspace final acceptance.
+- Strict all-feature workspace Clippy including tests: passed after the receipt
+  preservation assertion was added (`frozen-tariffs-clippy4`, 47.01s).
+- The earlier build exhausted disk before executing tests. Only this checkout's
+  generated Cargo artifacts were cleaned (60.2 GiB); subsequent validation uses
+  `CARGO_INCREMENTAL=0`, dev/test debug 0 and two build jobs. The 119-test run
+  passed with those resource settings. No source/worktree state was removed.
+- The expanded native gateway/cache/export/authoritative-receipt fixture passed
+  separately after its final assertion, run
+  `d9aaa354-e4b7-4150-9d38-866085a7148d`. The real SQLite correction retains the
+  original native tariff snapshot and records only that synthetic receipt's
+  request amount; it does not establish upstream billing semantics.
+- `cargo fmt -- --check`, whitespace checks, Markdown fences and local links:
+  passed.
+
+D3/D4 acceptance remains open: catalog-derived tariffs need declared endpoint
+profile provenance so configured regional endpoints cannot silently inherit
+published global native rates. Registry activation and generated schema/catalog
+artifacts must include that contract. Application-specific native guards,
+full-workspace checks, public API/feature isolation, final lifecycle/privacy
+coverage and provider proof remain.
+
+Read-only external inventory is in [DECISIONS_API_MIGRATION.md](DECISIONS_API_MIGRATION.md).
+The Cloud checkout at `184c1f2e` still resolves published alpha.30 and has not adopted
+the parent SDK extraction. No Cloud files, build or deployment were changed;
+its untracked `lib/` was preserved. PR #962 remains open at `529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16`.
+
+On 2026-10-06, `OPENAI_API_KEY` and the default credential store's OpenAI API-key
+slot were absent. No credentialed call was made; A11 remains unverified. The
+upstream Decisions/Luna pricing pages were refreshed and still do not resolve
+whether cached subsets are included in the base input charge. The accepted
+cache-billing gate remains in place.
+
 ## Remaining work
 
 | Batch | Current state |
 | --- | --- |
 | D2 | Lifecycle implemented; full workspace regression baseline green; Decisions-specific app guard coverage and final audit remain |
-| D3 | Pending: protocol tariffs, frozen charge evidence, cache-billing gate and reporting; native lifecycle settlement has local SDK evidence |
-| D4 | Pending: registry/artifact/skill updates, full-workspace checks, provider verification and external-consumer inventory |
+| D3 | Protocol tariffs and frozen settlement implemented locally; selected regressions pass; declared catalog profile provenance and full acceptance remain |
+| D4 | Skill/setup and external inventory updated; registry/profile/schema/API artifacts, full-workspace checks and qualified provider proof remain |
 
 Spec acceptance A1-A12 remains pending as an end-to-end audit. Local AI/SDK
 evidence must not be presented as completed gateway support. Nonzero-cache

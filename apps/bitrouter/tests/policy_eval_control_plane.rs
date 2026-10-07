@@ -338,11 +338,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             HopOutcome::Generated(&execution),
         )
         .await;
-    let recorder = EvalSettlementRecorder::new(
-        store.clone(),
-        pending,
-        std::sync::Arc::new(bitrouter::metering::PricingTable::new()),
-    );
+    let recorder = EvalSettlementRecorder::new(store.clone(), pending);
     let mut settlement = SettlementContext {
         operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: "request-observed".into(),
