@@ -16,9 +16,11 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   Implemented extraction batches, breaking import migration, validation evidence
   and remaining work against the AI spec.
 - [`DECISIONS_API_SPEC.md`](DECISIONS_API_SPEC.md) — **v0.2, design direction
-  accepted; implementation pending.** First-class OpenAI Decisions support
+  accepted; implementation in progress.** First-class OpenAI Decisions support
   stacked on #962: typed calls, operation-compatible routing, shared lifecycle
   and protocol pricing. Decision-driven routing policy remains a separate PR.
+- [`DECISIONS_API_PROGRESS.md`](DECISIONS_API_PROGRESS.md) — Local batch evidence
+  and remaining gateway/provider acceptance for the stacked Decisions change.
 - [`LOCAL_DAEMON_UPGRADE_SPEC.md`](LOCAL_DAEMON_UPGRADE_SPEC.md) — **implemented
   in #932; local and CI verification passed.** Safe local daemon handoff after
   a CLI upgrade: version and capability detection, idle-only restart,

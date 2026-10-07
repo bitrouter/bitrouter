@@ -97,6 +97,8 @@ pub enum ApiProtocol {
     GenerateContent,
     /// Responses.
     Responses,
+    /// Native typed Decisions (`POST /v1/decisions`).
+    Decisions,
     /// An externally-registered protocol identified by its registration name
     /// (e.g. `"bedrock-claude"`). The SDK does not serve `Custom` protocols
     /// inbound; they are outbound-only by design.
@@ -104,6 +106,18 @@ pub enum ApiProtocol {
 }
 
 impl ApiProtocol {
+    /// Semantic operation required by this wire; custom adapters remain generative.
+    pub fn operation(&self) -> ModelOperation {
+        match self {
+            Self::Decisions => ModelOperation::Decisions,
+            Self::ChatCompletions
+            | Self::Messages
+            | Self::GenerateContent
+            | Self::Responses
+            | Self::Custom(_) => ModelOperation::Generation,
+        }
+    }
+
     /// Stable string name for this protocol (`"chat_completions"`, `"messages"`, …, or
     /// the inner string for [`Custom`](Self::Custom)). Used as the wire-format
     /// representation in YAML config and as the registry key for outbound
@@ -114,6 +128,7 @@ impl ApiProtocol {
             Self::Messages => "messages",
             Self::GenerateContent => "generate_content",
             Self::Responses => "responses",
+            Self::Decisions => "decisions",
             Self::Custom(name) => name.as_str(),
         }
     }
@@ -139,12 +154,23 @@ impl<'de> Deserialize<'de> for ApiProtocol {
             "messages" => Self::Messages,
             "generate_content" => Self::GenerateContent,
             "responses" => Self::Responses,
+            "decisions" => Self::Decisions,
             _ => Self::Custom(s),
         })
     }
 }
 
-/// A wire protocol always (de)serializes as a string: one of the four known
+/// The two supported model-call operations, independent of caller wire format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperation {
+    /// Generative text/tool/media invocation.
+    Generation,
+    /// Native typed decision invocation.
+    Decisions,
+}
+
+/// A wire protocol always (de)serializes as a string: one of the known
 /// values, or any other string for an externally-registered `Custom` protocol.
 /// Hand-written because the `Custom(String)` variant means the value is an
 /// open string set, not a closed enum.
@@ -157,9 +183,9 @@ impl schemars::JsonSchema for ApiProtocol {
         schemars::json_schema!({
             "type": "string",
             "description": "Wire protocol. Known values: `chat_completions`, \
-                `messages`, `generate_content`, `responses`; any other string \
+                `messages`, `generate_content`, `responses`, `decisions`; any other string \
                 names an externally-registered (outbound-only) custom protocol.",
-            "examples": ["chat_completions", "messages", "generate_content", "responses"],
+            "examples": ["chat_completions", "messages", "generate_content", "responses", "decisions"],
         })
     }
 }

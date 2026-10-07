@@ -64,6 +64,7 @@ pub fn normalize_auth_extension_error(error: ModelError, operation: AuthOperatio
     match error {
         ModelError::InvalidRequest { .. } => ModelError::InvalidRequest { message },
         ModelError::InvalidResponse { .. } => ModelError::InvalidResponse { message },
+        ModelError::DecisionResponse { .. } => ModelError::InvalidResponse { message },
         ModelError::Provider { status, .. } => ModelError::Provider { status, message },
         ModelError::PolicyViolation { .. } => ModelError::PolicyViolation { message },
         ModelError::InvalidCredential { .. } => ModelError::InvalidCredential { message },
@@ -183,7 +184,9 @@ impl std::fmt::Debug for ContinuationAuthority {
 
 fn static_effective_auth_scheme(target: &ModelTarget) -> AuthScheme {
     match target.api_protocol {
-        ApiProtocol::ChatCompletions | ApiProtocol::Responses => AuthScheme::Bearer,
+        ApiProtocol::ChatCompletions | ApiProtocol::Responses | ApiProtocol::Decisions => {
+            AuthScheme::Bearer
+        }
         ApiProtocol::Messages => target.auth_scheme,
         ApiProtocol::GenerateContent => AuthScheme::XApiKey,
         ApiProtocol::Custom(_) => target.auth_scheme,

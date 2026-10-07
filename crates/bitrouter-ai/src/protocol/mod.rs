@@ -212,6 +212,7 @@ pub(crate) fn reject_unrepresentable_native_reasoning_part(
 }
 
 pub mod chat_completions;
+pub mod decisions;
 pub mod generate_content;
 pub mod messages;
 pub mod responses;
@@ -477,14 +478,14 @@ pub trait StreamEncoder: Send {
 }
 
 /// Look up the [`InboundAdapter`] for a built-in protocol. Custom protocols
-/// have no inbound adapter — the SDK never serves them to clients.
+/// have no generation adapter. Decisions uses its typed codec separately.
 pub fn inbound_adapter_for(protocol: &ApiProtocol) -> Option<Box<dyn InboundAdapter>> {
     match protocol {
         ApiProtocol::ChatCompletions => Some(Box::new(chat_completions::ChatCompletionsAdapter)),
         ApiProtocol::Messages => Some(Box::new(messages::MessagesAdapter)),
         ApiProtocol::Responses => Some(Box::new(responses::ResponsesAdapter)),
         ApiProtocol::GenerateContent => Some(Box::new(generate_content::GenerateContentAdapter)),
-        ApiProtocol::Custom(_) => None,
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
     }
 }
 

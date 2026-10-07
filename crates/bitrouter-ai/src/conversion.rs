@@ -16,6 +16,8 @@ use crate::types::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionProtocol {
+    /// Native Decisions, which has no generative projection.
+    Decisions,
     /// OpenAI Chat Completions.
     ChatCompletions,
     /// OpenAI Responses.
@@ -33,6 +35,7 @@ impl From<&ApiProtocol> for ConversionProtocol {
         match protocol {
             ApiProtocol::ChatCompletions => Self::ChatCompletions,
             ApiProtocol::Responses => Self::Responses,
+            ApiProtocol::Decisions => Self::Decisions,
             ApiProtocol::Messages => Self::Messages,
             ApiProtocol::GenerateContent => Self::GenerateContent,
             ApiProtocol::Custom(_) => Self::Custom,
@@ -58,6 +61,8 @@ pub enum ConversionStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionReason {
+    /// The selected wire implements a different model operation.
+    OperationUnsupported,
     /// No canonical input mapping exists for this item.
     UnclassifiedInputItem,
     /// No canonical input mapping exists for this content block or value.
@@ -162,6 +167,8 @@ pub enum ConversionDisposition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "field", rename_all = "snake_case")]
 pub enum ConversionLocation {
+    /// Whole-call semantic operation.
+    Operation,
     /// A Responses input array item.
     InputItem {
         /// Zero-based original input index.
@@ -347,6 +354,15 @@ impl ConversionReport {
 /// or a certification of remaining codec or schema/model behavior.
 pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionReport {
     let mut report = ConversionReport::default();
+    if *protocol == ApiProtocol::Decisions {
+        report.push_projection(
+            protocol,
+            ConversionLocation::Operation,
+            ConversionReason::OperationUnsupported,
+            ConversionEffect::TaskSemantics,
+        );
+        return report;
+    }
     for (tool, definition) in prompt.tools.iter().enumerate() {
         if let Tool::Function {
             parameters, strict, ..
@@ -392,7 +408,7 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
             ApiProtocol::Responses => Some("openai"),
             ApiProtocol::Messages => Some("anthropic"),
             ApiProtocol::GenerateContent => Some("google"),
-            ApiProtocol::ChatCompletions | ApiProtocol::Custom(_) => None,
+            ApiProtocol::ChatCompletions | ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
         };
         let refusal = if *protocol == ApiProtocol::ChatCompletions {
             Some((
@@ -474,7 +490,8 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
                     ),
                     ApiProtocol::ChatCompletions
                     | ApiProtocol::Messages
-                    | ApiProtocol::GenerateContent => (
+                    | ApiProtocol::GenerateContent
+                    | ApiProtocol::Decisions => (
                         ConversionReason::NativeReasoningUnrepresentable,
                         ConversionEffect::TaskSemantics,
                     ),
@@ -589,6 +606,7 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
             {
                 for (part, value) in value.iter().enumerate() {
                     let refused = match protocol {
+                        ApiProtocol::Decisions => true,
                         ApiProtocol::Responses => false,
                         ApiProtocol::ChatCompletions => {
                             matches!(value, ToolResultContentPart::FileId { .. })
@@ -769,6 +787,7 @@ fn history_refusal(
                 });
             }
             let changes_shape = match protocol {
+                ApiProtocol::Decisions => true,
                 ApiProtocol::GenerateContent => match output {
                     ToolResultOutput::Json { value } => !value.is_object(),
                     // Existing per-part rules report actual omitted media at its

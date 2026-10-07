@@ -246,7 +246,7 @@ fn response(protocol: &ApiProtocol) -> Value {
         ApiProtocol::GenerateContent => {
             json!({"responseId":"gemini_fixture","candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}})
         }
-        ApiProtocol::Custom(_) => Value::Null,
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => Value::Null,
     }
 }
 
@@ -291,7 +291,7 @@ fn response_stream(protocol: &ApiProtocol) -> String {
                 + &event(json!({"type":"message_stop"}))
         }
         ApiProtocol::GenerateContent => event(response(protocol)),
-        ApiProtocol::Custom(_) => String::new(),
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions => String::new(),
     }
 }
 
@@ -520,7 +520,9 @@ async fn four_protocols_invoke_without_sdk_and_keep_source_prompt() -> TestResul
                             && headers.contains("x-goog-api-key: selected-secret")
                     );
                 }
-                ApiProtocol::Custom(_) => {}
+                ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+                    return Err(io::Error::other("fixture requires a generation protocol").into());
+                }
             }
             if protocol != ApiProtocol::GenerateContent {
                 assert_eq!(request.body["model"], "selected-model");

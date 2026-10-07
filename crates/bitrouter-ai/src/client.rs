@@ -13,11 +13,18 @@ use futures_core::Stream;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::{AuthAppliers, AuthOperation, normalize_auth_extension_error};
+use crate::decisions::{DecisionRequest, DecisionResult};
 use crate::diagnostics::DiagnosticRedactor;
 use crate::error::{ModelError, Result};
-use crate::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
+use crate::protocol::decisions::{DecisionsCodec, DecisionsTransport};
+use crate::protocol::{OutboundAdapter, OutboundDispatch, SseEvent, Transport};
 use crate::target::ModelTarget;
-use crate::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
+use crate::types::{ApiProtocol, GenerateResult, ModelOperation, Prompt, StreamPart};
+
+enum SelectedInput<'a> {
+    Generation { prompt: &'a Prompt, stream: bool },
+    Decisions(&'a DecisionRequest),
+}
 
 /// An owned stream of canonical model parts and terminal failures.
 /// Dropping it drops the upstream response; cancellation stops pending I/O.
@@ -104,7 +111,7 @@ pub struct ModelClient {
 }
 
 impl ModelClient {
-    /// Build a client with the four built-in protocols.
+    /// Build a client with the built-in generation and Decisions protocols.
     pub fn new(timeouts: HttpTimeouts) -> Result<Self> {
         Self::with_dispatch(timeouts, Arc::new(OutboundDispatch::builtin()))
     }
@@ -154,6 +161,11 @@ impl ModelClient {
         prompt: &Prompt,
         stream: bool,
     ) -> Result<(serde_json::Value, crate::conversion::ConversionReport)> {
+        if target.api_protocol.operation() != ModelOperation::Generation {
+            return Err(ModelError::invalid_request(
+                "generation requires a generation protocol",
+            ));
+        }
         let (adapter, _) = self.dispatch.lookup(&target.api_protocol).ok_or_else(|| {
             ModelError::Configuration {
                 message: format!(
@@ -169,6 +181,54 @@ impl ModelClient {
         projection.stream = stream;
         let body = adapter.render_request_for_target(&projection, target)?;
         Ok((body, report))
+    }
+
+    /// Render one native decision projection without I/O or changing the source.
+    pub fn render_decision_request(
+        &self,
+        target: &ModelTarget,
+        request: &DecisionRequest,
+    ) -> Result<serde_json::Value> {
+        if target.api_protocol != ApiProtocol::Decisions {
+            return Err(ModelError::invalid_request(
+                "Decisions requires a Decisions protocol",
+            ));
+        }
+        let mut projection = request.clone();
+        projection.model.clone_from(&target.service_id);
+        DecisionsCodec::render_request(&projection)
+    }
+
+    /// Invoke one selected native Decisions target with shared authentication/I/O.
+    pub async fn decide(
+        &self,
+        target: &ModelTarget,
+        request: &DecisionRequest,
+        cancellation: &CancellationToken,
+    ) -> Result<DecisionResult> {
+        self.render_decision_request(target, request)?;
+        let (response, redactor) = self
+            .send_selected(target, &SelectedInput::Decisions(request), cancellation)
+            .await?;
+        let status = response.status();
+        let retry_after = parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+        let text = Self::read_body(response, cancellation)
+            .await
+            .map_err(|error| redactor.scrub_error(error))?;
+        if !status.is_success() {
+            return Err(redactor.scrub_error(ModelError::HttpResponse {
+                status: status.as_u16(),
+                body: text,
+                retry_after,
+            }));
+        }
+        let body = serde_json::from_str(&text).map_err(|_| ModelError::DecisionResponse {
+            failure: crate::decisions::DecisionResponseFailure {
+                message: "invalid Decisions response JSON".into(),
+                usage: None,
+            },
+        })?;
+        DecisionsCodec::parse_response(body, request).map_err(|error| redactor.scrub_error(error))
     }
 
     /// Build one JSON POST with the selected overall request deadline.
@@ -300,7 +360,14 @@ impl ModelClient {
             .await;
         }
         let (response, redactor) = self
-            .send_selected(target, prompt, false, cancellation)
+            .send_selected(
+                target,
+                &SelectedInput::Generation {
+                    prompt,
+                    stream: false,
+                },
+                cancellation,
+            )
             .await?;
         let result = async {
             let status = response.status();
@@ -335,7 +402,14 @@ impl ModelClient {
         cancellation: &CancellationToken,
     ) -> Result<ModelStream> {
         let (response, redactor) = self
-            .send_selected(target, prompt, true, cancellation)
+            .send_selected(
+                target,
+                &SelectedInput::Generation {
+                    prompt,
+                    stream: true,
+                },
+                cancellation,
+            )
             .await?;
         let status = response.status();
         if !status.is_success() {
@@ -364,8 +438,7 @@ impl ModelClient {
     async fn send_selected(
         &self,
         target: &ModelTarget,
-        prompt: &Prompt,
-        stream: bool,
+        input: &SelectedInput<'_>,
         cancellation: &CancellationToken,
     ) -> Result<(reqwest::Response, DiagnosticRedactor)> {
         let mut redactor = DiagnosticRedactor::default();
@@ -373,7 +446,7 @@ impl ModelClient {
         let mut refreshed = false;
         loop {
             let request = self
-                .authenticated_request(target, prompt, stream, cancellation, &mut redactor)
+                .authenticated_request(target, input, cancellation, &mut redactor)
                 .await
                 .map_err(|error| redactor.scrub_error(error))?;
             let rejected = request
@@ -408,8 +481,7 @@ impl ModelClient {
     async fn authenticated_request(
         &self,
         target: &ModelTarget,
-        prompt: &Prompt,
-        stream: bool,
+        input: &SelectedInput<'_>,
         cancellation: &CancellationToken,
         redactor: &mut DiagnosticRedactor,
     ) -> Result<reqwest::Request> {
@@ -425,7 +497,21 @@ impl ModelClient {
                 "missing effective model credential; supply a selected credential explicitly",
             ));
         }
-        let mut body = self.render_request(target, prompt, stream)?;
+        let (mut body, transport, stream): (serde_json::Value, &dyn Transport, bool) = match input {
+            SelectedInput::Generation { prompt, stream } => {
+                let body = self.render_request(target, prompt, *stream)?;
+                let (_, transport) = self
+                    .dispatch
+                    .lookup(&target.api_protocol)
+                    .ok_or_else(|| ModelError::configuration("selected protocol disappeared"))?;
+                (body, transport.as_ref(), *stream)
+            }
+            SelectedInput::Decisions(request) => (
+                self.render_decision_request(target, request)?,
+                &DecisionsTransport,
+                false,
+            ),
+        };
         if let Some(applier) = applier {
             applier
                 .prepare_body(&mut body, target)
@@ -434,10 +520,9 @@ impl ModelClient {
                     normalize_auth_extension_error(error, AuthOperation::BodyPreparation)
                 })?;
         }
-        let (_, transport) = self
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| ModelError::configuration("selected protocol disappeared"))?;
+        if matches!(input, SelectedInput::Decisions(_)) {
+            DecisionsCodec::parse_request(body.clone())?;
+        }
         let request = self.build_request(&transport.endpoint_url(target, stream), &body)?;
         let request = if let Some(applier) = applier {
             applier
