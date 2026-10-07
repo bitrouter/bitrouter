@@ -1,6 +1,6 @@
 # Gemini protocol retirement progress
 
-Status: implementation complete locally; release validation remains open.
+Status: implementation complete with local and hosted CI checks passing; replacement and release validation remain open.
 
 Baseline: PR #962 at `529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16`.
 Branch: `codex/retire-gemini-protocol`. Spec approved in `3c211ffc`.
@@ -29,7 +29,7 @@ Updated: 2026-10-07, America/New_York.
 | GR-06 | Pre-dispatch provider/protocol guards and cache filtering implemented; dedicated config/cache/activation fixtures pass, including mixed migrated/native model defaults. No credential store migration is performed. |
 | GR-07 | Local pass: historical identifiers decode as provenance, saved OAuth fixtures remain byte-identical, source-bound disk caches remain readable after quarantine, retired calls fail. These fixtures do not certify external legacy raw formats or production recovery. |
 | GR-08 | Local pass: native execution modules/registrations removed; the remaining diagnostic enum is historical decoding only. No renamed first-party native transport remains. |
-| GR-09 | Local pass: 3,659 workspace tests, six doctests (one existing ignored example), Clippy with warnings denied, formatting, registry validate/build/check, config schema and pinned public API guards. The public dependency inventory remains 16, with no OpenTelemetry type exposed. The final malformed-signed-argument hardening passes the full suite; all 410 AI unit tests also pass after removing panic-based error handling from restored shared fixtures. External consumers remain blocked as below. |
+| GR-09 | Local pass: 3,659 workspace tests, six doctests (one existing ignored example), Clippy with warnings denied, formatting, registry validate/build/check, config schema and pinned public API guards. The public dependency inventory remains 16, with no OpenTelemetry type exposed. The final malformed-signed-argument hardening passes the full suite; all 410 AI unit tests also pass after removing panic-based error handling from restored shared fixtures. Hosted CI: all 22 jobs passed at implementation commit `ad5f7a41`, including Linux/macOS/Windows tests, feature isolation and public API checks. External consumers remain blocked as below. |
 
 ## External release blockers
 
@@ -47,7 +47,7 @@ Cloud requires the parent #962 AI API migration plus this retirement migration a
 
 ## Evidence classes
 
-Local fixtures, actual SDK execution against a fixture provider, credentialed Google inference, hosted CI and production proof are recorded separately. The parent PR's test totals are not validation of this branch. No live-provider, complete hosted-CI or production success is claimed. Individual hosted results are recorded below.
+Local fixtures, actual SDK execution against a fixture provider, credentialed Google inference, hosted CI and production proof are recorded separately. The parent PR's test totals are not validation of this branch. Hosted CI success applies to the exact implementation commit recorded below. No live-provider or production success is claimed.
 
 ## Actual SDK fixture evidence
 
@@ -68,7 +68,7 @@ python scripts/validate_gemini_retirement_sdk.py --bro target/debug/bro --signed
 
 The unsigned run must complete a tool task; the signed run verifies the known client limitation and pre-upstream rejection. Its successful exit means that the limitation was reproduced, not that Google tool interoperability passed. Both runs use fixture credentials and loopback upstreams.
 
-The first full workspace build exhausted local disk while linking. Only this worktree's generated incremental cache was removed. Verification is being rerun with `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, two build jobs and two test threads. These are build-storage settings; no test behavior or checks are disabled.
+The first full workspace build exhausted local disk while linking. Only this worktree's generated incremental cache was removed. The completed local verification used `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, two build jobs and two test threads. These are build-storage settings; no test behavior or checks were disabled.
 
 Google reasoning uses the canonical declared `reasoning_effort` path (`minimal` through `high`) plus scoped `include_thoughts`. Raw `thinking_level`/`thinking_budget`, `none`/`xhigh`/`max`, seeds and penalties remain excluded until selected-model equivalence is demonstrated. Static-auth validation rejects duplicate bearer headers and conflicting Google key headers/query credentials.
 
@@ -76,4 +76,6 @@ The initial model for the full text/image/function/schema/thinking validation is
 
 ## Hosted CI follow-up
 
-The [initial hosted CI run](https://github.com/bitrouter/bitrouter/actions/runs/37570017412) at `5066839e` passed the Linux workspace and integration shards, doctests, documentation, MSRV, registry/schema, plugin and pinned public API checks. It found an ungated optional file-store import in the new retirement integration fixture. The credential portion is now guarded by `file-store`; historical protocol decoding/rejection remains covered without file storage. Local AI tests pass with no default features and with `pkce`, `hosted-login`, and `file-store` individually, plus Clippy with all features/tests and warnings denied. The corrected head requires its own hosted CI result; partial green jobs do not establish the entire run.
+The [initial hosted CI run](https://github.com/bitrouter/bitrouter/actions/runs/37570017412) at `5066839e` found an ungated optional file-store import in the new retirement integration fixture. The credential portion is now guarded by `file-store`; historical protocol decoding/rejection remains covered without file storage. Local AI tests pass with no default features and with `pkce`, `hosted-login`, and `file-store` individually, plus Clippy with all features/tests and warnings denied.
+
+The [corrected hosted CI run](https://github.com/bitrouter/bitrouter/actions/runs/37570703221) completed successfully at `ad5f7a412d13d92679f47aed0c13008bc950d9f4`: all 22 jobs passed, including workspace/application tests on Linux, macOS and Windows, Clippy on all three platforms, feature isolation, doctests, documentation, MSRV, registry/schema, plugin and pinned public API checks. Subsequent documentation-only evidence updates do not change the tested implementation; any CI on those commits is a separate run.
