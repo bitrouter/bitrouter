@@ -1,7 +1,8 @@
 # First-class Decisions API support
 
-Status: **v0.2, design direction accepted; implementation and provider validation
-pending.**
+Status: **v0.2, implemented; local, hosted-CI and bounded API-key validation
+verified.** See [acceptance evidence](DECISIONS_API_ACCEPTANCE.md) for scope and
+remaining billing/deployment limits.
 
 Date: 2026-10-06. Implementation is intended as a stacked PR on
 [PR #962](https://github.com/bitrouter/bitrouter/pull/962), branch
@@ -9,8 +10,8 @@ Date: 2026-10-06. Implementation is intended as a stacked PR on
 `529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16`. The independent R1-R3 review found
 only AI test/support changes since the original `def77d4e` audit; production
 envelope, hook and pricing seams are unchanged. That parent remains Draft/WIP.
-This document is saved in a checkout of main at `31cf68ed`; references to the
-parent use immutable GitHub links because its AI package is absent here.
+The design was originally authored from main at `31cf68ed`; immutable parent
+links preserve that reviewed baseline. Implementation lives on `codex/decisions-api`.
 
 ## 1. Purpose and agreed scope
 
@@ -79,7 +80,8 @@ workflow accuracy. [Score and interpretation guidance](https://developers.openai
 
 Before implementation, re-fetch these pages and record schema changes. Do not
 infer additional limits, endpoint availability or auth methods from the
-generic model catalog. Live account access remains unverified.
+generic model catalog. Account access is established only for the bounded
+path recorded in the acceptance ledger.
 
 ## 3. Source baseline and required changes
 
@@ -123,8 +125,7 @@ pub async fn decide(
 ) -> Result<DecisionResult>;
 ```
 
-This is an API sketch, not compiling or implemented code. It belongs on
-`ModelClient`. The client requires an effective Decisions target, projects the
+This signature is implemented on `ModelClient`. The client requires an effective Decisions target, projects the
 native model ID from that target, and preserves the original request. Direct
 calls read no ambient credentials, discover no accounts and perform no
 cross-provider fallback.
@@ -501,8 +502,7 @@ pricing_by_protocol:
           no_cache: 0.20
 ```
 
-These are two representations of the selected proposed schema, not examples
-accepted by the current implementation. Preserve the existing ordinary
+These are two representations of the implemented schema. Preserve the existing ordinary
 `pricing` entry and generative protocol order when adding the override.
 [Runtime pricing shape](https://github.com/bitrouter/bitrouter/blob/529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16/crates/bitrouter-sdk/src/config/mod.rs#L1099),
 [registry pricing shape](https://github.com/bitrouter/bitrouter/blob/529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16/crates/bitrouter-ai/src/catalog/types.rs#L357)
@@ -668,7 +668,8 @@ support is advertised only for the deployment actually updated and verified.
 
 ## 11. Acceptance and evidence
 
-All criteria below are **pending**. This spec provides no implementation proof.
+The criteria below define the contract. Current proof, including the bounded
+A11 live calls, is recorded in [DECISIONS_API_ACCEPTANCE.md](DECISIONS_API_ACCEPTANCE.md).
 
 | ID | Required evidence |
 | --- | --- |
@@ -710,8 +711,8 @@ run doctests. Also run the existing public API, feature isolation, span-schema
 and affected storage-migration guards. Tests of protocol/routing/billing logic
 use meaningful synthetic fixtures, not snapshots of live model catalog counts.
 Follow repository rules on panic-free Rust, no lint bypasses and no public
-forwarding exports. Validation commands here are a future requirement, not
-commands executed while authoring this document.
+forwarding exports. The acceptance ledger records execution of these gates; the original design
+authoring did not run implementation checks.
 
 ## 12. Accepted decisions and remaining validation
 
@@ -737,9 +738,11 @@ Before declaring the stacked implementation complete: refresh #962's source
 baseline; re-check the beta schema; implement R1-R3 and their acceptance
 criteria; migrate affected consumers; resolve or explicitly retain the billing
 gate; and record local, hosted-CI, provider and external-consumer evidence with
-their actual limits. This revision changes documentation only; implementation,
-commit, PR publication and deployment have not occurred.
+their actual limits. The accepted design is preserved in `3676c99a`. Implementation is published
+as draft #965; local, hosted-CI and bounded live proof are recorded in the
+acceptance ledger. Deployment and upstream cache billing remain unverified.
 
-Authoring verification: Markdown structure, JSON/YAML examples, local links,
-immutable source-anchor bounds and whitespace were checked. These are document
-checks only; Rust, provider, hosted CI and deployment checks have not run.
+Original design-authoring verification covered Markdown structure, JSON/YAML
+examples, local links, immutable source-anchor bounds and whitespace. Current
+Rust, hosted-CI and bounded provider evidence is recorded separately in the
+acceptance ledger; deployment remains unverified.

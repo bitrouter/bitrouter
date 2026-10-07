@@ -7,8 +7,9 @@ proof rather than inferring provider or deployed Cloud support from unit tests.
 
 Audit date: 2026-10-07. Local implementation and artifact guards are verified;
 the final source state is validated and [draft #965](https://github.com/bitrouter/bitrouter/pull/965)
-is published on #962. A11 is
-explicitly unverified because an OpenAI API key is unavailable.
+is published on #962. Hosted CI passed at `aa378f7c`; A11 is now verified
+for two bounded API-key calls through an isolated local gateway. The scope and
+redacted evidence are recorded below.
 
 | Criterion | Authoritative evidence | Scope / qualification |
 | --- | --- | --- |
@@ -20,9 +21,9 @@ explicitly unverified because an OpenAI API key is unavailable.
 | A6: price/usage agreement | App native HTTP/gateway/SQLite tariff test; [eval shared-tariff test](../apps/bitrouter/src/eval/settlement.rs); SDK protocol/frozen/unknown stream pricing tests; cache-gated export and authoritative correction | Exact independent overrides, missing buckets preserved, actual target match; native nonzero cache remains unavailable |
 | A7: disconnect/shutdown | `observed_native_disconnect_and_shutdown_preserve_sqlite_settlement` uses a real TCP gateway, held HTTP upstream, gateway-side cancelled-handler signal, shutdown join and one persisted row | Explicit upstream admission and closed client socket; no sleeps or cancellation-status-only proof; synthetic upstream |
 | A8: malformed completion/fallback | SDK malformed HTTP and inconsistent custom typed-result fixtures retain independently decoded usage, fail delivery and bypass retry-all policy; app invalid-output cost row; pre-completion status fallback test | One native attempt settles once; wrong-operation generation usage is not native accounting evidence; generation charging is preserved |
-| A9: generation/boundaries | Full workspace all-feature tests and doctests; CI feature matrix and positive-backed dependency tree guards | Generation conversion, tools, Responses continuation, auth, evolution, IPC and telemetry regressions; local evidence only |
+| A9: generation/boundaries | Full workspace all-feature tests and doctests; CI feature matrix and positive-backed dependency tree guards | Generation conversion, tools, Responses continuation, auth, evolution, IPC and telemetry regressions; local and hosted evidence |
 | A10: representations/artifacts/legacy | Registry profile/key/append mechanism test; app registry mapping and alias assembly tests; threshold/profile/frozen/legacy tests; reload tariff/profile/known-price classifier; generated catalog/schema and pinned SDK public API guards | Global and US/EU matching profiles, 272000/272001 whole-input boundaries; old rows remain legacy; source and embedded catalogs rebuilt |
-| A11: credentialed gateway call | Not executed. `OPENAI_API_KEY`, the default stored OpenAI API-key slot and the configured OpenAI provider/account keys were absent on 2026-10-07 | Unverified, as the spec permits when credentials are unavailable. No provider/account, invoice or production claim |
+| A11: credentialed gateway call | [Live evidence](DECISIONS_API_LIVE_EVIDENCE.json), 2026-10-07 17:33 UTC: two HTTP 200 native OpenAI calls through the local gateway, preserving typed text/image answers and matching SQLite usage/tariffs | User-supplied temporary API key, model `gpt-6-luna`, immutable PR catalog; downstream loopback auth skipped; zero-cache usage only. No subscription, regional, invoice or deployed Cloud claim |
 | A12: native request checks | SDK operation declaration/preparation rejection and fragment projection/cap cases; evidence/name/instructions, boolean/string choices, descriptions and ordered score rubrics | Images reported as excluded coverage; safety ID excluded; bounded fail-closed entry-request scope |
 
 ## Local validation
@@ -51,6 +52,42 @@ explicitly unverified because an OpenAI API key is unavailable.
   `CARGO_BUILD_JOBS=2`. These change build resource use, not the requested feature
   or test scope. Generated caches were cleaned only in this checkout after disk
   exhaustion; source and other worktrees were preserved.
+
+## Live provider acceptance
+
+The live run began on 2026-10-07 at 17:33 UTC (13:33 America/New_York),
+using the short-lived OpenAI API key supplied by the user for this test. The branch binary was rebuilt with all
+features from `aa378f7c81777fce3a75d80d926a4d1a57255765`. An isolated loopback
+gateway invoked `https://api.openai.com/v1/decisions` with model `gpt-6-luna`.
+
+- Text predicate, boolean choice and score: HTTP 200, **426 input tokens**,
+  zero output/cache tokens, **1,657 ms** observed gateway latency.
+- Inline image predicate: HTTP 200, **165 input tokens**, zero output/cache
+  tokens, **210 ms** observed gateway latency.
+- Both correlation headers matched the supplied request IDs. Native answer
+  order, names, boolean identity and distributions passed codec validation.
+- Graceful shutdown returned exit 0; SQLite contained exactly two matching
+  provider-reported usage records, each retaining the `decisions` protocol and
+  frozen `openai_global` tariff. Estimates were 43 and 17 micro-USD, **$0.000060
+  total**, including existing per-request rounding. These are estimates, not
+  verified invoice charges.
+
+[Redacted live response and settlement evidence](DECISIONS_API_LIVE_EVIDENCE.json)
+records the tested source, actual model, route and usage. The key was supplied
+through hidden stdin to the test process and passed only in the gateway's
+environment; the gateway was stopped after the test. Evidence contains no key.
+
+The first attempt used the default registry source on `main`, which still listed
+only generation protocols for Luna; local admission returned HTTP 400 before
+upstream I/O. The successful run pinned `registry.url` to this PR's immutable
+committed catalog. No public catalog/deployment was changed. Until that catalog
+is published, deployments need an explicitly compatible registry/configuration.
+These two calls establish this account/endpoint/schema path only; measured
+latencies are not a benchmark and zero-cache usage does not resolve cache billing.
+
+Hosted [CI run 37572253657](https://github.com/bitrouter/bitrouter/actions/runs/37572253657)
+passed all 22 jobs at the tested source head. The live acceptance update changes
+only documentation/evidence; it does not change the tested Rust source.
 
 ## Catalog and billing interpretation
 
@@ -85,5 +122,6 @@ The shipped BitRouter skill/setup reference is updated and its entrypoint remain
 under 200 lines. Plugin CLI references are unchanged and distribute the same skill;
 no CLI command, listen port, env var or default model was added. Product API prose,
 English/Chinese synchronization and the docs catalog refresh are a coordinated
-`bitrouter-docs` follow-up. No hosted CI, deployment or live provider evidence is
-implied by this local audit.
+`bitrouter-docs` follow-up. Hosted CI and bounded live provider evidence are
+recorded above. No deployed Cloud, subscription access or upstream invoice
+evidence is implied.

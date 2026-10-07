@@ -1,10 +1,11 @@
 # Decisions API implementation progress
 
-Status: **implemented and locally verified; live OpenAI acceptance unverified.**
+Status: **implemented; local/hosted checks and bounded live OpenAI acceptance verified.**
 
 The contract is [DECISIONS_API_SPEC.md](DECISIONS_API_SPEC.md). The implementation
 branch is `codex/decisions-api`, stacked on #962 at `529f2fde`; the approved spec
-is preserved in `3676c99a`. Draft stack: [#965](https://github.com/bitrouter/bitrouter/pull/965), based on #962. No credentialed OpenAI call or deployment has run.
+is preserved in `3676c99a`. Draft stack: [#965](https://github.com/bitrouter/bitrouter/pull/965), based on #962.
+Two bounded credentialed OpenAI calls are verified below; no deployment has run.
 
 ## D1: native AI semantics and selected-target client
 
@@ -235,19 +236,40 @@ these local checks and the retained upstream billing gate.
 Read-only external inventory is in [DECISIONS_API_MIGRATION.md](DECISIONS_API_MIGRATION.md).
 The Cloud checkout at `184c1f2e` still resolves published alpha.30 and has not adopted
 the parent SDK extraction. No Cloud files, build or deployment were changed;
-its untracked `lib/` was preserved. PR #962 remains open at `529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16`.
+its untracked `lib/` was preserved. At initial delivery, PR #962 was open at
+`529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16`. By the live acceptance run it had
+advanced to `0023b0a50919242cede1580755b002154f2ddeb1`; this live evidence is
+scoped to the existing `aa378f7c` stack, without a parent rebase in this test.
 
-On 2026-10-07, `OPENAI_API_KEY`, the default credential store's OpenAI API-key
-slot and the configured OpenAI provider/account keys were absent. No credentialed
-call was made; A11 remains unverified as permitted by the spec. The beta HTTP and
-typed resource references and pricing pages were refreshed. Cached-subset billing
+Before the user supplied a temporary key on 2026-10-07, `OPENAI_API_KEY`, the
+default credential store's OpenAI API-key slot and the configured OpenAI
+provider/account keys were absent. A11 was initially unverified as permitted by
+the spec. The beta HTTP and typed resource references and pricing pages were refreshed. Cached-subset billing
 remains unresolved; documented multipliers are estimates rather than invoice proof.
 
 ## Delivery status
 
 All four batches are implemented and locally verified, committed and published
-as draft #965 on #962. The worktree is clean after the delivery evidence update. A11 remains explicitly
-unverified; hosted CI and deployed Cloud support have no evidence in this task.
+as draft #965 on #962. Hosted CI passed all 22 jobs at `aa378f7c`. A11 passed
+two bounded API-key gateway calls on 2026-10-07; deployed Cloud support remains
+unverified.
 The external SDK migration and product-docs/catalog follow-up are inventoried;
 neither is advertised as a completed deployment. This local ledger does not
 establish upstream cache billing or invoice amounts.
+
+## A11: bounded live OpenAI acceptance
+
+At 2026-10-07 17:33 UTC, an isolated gateway built from `aa378f7c` invoked the
+real OpenAI `/v1/decisions` endpoint with the user-supplied temporary key. Text
+predicate/boolean-choice/score and inline-image predicate calls both returned
+HTTP 200. Usage was 426 and 165 input tokens, zero output/cache tokens.
+Graceful shutdown completed and exactly two SQLite rows retained matching raw
+usage, native protocol and frozen global tariffs. Total configured estimate:
+60 micro-USD; no invoice evidence.
+
+The default registry fetched `main`, whose Luna entry lacked this unmerged PR's
+native metadata and rejected admission locally. The successful run selected the
+immutable PR catalog through `registry.url`; no source fix or public deployment
+was needed. See [acceptance scope](DECISIONS_API_ACCEPTANCE.md) and
+[redacted live evidence](DECISIONS_API_LIVE_EVIDENCE.json). The gateway is stopped
+and the key was not saved in configuration, credentials or committed evidence.
