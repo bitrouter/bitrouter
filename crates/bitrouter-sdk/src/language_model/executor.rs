@@ -823,6 +823,9 @@ impl HttpExecutor {
         let trace_headers = ctx.take_outbound_trace_headers();
         let mut scrubber = UpstreamErrorScrubber::new(None);
         scrubber.capture_effective_target_key(target);
+        if let SelectedRequest::Generation(prompt) = input {
+            scrubber.redactor.capture_prompt_continuity(prompt);
+        }
         let started = Instant::now();
         let mut refreshed = false;
         loop {

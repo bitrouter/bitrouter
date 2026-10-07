@@ -1053,9 +1053,13 @@ impl ObserveHook for OtelExporter {
                     ));
                 }
                 if let Some(request) = ctx.decision_request() {
+                    let safety_identifier = request
+                        .safety_identifier
+                        .as_ref()
+                        .and_then(|value| value.as_deref());
                     let input =
                         serde_json::json!({"input": request.input, "questions": request.questions});
-                    if let Ok(json) = serde_json::to_string(&input) {
+                    if let Some(json) = captured_decision_content_json(&input, safety_identifier) {
                         span.set_attribute(KeyValue::new(
                             "bitrouter.decisions.input",
                             truncate_utf8(json, self.config.content_attr_max_bytes),
@@ -1065,7 +1069,8 @@ impl ObserveHook for OtelExporter {
                         .execution_result
                         .as_ref()
                         .and_then(|result| result.result.decisions())
-                        && let Ok(json) = serde_json::to_string(&result.answers)
+                        && let Some(json) =
+                            captured_decision_content_json(&result.answers, safety_identifier)
                     {
                         span.set_attribute(KeyValue::new(
                             "bitrouter.decisions.answers",
@@ -1343,6 +1348,37 @@ fn captured_content_json<T: serde::Serialize + ?Sized>(
     redactor: &bitrouter_ai::diagnostics::DiagnosticRedactor,
 ) -> Option<String> {
     let mut value = serde_json::to_value(content).ok()?;
+    redactor.scrub_value(&mut value);
+    serde_json::to_string(&value).ok()
+}
+
+fn captured_decision_content_json<T: serde::Serialize + ?Sized>(
+    content: &T,
+    safety_identifier: Option<&str>,
+) -> Option<String> {
+    fn omit_identifiers(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                fields.remove("safety_identifier");
+                for value in fields.values_mut() {
+                    omit_identifiers(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    omit_identifiers(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut value = serde_json::to_value(content).ok()?;
+    omit_identifiers(&mut value);
+    let mut redactor = bitrouter_ai::diagnostics::DiagnosticRedactor::default();
+    if let Some(identifier) = safety_identifier {
+        redactor.add_replacement(identifier.to_owned(), "[redacted safety identifier]".into());
+    }
     redactor.scrub_value(&mut value);
     serde_json::to_string(&value).ok()
 }
@@ -2262,13 +2298,21 @@ mod hop_tests {
             }))?;
             let native = DecisionsCodec::parse_response(
                 serde_json::json!({
-                    "model":"test-model","answers":[{"type":"predicate","name":"q","probability":0.7}],
+                    "model":"test-model","answers":[{"type":"predicate","name":"q","probability":0.7,
+                        "safety_identifier":"private-native-safety", "safe_extension":true,
+                        "extra_answer":{"nested":[{"safety_identifier":"private-upstream-safety",
+                            "echo":"private-native-safety"}]}}],
                     "usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10,
                         "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
                         "output_tokens_details":{"reasoning_tokens":0}}
                 }),
                 &request,
             )?;
+            let wire_before = DecisionsCodec::render_response(&native, &request)?;
+            assert_eq!(
+                wire_before["answers"][0]["safety_identifier"],
+                "private-native-safety"
+            );
             let mut target = fresh_target("openai");
             target.api_protocol = ApiProtocol::Decisions;
             let mut ctx = PipelineContext::new(PipelineRequest::new_decisions(
@@ -2312,11 +2356,29 @@ mod hop_tests {
             if mode == ContentCaptureMode::Full {
                 assert!(input.is_some_and(|input| input.contains("private-native-evidence")));
                 assert!(answers.is_some_and(|answers| answers.contains("probability")));
+                let answer_json: serde_json::Value =
+                    serde_json::from_str(answers.ok_or("missing captured native answers")?)?;
+                assert!(answer_json[0].get("safety_identifier").is_none());
+                assert!(
+                    answer_json[0]["extra_answer"]["nested"][0]
+                        .get("safety_identifier")
+                        .is_none()
+                );
+                assert_eq!(answer_json[0]["safe_extension"], true);
             } else {
                 assert!(input.is_none());
                 assert!(answers.is_none());
             }
             assert!(!format!("{spans:?}").contains("private-native-safety"));
+            assert!(!format!("{spans:?}").contains("private-upstream-safety"));
+            let wire_after = DecisionsCodec::render_response(
+                ctx.execution_result
+                    .as_ref()
+                    .and_then(|result| result.result.decisions())
+                    .ok_or("missing native result")?,
+                ctx.decision_request().ok_or("missing native request")?,
+            )?;
+            assert_eq!(wire_after, wire_before);
             let hop = spans
                 .iter()
                 .find(|span| span.span_kind == SpanKind::Client)

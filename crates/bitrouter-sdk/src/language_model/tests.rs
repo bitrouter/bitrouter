@@ -5898,6 +5898,124 @@ async fn successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_obse
 }
 
 #[tokio::test]
+async fn non_stream_upstream_errors_redact_admitted_continuity() -> Result<()> {
+    use bitrouter_ai::protocol::{OutboundAdapter, chat_completions::ChatCompletionsAdapter};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    for protocol in [ApiProtocol::Messages, ApiProtocol::ChatCompletions] {
+        let server = MockServer::start().await;
+        let mut selected = target("fixture");
+        selected.api_base = server.uri();
+        selected.api_key = "continuity-test-key".into();
+        selected.api_protocol = protocol.clone();
+        let signature = "private-continuity-sentinel";
+        let mut req = request();
+        let prompt = req
+            .input
+            .generation_prompt_mut()
+            .ok_or_else(|| BitrouterError::internal("missing generation fixture"))?;
+        let mut private_values = vec![signature.to_owned()];
+        let upstream_path = if protocol == ApiProtocol::Messages {
+            prompt.messages.insert(
+                0,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Reasoning {
+                        text: "prior reasoning".into(),
+                        provider_metadata: std::collections::BTreeMap::from([(
+                            "anthropic".into(),
+                            serde_json::json!({"signature": signature}),
+                        )]),
+                        native: None,
+                    }],
+                },
+            );
+            "/messages"
+        } else {
+            selected.chat_google_extensions = true;
+            let result = ChatCompletionsAdapter.parse_response(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "tool_calls": [{
+                    "id": "fixture-call", "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": signature}}
+                }]}, "finish_reason": "tool_calls"}]
+            }))?;
+            let bound = bitrouter_ai::providers::google_chat::bind_result(
+                result,
+                &selected.model_target(),
+            )?;
+            let replay_proof = bound
+                .content
+                .iter()
+                .find_map(|content| {
+                    let Content::ToolCall {
+                        provider_metadata, ..
+                    } = content
+                    else {
+                        return None;
+                    };
+                    provider_metadata
+                        .get("google")?
+                        .get("replayProof")?
+                        .as_str()
+                })
+                .ok_or_else(|| BitrouterError::internal("missing bound replay proof"))?;
+            private_values.push(replay_proof.to_owned());
+            prompt.messages.insert(
+                0,
+                Message {
+                    role: Role::Assistant,
+                    content: bound.content,
+                },
+            );
+            "/chat/completions"
+        };
+        let original = prompt.clone();
+        Mock::given(method("POST"))
+            .and(path(upstream_path))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": format!("Invalid history: {}", private_values.join(" / ")),
+                    "param": "messages"}
+            })))
+            .mount(&server)
+            .await;
+        let ctx = PipelineContext::new(req);
+        let source = ctx.require_generation_prompt()?;
+        let error = HttpExecutor::with_defaults()?
+            .execute(&selected, source, &ctx)
+            .await
+            .err()
+            .ok_or_else(|| BitrouterError::internal("echoed upstream error accepted"))?;
+        assert!(matches!(&error, BitrouterError::UpstreamBadRequest { .. }));
+        assert_eq!(error.status(), 400);
+        let public = error.public_message();
+        assert!(public.contains("Invalid history"));
+        assert!(public.contains("[redacted continuity]"));
+        for value in private_values {
+            assert!(!public.contains(&value));
+            assert!(!format!("{error:?}").contains(&value));
+        }
+        let sent = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("missing request inventory"))?;
+        assert_eq!(sent.len(), 1);
+        let wire = sent[0]
+            .body_json::<serde_json::Value>()
+            .map_err(BitrouterError::internal)?;
+        let sent_signature = if protocol == ApiProtocol::Messages {
+            &wire["messages"][0]["content"][0]["signature"]
+        } else {
+            &wire["messages"][0]["tool_calls"][0]["extra_content"]["google"]["thought_signature"]
+        };
+        assert_eq!(sent_signature, signature);
+        assert_eq!(source, &original);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn google_continuity_failure_keeps_reported_usage_in_settlement() -> Result<()> {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

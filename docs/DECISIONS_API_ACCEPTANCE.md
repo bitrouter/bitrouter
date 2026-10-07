@@ -155,3 +155,32 @@ Validation of this merged source:
 The A11 live evidence remains scoped to the original tested `aa378f7c` source
 and pinned catalog. No live request was repeated during conflict resolution.
 Hosted CI for the merged head is separate from the earlier completed CI run.
+
+## Final reviewer privacy fixes
+
+The GPT-6 Astra review of `92bfb8e2` found two confirmed P2 privacy defects.
+Both were reproduced with synthetic loopback fixtures and corrected:
+
+- Shared non-streaming SDK execution captures generation continuity values
+  before request rendering/authentication. Echoed Anthropic signatures and
+  credential-bound Google signatures/replay proofs are filtered from public
+  and debug errors; outgoing signatures and source prompts remain unchanged.
+- Native full-content telemetry uses a separate JSON projection. It recursively
+  removes `safety_identifier` fields and redacts known request-identifier echoes,
+  including nested answer extensions. Harmless extensions remain captured, and
+  native wire rendering remains unchanged. Capture-off behavior is retained.
+
+The two regressions failed before these production fixes and passed afterward,
+run `8bebe244-fe1b-4374-a66a-5453897cc0d6`. The focused Astra follow-up inspected
+the fixes and regressions and confirmed both findings closed, with no remaining
+actionable defect in that scope.
+
+Final local checks: **3697 all-feature workspace tests passed, 22 existing
+skips**, run `085f325c-a4f8-420f-a224-092d300f3cbd`; workspace doctests **6 passed,
+1 ignored**; strict all-feature Clippy including tests, formatting and dist
+freshness passed. No public API or span-schema shape changed.
+
+Hosted [CI run 37665057763](https://github.com/bitrouter/bitrouter/actions/runs/37665057763)
+passed all 22 jobs on the reviewed pre-fix `92bfb8e2` head. Hosted CI for the
+privacy-fix head is separate. Prior live-provider evidence remains scoped to
+`aa378f7c`; no real credentials or provider calls were used for these fixes.
