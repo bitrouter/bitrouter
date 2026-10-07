@@ -24,7 +24,7 @@ pub enum ConversionProtocol {
     Responses,
     /// Anthropic Messages.
     Messages,
-    /// Google Generate Content.
+    /// Historical diagnostic provenance only; no executable native codec.
     GenerateContent,
     /// An explicitly registered custom wire.
     Custom,
@@ -37,7 +37,7 @@ impl From<&ApiProtocol> for ConversionProtocol {
             ApiProtocol::Responses => Self::Responses,
             ApiProtocol::Decisions => Self::Decisions,
             ApiProtocol::Messages => Self::Messages,
-            ApiProtocol::GenerateContent => Self::GenerateContent,
+
             ApiProtocol::Custom(_) => Self::Custom,
         }
     }
@@ -223,13 +223,15 @@ pub enum ConversionLocation {
         /// Zero-based content index within that message.
         block: usize,
     },
-    /// A native reasoning block in the canonical result.
+    /// A canonical result block.
     OutputContent {
         /// Zero-based result content index.
         block: usize,
     },
     /// A native reasoning terminal event; native item IDs are intentionally absent.
     StreamReasoning,
+    /// A tool-call stream event; opaque tool IDs are intentionally absent.
+    StreamToolCall,
     /// A canonical provider-defined tool declaration.
     ToolDefinition {
         /// Zero-based original tool index.
@@ -237,6 +239,8 @@ pub enum ConversionLocation {
     },
     /// The canonical structured-output requirement.
     ResponseFormat,
+    /// Target-specific generation controls in the source request.
+    GenerationOptions,
 }
 
 /// One categorical conversion diagnostic, suitable for trusted observation.
@@ -364,42 +368,16 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
         return report;
     }
     for (tool, definition) in prompt.tools.iter().enumerate() {
-        if let Tool::Function {
-            parameters, strict, ..
-        } = definition
+        if let Tool::Function { strict, .. } = definition
+            && strict.is_some()
+            && matches!(protocol, ApiProtocol::Messages)
         {
-            if strict.is_some()
-                && matches!(
-                    protocol,
-                    ApiProtocol::Messages | ApiProtocol::GenerateContent
-                )
-            {
-                report.push_projection(
-                    protocol,
-                    ConversionLocation::ToolDefinition { tool },
-                    ConversionReason::FunctionStrictUnrepresentable,
-                    ConversionEffect::TaskSemantics,
-                );
-            }
-            if *protocol == ApiProtocol::GenerateContent {
-                use crate::protocol::generate_content::{
-                    SchemaProjection, classify_schema_projection,
-                };
-                match classify_schema_projection(parameters) {
-                    SchemaProjection::Unclassified => report.push_projection(
-                        protocol,
-                        ConversionLocation::ToolDefinition { tool },
-                        ConversionReason::ToolSchemaProjectionUnclassified,
-                        ConversionEffect::Unknown,
-                    ),
-                    SchemaProjection::Equivalent => report.push_equivalent(
-                        protocol,
-                        ConversionLocation::ToolDefinition { tool },
-                        ConversionReason::GeminiSchemaNormalization,
-                    ),
-                    SchemaProjection::Unchanged => {}
-                }
-            }
+            report.push_projection(
+                protocol,
+                ConversionLocation::ToolDefinition { tool },
+                ConversionReason::FunctionStrictUnrepresentable,
+                ConversionEffect::TaskSemantics,
+            );
         }
         let Tool::ProviderDefined { id, args, .. } = definition else {
             continue;
@@ -407,7 +385,6 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
         let family = match protocol {
             ApiProtocol::Responses => Some("openai"),
             ApiProtocol::Messages => Some("anthropic"),
-            ApiProtocol::GenerateContent => Some("google"),
             ApiProtocol::ChatCompletions | ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
         };
         let refusal = if *protocol == ApiProtocol::ChatCompletions {
@@ -442,15 +419,13 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
             );
         }
     }
-    if matches!(
-        protocol,
-        ApiProtocol::Messages | ApiProtocol::GenerateContent
-    ) && let Some(ResponseFormat::JsonSchema {
-        name,
-        description,
-        strict,
-        ..
-    }) = &prompt.response_format
+    if matches!(protocol, ApiProtocol::Messages)
+        && let Some(ResponseFormat::JsonSchema {
+            name,
+            description,
+            strict,
+            ..
+        }) = &prompt.response_format
     {
         if name.is_some() || description.is_some() {
             report.push_projection(
@@ -490,7 +465,6 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
                     ),
                     ApiProtocol::ChatCompletions
                     | ApiProtocol::Messages
-                    | ApiProtocol::GenerateContent
                     | ApiProtocol::Decisions => (
                         ConversionReason::NativeReasoningUnrepresentable,
                         ConversionEffect::TaskSemantics,
@@ -517,7 +491,9 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
                     let google = provider_namespace(provider_metadata, "google")
                         .is_some_and(|fields| fields.contains_key("thoughtSignature"));
                     (anthropic && *protocol != ApiProtocol::Messages)
-                        || (google && *protocol != ApiProtocol::GenerateContent)
+                        || (google
+                            && !(*protocol == ApiProtocol::ChatCompletions
+                                && matches!(content, Content::ToolCall { .. })))
                 }
                 _ => false,
             };
@@ -618,7 +594,7 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
                             }
                             ToolResultContentPart::FileId { .. } => true,
                         },
-                        ApiProtocol::GenerateContent | ApiProtocol::Custom(_) => {
+                        ApiProtocol::Custom(_) => {
                             !matches!(value, ToolResultContentPart::Text { .. })
                         }
                     };
@@ -661,10 +637,7 @@ fn history_refusal(
     use ConversionEffect::{ReplayAuthority, TaskSemantics, Unknown};
     use ConversionReason as Reason;
     if let Content::ToolCall { arguments, .. } = content
-        && matches!(
-            protocol,
-            ApiProtocol::Messages | ApiProtocol::GenerateContent
-        )
+        && matches!(protocol, ApiProtocol::Messages)
         && serde_json::from_str::<serde_json::Value>(arguments).is_err()
     {
         return Some((Reason::ToolArgumentsUnrepresentable, TaskSemantics));
@@ -788,15 +761,6 @@ fn history_refusal(
             }
             let changes_shape = match protocol {
                 ApiProtocol::Decisions => true,
-                ApiProtocol::GenerateContent => match output {
-                    ToolResultOutput::Json { value } => !value.is_object(),
-                    // Existing per-part rules report actual omitted media at its
-                    // nested source coordinate, before a shape classification.
-                    ToolResultOutput::Content { value } => value
-                        .iter()
-                        .all(|part| matches!(part, ToolResultContentPart::Text { .. })),
-                    _ => true,
-                },
                 // These wire slots carry canonical JSON as its JSON encoding;
                 // serialization preserves the complete value. Status is checked
                 // independently above, not waived by that representation.

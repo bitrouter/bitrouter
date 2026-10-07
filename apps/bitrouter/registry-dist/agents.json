@@ -62,38 +62,6 @@
       "acp": {
         "protocol_version": 1
       },
-      "description": "Google's Gemini CLI with `--experimental-acp` (best-effort routing)",
-      "id": "gemini-cli",
-      "name": "Gemini CLI",
-      "package_marker": "gemini-cli",
-      "project_url": "https://github.com/google-gemini/gemini-cli",
-      "routing": {
-        "auth_env": "GEMINI_API_KEY",
-        "base_url_env": "GOOGLE_GEMINI_BASE_URL",
-        "bearer_auth": false,
-        "kind": "env",
-        "model_env": "GEMINI_MODEL"
-      },
-      "runtimes": [
-        {
-          "runtime": "local",
-          "transport": {
-            "args": [
-              "-y",
-              "--",
-              "@google/gemini-cli@latest",
-              "--experimental-acp"
-            ],
-            "command": "npx",
-            "type": "stdio"
-          }
-        }
-      ]
-    },
-    {
-      "acp": {
-        "protocol_version": 1
-      },
       "description": "Nous Research's Hermes Agent via its native `hermes acp`",
       "id": "hermes-acp",
       "interactive_binary": "hermes",

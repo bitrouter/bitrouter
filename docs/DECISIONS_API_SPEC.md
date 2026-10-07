@@ -416,8 +416,8 @@ Operation filtering precedes native-protocol preference:
 5. Repeat/check the invariant at executor admission for every fallback hop.
 
 For this PR, Decisions has one supported wire family. Generation retains its
-existing four-protocol conversion matrix; adding Decisions does not create a
-five-by-five semantic conversion promise. A plain generation request also
+three-protocol generation conversion matrix retained after #964; Decisions
+does not add cross-operation semantic conversion. A plain generation request also
 cannot select a Decisions-only target when it requires no optional capabilities.
 
 Add Decisions support only to the verified OpenAI `gpt-6-luna` model entry.

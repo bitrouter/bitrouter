@@ -186,6 +186,54 @@ impl Config {
     /// before activation. Config-backed routing also runs it at first
     /// resolution so infallible table constructors cannot bypass validation.
     pub fn validate_router_config(&self) -> Result<()> {
+        for (name, provider) in &self.providers {
+            if !provider.active {
+                continue;
+            }
+            if let Some(message) = bitrouter_ai::providers::retired::provider_message(name) {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}: {message}"
+                )));
+            }
+            if let Some(protocol) = provider
+                .api_protocol
+                .values()
+                .flat_map(|list| list.as_slice())
+                .find(|protocol| {
+                    bitrouter_ai::providers::retired::protocol_message(protocol.as_str()).is_some()
+                })
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}.api_protocol: retired protocol '{protocol}'; select Chat Completions and a verified endpoint explicitly"
+                )));
+            }
+            for (index, model) in provider.models.iter().enumerate() {
+                if let Some(protocol) = model.api_protocol.as_ref().and_then(|list| {
+                    list.as_slice().iter().find(|protocol| {
+                        bitrouter_ai::providers::retired::protocol_message(protocol.as_str())
+                            .is_some()
+                    })
+                }) {
+                    return Err(BitrouterError::bad_request(format!(
+                        "providers.{name}.models[{index}].api_protocol: retired protocol '{protocol}'; select Chat Completions and a verified endpoint explicitly"
+                    )));
+                }
+            }
+            if provider.api_protocol.is_empty()
+                && (provider.models.is_empty()
+                    || provider
+                        .models
+                        .iter()
+                        .any(|model| model.api_protocol.is_none()))
+                && let Some(message) = bitrouter_ai::providers::retired::protocol_message(
+                    infer_protocol(&provider.api_base).as_str(),
+                )
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}.api_base: {message}"
+                )));
+            }
+        }
         router::validate_router_config(self)
     }
 
@@ -193,6 +241,11 @@ impl Config {
     /// preset compatibility syntax.
     pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
         self.validate_router_config()?;
+        if let Some((provider, _)) = raw_model.split_once(':')
+            && let Some(message) = bitrouter_ai::providers::retired::provider_message(provider)
+        {
+            return Err(BitrouterError::bad_request(message));
+        }
         presets::resolve_routers(
             raw_model,
             &self.routers,
@@ -1473,8 +1526,13 @@ pub fn infer_protocol(api_base: &str) -> ApiProtocol {
     let host = api_base.to_ascii_lowercase();
     if host.contains("anthropic.com") {
         ApiProtocol::Messages
-    } else if host.contains("googleapis.com") || host.contains("generativelanguage") {
-        ApiProtocol::GenerateContent
+    } else if (host.contains("generativelanguage.googleapis.com")
+        && !host.trim_end_matches('/').ends_with("/openai"))
+        || (host.contains("aiplatform.googleapis.com") && host.contains("publishers/google"))
+    {
+        // A historical native base needs explicit migration rather than an
+        // invented Chat endpoint. The retired identifier remains provenance.
+        ApiProtocol::Custom("generate_content".into())
     } else {
         ApiProtocol::ChatCompletions
     }
@@ -2105,13 +2163,17 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// connect window (minutes). Discovery is best-effort; a 5s overall cap is
 /// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {
+    if let Err(error) = config.validate_router_config() {
+        tracing::warn!(%error, "invalid configuration; model discovery skipped");
+        return;
+    }
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     for (provider_id, provider) in config.providers.iter_mut() {
-        if !provider.auto_discover || !provider.models.is_empty() {
+        if !provider.active || !provider.auto_discover || !provider.models.is_empty() {
             continue;
         }
         let url = format!("{}/models", provider.api_base.trim_end_matches('/'));

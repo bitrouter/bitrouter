@@ -10,12 +10,11 @@ use bitrouter_sdk::language_model::hooks::FallbackDecision;
 use bitrouter_sdk::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy};
 use bitrouter_sdk::language_model::types::{OutboundHeaderRule, RoutingTarget};
 
-fn all_protocols() -> [ApiProtocol; 4] {
+fn all_protocols() -> [ApiProtocol; 3] {
     [
         ApiProtocol::ChatCompletions,
         ApiProtocol::Messages,
         ApiProtocol::Responses,
-        ApiProtocol::GenerateContent,
     ]
 }
 
@@ -34,6 +33,7 @@ fn model_diagnostics_are_sanitized_by_sdk_before_sse() -> bitrouter_sdk::Result<
         (
             ModelError::InvalidResponse {
                 message: "provider secret invalid body".into(),
+                usage: None,
             },
             502,
             "upstream returned an invalid response",
@@ -102,10 +102,6 @@ fn rate_limit_presentation_survives_all_sse_codecs() -> bitrouter_sdk::Result<()
                 assert!(wire.contains("rate_limit_error"), "{wire}");
             }
             ApiProtocol::Responses => assert!(wire.contains("response.failed"), "{wire}"),
-            ApiProtocol::GenerateContent => {
-                assert!(wire.contains("RESOURCE_EXHAUSTED"), "{wire}");
-                assert!(wire.contains("429"), "{wire}");
-            }
             ApiProtocol::Decisions | ApiProtocol::Custom(_) => {}
         }
     }
@@ -123,6 +119,7 @@ fn selected_model_target_uses_overrides_and_redacts_credentials() -> bitrouter_s
         chat_token_limit_field: Some(ChatTokenLimitField::MaxCompletionTokens),
         chat_supports_store: Some(false),
         chat_supports_stream_options: Some(true),
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: Some("selected-account".into()),
         api_key_override: Some("override-secret".into()),
@@ -179,6 +176,7 @@ fn invocation_failures_retain_sdk_policy_and_cancellation_does_not_fallback() {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,

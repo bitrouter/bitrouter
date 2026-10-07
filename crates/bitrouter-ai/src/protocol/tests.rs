@@ -35,7 +35,6 @@ fn adapter_for(protocol: ApiProtocol) -> crate::error::Result<Box<dyn BothAdapte
         ApiProtocol::ChatCompletions => Box::new(chat_completions::ChatCompletionsAdapter),
         ApiProtocol::Messages => Box::new(messages::MessagesAdapter),
         ApiProtocol::Responses => Box::new(responses::ResponsesAdapter),
-        ApiProtocol::GenerateContent => Box::new(generate_content::GenerateContentAdapter),
         ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
             return Err(ModelError::invalid_request(
                 "generation fixture requires a generation protocol",
@@ -44,12 +43,11 @@ fn adapter_for(protocol: ApiProtocol) -> crate::error::Result<Box<dyn BothAdapte
     })
 }
 
-fn all_protocols() -> [ApiProtocol; 4] {
+fn all_protocols() -> [ApiProtocol; 3] {
     [
         ApiProtocol::Messages,
         ApiProtocol::ChatCompletions,
         ApiProtocol::Responses,
-        ApiProtocol::GenerateContent,
     ]
 }
 
@@ -65,9 +63,6 @@ fn minimal_request(protocol: ApiProtocol) -> crate::error::Result<serde_json::Va
             "model": "m", "messages": [{ "role": "user", "content": "hi" }],
         }),
         ApiProtocol::Responses => serde_json::json!({ "model": "m", "input": "hi" }),
-        ApiProtocol::GenerateContent => serde_json::json!({
-            "model": "m", "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
-        }),
         ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
             return Err(ModelError::invalid_request(
                 "generation fixture requires a generation protocol",
@@ -174,11 +169,7 @@ fn official_usage(protocol: ApiProtocol) -> Usage {
             50
         },
         cache_read_tokens: 600,
-        cache_write_tokens: if protocol == ApiProtocol::GenerateContent {
-            0
-        } else {
-            100
-        },
+        cache_write_tokens: 100,
         origin: UsageOrigin::ProviderReported,
         ..Default::default()
     }
@@ -241,21 +232,6 @@ fn official_usage_response(protocol: ApiProtocol) -> serde_json::Value {
                 "output_tokens": 150,
                 "cache_read_input_tokens": 600,
                 "cache_creation_input_tokens": 100
-            }
-        }),
-        ApiProtocol::GenerateContent => serde_json::json!({
-            "modelVersion": "google/gemini-test",
-            "candidates": [{
-                "index": 0,
-                "content": {"role": "model", "parts": [{"text": "ok"}]},
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 1_000,
-                "candidatesTokenCount": 100,
-                "thoughtsTokenCount": 50,
-                "cachedContentTokenCount": 600,
-                "totalTokenCount": 1_150
             }
         }),
         ApiProtocol::Custom(_) | ApiProtocol::Decisions => serde_json::Value::Null,
@@ -357,25 +333,6 @@ fn official_usage_stream(protocol: ApiProtocol) -> Vec<SseEvent> {
                 data: serde_json::json!({"type": "message_stop"}).to_string(),
             },
         ],
-        ApiProtocol::GenerateContent => vec![SseEvent {
-            event: None,
-            data: serde_json::json!({
-                "modelVersion": "google/gemini-test",
-                "candidates": [{
-                    "index": 0,
-                    "content": {"role": "model", "parts": [{"text": "ok"}]},
-                    "finishReason": "STOP"
-                }],
-                "usageMetadata": {
-                    "promptTokenCount": 1_000,
-                    "candidatesTokenCount": 100,
-                    "thoughtsTokenCount": 50,
-                    "cachedContentTokenCount": 600,
-                    "totalTokenCount": 1_150
-                }
-            })
-            .to_string(),
-        }],
         ApiProtocol::Custom(_) | ApiProtocol::Decisions => Vec::new(),
     }
 }
@@ -406,9 +363,6 @@ fn assert_usage(actual: &Usage, expected: &Usage, context: &str) {
 fn expected_after_wire(mut usage: Usage, protocol: ApiProtocol) -> Usage {
     if protocol == ApiProtocol::Messages {
         usage.reasoning_tokens = 0;
-    }
-    if protocol == ApiProtocol::GenerateContent {
-        usage.cache_write_tokens = 0;
     }
     usage
 }
@@ -475,18 +429,6 @@ fn assert_official_usage_wire(protocol: ApiProtocol, wire: &serde_json::Value, u
                 usage.cache_write_tokens,
             );
         }
-        ApiProtocol::GenerateContent => {
-            assert_eq!(wire["promptTokenCount"], usage.prompt_tokens);
-            assert_eq!(
-                wire["candidatesTokenCount"],
-                usage
-                    .completion_tokens
-                    .saturating_sub(usage.reasoning_tokens)
-            );
-            assert_eq!(wire["thoughtsTokenCount"], usage.reasoning_tokens);
-            assert_eq!(wire["totalTokenCount"], usage.total());
-            assert_optional_counter(&wire["cachedContentTokenCount"], usage.cache_read_tokens);
-        }
         ApiProtocol::Custom(_) | ApiProtocol::Decisions => (),
     }
 }
@@ -537,7 +479,6 @@ fn usage_wire_from_frames(protocol: ApiProtocol, frames: &[SseFrame]) -> Option<
                 == Some("message_delta"))
             .then(|| json.get("usage").cloned())
             .flatten(),
-            ApiProtocol::GenerateContent => json.get("usageMetadata").cloned(),
             ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
         }
     })
@@ -641,10 +582,7 @@ fn usage_conversion_matrix_4x4_non_streaming_official_wire() -> crate::error::Re
             let Ok(rendered) = rendered else {
                 continue;
             };
-            let wire_usage = match target_protocol {
-                ApiProtocol::GenerateContent => rendered.get("usageMetadata"),
-                _ => rendered.get("usage"),
-            };
+            let wire_usage = rendered.get("usage");
             assert!(
                 wire_usage.is_some(),
                 "{source_protocol:?}->{target_protocol:?}: wire usage missing"
@@ -1036,95 +974,6 @@ fn usage_cache_buckets_are_independent_non_streaming_and_streaming() -> crate::e
     Ok(())
 }
 
-// ===== per-adapter unit tests =====
-
-/// Each outbound adapter must extract the provider-native response id
-/// from a non-streaming body into `GenerateResult.response_id` so the
-/// observe plugin can stamp it onto the OTel `gen_ai.response.id`
-/// attribute (current GenAI semconv:
-/// <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>).
-#[test]
-fn outbound_adapters_extract_response_id() -> crate::error::Result<()> {
-    // Chat Completions: top-level `id` (`chatcmpl-...`).
-    let openai_chat = adapter_for(ApiProtocol::ChatCompletions)?;
-    let body = serde_json::json!({
-        "id": "chatcmpl-abc123",
-        "object": "chat.completion",
-        "model": "gpt-test",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-    });
-    assert_eq!(
-        openai_chat
-            .parse_response(body)
-            .unwrap()
-            .response_id
-            .as_deref(),
-        Some("chatcmpl-abc123"),
-        "Chat Completions must extract top-level `id`"
-    );
-
-    // Messages: top-level `id` (`msg_...`).
-    let anthropic = adapter_for(ApiProtocol::Messages)?;
-    let body = serde_json::json!({
-        "id": "msg_01ABC",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "hi"}],
-        "stop_reason": "end_turn",
-    });
-    assert_eq!(
-        anthropic
-            .parse_response(body)
-            .unwrap()
-            .response_id
-            .as_deref(),
-        Some("msg_01ABC"),
-        "Anthropic must extract top-level `id`"
-    );
-
-    // Generate Content: top-level `responseId`.
-    let google = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "responseId": "google-resp-xyz",
-        "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
-    });
-    assert_eq!(
-        google.parse_response(body).unwrap().response_id.as_deref(),
-        Some("google-resp-xyz"),
-        "Google must extract `responseId`"
-    );
-
-    // Responses: top-level `id` (`resp_...`).
-    let responses = adapter_for(ApiProtocol::Responses)?;
-    let body = serde_json::json!({
-        "id": "resp_abc789",
-        "object": "response",
-        "status": "completed",
-        "output": [{"type": "message", "content": [{"text": "hi"}]}],
-    });
-    assert_eq!(
-        responses
-            .parse_response(body)
-            .unwrap()
-            .response_id
-            .as_deref(),
-        Some("resp_abc789"),
-        "Responses must extract top-level `id`"
-    );
-
-    // Absent id: graceful None.
-    let openai_chat = adapter_for(ApiProtocol::ChatCompletions)?;
-    let body = serde_json::json!({
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-    });
-    assert_eq!(
-        openai_chat.parse_response(body).unwrap().response_id,
-        None,
-        "missing provider id must surface as None, not panic"
-    );
-    Ok(())
-}
-
 #[test]
 fn chat_completions_request_roundtrip() -> crate::error::Result<()> {
     let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
@@ -1206,9 +1055,6 @@ fn token_limit_translates_across_every_protocol_pair() -> crate::error::Result<(
             ApiProtocol::ChatCompletions => body["max_completion_tokens"] = 777.into(),
             ApiProtocol::Messages => body["max_tokens"] = 777.into(),
             ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
-            ApiProtocol::GenerateContent => {
-                body["generationConfig"] = serde_json::json!({"maxOutputTokens": 777});
-            }
             ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
                 return Err(ModelError::invalid_request(
                     "generation fixture requires a generation protocol",
@@ -1241,9 +1087,6 @@ fn token_limit_translates_across_every_protocol_pair() -> crate::error::Result<(
                 }
                 ApiProtocol::Messages => assert_eq!(rendered["max_tokens"], 777),
                 ApiProtocol::Responses => assert_eq!(rendered["max_output_tokens"], 777),
-                ApiProtocol::GenerateContent => {
-                    assert_eq!(rendered["generationConfig"]["maxOutputTokens"], 777)
-                }
                 ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
                     return Err(ModelError::invalid_request(
                         "generation fixture requires a generation protocol",
@@ -1287,6 +1130,7 @@ fn target_token_limit_override_wins_over_inbound_spelling() -> crate::error::Res
 
             compatibility: ModelCompatibility {
                 chat_completions: ChatCompletionsCompatibility {
+                    google_extensions: false,
                     token_limit_field: Some(override_field),
                     supports_store: None,
                     supports_stream_options: None,
@@ -1325,6 +1169,7 @@ fn chat_target_omits_explicitly_unsupported_optional_fields() -> crate::error::R
 
         compatibility: ModelCompatibility {
             chat_completions: ChatCompletionsCompatibility {
+                google_extensions: false,
                 token_limit_field: None,
                 supports_store: Some(false),
                 supports_stream_options: Some(false),
@@ -1361,6 +1206,7 @@ fn chat_target_does_not_silently_drop_store_true() -> crate::error::Result<()> {
 
         compatibility: ModelCompatibility {
             chat_completions: ChatCompletionsCompatibility {
+                google_extensions: false,
                 token_limit_field: None,
                 supports_store: Some(false),
                 supports_stream_options: None,
@@ -1381,18 +1227,12 @@ fn chat_target_does_not_silently_drop_store_true() -> crate::error::Result<()> {
 #[test]
 fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution()
 -> crate::error::Result<()> {
-    for inbound_protocol in [
-        ApiProtocol::Messages,
-        ApiProtocol::Responses,
-        ApiProtocol::GenerateContent,
-    ] {
+    for inbound_protocol in [ApiProtocol::Messages, ApiProtocol::Responses] {
         let mut body = minimal_request(inbound_protocol.clone())?;
         match inbound_protocol {
             ApiProtocol::Messages => body["max_tokens"] = 777.into(),
             ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
-            ApiProtocol::GenerateContent => {
-                body["generationConfig"] = serde_json::json!({"maxOutputTokens": 777});
-            }
+
             _ => unreachable!(),
         }
         let mut prompt = adapter_for(inbound_protocol.clone())?
@@ -1432,6 +1272,7 @@ fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution()
 
                 compatibility: ModelCompatibility {
                     chat_completions: ChatCompletionsCompatibility {
+                        google_extensions: false,
                         token_limit_field: Some(override_field),
                         supports_store: None,
                         supports_stream_options: None,
@@ -1514,43 +1355,6 @@ fn messages_passes_through_uncommon_params() -> crate::error::Result<()> {
         assert_eq!(
             rendered[key], body[key],
             "Anthropic `{key}` must survive parse/render"
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn generate_content_passes_through_uncommon_generation_config() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-2.0-flash",
-        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-        "generationConfig": {
-            "temperature": 0.5,
-            "stopSequences": ["END"],
-            "topK": 40,
-            "seed": 7,
-            "responseMimeType": "application/json",
-            "responseSchema": {"type": "object"},
-            "presencePenalty": 0.1,
-            "frequencyPenalty": -0.1
-        }
-    });
-    let prompt = adapter.parse_request(body.clone()).unwrap();
-    let rendered = adapter.render_request(&prompt).unwrap();
-    let gc = &rendered["generationConfig"];
-    for key in [
-        "stopSequences",
-        "topK",
-        "seed",
-        "responseMimeType",
-        "responseSchema",
-        "presencePenalty",
-        "frequencyPenalty",
-    ] {
-        assert_eq!(
-            gc[key], body["generationConfig"][key],
-            "Google generationConfig.{key} must survive parse/render"
         );
     }
     Ok(())
@@ -1994,89 +1798,6 @@ fn responses_reasoning_effort_preserves_reasoning_siblings() -> crate::error::Re
 }
 
 #[test]
-fn generate_content_promotes_thinking_level_and_preserves_siblings() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-3.1-pro-preview",
-        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-        "generationConfig": {
-            "thinkingConfig": {
-                "thinkingLevel": "high",
-                "includeThoughts": true
-            }
-        }
-    });
-
-    let prompt = adapter.parse_request(body)?;
-    assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::High));
-    let rendered = adapter.render_request(&prompt)?;
-    assert_eq!(
-        rendered["generationConfig"]["thinkingConfig"]["thinkingLevel"],
-        "high"
-    );
-    assert_eq!(
-        rendered["generationConfig"]["thinkingConfig"]["includeThoughts"],
-        true
-    );
-    Ok(())
-}
-
-#[test]
-fn generate_content_keeps_numeric_thinking_budget_opaque() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-2.5-flash",
-        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-        "generationConfig": {
-            "thinkingConfig": {
-                "thinkingBudget": 2048,
-                "includeThoughts": true
-            }
-        }
-    });
-
-    let prompt = adapter.parse_request(body)?;
-    assert_eq!(prompt.params.reasoning_effort, None);
-    let rendered = adapter.render_request(&prompt)?;
-    assert_eq!(
-        rendered["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-        2048
-    );
-    assert_eq!(
-        rendered["generationConfig"]["thinkingConfig"]["includeThoughts"],
-        true
-    );
-    Ok(())
-}
-
-#[test]
-fn generate_content_rejects_qualitative_and_numeric_thinking_controls_together()
--> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-3.1-pro-preview",
-        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-        "generationConfig": {
-            "thinkingConfig": {
-                "thinkingLevel": "high",
-                "thinkingBudget": 2048
-            }
-        }
-    });
-
-    assert!(adapter.parse_request(body).is_err());
-
-    let mut prompt = adapter.parse_request(serde_json::json!({
-        "model": "gemini-2.5-flash",
-        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-        "generationConfig": {"thinkingConfig": {"thinkingBudget": 2048}}
-    }))?;
-    prompt.params.reasoning_effort = Some(ReasoningEffort::High);
-    assert!(adapter.render_request(&prompt).is_err());
-    Ok(())
-}
-
-#[test]
 fn messages_inbound_accepts_mid_conversation_system() -> crate::error::Result<()> {
     // Opus 4.8 mid-conversation system messages: a `role:"system"` entry at a
     // non-first position parses into a canonical System-role message in place.
@@ -2270,78 +1991,6 @@ fn refusal_stop_details_round_trips_messages() -> crate::error::Result<()> {
 }
 
 #[test]
-fn generate_content_inbound_promotes_response_schema() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-2.5-pro",
-        "contents": [{"role": "user", "parts": [{"text": "weather?"}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": {"type": "object", "properties": {"x": {"type": "string"}}}
-        }
-    });
-    let prompt = adapter.parse_request(body).unwrap();
-    match prompt.response_format {
-        Some(ResponseFormat::JsonSchema { schema, .. }) => {
-            assert_eq!(schema["properties"]["x"]["type"], "string");
-        }
-        other => panic!("expected JsonSchema, got {other:?}"),
-    }
-    assert!(!prompt.params.extra.contains_key("responseSchema"));
-    assert!(!prompt.params.extra.contains_key("responseMimeType"));
-    Ok(())
-}
-
-#[test]
-fn generate_content_inbound_leaves_enum_mime_in_extras() -> crate::error::Result<()> {
-    // `text/x.enum` has no JSON schema; must stay in extras for opaque
-    // Generate Content-native pass-through.
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-2.5-pro",
-        "contents": [{"role": "user", "parts": [{"text": "x"}]}],
-        "generationConfig": {
-            "responseMimeType": "text/x.enum"
-        }
-    });
-    let prompt = adapter.parse_request(body.clone()).unwrap();
-    assert!(prompt.response_format.is_none());
-    let rendered = adapter.render_request(&prompt).unwrap();
-    assert_eq!(
-        rendered["generationConfig"]["responseMimeType"],
-        "text/x.enum"
-    );
-    Ok(())
-}
-
-#[test]
-fn generate_content_outbound_renders_admitted_response_schema() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let mut prompt = sample_prompt_with_schema();
-    let report = request_projection_report(ApiProtocol::GenerateContent, &prompt)?;
-    assert_eq!(report.issues.len(), 2);
-    if let Some(ResponseFormat::JsonSchema {
-        name,
-        description,
-        strict,
-        ..
-    }) = &mut prompt.response_format
-    {
-        *name = None;
-        *description = None;
-        *strict = None;
-    }
-    let rendered = adapter.render_request(&prompt)?;
-    let gc = &rendered["generationConfig"];
-    assert_eq!(gc["responseMimeType"], "application/json");
-    assert_eq!(
-        gc["responseSchema"]["properties"]["location"]["type"],
-        "string"
-    );
-    Ok(())
-}
-
-#[test]
 fn responses_inbound_promotes_text_format() -> crate::error::Result<()> {
     let adapter = adapter_for(ApiProtocol::Responses)?;
     let body = serde_json::json!({
@@ -2418,46 +2067,6 @@ fn responses_outbound_merges_text_siblings() -> crate::error::Result<()> {
 }
 
 #[test]
-fn response_schema_survives_admitted_cross_protocol_routing() -> crate::error::Result<()> {
-    // This common subset has no unsupported schema name, description or flag.
-    let mut prompt = sample_prompt_with_schema();
-    let Some(ResponseFormat::JsonSchema {
-        name,
-        description,
-        strict,
-        schema,
-    }) = &mut prompt.response_format
-    else {
-        return Err(ModelError::invalid_request("missing schema fixture"));
-    };
-    *name = None;
-    *description = None;
-    *strict = None;
-    let schema = schema.clone();
-
-    // Chat Completions
-    let chat = adapter_for(ApiProtocol::ChatCompletions)?.render_request(&prompt)?;
-    assert_eq!(chat["response_format"]["json_schema"]["schema"], schema);
-
-    // Messages
-    let ant = adapter_for(ApiProtocol::Messages)?.render_request(&prompt)?;
-    assert_eq!(ant["output_config"]["format"]["schema"], schema);
-
-    // Generate Content
-    let g = adapter_for(ApiProtocol::GenerateContent)?.render_request(&prompt)?;
-    assert_eq!(g["generationConfig"]["responseSchema"], schema);
-    assert_eq!(
-        g["generationConfig"]["responseMimeType"],
-        "application/json"
-    );
-
-    // Responses
-    let r = adapter_for(ApiProtocol::Responses)?.render_request(&prompt)?;
-    assert_eq!(r["text"]["format"]["schema"], schema);
-    Ok(())
-}
-
-#[test]
 fn builtin_adapters_advertise_response_format_support() -> crate::error::Result<()> {
     for proto in all_protocols() {
         let a = adapter_for(proto.clone())?;
@@ -2496,6 +2105,7 @@ fn messages_no_beta_header_is_emitted() {
 
         compatibility: ModelCompatibility {
             chat_completions: ChatCompletionsCompatibility {
+                google_extensions: false,
                 token_limit_field: None,
                 supports_store: None,
                 supports_stream_options: None,
@@ -2532,6 +2142,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
 
         compatibility: ModelCompatibility {
             chat_completions: ChatCompletionsCompatibility {
+                google_extensions: false,
                 token_limit_field: None,
                 supports_store: None,
                 supports_stream_options: None,
@@ -3367,7 +2978,8 @@ fn coarse_wires_drop_block_markers_and_emit_only_deltas() -> crate::error::Resul
     // SSE frames — while the text deltas pass through unaffected. This proves the
     // coarse-vs-framed split: a block-framed upstream re-encoded to a coarse
     // client simply drops the frames.
-    for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::GenerateContent] {
+    {
+        let protocol = ApiProtocol::ChatCompletions;
         let adapter = adapter_for(protocol.clone())?;
         let mut encoder = adapter.stream_encoder("resp_c", "test-model");
 
@@ -3746,92 +3358,6 @@ fn responses_stream_content_policy_error_is_typed_and_publicly_sanitized()
 }
 
 #[test]
-fn streaming_decoders_emit_response_started_once() -> crate::error::Result<()> {
-    // The 3 streaming protocols whose canonical IR previously dropped the
-    // upstream response id now surface it as a one-shot `ResponseStarted`,
-    // so observability can stamp `gen_ai.response.id` on the trace. OpenAI
-    // Responses is unaffected (it carries the id on `ResponseCompleted`).
-
-    // Chat Completions: top-level `id` repeats on every chunk → emit once.
-    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
-    let mut dec = adapter.stream_decoder();
-    let first = dec
-        .decode(&SseEvent {
-            event: None,
-            data: serde_json::json!({
-                "id": "chatcmpl-stream1",
-                "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": null}],
-            })
-            .to_string(),
-        })
-        .unwrap();
-    assert!(
-        first.iter().any(
-            |p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "chatcmpl-stream1")
-        ),
-        "Chat Completions first chunk emits ResponseStarted; got {first:?}"
-    );
-    let second = dec
-        .decode(&SseEvent {
-            event: None,
-            data: serde_json::json!({
-                "id": "chatcmpl-stream1",
-                "choices": [{"index": 0, "delta": {"content": " there"}, "finish_reason": null}],
-            })
-            .to_string(),
-        })
-        .unwrap();
-    assert!(
-        !second
-            .iter()
-            .any(|p| matches!(p, StreamPart::ResponseStarted { .. })),
-        "ResponseStarted is emitted only once per stream; got {second:?}"
-    );
-
-    // Messages: `message_start` carries `message.id` (fires once).
-    let adapter = adapter_for(ApiProtocol::Messages)?;
-    let mut dec = adapter.stream_decoder();
-    let parts = dec
-        .decode(&SseEvent {
-            event: Some("message_start".to_string()),
-            data: serde_json::json!({
-                "type": "message_start",
-                "message": {"id": "msg_stream1", "usage": {"input_tokens": 3, "output_tokens": 0}}
-            })
-            .to_string(),
-        })
-        .unwrap();
-    assert!(
-        parts
-            .iter()
-            .any(|p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "msg_stream1")),
-        "Anthropic message_start emits ResponseStarted; got {parts:?}"
-    );
-
-    // Generate Content: top-level `responseId` repeats on every chunk → emit once.
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let mut dec = adapter.stream_decoder();
-    let parts = dec
-        .decode(&SseEvent {
-            event: None,
-            data: serde_json::json!({
-                "responseId": "google-stream1",
-                "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}}]
-            })
-            .to_string(),
-        })
-        .unwrap();
-    assert!(
-        parts
-            .iter()
-            .any(|p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "google-stream1")),
-        "Google first chunk emits ResponseStarted; got {parts:?}"
-    );
-    Ok(())
-}
-
-#[test]
 fn chat_encoder_role_survives_leading_response_started() -> crate::error::Result<()> {
     // Regression: a leading `ResponseStarted` (now emitted first by the
     // Chat Completions / Generate Content decoders) must NOT consume the one-shot
@@ -4001,11 +3527,7 @@ fn chat_extras_do_not_leak_to_other_protocols() -> crate::error::Result<()> {
         }))
         .unwrap();
 
-    for protocol in [
-        ApiProtocol::Messages,
-        ApiProtocol::Responses,
-        ApiProtocol::GenerateContent,
-    ] {
+    for protocol in [ApiProtocol::Messages, ApiProtocol::Responses] {
         let rendered = adapter_for(protocol.clone())?
             .render_request(&prompt)
             .unwrap();
@@ -4031,57 +3553,6 @@ fn chat_extras_do_not_leak_to_other_protocols() -> crate::error::Result<()> {
         .render_request(&prompt)
         .unwrap();
     assert_eq!(responses["parallel_tool_calls"], false);
-    Ok(())
-}
-
-#[test]
-fn raw_extras_are_scoped_to_their_inbound_protocol() -> crate::error::Result<()> {
-    let cases = [
-        (
-            ApiProtocol::Messages,
-            "metadata",
-            serde_json::json!({"user_id": "messages-user"}),
-        ),
-        (
-            ApiProtocol::Responses,
-            "max_tool_calls",
-            serde_json::json!(3),
-        ),
-        (
-            ApiProtocol::GenerateContent,
-            "candidateCount",
-            serde_json::json!(2),
-        ),
-    ];
-
-    for (source, field, value) in cases {
-        let mut body = minimal_request(source.clone())?;
-        if source == ApiProtocol::GenerateContent {
-            body["generationConfig"] = serde_json::json!({});
-            body["generationConfig"][field] = value;
-        } else {
-            body[field] = value;
-        }
-        let prompt = adapter_for(source.clone())?.parse_request(body)?;
-
-        for target in all_protocols()
-            .into_iter()
-            .filter(|target| target != &source)
-        {
-            let rendered = adapter_for(target.clone())?.render_request(&prompt)?;
-            assert!(
-                rendered.get(field).is_none(),
-                "{source} extra `{field}` leaked to {target}: {rendered}"
-            );
-            assert!(
-                rendered
-                    .get("generationConfig")
-                    .and_then(|config| config.get(field))
-                    .is_none(),
-                "{source} extra `{field}` leaked into {target} generation config: {rendered}"
-            );
-        }
-    }
     Ok(())
 }
 
@@ -4131,7 +3602,8 @@ fn extra_protocol_provenance_survives_canonical_serialization() -> crate::error:
 fn store_is_never_silently_discarded_cross_protocol() -> crate::error::Result<()> {
     let chat = adapter_for(ApiProtocol::ChatCompletions)?;
 
-    for protocol in [ApiProtocol::Messages, ApiProtocol::GenerateContent] {
+    {
+        let protocol = ApiProtocol::Messages;
         let mut false_body = minimal_request(ApiProtocol::ChatCompletions)?;
         false_body["store"] = false.into();
         let false_prompt = chat.parse_request(false_body).unwrap();
@@ -4180,62 +3652,6 @@ fn chat_completions_does_not_forward_terminus_session_id() -> crate::error::Resu
             "{protocol:?} upstream must not receive Terminus session metadata"
         );
     }
-    Ok(())
-}
-
-#[test]
-fn generate_content_passes_through_top_level_extras() -> crate::error::Result<()> {
-    // toolConfig / safetySettings / cachedContent live at the request root,
-    // not under generationConfig. They must survive the round-trip.
-    // Refs: <https://ai.google.dev/api/generate-content>.
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-2.0-flash",
-        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-        "toolConfig": {
-            "functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["lookup"]}
-        },
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}
-        ],
-        "cachedContent": "cachedContents/abc123"
-    });
-    let prompt = adapter.parse_request(body.clone()).unwrap();
-    let rendered = adapter.render_request(&prompt).unwrap();
-    for key in ["toolConfig", "safetySettings", "cachedContent"] {
-        assert_eq!(
-            rendered[key], body[key],
-            "Google top-level `{key}` must survive parse/render"
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn generate_content_request_stream_flag_is_propagated() -> crate::error::Result<()> {
-    // The server injects `stream: true` from a `:streamGenerateContent` path
-    // verb. Before #stream-flag-fix the adapter dropped this field on the
-    // floor and forced stream=false, sending streaming clients to the
-    // non-streaming branch.
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "model": "gemini-2.0-flash",
-        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-        "stream": true
-    });
-    let prompt = adapter.parse_request(body).unwrap();
-    assert!(
-        prompt.stream,
-        "streamGenerateContent must set prompt.stream"
-    );
-
-    // And the wire shape does NOT leak `stream` back upstream (Google's
-    // generate-content body has no `stream` field of its own).
-    let rendered = adapter.render_request(&prompt).unwrap();
-    assert!(
-        rendered.get("stream").is_none(),
-        "Google outbound must not include a stream field"
-    );
     Ok(())
 }
 
@@ -4324,18 +3740,6 @@ fn messages_response_drops_unsigned_reasoning() -> crate::error::Result<()> {
     );
     assert_eq!(blocks[0]["type"], "text");
     assert_eq!(blocks[0]["text"], "visible answer");
-    Ok(())
-}
-
-#[test]
-fn generate_content_request_roundtrip() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let prompt = sample_prompt();
-    let json = adapter.render_request(&prompt).unwrap();
-    assert_eq!(json["systemInstruction"]["parts"][0]["text"], "be brief");
-    assert_eq!(json["contents"][0]["role"], "user");
-    let parsed = adapter.parse_request(json).unwrap();
-    assert_eq!(parsed.system.as_deref(), Some("be brief"));
     Ok(())
 }
 
@@ -5688,59 +5092,8 @@ fn chat_completions_request_schema_is_stable() -> std::result::Result<(), Box<dy
 }
 
 #[test]
-fn generate_content_request_schema_is_stable() -> std::result::Result<(), Box<dyn std::error::Error>>
-{
-    assert_schema_snapshot::<generate_content::GenerateContentRequest>("generate_content_request")
-}
-
-#[test]
 fn responses_request_schema_is_stable() -> std::result::Result<(), Box<dyn std::error::Error>> {
     assert_schema_snapshot::<responses::ResponsesRequest>("responses_request")
-}
-
-/// `#[schemars(skip)]` on the `extra` `HashMap` must hide it from the published
-/// contract — the schema for the request should never expose
-/// `additionalProperties` of arbitrary JSON values. The exact wording belongs
-/// to the snapshots above; this asserts the negative behavior outright so a
-/// regression is obvious from the failure message.
-#[test]
-fn extra_passthrough_field_is_not_in_schema() {
-    let s = serde_json::to_value(schemars::schema_for!(messages::MessagesRequest)).unwrap();
-    assert!(
-        s.get("properties").and_then(|p| p.get("extra")).is_none(),
-        "MessagesRequest schema must not expose `extra` (pass-through field)",
-    );
-    let s = serde_json::to_value(schemars::schema_for!(chat_completions::ChatRequest)).unwrap();
-    assert!(
-        s.get("properties").and_then(|p| p.get("extra")).is_none(),
-        "Chat CompletionsRequest schema must not expose `extra` (pass-through field)",
-    );
-    // Generate Content has two `extra` fields — top-level and on `generationConfig`.
-    // Walk both points to make sure neither leaks.
-    let s = serde_json::to_value(schemars::schema_for!(
-        generate_content::GenerateContentRequest
-    ))
-    .unwrap();
-    assert!(
-        s.get("properties").and_then(|p| p.get("extra")).is_none(),
-        "Google GenerateContentRequest schema must not expose top-level `extra`",
-    );
-    let gen_cfg = s
-        .get("$defs")
-        .and_then(|d| d.get("GenerateContentGenerationConfig"))
-        .expect("schema must include GenerateContentGenerationConfig in $defs");
-    assert!(
-        gen_cfg
-            .get("properties")
-            .and_then(|p| p.get("extra"))
-            .is_none(),
-        "Google GenerateContentGenerationConfig schema must not expose `extra`",
-    );
-    let s = serde_json::to_value(schemars::schema_for!(responses::ResponsesRequest)).unwrap();
-    assert!(
-        s.get("properties").and_then(|p| p.get("extra")).is_none(),
-        "ResponsesRequest schema must not expose `extra` (pass-through field)",
-    );
 }
 
 // ===== multimodal (file) content =====
@@ -5823,14 +5176,6 @@ fn image_parses_to_file_in_every_protocol() -> crate::error::Result<()> {
                 ]}]
             }),
         ),
-        (
-            ApiProtocol::GenerateContent,
-            serde_json::json!({
-                "contents": [{ "role": "user", "parts": [
-                    { "inlineData": { "mimeType": "image/png", "data": IMG_B64 } }
-                ]}]
-            }),
-        ),
     ];
     for (protocol, body) in cases {
         let prompt = adapter_for(protocol.clone())?
@@ -5893,17 +5238,6 @@ fn image_file_renders_to_messages_image_block() -> crate::error::Result<()> {
     assert_eq!(block["source"]["type"], "base64");
     assert_eq!(block["source"]["media_type"], "image/png");
     assert_eq!(block["source"]["data"], IMG_B64);
-    Ok(())
-}
-
-#[test]
-fn image_file_renders_to_generate_content_inline_data() -> crate::error::Result<()> {
-    let req = adapter_for(ApiProtocol::GenerateContent)?
-        .render_request(&image_file_prompt())
-        .unwrap();
-    let part = &req["contents"][0]["parts"][0];
-    assert_eq!(part["inlineData"]["mimeType"], "image/png");
-    assert_eq!(part["inlineData"]["data"], IMG_B64);
     Ok(())
 }
 
@@ -6014,107 +5348,6 @@ fn response_modalities_round_trip_through_chat_completions() -> crate::error::Re
 }
 
 #[test]
-fn response_modalities_round_trip_through_generate_content() -> crate::error::Result<()> {
-    let body = serde_json::json!({
-        "contents": [{ "role": "user", "parts": [{ "text": "draw a cat" }] }],
-        "generationConfig": { "responseModalities": ["TEXT", "IMAGE"] }
-    });
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let prompt = adapter.parse_request(body).unwrap();
-    assert_eq!(
-        prompt.params.response_modalities,
-        vec![Modality::Text, Modality::Image]
-    );
-    assert!(
-        prompt
-            .required_capabilities()
-            .contains(&Capability::ImageOutput)
-    );
-    let req = adapter.render_request(&prompt).unwrap();
-    assert_eq!(
-        req["generationConfig"]["responseModalities"],
-        serde_json::json!(["TEXT", "IMAGE"])
-    );
-    Ok(())
-}
-
-#[test]
-fn generated_image_round_trips_through_generate_content_stream() -> crate::error::Result<()> {
-    // A generated image survives the canonical stream `File` part through the
-    // Gemini encoder (inlineData chunk) and back through its decoder.
-    let outbound = adapter_for(ApiProtocol::GenerateContent)?;
-    let part = StreamPart::File {
-        media_type: "image/png".to_string(),
-        data: DataContent::Base64 {
-            data: IMG_B64.to_string(),
-        },
-    };
-    let mut encoder = outbound.stream_encoder("resp_s", "test-model");
-    let mut frames = encoder.encode(&part).unwrap();
-    frames.extend(encoder.finish().unwrap());
-
-    let mut decoder = outbound.stream_decoder();
-    let mut decoded = Vec::new();
-    for frame in &frames {
-        if let SseFrame::Event { event, data } = frame {
-            decoded.extend(
-                decoder
-                    .decode(&SseEvent {
-                        event: event.clone(),
-                        data: data.clone(),
-                    })
-                    .unwrap(),
-            );
-        }
-    }
-    decoded.extend(decoder.finish().unwrap());
-
-    let expected = DataContent::Base64 {
-        data: IMG_B64.to_string(),
-    };
-    let file = decoded.iter().find_map(|p| match p {
-        StreamPart::File { media_type, data } => Some((media_type.as_str(), data)),
-        _ => None,
-    });
-    assert_eq!(file, Some(("image/png", &expected)));
-    Ok(())
-}
-
-#[test]
-fn generated_image_round_trips_through_generate_content_response() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [
-                { "inlineData": { "mimeType": "image/png", "data": IMG_B64 } }
-            ]},
-            "finishReason": "STOP"
-        }]
-    });
-    let result = adapter.parse_response(body).unwrap();
-    let expected = DataContent::Base64 {
-        data: IMG_B64.to_string(),
-    };
-    let file = result.content.iter().find_map(|c| match c {
-        Content::File {
-            media_type, data, ..
-        } => Some((media_type.as_str(), data)),
-        _ => None,
-    });
-    assert_eq!(file, Some(("image/png", &expected)));
-
-    let rendered = adapter
-        .render_response(&result, &sample_prompt(), "id")
-        .unwrap();
-    let s = serde_json::to_string(&rendered).unwrap();
-    assert!(
-        s.contains("inlineData") && s.contains(IMG_B64),
-        "rendered response should carry the generated image: {s}"
-    );
-    Ok(())
-}
-
-#[test]
 fn generated_image_renders_into_chat_response_best_effort() -> crate::error::Result<()> {
     let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
     let result = GenerateResult {
@@ -6140,41 +5373,6 @@ fn generated_image_renders_into_chat_response_best_effort() -> crate::error::Res
     assert_eq!(
         part["image_url"]["url"],
         format!("data:image/png;base64,{IMG_B64}")
-    );
-    Ok(())
-}
-
-#[test]
-fn generated_file_url_round_trips_through_generate_content() -> crate::error::Result<()> {
-    // The URL (`fileData` / `fileUri`) output path mirrors the base64 one.
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [
-                { "fileData": { "mimeType": "image/png", "fileUri": "https://example.invalid/g.png" } }
-            ]},
-            "finishReason": "STOP"
-        }]
-    });
-    let result = adapter.parse_response(body).unwrap();
-    let expected = DataContent::Url {
-        url: "https://example.invalid/g.png".to_string(),
-    };
-    let file = result.content.iter().find_map(|c| match c {
-        Content::File {
-            media_type, data, ..
-        } => Some((media_type.as_str(), data)),
-        _ => None,
-    });
-    assert_eq!(file, Some(("image/png", &expected)));
-
-    let rendered = adapter
-        .render_response(&result, &sample_prompt(), "id")
-        .unwrap();
-    let s = serde_json::to_string(&rendered).unwrap();
-    assert!(
-        s.contains("fileData") && s.contains("https://example.invalid/g.png"),
-        "rendered response should carry the file URL: {s}"
     );
     Ok(())
 }
@@ -6263,39 +5461,6 @@ fn tool_result_text_round_trips_through_string_capable_protocols() -> crate::err
             "{protocol:?} lost a Text tool result"
         );
     }
-    Ok(())
-}
-
-#[test]
-fn tool_result_text_to_object_wrapper_on_gemini_is_unclassified() -> crate::error::Result<()> {
-    let output = ToolResultOutput::Text {
-        value: "the result is 42".to_string(),
-    };
-    let source = tool_result_prompt("c", Some("f"), output);
-    let original = source.clone();
-    let report = request_projection_report(ApiProtocol::GenerateContent, &source)?;
-    assert_eq!(
-        report.issues[0].reason,
-        crate::conversion::ConversionReason::ToolResultShapeProjectionUnclassified
-    );
-    assert_eq!(source, original);
-    Ok(())
-}
-
-#[test]
-fn tool_result_json_round_trips_through_generate_content() -> crate::error::Result<()> {
-    // Generate Content (`functionResponse.response`) is the only request wire
-    // whose tool-result body is a structured JSON *object* slot, so a Json object
-    // output survives intact there. (Responses' `output` is a string slot — see
-    // `tool_result_json_degrades_to_text_on_string_wires`.)
-    let output = ToolResultOutput::Json {
-        value: serde_json::json!({ "celsius": 21, "unit": "C" }),
-    };
-    assert_eq!(
-        round_trip_tool_output(ApiProtocol::GenerateContent, output.clone())?,
-        output,
-        "Generate Content lost a Json tool result"
-    );
     Ok(())
 }
 
@@ -6581,12 +5746,6 @@ fn tool_choice_round_trips_across_protocol_matrix() -> crate::error::Result<()> 
                 "tool_choice",
                 serde_json::json!({ "type": "function", "name": "X" }),
             ),
-            ApiProtocol::GenerateContent => (
-                "toolConfig",
-                serde_json::json!({
-                    "functionCallingConfig": { "mode": "ANY", "allowedFunctionNames": ["X"] }
-                }),
-            ),
             ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
                 return Err(ModelError::invalid_request(
                     "generation fixture requires a generation protocol",
@@ -6607,10 +5766,6 @@ fn tool_choice_round_trips_across_protocol_matrix() -> crate::error::Result<()> 
             }
             ApiProtocol::Responses => {
                 req["tool_choice"]["type"] == "function" && req["tool_choice"]["name"] == "X"
-            }
-            ApiProtocol::GenerateContent => {
-                let fcc = &req["toolConfig"]["functionCallingConfig"];
-                fcc["mode"] == "ANY" && fcc["allowedFunctionNames"][0] == "X"
             }
             ApiProtocol::Custom(_) | ApiProtocol::Decisions => false,
         }
@@ -6853,62 +6008,6 @@ fn tool_result_content_file_id_round_trips_through_responses() -> crate::error::
         output,
         "Responses lost a FileId tool-result content part"
     );
-    Ok(())
-}
-
-#[test]
-fn tool_name_survives_gemini_function_response_round_trip() -> crate::error::Result<()> {
-    // Gemini keys tool results by function name; `tool_name` must survive a
-    // render→parse round trip through `functionResponse`.
-    let output = ToolResultOutput::Json {
-        value: serde_json::json!({ "ok": true }),
-    };
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let rendered = adapter
-        .render_request(&tool_result_prompt(
-            "call_1",
-            Some("get_weather"),
-            output.clone(),
-        ))
-        .unwrap();
-    // The rendered wire carries the tool name under `functionResponse.name`.
-    let fr = &rendered["contents"][0]["parts"][0]["functionResponse"];
-    assert_eq!(fr["name"], "get_weather");
-    assert_eq!(fr["response"]["ok"], true);
-
-    let reparsed = adapter.parse_request(rendered).unwrap();
-    let (_, tool_name, parsed_output) = first_tool_result(&reparsed);
-    assert_eq!(
-        tool_name,
-        Some("get_weather"),
-        "Gemini functionResponse must preserve the tool name"
-    );
-    assert_eq!(parsed_output, &output, "Gemini lost the Json tool output");
-    Ok(())
-}
-
-#[test]
-fn gemini_function_response_carries_call_id_when_distinct() -> crate::error::Result<()> {
-    // When the call id differs from the tool name, the Gemini wire carries it
-    // under `functionResponse.id` and a round trip recovers both.
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let rendered = adapter
-        .render_request(&tool_result_prompt(
-            "call_42",
-            Some("get_weather"),
-            ToolResultOutput::Json {
-                value: serde_json::json!({ "ok": true }),
-            },
-        ))
-        .unwrap();
-    let fr = &rendered["contents"][0]["parts"][0]["functionResponse"];
-    assert_eq!(fr["name"], "get_weather");
-    assert_eq!(fr["id"], "call_42");
-
-    let reparsed = adapter.parse_request(rendered).unwrap();
-    let (call_id, tool_name, _) = first_tool_result(&reparsed);
-    assert_eq!(call_id, "call_42", "Gemini lost the distinct call id");
-    assert_eq!(tool_name, Some("get_weather"));
     Ok(())
 }
 
@@ -8122,393 +7221,6 @@ fn unmapped_tool_choice_passes_through_unchanged() -> crate::error::Result<()> {
     Ok(())
 }
 
-/// Generate Content's `allowedFunctionNames` is a restricting *set*; the
-/// canonical slot only models the single-tool case. A multi-name `ANY` (or an
-/// `AUTO`/`NONE` carrying names) must therefore be left in `extra` and pass
-/// through verbatim — never narrowed to a bare `Required`/`Auto` that would
-/// silently widen the constraint.
-#[test]
-fn gc_tool_choice_with_restricting_set_passes_through() -> crate::error::Result<()> {
-    let gc = adapter_for(ApiProtocol::GenerateContent)?;
-    let cases = [
-        serde_json::json!({ "mode": "ANY", "allowedFunctionNames": ["A", "B"] }),
-        serde_json::json!({ "mode": "AUTO", "allowedFunctionNames": ["A"] }),
-    ];
-    for fcc in cases {
-        let mut body = minimal_request(ApiProtocol::GenerateContent)?;
-        body["toolConfig"] = serde_json::json!({ "functionCallingConfig": fcc });
-        let prompt = gc.parse_request(body.clone()).unwrap();
-        assert_eq!(
-            prompt.tool_choice, None,
-            "a restricting-set config must not be force-fit into the canonical slot: {fcc}"
-        );
-        let rendered = gc.render_request(&prompt).unwrap();
-        assert_eq!(
-            rendered["toolConfig"], body["toolConfig"],
-            "a restricting-set toolConfig must pass through verbatim: {fcc}"
-        );
-    }
-    Ok(())
-}
-
-// ===== typed sampling params (top_k / seed / stop / presence_penalty /
-// frequency_penalty) cross-protocol translation =====
-
-/// Each typed sampling slot the protocol carries survives a render→parse
-/// round-trip on its own wire — the same-protocol fidelity contract. Per the
-/// official wire shapes: Chat Completions carries `seed` / `stop` /
-/// `presence_penalty` / `frequency_penalty` but no top-k; Anthropic carries
-/// `top_k` / `stop_sequences`; Gemini carries all five; Responses carries none.
-#[test]
-fn sampling_params_same_protocol_round_trip() -> crate::error::Result<()> {
-    // Chat Completions: seed, stop, presence_penalty, frequency_penalty.
-    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
-    let params = chat
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "seed": 7,
-            "stop": ["END", "STOP"],
-            "presence_penalty": 0.5,
-            "frequency_penalty": -0.25
-        }))
-        .unwrap();
-    let back = chat
-        .parse_request(chat.render_request(&params).unwrap())
-        .unwrap()
-        .params;
-    assert_eq!(back.seed, Some(7));
-    assert_eq!(back.stop, vec!["END".to_string(), "STOP".to_string()]);
-    assert_eq!(back.presence_penalty, Some(0.5));
-    assert_eq!(back.frequency_penalty, Some(-0.25));
-    assert_eq!(back.top_k, None, "Chat Completions has no top-k");
-
-    // A scalar `stop` string normalises to a one-element list.
-    let scalar = chat
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "stop": "END"
-        }))
-        .unwrap();
-    assert_eq!(scalar.params.stop, vec!["END".to_string()]);
-
-    // Anthropic: top_k, stop_sequences.
-    let anthropic = adapter_for(ApiProtocol::Messages)?;
-    let back = anthropic
-        .parse_request(
-            anthropic
-                .render_request(
-                    &anthropic
-                        .parse_request(serde_json::json!({
-                            "model": "claude-opus-4-8",
-                            "max_tokens": 16,
-                            "messages": [{"role": "user", "content": "hi"}],
-                            "top_k": 40,
-                            "stop_sequences": ["END"]
-                        }))
-                        .unwrap(),
-                )
-                .unwrap(),
-        )
-        .unwrap()
-        .params;
-    assert_eq!(back.top_k, Some(40));
-    assert_eq!(back.stop, vec!["END".to_string()]);
-
-    // Gemini: all five, nested under generationConfig.
-    let gemini = adapter_for(ApiProtocol::GenerateContent)?;
-    let back = gemini
-        .parse_request(
-            gemini
-                .render_request(
-                    &gemini
-                        .parse_request(serde_json::json!({
-                            "model": "gemini-2.0-flash",
-                            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                            "generationConfig": {
-                                "topK": 40,
-                                "seed": 7,
-                                "stopSequences": ["END", "STOP"],
-                                "presencePenalty": 0.1,
-                                "frequencyPenalty": -0.1
-                            }
-                        }))
-                        .unwrap(),
-                )
-                .unwrap(),
-        )
-        .unwrap()
-        .params;
-    assert_eq!(back.top_k, Some(40));
-    assert_eq!(back.seed, Some(7));
-    assert_eq!(back.stop, vec!["END".to_string(), "STOP".to_string()]);
-    assert_eq!(back.presence_penalty, Some(0.1));
-    assert_eq!(back.frequency_penalty, Some(-0.1));
-    Ok(())
-}
-
-/// Cross-protocol translation, Chat → others: `seed` + `stop` +
-/// `presence_penalty` + `frequency_penalty` authored on a Chat Completions body
-/// must reach Gemini as `generationConfig.{seed, stopSequences, presencePenalty,
-/// frequencyPenalty}` (the WHOLE point — these used to no-op as top-level keys
-/// against Gemini's nested-config wire) and `stop` must reach Anthropic as
-/// `stop_sequences`.
-#[test]
-fn sampling_params_translate_chat_to_gemini_and_anthropic() -> crate::error::Result<()> {
-    let chat = adapter_for(ApiProtocol::ChatCompletions)?;
-    let prompt = chat
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "seed": 7,
-            "stop": ["END", "STOP"],
-            "presence_penalty": 0.5,
-            "frequency_penalty": -0.25
-        }))
-        .unwrap();
-
-    // Gemini: nested in generationConfig under the Google wire names.
-    let gc = &adapter_for(ApiProtocol::GenerateContent)?
-        .render_request(&prompt)
-        .unwrap()["generationConfig"];
-    assert_eq!(gc["seed"], 7);
-    assert_eq!(gc["stopSequences"], serde_json::json!(["END", "STOP"]));
-    assert_eq!(gc["presencePenalty"], 0.5);
-    assert_eq!(gc["frequencyPenalty"], -0.25);
-
-    // Anthropic: `stop` becomes `stop_sequences`; seed / penalties have no
-    // Anthropic wire field and must not appear.
-    let anthropic = adapter_for(ApiProtocol::Messages)?
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(
-        anthropic["stop_sequences"],
-        serde_json::json!(["END", "STOP"])
-    );
-    assert!(anthropic.get("seed").is_none());
-    assert!(anthropic.get("presence_penalty").is_none());
-    assert!(anthropic.get("frequency_penalty").is_none());
-
-    // Responses carries none of these — they must not leak onto its wire.
-    let responses = adapter_for(ApiProtocol::Responses)?
-        .render_request(&prompt)
-        .unwrap();
-    for key in ["seed", "stop", "presence_penalty", "frequency_penalty"] {
-        assert!(
-            responses.get(key).is_none(),
-            "Responses must not render `{key}`"
-        );
-    }
-    Ok(())
-}
-
-/// Cross-protocol translation, Gemini/Anthropic → others: a Gemini `topK` +
-/// `stopSequences` must reach Anthropic as `top_k` + `stop_sequences` and Chat
-/// Completions as `stop` (Chat has no top-k, so `topK` is dropped there, not
-/// leaked).
-#[test]
-fn sampling_params_translate_gemini_and_anthropic_to_others() -> crate::error::Result<()> {
-    // Author on Gemini, render to Anthropic + Chat.
-    let gemini = adapter_for(ApiProtocol::GenerateContent)?;
-    let prompt = gemini
-        .parse_request(serde_json::json!({
-            "model": "gemini-2.0-flash",
-            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-            "generationConfig": {
-                "topK": 40,
-                "stopSequences": ["END"]
-            }
-        }))
-        .unwrap();
-    assert_eq!(prompt.params.top_k, Some(40));
-
-    // Anthropic: top_k + stop_sequences.
-    let anthropic = adapter_for(ApiProtocol::Messages)?
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(anthropic["top_k"], 40);
-    assert_eq!(anthropic["stop_sequences"], serde_json::json!(["END"]));
-
-    // Chat Completions: stop survives; top_k is dropped (no wire field), never
-    // splatted verbatim.
-    let chat = adapter_for(ApiProtocol::ChatCompletions)?
-        .render_request(&prompt)
-        .unwrap();
-    assert_eq!(chat["stop"], serde_json::json!(["END"]));
-    assert!(
-        chat.get("top_k").is_none() && chat.get("topK").is_none(),
-        "Chat Completions must not carry top-k in any form: {chat}"
-    );
-
-    // Author an Anthropic `top_k` and confirm it reaches Gemini as `topK`.
-    let anthropic_in = adapter_for(ApiProtocol::Messages)?
-        .parse_request(serde_json::json!({
-            "model": "claude-opus-4-8",
-            "max_tokens": 16,
-            "messages": [{"role": "user", "content": "hi"}],
-            "top_k": 64
-        }))
-        .unwrap();
-    let gc = &adapter_for(ApiProtocol::GenerateContent)?
-        .render_request(&anthropic_in)
-        .unwrap()["generationConfig"];
-    assert_eq!(gc["topK"], 64);
-    Ok(())
-}
-
-/// Cross-protocol no-leak, Gemini/Anthropic → Responses: the Responses API has no
-/// wire field for `top_k` / `seed` / `stop` / `presence_penalty` /
-/// `frequency_penalty`, so a source request carrying any of them must render to
-/// Responses with NONE of those values present — in neither the native (snake)
-/// nor the source-wire (camel) spelling, and not leaked through the `extra`
-/// splat. The params Responses *does* support (`temperature`, `top_p`,
-/// `max_output_tokens`) still survive. Locks in the "Responses carries none"
-/// contract the [`GenerationParams`] field docs assert.
-#[test]
-fn sampling_params_do_not_leak_to_responses() -> crate::error::Result<()> {
-    let responses = adapter_for(ApiProtocol::Responses)?;
-
-    // Gemini source: all five generationConfig knobs, plus supported params.
-    let gemini = adapter_for(ApiProtocol::GenerateContent)?
-        .parse_request(serde_json::json!({
-            "model": "gemini-2.0-flash",
-            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-            "generationConfig": {
-                "temperature": 0.5,
-                "topP": 0.9,
-                "maxOutputTokens": 32,
-                "topK": 40,
-                "seed": 7,
-                "stopSequences": ["END"],
-                "presencePenalty": 0.1,
-                "frequencyPenalty": -0.1
-            }
-        }))
-        .unwrap();
-    let from_gemini = responses.render_request(&gemini).unwrap();
-    // None of the unsupported five appears in any spelling.
-    for key in [
-        "top_k",
-        "topK",
-        "seed",
-        "stop",
-        "stop_sequences",
-        "stopSequences",
-        "presence_penalty",
-        "presencePenalty",
-        "frequency_penalty",
-        "frequencyPenalty",
-    ] {
-        assert!(
-            from_gemini.get(key).is_none(),
-            "Responses must not carry `{key}` from a Gemini source: {from_gemini}"
-        );
-    }
-    // The supported params survive the route.
-    assert_eq!(from_gemini["temperature"], 0.5);
-    assert_eq!(from_gemini["top_p"], 0.9);
-    assert_eq!(from_gemini["max_output_tokens"], 32);
-
-    // Anthropic source: `top_k` must not reach Responses in any form.
-    let anthropic = adapter_for(ApiProtocol::Messages)?
-        .parse_request(serde_json::json!({
-            "model": "claude-opus-4-8",
-            "max_tokens": 16,
-            "messages": [{"role": "user", "content": "hi"}],
-            "top_k": 64
-        }))
-        .unwrap();
-    assert_eq!(anthropic.params.top_k, Some(64));
-    let from_anthropic = responses.render_request(&anthropic).unwrap();
-    assert!(
-        from_anthropic.get("top_k").is_none() && from_anthropic.get("topK").is_none(),
-        "Responses must not carry top-k from an Anthropic source: {from_anthropic}"
-    );
-    Ok(())
-}
-
-/// A parsed sampling param must NOT also remain in the raw `extra` passthrough —
-/// otherwise it would be double-written (once from the typed slot, once verbatim
-/// from `extra`) and forwarded with its source-wire name into a cross-protocol
-/// target that ignores it.
-#[test]
-fn parsed_sampling_params_are_not_duplicated_in_extra() -> crate::error::Result<()> {
-    // Chat Completions: seed / stop / penalties leave `extra`.
-    let chat = adapter_for(ApiProtocol::ChatCompletions)?
-        .parse_request(serde_json::json!({
-            "model": "gpt-5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "seed": 7,
-            "stop": ["END"],
-            "presence_penalty": 0.5,
-            "frequency_penalty": -0.25
-        }))
-        .unwrap();
-    for key in ["seed", "stop", "presence_penalty", "frequency_penalty"] {
-        assert!(
-            !chat.params.extra.contains_key(key),
-            "Chat Completions `{key}` must be promoted out of extra, not duplicated"
-        );
-    }
-
-    // Anthropic: top_k / stop_sequences leave `extra`.
-    let anthropic = adapter_for(ApiProtocol::Messages)?
-        .parse_request(serde_json::json!({
-            "model": "claude-opus-4-8",
-            "max_tokens": 16,
-            "messages": [{"role": "user", "content": "hi"}],
-            "top_k": 40,
-            "stop_sequences": ["END"]
-        }))
-        .unwrap();
-    for key in ["top_k", "stop_sequences"] {
-        assert!(
-            !anthropic.params.extra.contains_key(key),
-            "Anthropic `{key}` must be promoted out of extra, not duplicated"
-        );
-    }
-
-    // Gemini: all five leave the generationConfig-level `extra`. (The Gemini
-    // adapter only stashes top-level Google fields under the sentinel key, so
-    // generationConfig knobs that were promoted simply never land in `extra`.)
-    let gemini = adapter_for(ApiProtocol::GenerateContent)?
-        .parse_request(serde_json::json!({
-            "model": "gemini-2.0-flash",
-            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-            "generationConfig": {
-                "topK": 40,
-                "seed": 7,
-                "stopSequences": ["END"],
-                "presencePenalty": 0.1,
-                "frequencyPenalty": -0.1
-            }
-        }))
-        .unwrap();
-    for key in [
-        "topK",
-        "seed",
-        "stopSequences",
-        "presencePenalty",
-        "frequencyPenalty",
-    ] {
-        assert!(
-            !gemini.params.extra.contains_key(key),
-            "Gemini generationConfig `{key}` must be promoted out of extra"
-        );
-    }
-    // And the render carries each exactly once (no duplicate verbatim splat):
-    // re-rendering and re-parsing recovers the same typed values.
-    let rendered = adapter_for(ApiProtocol::GenerateContent)?
-        .render_request(&gemini)
-        .unwrap();
-    let gc = &rendered["generationConfig"];
-    assert_eq!(gc["topK"], 40);
-    assert_eq!(gc["seed"], 7);
-    assert_eq!(gc["stopSequences"], serde_json::json!(["END"]));
-    Ok(())
-}
-
 // ===== Part C: typed tools (V3 function `strict` + provider-defined tools) =====
 
 /// A prompt carrying exactly the given tool list (and nothing else interesting).
@@ -8623,7 +7335,8 @@ fn function_tool_strict_omitted_when_absent() -> crate::error::Result<()> {
 /// declaration without that flag still round-trips.
 #[test]
 fn function_tool_strict_refused_on_anthropic_and_gemini() -> crate::error::Result<()> {
-    for protocol in [ApiProtocol::Messages, ApiProtocol::GenerateContent] {
+    {
+        let protocol = ApiProtocol::Messages;
         let mut prompt = prompt_with_tools(vec![Tool::Function {
             name: "get_weather".to_string(),
             description: Some("desc".to_string()),
@@ -8793,137 +7506,6 @@ fn messages_provider_defined_renders_versioned_native_shape() -> crate::error::R
     Ok(())
 }
 
-/// Every Gemini built-in tool round-trips losslessly (id `google.<key>` +
-/// verbatim args), covering search, code execution, and URL context.
-#[test]
-fn generate_content_provider_defined_tools_round_trip() -> crate::error::Result<()> {
-    let cases = vec![
-        Tool::ProviderDefined {
-            id: "google.googleSearch".to_string(),
-            name: "googleSearch".to_string(),
-            args: serde_json::json!({}),
-            provider_metadata: Default::default(),
-        },
-        Tool::ProviderDefined {
-            id: "google.codeExecution".to_string(),
-            name: "codeExecution".to_string(),
-            args: serde_json::json!({}),
-            provider_metadata: Default::default(),
-        },
-        Tool::ProviderDefined {
-            id: "google.googleSearchRetrieval".to_string(),
-            name: "googleSearchRetrieval".to_string(),
-            args: serde_json::json!({ "dynamicRetrievalConfig": { "mode": "MODE_DYNAMIC" } }),
-            provider_metadata: Default::default(),
-        },
-        Tool::ProviderDefined {
-            id: "google.urlContext".to_string(),
-            name: "urlContext".to_string(),
-            args: serde_json::json!({}),
-            provider_metadata: Default::default(),
-        },
-    ];
-    for tool in cases {
-        let round_tripped = round_trip_tools(&ApiProtocol::GenerateContent, vec![tool.clone()])?;
-        assert_eq!(round_tripped, vec![tool.clone()], "round-trip for {tool:?}");
-    }
-    Ok(())
-}
-
-/// Gemini renders a built-in tool as a single-key `{<toolKey>: args}` object.
-#[test]
-fn generate_content_provider_defined_renders_single_key_object() -> crate::error::Result<()> {
-    let rendered = rendered_tools_json(
-        &ApiProtocol::GenerateContent,
-        vec![Tool::ProviderDefined {
-            id: "google.googleSearch".to_string(),
-            name: "googleSearch".to_string(),
-            args: serde_json::json!({}),
-            provider_metadata: Default::default(),
-        }],
-    )?;
-    // The built-in tool is its own tool-array element with the camelCase key.
-    let entry = rendered
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e.get("googleSearch").is_some())
-        .expect("googleSearch entry present");
-    assert_eq!(entry["googleSearch"], serde_json::json!({}));
-    Ok(())
-}
-
-/// A single Gemini tool object carrying both `functionDeclarations` and a
-/// built-in `googleSearch` key expands into both a function tool and a
-/// provider-defined tool, and rebuilds the same wire on render.
-#[test]
-fn generate_content_mixed_function_and_builtin_tools_round_trip() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
-        "tools": [{
-            "functionDeclarations": [{
-                "name": "get_weather",
-                "description": "w",
-                "parameters": { "type": "object" }
-            }],
-            "googleSearch": {}
-        }]
-    });
-    let parsed = adapter.parse_request(body).unwrap();
-    assert_eq!(parsed.tools.len(), 2, "one function + one builtin");
-    assert!(matches!(parsed.tools[0], Tool::Function { .. }));
-    assert!(matches!(parsed.tools[1], Tool::ProviderDefined { .. }));
-
-    // Re-render and re-parse: both tools survive (the function-declarations
-    // object plus the googleSearch element).
-    let rendered = adapter.render_request(&parsed).unwrap();
-    let reparsed = adapter.parse_request(rendered).unwrap();
-    assert_eq!(reparsed.tools, parsed.tools);
-    Ok(())
-}
-
-/// Gemini's existing serializer must not remove unclassified constraints.
-/// A separately authored supported schema retains its fields, with only the
-/// bounded single-type/nullable representation changed.
-#[test]
-fn generate_content_refuses_unclassified_tool_schema_cleanup() -> crate::error::Result<()> {
-    let mut prompt = prompt_with_tools(vec![Tool::Function {
-        name: "read_file".into(),
-        description: Some("r".into()),
-        parameters: serde_json::json!({
-            "$schema":"https://json-schema.org/draft-07/schema#", "type":"object",
-            "additionalProperties":false, "properties":{
-                "path":{"type":"string","minLength":1},
-                "limit":{"type":["integer","null"],"exclusiveMinimum":0,"description":"max lines"},
-                "matches":{"type":"array","items":{"type":"string","$comment":"drop me"}}
-            }, "required":["path"]
-        }),
-        strict: None,
-        provider_metadata: Default::default(),
-    }]);
-    let original = prompt.clone();
-    let report = request_projection_report(ApiProtocol::GenerateContent, &prompt)?;
-    assert_eq!(
-        report.issues[0].reason,
-        crate::conversion::ConversionReason::ToolSchemaProjectionUnclassified
-    );
-    assert_eq!(prompt, original);
-    // A separately authored common schema preserves its constraints, with the
-    // single-base nullable type represented equivalently on Gemini.
-    if let Tool::Function { parameters, .. } = &mut prompt.tools[0] {
-        *parameters = serde_json::json!({"type":"object","properties":{
-            "limit":{"type":["integer","null"],"minimum":0,"description":"max lines"}
-        },"required":["limit"]});
-    }
-    let body = adapter_for(ApiProtocol::GenerateContent)?.render_request(&prompt)?;
-    let parameters = &body["tools"][0]["functionDeclarations"][0]["parameters"];
-    assert_eq!(parameters["properties"]["limit"]["type"], "integer");
-    assert_eq!(parameters["properties"]["limit"]["nullable"], true);
-    assert_eq!(parameters["properties"]["limit"]["minimum"], 0);
-    assert_eq!(parameters["required"], serde_json::json!(["limit"]));
-    Ok(())
-}
 /// A Responses array mixing a function tool and a server tool keeps both, in
 /// order, with the function/provider split intact.
 #[test]
@@ -9195,108 +7777,6 @@ fn chat_completions_url_citation_round_trip() {
     assert_eq!(sources_of(&reparsed.content), sources_of(&result.content));
 }
 
-/// Gemini: `groundingMetadata.groundingChunks[].web` is lifted into a
-/// `Content::Source` on parse and re-attached on render.
-#[test]
-fn generate_content_grounding_round_trip() {
-    let adapter = generate_content::GenerateContentAdapter;
-    let provider_resp = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [{ "text": "grounded answer" }] },
-            "groundingMetadata": {
-                "groundingChunks": [
-                    { "web": { "uri": "https://example.invalid/g1", "title": "G1" } },
-                    { "web": { "uri": "https://example.invalid/g2" } }
-                ]
-            },
-            "finishReason": "STOP"
-        }]
-    });
-    let result = adapter.parse_response(provider_resp).unwrap();
-    let sources = sources_of(&result.content);
-    assert_eq!(sources.len(), 2, "two grounding chunks parsed into Sources");
-    match sources[1] {
-        // A chunk without a title yields a titleless Source (no fabricated title).
-        Source::Url { url, title, .. } => {
-            assert_eq!(url, "https://example.invalid/g2");
-            assert!(title.is_none());
-        }
-        other => panic!("expected url source, got {other:?}"),
-    }
-
-    let prompt = sample_prompt();
-    let rendered = adapter.render_response(&result, &prompt, "resp_1").unwrap();
-    let chunks = &rendered["candidates"][0]["groundingMetadata"]["groundingChunks"];
-    assert_eq!(chunks[0]["web"]["uri"], "https://example.invalid/g1");
-    assert_eq!(chunks[0]["web"]["title"], "G1");
-    assert_eq!(chunks[1]["web"]["uri"], "https://example.invalid/g2");
-    // The titleless chunk renders with no `title` key (no null).
-    assert!(chunks[1]["web"].get("title").is_none());
-
-    let reparsed = adapter.parse_response(rendered).unwrap();
-    assert_eq!(sources_of(&reparsed.content), sources_of(&result.content));
-}
-
-/// Gemini SHOULD-FIX: grounding chunk kinds beyond `web` are mapped, not
-/// silently dropped. A `retrievedContext` chunk with an http(s) uri becomes a
-/// [`Source::Url`]; an `image` chunk maps via its `sourceUri`; a `maps` chunk
-/// with a `uri` becomes a URL; and a `gs://` `retrievedContext` becomes a
-/// [`Source::Document`] with the media type inferred from the path.
-#[test]
-fn generate_content_grounding_maps_all_chunk_kinds() {
-    let adapter = generate_content::GenerateContentAdapter;
-    let provider_resp = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [{ "text": "grounded" }] },
-            "groundingMetadata": {
-                "groundingChunks": [
-                    { "retrievedContext": { "uri": "https://example.invalid/rag", "title": "RAG" } },
-                    { "image": { "sourceUri": "https://example.invalid/page", "imageUri": "https://example.invalid/i.png", "title": "Img" } },
-                    { "maps": { "uri": "https://maps.example.invalid/p", "title": "Place" } },
-                    { "retrievedContext": { "uri": "gs://bucket/report.pdf", "title": "Report" } }
-                ]
-            },
-            "finishReason": "STOP"
-        }]
-    });
-    let result = adapter.parse_response(provider_resp).unwrap();
-    let sources = sources_of(&result.content);
-    assert_eq!(sources.len(), 4, "every grounding chunk kind is mapped");
-
-    // retrievedContext (http) -> Url
-    match sources[0] {
-        Source::Url { url, title, .. } => {
-            assert_eq!(url, "https://example.invalid/rag");
-            assert_eq!(title.as_deref(), Some("RAG"));
-        }
-        other => panic!("expected url source for retrievedContext(http), got {other:?}"),
-    }
-    // image -> Url keyed by sourceUri (not imageUri)
-    match sources[1] {
-        Source::Url { url, .. } => assert_eq!(url, "https://example.invalid/page"),
-        other => panic!("expected url source for image chunk, got {other:?}"),
-    }
-    // maps -> Url
-    match sources[2] {
-        Source::Url { url, .. } => assert_eq!(url, "https://maps.example.invalid/p"),
-        other => panic!("expected url source for maps chunk, got {other:?}"),
-    }
-    // retrievedContext (gs://) -> Document with inferred media type + filename
-    match sources[3] {
-        Source::Document {
-            media_type,
-            title,
-            filename,
-            ..
-        } => {
-            assert_eq!(media_type, "application/pdf");
-            assert_eq!(title, "Report");
-            assert_eq!(filename.as_deref(), Some("report.pdf"));
-        }
-        other => panic!("expected document source for retrievedContext(gs://), got {other:?}"),
-    }
-}
-
 /// Anthropic: both citation shapes — a text block's `citations[]`
 /// (`web_search_result_location`) and a `web_search_tool_result` block's
 /// `content[]` (`web_search_result`) — are lifted into `Content::Source` parts,
@@ -9493,70 +7973,6 @@ fn messages_web_search_pair_no_orphan_with_inline_citation() {
     assert_eq!(results[0]["content"].as_array().unwrap().len(), 2);
 }
 
-/// Anthropic MUST-FIX (cross-protocol): a Gemini grounding response rendered to
-/// an Anthropic client has no originating `server_tool_use`, so the render
-/// SYNTHESIZES a matching call block immediately before the
-/// `web_search_tool_result`. Both blocks must be present and share one id, so
-/// the emitted wire is a valid pair.
-#[test]
-fn messages_web_search_pair_synthesized_cross_protocol() {
-    let gemini = generate_content::GenerateContentAdapter;
-    let messages = messages::MessagesAdapter;
-    let gemini_resp = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [{ "text": "grounded" }] },
-            "groundingMetadata": {
-                "groundingChunks": [
-                    { "web": { "uri": "https://example.invalid/g", "title": "G" } }
-                ]
-            },
-            "finishReason": "STOP"
-        }]
-    });
-    // Gemini upstream -> canonical (a bare `Source`, no provider-executed call).
-    let canonical = gemini.parse_response(gemini_resp).unwrap();
-    assert_eq!(sources_of(&canonical.content).len(), 1);
-    assert!(
-        !canonical
-            .content
-            .iter()
-            .any(|c| matches!(c, Content::ToolCall { .. })),
-        "Gemini grounding carries no tool call"
-    );
-
-    // canonical -> Anthropic client response.
-    let rendered = messages
-        .render_response(&canonical, &sample_prompt(), "msg_1")
-        .unwrap();
-    let blocks = rendered["content"].as_array().unwrap();
-    let server_call = blocks
-        .iter()
-        .find(|b| b["type"] == "server_tool_use")
-        .expect("a server_tool_use block was synthesized");
-    let result = blocks
-        .iter()
-        .find(|b| b["type"] == "web_search_tool_result")
-        .expect("a web_search_tool_result block was rendered");
-    assert_eq!(server_call["name"], "web_search");
-    // The synthesized pair shares one id -> valid wire.
-    assert_eq!(
-        server_call["id"].as_str().unwrap(),
-        result["tool_use_id"].as_str().unwrap(),
-        "synthesized pair shares one tool_use_id"
-    );
-    // The synthesized call precedes its result block on the wire.
-    let call_pos = blocks.iter().position(|b| b["type"] == "server_tool_use");
-    let result_pos = blocks
-        .iter()
-        .position(|b| b["type"] == "web_search_tool_result");
-    assert!(call_pos < result_pos, "the call precedes its result block");
-
-    // The rendered wire re-parses cleanly: the synthesized call becomes a
-    // provider-executed tool call, the result block its source.
-    let reparsed = messages.parse_response(rendered).unwrap();
-    assert_eq!(sources_of(&reparsed.content).len(), 1);
-}
-
 /// Responses: an `output_text` part's `annotations[]` — a `url_citation` and a
 /// `file_citation` — are lifted into `Content::Source` parts (URL + document)
 /// and re-attached on render.
@@ -9613,91 +8029,6 @@ fn responses_annotations_round_trip_url_and_document() {
     // document citation (its provider file_id is a documented drop).
     let reparsed = adapter.parse_response(rendered).unwrap();
     assert_eq!(sources_of(&reparsed.content).len(), 2);
-}
-
-/// Cross-protocol: a Gemini grounding response is parsed to canonical Sources,
-/// then rendered onto the Chat Completions wire as `message.annotations[]` —
-/// url + title + a (synthesized) id all cross faithfully.
-#[test]
-fn cross_protocol_gemini_grounding_to_chat_annotations() {
-    let gemini = generate_content::GenerateContentAdapter;
-    let chat = chat_completions::ChatCompletionsAdapter;
-
-    let gemini_resp = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [{ "text": "x" }] },
-            "groundingMetadata": {
-                "groundingChunks": [
-                    { "web": { "uri": "https://example.invalid/x", "title": "X" } }
-                ]
-            },
-            "finishReason": "STOP"
-        }]
-    });
-    // Gemini upstream -> canonical
-    let canonical = gemini.parse_response(gemini_resp).unwrap();
-    assert_eq!(sources_of(&canonical.content).len(), 1);
-
-    // canonical -> Chat client response: the citation lands on `annotations[]`.
-    let prompt = sample_prompt();
-    let chat_resp = chat
-        .render_response(&canonical, &prompt, "chatcmpl-x")
-        .unwrap();
-    let ann = &chat_resp["choices"][0]["message"]["annotations"][0];
-    assert_eq!(ann["type"], "url_citation");
-    assert_eq!(ann["url_citation"]["url"], "https://example.invalid/x");
-    assert_eq!(ann["url_citation"]["title"], "X");
-
-    // And a Chat client parsing that response recovers the same canonical Source.
-    let back = chat.parse_response(chat_resp).unwrap();
-    assert_eq!(sources_of(&back.content), sources_of(&canonical.content));
-}
-
-/// Streaming, Gemini decode: grounding metadata in a stream chunk surfaces as a
-/// `StreamPart::Source`, deduped across the repeated accumulating chunks.
-#[test]
-fn generate_content_streams_source_deduped() {
-    let adapter = generate_content::GenerateContentAdapter;
-    let mut decoder = adapter.stream_decoder();
-    let chunk = |with_finish: bool| {
-        let mut c = serde_json::json!({
-            "candidates": [{
-                "content": { "role": "model", "parts": [{ "text": "t" }] },
-                "groundingMetadata": {
-                    "groundingChunks": [
-                        { "web": { "uri": "https://example.invalid/s", "title": "S" } }
-                    ]
-                }
-            }]
-        });
-        if with_finish {
-            c["candidates"][0]["finishReason"] = "STOP".into();
-        }
-        SseEvent {
-            event: None,
-            data: c.to_string(),
-        }
-    };
-    let mut parts = decoder.decode(&chunk(false)).unwrap();
-    // The same grounding chunk repeats on the next frame but must not re-emit.
-    parts.extend(decoder.decode(&chunk(true)).unwrap());
-
-    let source_parts: Vec<&Source> = parts
-        .iter()
-        .filter_map(|p| match p {
-            StreamPart::Source { source } => Some(source),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        source_parts.len(),
-        1,
-        "grounding source emitted exactly once"
-    );
-    match source_parts[0] {
-        Source::Url { url, .. } => assert_eq!(url, "https://example.invalid/s"),
-        other => panic!("expected url source, got {other:?}"),
-    }
 }
 
 /// Streaming, Chat decode: `delta.annotations[]` surfaces as a
@@ -10369,91 +8700,6 @@ fn chat_system_fingerprint_round_trips_on_result() {
     assert_eq!(rendered["system_fingerprint"], "fp_44709d6fcb");
 }
 
-/// Gemini `modelVersion` (no canonical field) round-trips through Generate
-/// Content at result level under `provider_metadata["google"]`.
-#[test]
-fn generate_content_model_version_round_trips_on_result() {
-    let adapter = generate_content::GenerateContentAdapter;
-    let response = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [{ "text": "hi" }] },
-            "finishReason": "STOP",
-            "index": 0,
-        }],
-        "modelVersion": "gemini-2.0-flash-001",
-        "usageMetadata": { "promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2 },
-    });
-    let result = adapter.parse_response(response).unwrap();
-    assert_eq!(
-        result
-            .provider_metadata
-            .get("google")
-            .and_then(|g| g.get("modelVersion")),
-        Some(&serde_json::Value::String("gemini-2.0-flash-001".into()))
-    );
-    let prompt = Prompt {
-        model: "gemini-2.0-flash".to_string(),
-        system: None,
-        system_provider_metadata: Default::default(),
-        messages: vec![],
-        tools: vec![],
-        params: GenerationParams::default(),
-        response_format: None,
-        tool_choice: None,
-        stream: false,
-    };
-    let rendered = adapter.render_response(&result, &prompt, "resp_1").unwrap();
-    assert_eq!(rendered["modelVersion"], "gemini-2.0-flash-001");
-}
-
-/// Gemini `thoughtSignature` on a thinking part round-trips so a multi-turn
-/// thinking conversation can replay the signed reasoning.
-#[test]
-fn generate_content_thought_signature_round_trips() {
-    let adapter = generate_content::GenerateContentAdapter;
-    let response = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [
-                { "text": "reasoning", "thought": true, "thoughtSignature": "TS-xyz" },
-            ] },
-            "finishReason": "STOP",
-            "index": 0,
-        }],
-        "usageMetadata": { "promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2 },
-    });
-    let result = adapter.parse_response(response).unwrap();
-    match &result.content[0] {
-        Content::Reasoning {
-            provider_metadata, ..
-        } => assert_eq!(
-            provider_metadata
-                .get("google")
-                .and_then(|g| g.get("thoughtSignature")),
-            Some(&serde_json::Value::String("TS-xyz".into()))
-        ),
-        other => panic!("expected reasoning, got {other:?}"),
-    }
-    // Re-render to a request: the signature reappears on the thought part.
-    let prompt = Prompt {
-        model: "gemini-2.0-flash".to_string(),
-        system: None,
-        system_provider_metadata: Default::default(),
-        messages: vec![Message {
-            role: Role::Assistant,
-            content: vec![result.content[0].clone()],
-        }],
-        tools: vec![],
-        params: GenerationParams::default(),
-        response_format: None,
-        tool_choice: None,
-        stream: false,
-    };
-    let rendered = adapter.render_request(&prompt).unwrap();
-    let part = &rendered["contents"][0]["parts"][0];
-    assert_eq!(part["thought"], true);
-    assert_eq!(part["thoughtSignature"], "TS-xyz");
-}
-
 /// The `File.extra` → `provider_metadata` migration is real: an OpenAI image
 /// `detail` hint (the canonical example of the former ad-hoc `extra`) is parsed
 /// under `provider_metadata["openai"]["detail"]` and rendered back onto the
@@ -10928,64 +9174,6 @@ fn openai_image_detail_crosses_chat_to_responses() {
     );
 }
 
-/// Gemini `thoughtSignature` round-trips on a **functionCall** part (not just the
-/// thinking-part path): a tool call that continues a reasoning chain carries the
-/// signature, and it must reappear on the rendered `functionCall` part so a
-/// follow-up turn can replay the chain.
-#[test]
-fn generate_content_thought_signature_round_trips_on_function_call() {
-    let adapter = generate_content::GenerateContentAdapter;
-    let response = serde_json::json!({
-        "candidates": [{
-            "content": { "role": "model", "parts": [
-                {
-                    "functionCall": { "name": "get_weather", "args": { "city": "SF" } },
-                    "thoughtSignature": "TS-fc-1",
-                },
-            ] },
-            "finishReason": "STOP",
-            "index": 0,
-        }],
-        "usageMetadata": { "promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2 },
-    });
-    let result = adapter.parse_response(response).unwrap();
-    match &result.content[0] {
-        Content::ToolCall {
-            name,
-            provider_metadata,
-            ..
-        } => {
-            assert_eq!(name, "get_weather");
-            assert_eq!(
-                provider_metadata
-                    .get("google")
-                    .and_then(|g| g.get("thoughtSignature")),
-                Some(&serde_json::Value::String("TS-fc-1".into()))
-            );
-        }
-        other => panic!("expected tool call, got {other:?}"),
-    }
-    // Re-render to a request: the signature reappears on the functionCall part.
-    let prompt = Prompt {
-        model: "gemini-2.0-flash".to_string(),
-        system: None,
-        system_provider_metadata: Default::default(),
-        messages: vec![Message {
-            role: Role::Assistant,
-            content: vec![result.content[0].clone()],
-        }],
-        tools: vec![],
-        params: GenerationParams::default(),
-        response_format: None,
-        tool_choice: None,
-        stream: false,
-    };
-    let rendered = adapter.render_request(&prompt).unwrap();
-    let part = &rendered["contents"][0]["parts"][0];
-    assert!(part.get("functionCall").is_some());
-    assert_eq!(part["thoughtSignature"], "TS-fc-1");
-}
-
 // ===== tool-approval flow (human-in-the-loop) + execution-denied =====
 //
 // Only OpenAI Responses carries the approval handshake on the wire
@@ -11325,11 +9513,7 @@ fn responses_unpaired_denial_without_reason_is_refused() -> crate::error::Result
 /// The other request wires cannot faithfully carry the execution-denied status.
 #[test]
 fn execution_denied_status_loss_is_refused_on_non_responses_wires() -> crate::error::Result<()> {
-    for protocol in [
-        ApiProtocol::ChatCompletions,
-        ApiProtocol::Messages,
-        ApiProtocol::GenerateContent,
-    ] {
+    for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::Messages] {
         let prompt = tool_result_prompt(
             "call_1",
             Some("roll"),
@@ -11350,11 +9534,7 @@ fn execution_denied_status_loss_is_refused_on_non_responses_wires() -> crate::er
 /// Messages and Generate Content.
 #[test]
 fn approval_only_tool_message_has_explicit_chat_rejection() -> crate::error::Result<()> {
-    for protocol in [
-        ApiProtocol::ChatCompletions,
-        ApiProtocol::Messages,
-        ApiProtocol::GenerateContent,
-    ] {
+    for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::Messages] {
         let prompt = Prompt {
             model: "m".to_string(),
             system: None,
@@ -11495,53 +9675,6 @@ fn messages_end_turn_raw_is_not_stashed() -> crate::error::Result<()> {
         .render_response(&result, &sample_prompt(), "msg_1")
         .unwrap();
     assert_eq!(rendered["stop_reason"], "end_turn");
-    Ok(())
-}
-
-#[test]
-fn generate_content_recitation_raw_round_trips() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    // `RECITATION` collapses to `ContentFilter`, which renders back as `SAFETY`;
-    // the precise sub-reason must survive via the stash.
-    let body = serde_json::json!({
-        "candidates": [{
-            "content": {"role": "model", "parts": [{"text": "hi"}]},
-            "finishReason": "RECITATION",
-            "index": 0,
-        }],
-        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
-    });
-    let result = adapter.parse_response(body).unwrap();
-    assert_eq!(result.finish_reason, Some(FinishReason::ContentFilter));
-    assert_eq!(
-        raw_finish(&result, PROVIDER_ID_GOOGLE).as_deref(),
-        Some("RECITATION")
-    );
-    let rendered = adapter
-        .render_response(&result, &sample_prompt(), "r1")
-        .unwrap();
-    assert_eq!(rendered["candidates"][0]["finishReason"], "RECITATION");
-    Ok(())
-}
-
-#[test]
-fn generate_content_stop_raw_is_not_stashed() -> crate::error::Result<()> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let body = serde_json::json!({
-        "candidates": [{
-            "content": {"role": "model", "parts": [{"text": "hi"}]},
-            "finishReason": "STOP",
-            "index": 0,
-        }],
-        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
-    });
-    let result = adapter.parse_response(body).unwrap();
-    assert_eq!(result.finish_reason, Some(FinishReason::Stop));
-    assert!(raw_finish(&result, PROVIDER_ID_GOOGLE).is_none());
-    let rendered = adapter
-        .render_response(&result, &sample_prompt(), "r1")
-        .unwrap();
-    assert_eq!(rendered["candidates"][0]["finishReason"], "STOP");
     Ok(())
 }
 
@@ -11992,128 +10125,6 @@ fn messages_encoder_treats_empty_name_delta_as_continuation() -> crate::error::R
     Ok(())
 }
 
-/// Encode a canonical stream as Generate Content SSE (including the terminal
-/// `finish()` flush) and return one `(name, args_json_string)` per emitted
-/// `functionCall` part.
-fn gemini_encode_function_calls(
-    parts: &[StreamPart],
-) -> crate::error::Result<Vec<(String, String)>> {
-    let adapter = adapter_for(ApiProtocol::GenerateContent)?;
-    let mut encoder = adapter.stream_encoder("g_repro", "gemini");
-    let mut frames = Vec::new();
-    for p in parts {
-        frames.extend(encoder.encode(p).unwrap());
-    }
-    frames.extend(encoder.finish().unwrap());
-    let mut calls = Vec::new();
-    for f in &frames {
-        if let SseFrame::Event { data, .. } = f {
-            let v: serde_json::Value = serde_json::from_str(data).unwrap();
-            if let Some(arr) = v["candidates"][0]["content"]["parts"].as_array() {
-                for part in arr {
-                    if let Some(fc) = part.get("functionCall") {
-                        calls.push((
-                            fc["name"].as_str().unwrap_or("").to_string(),
-                            fc["args"].to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    Ok(calls)
-}
-
-/// Gemini path: a fragmented tool call (name on first chunk, args streamed
-/// across deltas) re-encodes to ONE `functionCall` with the FULL args — the
-/// encoder accumulates instead of emitting one `functionCall{args:{}}` per
-/// delta.
-#[test]
-fn gemini_encode_fragmented_args_single_function_call() -> crate::error::Result<()> {
-    let id = "call_1".to_string();
-    let parts = vec![
-        StreamPart::ToolCallDelta {
-            id: id.clone(),
-            name: Some("exec_command".into()),
-            arguments: "".into(),
-            provider_metadata: Default::default(),
-        },
-        StreamPart::ToolCallDelta {
-            id: id.clone(),
-            name: None,
-            arguments: "{\"cmd\":".into(),
-            provider_metadata: Default::default(),
-        },
-        StreamPart::ToolCallDelta {
-            id: id.clone(),
-            name: None,
-            arguments: "\"ls\"}".into(),
-            provider_metadata: Default::default(),
-        },
-        StreamPart::Finish {
-            reason: FinishReason::ToolCalls,
-        },
-    ];
-    let calls = gemini_encode_function_calls(&parts)?;
-    assert_eq!(
-        calls.len(),
-        1,
-        "one functionCall, not one per delta: {calls:?}"
-    );
-    assert_eq!(calls[0].0, "exec_command");
-    assert_eq!(calls[0].1, "{\"cmd\":\"ls\"}");
-    Ok(())
-}
-
-/// Gemini path: empty-name continuation chunks (upstreams that re-send
-/// `name:""` every chunk) also collapse to ONE complete `functionCall`.
-#[test]
-fn gemini_encode_empty_continuation_name_single_function_call() -> crate::error::Result<()> {
-    let parts = decode_stream(
-        ApiProtocol::ChatCompletions,
-        &empty_continuation_name_chat_events(),
-    )?;
-    let calls = gemini_encode_function_calls(&parts)?;
-    assert_eq!(
-        calls.len(),
-        1,
-        "one functionCall, not fragmented: {calls:?}"
-    );
-    assert_eq!(calls[0].0, "exec_command");
-    assert_eq!(calls[0].1, "{\"cmd\":\"ls\"}");
-    Ok(())
-}
-
-/// Gemini path: two distinct (parallel) tool calls still emit two complete
-/// `functionCall` parts — accumulation must not merge separate calls.
-#[test]
-fn gemini_encode_two_tool_calls_emit_two_function_calls() -> crate::error::Result<()> {
-    let parts = vec![
-        StreamPart::ToolCallDelta {
-            id: "a".into(),
-            name: Some("first".into()),
-            arguments: "{\"x\":1}".into(),
-            provider_metadata: Default::default(),
-        },
-        StreamPart::ToolCallDelta {
-            id: "b".into(),
-            name: Some("second".into()),
-            arguments: "{\"y\":2}".into(),
-            provider_metadata: Default::default(),
-        },
-        StreamPart::Finish {
-            reason: FinishReason::ToolCalls,
-        },
-    ];
-    let calls = gemini_encode_function_calls(&parts)?;
-    assert_eq!(calls.len(), 2, "two distinct calls: {calls:?}");
-    assert_eq!(calls[0].0, "first");
-    assert_eq!(calls[0].1, "{\"x\":1}");
-    assert_eq!(calls[1].0, "second");
-    assert_eq!(calls[1].1, "{\"y\":2}");
-    Ok(())
-}
-
 // ===== server-side tool loop: ServerToolCall / ServerToolResult rendering =====
 
 fn server_tool_call_parts() -> [StreamPart; 2] {
@@ -12269,7 +10280,8 @@ fn chat_encode_late_tool_name_first_chunk_carries_name() -> crate::error::Result
 fn coarse_wires_drop_server_tool_activity() -> crate::error::Result<()> {
     // Chat Completions and Generate Content have no server-tool / MCP stream
     // form; the activity is dropped (the final answer still streams).
-    for proto in [ApiProtocol::ChatCompletions, ApiProtocol::GenerateContent] {
+    {
+        let proto = ApiProtocol::ChatCompletions;
         let events = encode_stream_events(proto.clone(), &server_tool_call_parts())?;
         assert!(
             !events.iter().any(|(_, d)| {
@@ -12394,37 +10406,6 @@ fn responses_custom_tool_stream_preserves_type_namespace_and_text() -> crate::er
 }
 
 #[test]
-fn history_projection_gemini_to_chat_preserves_all_tool_results() -> crate::error::Result<()> {
-    let gemini = generate_content::GenerateContentAdapter;
-    let prompt = gemini.parse_request(serde_json::json!({
-        "model": "m",
-        "contents": [
-            {"role": "model", "parts": [
-                {"functionCall": {"id": "call_a", "name": "a", "args": {}}},
-                {"functionCall": {"id": "call_b", "name": "b", "args": {}}}
-            ]},
-            {"role": "user", "parts": [
-                {"functionResponse": {"id": "call_a", "name": "a", "response": {"value": 1}}},
-                {"functionResponse": {"id": "call_b", "name": "b", "response": {"value": 2}}}
-            ]}
-        ]
-    }))?;
-    assert_eq!(prompt.messages[1].content.len(), 2);
-    let source = serde_json::to_value(&prompt)
-        .map_err(|error| crate::error::ModelError::invalid_request(error.to_string()))?;
-    let chat = chat_completions::ChatCompletionsAdapter;
-    let rendered = chat.render_request(&prompt)?;
-    assert_eq!(rendered["messages"][1]["tool_call_id"], "call_a");
-    assert_eq!(rendered["messages"][1]["content"], "{\"value\":1}");
-    assert_eq!(rendered["messages"][2]["tool_call_id"], "call_b");
-    assert_eq!(rendered["messages"][2]["content"], "{\"value\":2}");
-    let replay = chat.parse_request(rendered)?;
-    assert_eq!(replay.messages.len(), 3);
-    assert_eq!(serde_json::to_value(&prompt).ok(), Some(source));
-    Ok(())
-}
-
-#[test]
 fn history_projection_responses_preserves_interleaved_content_order() -> crate::error::Result<()> {
     let mut prompt = sample_prompt();
     prompt.system = None;
@@ -12508,4 +10489,217 @@ fn history_projection_chat_rejects_unrepresentable_tool_message() {
             ));
         }
     }
+}
+
+#[test]
+fn outbound_adapters_extract_response_id() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // Chat Completions: top-level `id` (`chatcmpl-...`).
+    let openai_chat = adapter_for(ApiProtocol::ChatCompletions)?;
+    let body = serde_json::json!({
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "model": "gpt-test",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    });
+    assert_eq!(
+        openai_chat.parse_response(body)?.response_id.as_deref(),
+        Some("chatcmpl-abc123"),
+        "Chat Completions must extract top-level `id`"
+    );
+
+    // Messages: top-level `id` (`msg_...`).
+    let anthropic = adapter_for(ApiProtocol::Messages)?;
+    let body = serde_json::json!({
+        "id": "msg_01ABC",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+    });
+    assert_eq!(
+        anthropic.parse_response(body)?.response_id.as_deref(),
+        Some("msg_01ABC"),
+        "Anthropic must extract top-level `id`"
+    );
+
+    // Responses: top-level `id` (`resp_...`).
+    let responses = adapter_for(ApiProtocol::Responses)?;
+    let body = serde_json::json!({
+        "id": "resp_abc789",
+        "object": "response",
+        "status": "completed",
+        "output": [{"type": "message", "content": [{"text": "hi"}]}],
+    });
+    assert_eq!(
+        responses.parse_response(body)?.response_id.as_deref(),
+        Some("resp_abc789"),
+        "Responses must extract top-level `id`"
+    );
+
+    // Absent id: graceful None.
+    let openai_chat = adapter_for(ApiProtocol::ChatCompletions)?;
+    let body = serde_json::json!({
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    });
+    assert_eq!(
+        openai_chat.parse_response(body)?.response_id,
+        None,
+        "missing provider id must surface as None, not panic"
+    );
+    Ok(())
+}
+
+#[test]
+fn streaming_decoders_emit_response_started_once()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // The Chat and Messages streaming protocols whose canonical IR previously dropped the
+    // upstream response id now surface it as a one-shot `ResponseStarted`,
+    // so observability can stamp `gen_ai.response.id` on the trace. OpenAI
+    // Responses is unaffected (it carries the id on `ResponseCompleted`).
+
+    // Chat Completions: top-level `id` repeats on every chunk → emit once.
+    let adapter = adapter_for(ApiProtocol::ChatCompletions)?;
+    let mut dec = adapter.stream_decoder();
+    let first = dec
+        .decode(&SseEvent {
+            event: None,
+            data: serde_json::json!({
+                "id": "chatcmpl-stream1",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": null}],
+            })
+            .to_string(),
+        })
+        ?;
+    assert!(
+        first.iter().any(
+            |p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "chatcmpl-stream1")
+        ),
+        "Chat Completions first chunk emits ResponseStarted; got {first:?}"
+    );
+    let second = dec.decode(&SseEvent {
+        event: None,
+        data: serde_json::json!({
+            "id": "chatcmpl-stream1",
+            "choices": [{"index": 0, "delta": {"content": " there"}, "finish_reason": null}],
+        })
+        .to_string(),
+    })?;
+    assert!(
+        !second
+            .iter()
+            .any(|p| matches!(p, StreamPart::ResponseStarted { .. })),
+        "ResponseStarted is emitted only once per stream; got {second:?}"
+    );
+
+    // Messages: `message_start` carries `message.id` (fires once).
+    let adapter = adapter_for(ApiProtocol::Messages)?;
+    let mut dec = adapter.stream_decoder();
+    let parts = dec.decode(&SseEvent {
+        event: Some("message_start".to_string()),
+        data: serde_json::json!({
+            "type": "message_start",
+            "message": {"id": "msg_stream1", "usage": {"input_tokens": 3, "output_tokens": 0}}
+        })
+        .to_string(),
+    })?;
+    assert!(
+        parts
+            .iter()
+            .any(|p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "msg_stream1")),
+        "Anthropic message_start emits ResponseStarted; got {parts:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn raw_extras_are_scoped_to_their_inbound_protocol()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        (
+            ApiProtocol::Messages,
+            "metadata",
+            serde_json::json!({"user_id": "messages-user"}),
+        ),
+        (
+            ApiProtocol::Responses,
+            "max_tool_calls",
+            serde_json::json!(3),
+        ),
+    ];
+
+    for (source, field, value) in cases {
+        let mut body = minimal_request(source.clone())?;
+        body[field] = value;
+        let prompt = adapter_for(source.clone())?.parse_request(body)?;
+
+        for target in all_protocols()
+            .into_iter()
+            .filter(|target| target != &source)
+        {
+            let rendered = adapter_for(target.clone())?.render_request(&prompt)?;
+            assert!(
+                rendered.get(field).is_none(),
+                "{source} extra `{field}` leaked to {target}: {rendered}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn extra_passthrough_field_is_not_in_schema() -> std::result::Result<(), Box<dyn std::error::Error>>
+{
+    let s = serde_json::to_value(schemars::schema_for!(messages::MessagesRequest))?;
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "MessagesRequest schema must not expose `extra` (pass-through field)",
+    );
+    let s = serde_json::to_value(schemars::schema_for!(chat_completions::ChatRequest))?;
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "Chat CompletionsRequest schema must not expose `extra` (pass-through field)",
+    );
+    let s = serde_json::to_value(schemars::schema_for!(responses::ResponsesRequest))?;
+    assert!(
+        s.get("properties").and_then(|p| p.get("extra")).is_none(),
+        "ResponsesRequest schema must not expose `extra` (pass-through field)",
+    );
+    Ok(())
+}
+
+#[test]
+fn parsed_sampling_params_are_not_duplicated_in_extra()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    // Chat Completions: seed / stop / penalties leave `extra`.
+    let chat = adapter_for(ApiProtocol::ChatCompletions)?.parse_request(serde_json::json!({
+        "model": "gpt-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "seed": 7,
+        "stop": ["END"],
+        "presence_penalty": 0.5,
+        "frequency_penalty": -0.25
+    }))?;
+    for key in ["seed", "stop", "presence_penalty", "frequency_penalty"] {
+        assert!(
+            !chat.params.extra.contains_key(key),
+            "Chat Completions `{key}` must be promoted out of extra, not duplicated"
+        );
+    }
+
+    // Anthropic: top_k / stop_sequences leave `extra`.
+    let anthropic = adapter_for(ApiProtocol::Messages)?.parse_request(serde_json::json!({
+        "model": "claude-opus-4-8",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}],
+        "top_k": 40,
+        "stop_sequences": ["END"]
+    }))?;
+    for key in ["top_k", "stop_sequences"] {
+        assert!(
+            !anthropic.params.extra.contains_key(key),
+            "Anthropic `{key}` must be promoted out of extra, not duplicated"
+        );
+    }
+    Ok(())
 }

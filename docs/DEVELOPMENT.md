@@ -8,7 +8,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-ai`            | crate   | Model semantics, four-protocol codecs, SSE framing, selected-model HTTP calls, injected auth transactions and explicit catalog runtime; no router/application dependency |
+| `crates/bitrouter-ai`            | crate   | Model semantics, three-protocol codecs, SSE framing, selected-model HTTP calls, injected auth transactions and explicit catalog runtime; no router/application dependency |
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, staged AI executor integration, the ACP thin proxy (`acp` feature), config loading, the axum HTTP server, and the observability contract (`observe`) |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback; optional `sdk` retains legacy hooks |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
@@ -19,7 +19,7 @@ The `extensions/` directory expresses ownership and delivery boundaries; it does
 
 ### External interfaces
 
-Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from AI's four internal *wire-protocol adapters* (Chat Completions / Responses / Messages / Generate Content, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
+Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from AI's three internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
 
 | Interface                 | Where it lives                                                                                            | Entry point              |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
@@ -109,7 +109,7 @@ presentation.
 Model semantic types, wire codecs, authentication contracts and credential values
 have one owner in **`bitrouter-ai`**. The SDK, provider integrations and application
 consumers depend directly on AI; AI has no SDK, application or agent-runtime
-dependency. AI owns generation codecs, the native Decisions codec, SSE framing and selected-model HTTP
+dependency. AI owns three generation codecs, the native Decisions codec, SSE framing and selected-model HTTP
 invocation (`ModelClient` and `HttpTimeouts`); its errors carry domain facts rather
 than gateway status policy. Explicitly registered `AuthApplier`s can shape a body,
 authenticate and recover the same selected account once after a 401. `ModelClient`
@@ -163,27 +163,24 @@ typed incompatibility report. Other client codecs return output incompatibility
 when they cannot retain native reasoning. Gateway status mapping stays in the SDK.
 Built-in request parsing now also refuses initial ingress omissions before any partial
 Prompt can enter the pipeline: unknown items/blocks, unsupported content values,
-lossy system/tool-result shapes, ambiguous Gemini parts and unsigned Messages thinking.
+lossy system/tool-result shapes and unsigned Messages thinking.
 Reports carry original wire indices and remain content-free. HTTP handler tests verify
 400 responses before any executor call in ordinary and streaming modes. Shared request admission now also excludes initial structural history losses: omitted
 reasoning/sources, provider execution or MCP identity lost in projection, unsupported
 approval parts/reasons and omitted tool-result media/file IDs. Existing native-family
 tool declarations remain eligible; unknown cross-family translation and non-object
-argument loss are refused. Antigravity delegates to the Gemini admission it actually
-uses. Native continuity tokens cannot cross a wire that omits them. Native token
+argument loss are refused. Native continuity tokens cannot cross a wire that omits them. Native token
 presence/representation and local denial pairing are not complete authority proofs.
 Projection now also refuses explicit strict flags, schema names/descriptions and file
 names that the selected codec would omit, plus tool-result error/denial status loss.
-Gemini's tool-schema cleanup is checked against the original schema; only unchanged
-schemas and a bounded single-base-type/nullable representation are admitted. Other
-cleanup remains unclassified. A suppressed paired denial cannot lose its supplied reason.
-Malformed argument strings cannot become empty objects on Messages/Gemini. Chat and
+Google Chat admits a conservative target-scoped schema/option subset without rewriting constraints. Explicit cache resources and unverified strict/schema metadata are refused. A suppressed paired denial cannot lose its supplied reason.
+Malformed argument strings cannot become empty objects on Messages. Chat and
 Messages preserve text-only tool-result arrays, and Chat preserves multiple text parts.
-Unclassified Chat ordering/reasoning concatenation, Gemini result wrappers and selected
-four-wire ingress attribute/boundary losses are refused. Value-preserving JSON encoding
-into string-only tool slots remains eligible; error/denial status is checked separately.
-`ConversionReport.admitted` now retains classified JSON encoding/Gemini schema
-normalization separately from refusal `issues`. Selected-target preparation can return
+Unclassified Chat ordering/reasoning concatenation and selected three-wire ingress
+attribute/boundary losses are refused. Value-preserving JSON encoding into
+string-only tool slots remains eligible; error/denial status is checked separately.
+`ConversionReport.admitted` retains classified JSON encoding separately from refusal issues.
+Selected-target preparation can return
 the report through `ModelClient::render_request_with_report`; executor preflight returns
 that assessment. The SDK rechecks refusals and invokes `on_conversion_admitted` for
 eligible detected effects before hop start, without counting a candidate as an HTTP
@@ -240,13 +237,7 @@ now places product activation/configuration and credential discovery in
 `apps/bitrouter/src/cloud/account`. The old providers package is removed locally.
 Model, Cloud management and telemetry retain the same shared AI hosted session;
 external consumer migration and publication remain separate verification work.
-Google AI's Antigravity integration receives a session and bootstrap HTTP client;
-its confidential refresher receives explicit endpoint/client metadata and a
-caller-permitted secret-source callback. Binary/environment/Keychain discovery
-remains above AI. Its custom protocol is explicitly registered through
-`bitrouter_ai::providers::antigravity::protocol::register`; it delegates Gemini
-semantics while owning Code Assist endpoints/envelopes. Project caches are bound
-to the exact bearer and origin, and source prompts are projected independently.
+Native Gemini Generate Content and the private `google-ai` Antigravity transport are retired. Metered Google calls use the official Chat endpoint. Tool signatures retain canonical metadata and a selected-credential replay proof; clients must echo the entire tool-call `extra_content`. The proof is removed before upstream dispatch. See [retirement progress](GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md) for the actual SDK limitation and live validation gates.
 
 `ModelTarget` carries effective connection values, compatibility and an optional
 caller-selected account label. SDK routing, header policy, continuation admission
@@ -264,8 +255,7 @@ commit after login/logout replaces its original credential. Failed persistence
 retains the rotated replacement for a later commit; this is volatile recovery,
 not a claim of crash durability or cross-process exclusion. Ordinary subscription providers and Claude CLI adoption also use these transactions.
 Explicit call overrides outrank stored credentials; permitted fallback is used only
-for an absent slot. Copilot caches are source-bound, and Google binds project and
-wire authentication to the same credential. Hosted OAuth uses the richer owned
+for an absent slot. Copilot caches are source-bound. Google Chat tool continuity is bound to the effective static credential, endpoint and model. Hosted OAuth uses the richer owned
 transaction contract in AI's optional `hosted` feature. `HostedSession` receives
 a selected slot, full-envelope store and HTTP client; its shared metadata/token
 decoders also serve application-driven device login. The application account
@@ -401,7 +391,7 @@ The axum server lives behind the SDK's `server` feature (`crates/bitrouter-sdk/s
 | `POST /v1/chat/completions`         | Chat Completions inbound         |
 | `POST /v1/responses`                | Responses inbound                |
 | `POST /v1/messages`                 | Messages inbound                 |
-| `POST /v1beta/models/{model_action}`| Generate Content inbound         |
+| `POST /v1/decisions`               | Native Decisions inbound         |
 | `GET  /v1/models`                   | model catalog listing            |
 | `POST /mcp/{server}`                | MCP gateway (JSON-RPC proxy)     |
 | `GET  /metrics`                     | OTLP-migration banner (see below)|

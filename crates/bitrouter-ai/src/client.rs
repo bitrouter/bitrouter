@@ -161,6 +161,12 @@ impl ModelClient {
         prompt: &Prompt,
         stream: bool,
     ) -> Result<(serde_json::Value, crate::conversion::ConversionReport)> {
+        if let Some(message) =
+            crate::providers::retired::protocol_message(target.api_protocol.as_str())
+                .or_else(|| crate::providers::retired::provider_message(&target.provider_name))
+        {
+            return Err(ModelError::configuration(message));
+        }
         if target.api_protocol.operation() != ModelOperation::Generation {
             return Err(ModelError::invalid_request(
                 "generation requires a generation protocol",
@@ -174,7 +180,10 @@ impl ModelClient {
                 ),
             }
         })?;
-        let report = adapter.admission(prompt);
+        let mut report = adapter.admission(prompt);
+        report
+            .issues
+            .extend(crate::providers::google_chat::admission(prompt, target).issues);
         report.require_admitted()?;
         let mut projection = prompt.clone();
         projection.model = target.service_id.clone();
@@ -189,6 +198,12 @@ impl ModelClient {
         target: &ModelTarget,
         request: &DecisionRequest,
     ) -> Result<serde_json::Value> {
+        if let Some(message) =
+            crate::providers::retired::protocol_message(target.api_protocol.as_str())
+                .or_else(|| crate::providers::retired::provider_message(&target.provider_name))
+        {
+            return Err(ModelError::configuration(message));
+        }
         if target.api_protocol != ApiProtocol::Decisions {
             return Err(ModelError::invalid_request(
                 "Decisions requires a Decisions protocol",
@@ -289,7 +304,21 @@ impl ModelClient {
         if *protocol == ApiProtocol::Responses {
             validate_responses_terminal(&json)?;
         }
-        adapter.parse_response(json).map_err(response_error)
+        let usage = if *protocol == ApiProtocol::ChatCompletions {
+            json.get("usage")
+                .and_then(crate::protocol::chat_completions::parse_usage)
+                .map(Box::new)
+        } else {
+            None
+        };
+        adapter
+            .parse_response(json)
+            .map_err(|error| match response_error(error) {
+                ModelError::InvalidResponse { message, .. } => {
+                    ModelError::InvalidResponse { message, usage }
+                }
+                error => error,
+            })
     }
 
     /// Decode a successful HTTP stream. Clean EOF requires a model terminal part.
@@ -325,7 +354,15 @@ impl ModelClient {
                                 terminal |= part.is_terminal();
                                 yield Ok(part);
                             },
-                            Err(error) => { yield Err(error); return; }
+                            Err(mut error) => {
+                                if adapter.protocol() == ApiProtocol::ChatCompletions
+                                    && let Ok(chunk) = serde_json::from_str::<serde_json::Value>(&event.data)
+                                    && let Some(reported) = chunk.get("usage").and_then(crate::protocol::chat_completions::parse_usage) {
+                                    yield Ok(StreamPart::Usage { usage: reported.clone() });
+                                    if let ModelError::InvalidResponse { usage, .. } = &mut error { *usage = Some(Box::new(reported)); }
+                                }
+                                yield Err(error); return;
+                            }
                         }
                     }
                     Err(eventsource_stream::EventStreamError::Transport(error)) => {
@@ -346,7 +383,7 @@ impl ModelClient {
                 Err(error) => { yield Err(error); return; }
             }
             if !terminal {
-                yield Err(ModelError::InvalidResponse { message: "upstream stream ended without a model terminal part".into() });
+                yield Err(ModelError::InvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
             }
         };
         Box::pin(stream)
@@ -394,7 +431,10 @@ impl ModelClient {
                     message: "selected protocol disappeared".into(),
                 }
             })?;
-            Self::parse_response(adapter.as_ref(), &target.api_protocol, &text)
+            crate::providers::google_chat::bind_result(
+                Self::parse_response(adapter.as_ref(), &target.api_protocol, &text)?,
+                target,
+            )
         }
         .await;
         result.map_err(|error| redactor.scrub_error(error))
@@ -438,8 +478,11 @@ impl ModelClient {
             }
         })?;
         Ok(Box::pin(
-            Self::decode_stream(Arc::clone(adapter), response, cancellation.clone())
-                .map(move |part| part.map_err(|error| redactor.scrub_error(error))),
+            crate::providers::google_chat::bind_stream(
+                Self::decode_stream(Arc::clone(adapter), response, cancellation.clone()),
+                target.clone(),
+            )
+            .map(move |part| part.map_err(|error| redactor.scrub_error(error))),
         ))
     }
 
@@ -451,6 +494,9 @@ impl ModelClient {
     ) -> Result<(reqwest::Response, DiagnosticRedactor)> {
         let mut redactor = DiagnosticRedactor::default();
         redactor.add_replacement(target.api_key.clone(), "[redacted credential]".into());
+        if let SelectedInput::Generation { prompt, .. } = input {
+            redactor.capture_prompt_continuity(prompt);
+        }
         let mut refreshed = false;
         loop {
             let request = self
@@ -547,6 +593,7 @@ impl ModelClient {
             return Err(ModelError::Cancelled);
         }
         redactor.capture_request_credentials(&request, &target.api_key);
+        crate::providers::google_chat::validate_authenticated_request(&request, target)?;
         Ok(request)
     }
 }
@@ -568,6 +615,7 @@ fn response_error(error: ModelError) -> ModelError {
         | ModelError::InvalidResponse { .. }) => error,
         error => ModelError::InvalidResponse {
             message: error.to_string(),
+            usage: None,
         },
     }
 }
@@ -580,6 +628,7 @@ fn validate_responses_terminal(json: &serde_json::Value) -> Result<()> {
                 "Responses response has non-success terminal status '{}'",
                 status.unwrap_or("<missing>")
             ),
+            usage: None,
         });
     }
     if json
@@ -589,6 +638,7 @@ fn validate_responses_terminal(json: &serde_json::Value) -> Result<()> {
     {
         return Err(ModelError::InvalidResponse {
             message: "Responses response missing non-empty 'id'".into(),
+            usage: None,
         });
     }
     Ok(())

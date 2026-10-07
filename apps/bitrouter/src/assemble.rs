@@ -535,16 +535,8 @@ async fn assemble_app(
     // Read from the user's `config` — per-provider timeouts are a user-only
     // field, never set by the registry/builtin-defaults merge.
     let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
-    // The `google-ai` subscription provider (Antigravity / `agy`) speaks a custom
-    // protocol (Gemini generateContent retargeted at cloudcode-pa's `v1internal:*`
-    // method endpoints), registered on the dispatch only when it is configured.
-    let mut dispatch = OutboundDispatch::builtin();
-    if config
-        .providers
-        .contains_key(bitrouter_ai::providers::antigravity::PROVIDER_ID)
-    {
-        bitrouter_ai::providers::antigravity::protocol::register(&mut dispatch);
-    }
+    let dispatch = OutboundDispatch::builtin();
+
     let executor = Arc::new(
         HttpExecutor::with_provider_timeouts(
             global_timeouts,
@@ -1427,45 +1419,7 @@ fn build_auth_appliers(
         let applier = bitrouter_ai::providers::supergrok::SuperGrokAuthApplier::new(session);
         appliers.register("supergrok", Arc::new(applier));
     }
-    // The `google-ai` subscription applier (Google OAuth imported from the `agy`
-    // CLI session). The custom protocol adapter is registered separately on the
-    // dispatch above.
-    if config
-        .providers
-        .contains_key(bitrouter_ai::providers::antigravity::PROVIDER_ID)
-    {
-        let google_http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent(concat!("bitrouter-providers/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .context("building Google AI HTTP client")?;
-        let refresher = bitrouter_ai::providers::antigravity::refresh::AntigravityRefresher::new(
-            google_http.clone(),
-            crate::providers::antigravity::agy_client::TOKEN_ENDPOINT,
-            crate::providers::antigravity::agy_client::CLIENT_ID,
-            Arc::new(|| {
-                crate::providers::antigravity::agy_client::extract_secrets().map_err(|error| {
-                    bitrouter_ai::error::ModelError::Provider {
-                        status: 401,
-                        message: format!(
-                            "cannot refresh Google AI using the permitted agy binary: {error}"
-                        ),
-                    }
-                })
-            }),
-        );
-        let session = bitrouter_ai::auth::store::OAuthSession::new(
-            account_store.clone(),
-            Arc::new(refresher),
-            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
-        );
-        let applier =
-            bitrouter_ai::providers::antigravity::AntigravityAuthApplier::new(session, google_http);
-        appliers.register(
-            bitrouter_ai::providers::antigravity::PROVIDER_ID,
-            Arc::new(applier),
-        );
-    }
+
     Ok(appliers)
 }
 

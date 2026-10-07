@@ -5,10 +5,7 @@ mod conversion;
 use conversion::{adapters, prompt, refusal};
 
 use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation};
-use bitrouter_ai::protocol::{
-    InboundAdapter, OutboundAdapter, generate_content::GenerateContentAdapter,
-    responses::ResponsesAdapter,
-};
+use bitrouter_ai::protocol::{InboundAdapter, OutboundAdapter, responses::ResponsesAdapter};
 use bitrouter_ai::types::{
     ApiProtocol, Content, DataContent, Message, Prompt, ProviderMetadata, ResponseFormat, Role,
     Tool, ToolResultOutput,
@@ -33,10 +30,7 @@ fn explicit_function_strict_flags_need_a_faithful_target_slot() -> TestResult {
         let mut source = prompt()?;
         source.tools = vec![function(json!({"type":"object"}), Some(strict))];
         for (protocol, adapter) in adapters() {
-            if matches!(
-                protocol,
-                ApiProtocol::Messages | ApiProtocol::GenerateContent
-            ) {
+            if matches!(protocol, ApiProtocol::Messages) {
                 let report = refusal(adapter.as_ref(), &source)?;
                 assert_eq!(
                     report.issues[0].location,
@@ -57,58 +51,6 @@ fn explicit_function_strict_flags_need_a_faithful_target_slot() -> TestResult {
 }
 
 #[test]
-fn gemini_schema_cleanup_cannot_delete_constraints_or_collapse_distinct_types() -> TestResult {
-    for parameters in [
-        json!({"type":"object","additionalProperties":false,"properties":{"constraint-secret":{"type":"string"}}}),
-        json!({"type":"object","properties":{"x":{"type":"array","items":{"type":"number","exclusiveMinimum":0}}}}),
-        json!({"anyOf":[{"type":"object","properties":{"x":{"$ref":"#/$defs/secret"}}}],"$defs":{"secret":{"type":"string"}}}),
-        json!({"type":["string","integer","null"]}),
-        json!({"type":["null"]}),
-        json!({"type":["string","null"],"nullable":false}),
-    ] {
-        let mut source = prompt()?;
-        source.tools = vec![function(parameters.clone(), None)];
-        let report = refusal(&GenerateContentAdapter, &source)?;
-        assert_eq!(report.issues[0].effect, ConversionEffect::Unknown);
-        for (protocol, adapter) in adapters() {
-            if protocol == ApiProtocol::GenerateContent {
-                continue;
-            }
-            let body = adapter.render_request(&source)?;
-            let rendered = match protocol {
-                ApiProtocol::ChatCompletions => &body["tools"][0]["function"]["parameters"],
-                ApiProtocol::Responses => &body["tools"][0]["parameters"],
-                _ => &body["tools"][0]["input_schema"],
-            };
-            assert_eq!(rendered, &parameters);
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn gemini_equivalent_nullable_and_single_type_unions_remain_eligible() -> TestResult {
-    let mut source = prompt()?;
-    source.tools = vec![function(
-        json!({
-            "type":"object", "required":["x"],
-            "properties":{"x":{"type":["null","integer"],"minimum":0},
-                "y":{"type":"array","items":{"type":["string"]}},
-                "z":{"anyOf":[{"type":["boolean","null"]},{"type":"string"}]}}
-        }),
-        None,
-    )];
-    let body = GenerateContentAdapter.render_request(&source)?;
-    let parameters = &body["tools"][0]["functionDeclarations"][0]["parameters"];
-    assert_eq!(parameters["properties"]["x"]["type"], "integer");
-    assert_eq!(parameters["properties"]["x"]["nullable"], true);
-    assert_eq!(parameters["properties"]["x"]["minimum"], 0);
-    assert_eq!(parameters["properties"]["y"]["items"]["type"], "string");
-    assert_eq!(parameters["properties"]["z"]["anyOf"][0]["nullable"], true);
-    Ok(())
-}
-
-#[test]
 fn structured_output_metadata_cannot_disappear_on_other_wires() -> TestResult {
     for (name, description, strict) in [
         (Some("name-secret".into()), None, None),
@@ -124,10 +66,7 @@ fn structured_output_metadata_cannot_disappear_on_other_wires() -> TestResult {
             schema: json!({"type":"object","properties":{"x":{"type":"string"}}}),
         });
         for (protocol, adapter) in adapters() {
-            if matches!(
-                protocol,
-                ApiProtocol::Messages | ApiProtocol::GenerateContent
-            ) {
+            if matches!(protocol, ApiProtocol::Messages) {
                 let report = refusal(adapter.as_ref(), &source)?;
                 assert_eq!(
                     report.issues[0].location,

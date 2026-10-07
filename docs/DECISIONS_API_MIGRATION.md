@@ -15,6 +15,7 @@ evidence of hosted Cloud support.
 | Generation parameter/default mutation | Propagate its `Result`; native input cannot accept generation defaults or reasoning effort |
 | Infallible context response construction | Propagate `response()` / `into_response()` errors; missing execution cannot synthesize a generation result |
 | `SettlementContext` literals | Supply `operation`; retain actual `target` evidence; native calls have no generation finish reason or first-token observation |
+| `RoutingTarget` literals | Supply `chat_google_extensions`; native/ordinary fixtures use `false`, while verified Google Chat targets preserve the parent's explicit support declaration |
 | Provider-model literals | Add independent `pricing_by_protocol` maps; ordinary `pricing` remains the generation fallback |
 | Pricing literals | Supply optional `endpoint_profile` provenance or use the default; declared global/regional rates cannot rebind to another endpoint |
 | Server-config literals | Supply `require_known_pricing: false` or use the default; app-level strict price coverage is opt-in |

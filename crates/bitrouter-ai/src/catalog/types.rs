@@ -35,14 +35,82 @@ pub struct Envelope<T> {
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryData {
     /// Every provider entry from `providers.json`.
+    #[serde(deserialize_with = "deserialize_providers")]
     pub providers: Vec<RegistryProvider>,
     /// Every canonical model id from `models.json`.
     pub canonical: Vec<CanonicalModel>,
 }
 
+fn retired_protocol_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(name) => {
+            crate::providers::retired::protocol_message(name).is_some()
+        }
+        serde_json::Value::Array(values) => values.iter().any(retired_protocol_value),
+        serde_json::Value::Object(fields) => fields.values().any(retired_protocol_value),
+        _ => false,
+    }
+}
+
+fn deserialize_providers<'de, D>(deserializer: D) -> Result<Vec<RegistryProvider>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    providers_from_values(Vec::<serde_json::Value>::deserialize(deserializer)?)
+        .map_err(serde::de::Error::custom)
+}
+
+/// Filter retired entries before decoding the current protocol vocabulary.
+/// Diagnostics contain counts only; the caller's snapshot bytes are untouched.
+pub(crate) fn providers_from_values(
+    values: Vec<serde_json::Value>,
+) -> Result<Vec<RegistryProvider>, serde_json::Error> {
+    let mut providers = Vec::new();
+    let mut retired_providers = 0usize;
+    let mut retired_models = 0usize;
+    for mut value in values {
+        let retired = value
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| crate::providers::retired::provider_message(name).is_some())
+            || value
+                .get("api_protocol")
+                .is_some_and(retired_protocol_value);
+        if retired {
+            retired_providers += 1;
+            continue;
+        }
+        if let Some(models) = value
+            .get_mut("models")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            let before = models.len();
+            models.retain(|model| {
+                !model
+                    .get("api_protocol")
+                    .is_some_and(retired_protocol_value)
+            });
+            retired_models += before - models.len();
+            if before > 0 && models.is_empty() {
+                retired_providers += 1;
+                continue;
+            }
+        }
+        providers.push(serde_json::from_value(value)?);
+    }
+    if retired_providers > 0 || retired_models > 0 {
+        tracing::warn!(
+            retired_providers,
+            retired_models,
+            "retired native-protocol catalog entries quarantined"
+        );
+    }
+    Ok(providers)
+}
+
 /// The wire protocol a provider serves, in the registry's vocabulary. Maps onto
 /// bitrouter's [`ApiProtocol`] at merge time: `openai`→Chat Completions,
-/// `anthropic`→Messages, `google`→Generate Content, `responses`→Responses.
+/// `anthropic`→Messages, `responses`→Responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryProtocol {
@@ -50,16 +118,10 @@ pub enum RegistryProtocol {
     Openai,
     /// Anthropic Messages.
     Anthropic,
-    /// Google Generate Content.
-    Google,
     /// OpenAI Responses.
     Responses,
     /// Native Decisions.
     Decisions,
-    /// Google Antigravity Code Assist — Gemini `generateContent` retargeted at
-    /// `cloudcode-pa.googleapis.com/v1internal:*` (custom protocol, registered
-    /// by `bitrouter_ai::providers::antigravity`).
-    Antigravity,
 }
 
 impl RegistryProtocol {
@@ -68,14 +130,8 @@ impl RegistryProtocol {
         match self {
             RegistryProtocol::Openai => ApiProtocol::ChatCompletions,
             RegistryProtocol::Anthropic => ApiProtocol::Messages,
-            RegistryProtocol::Google => ApiProtocol::GenerateContent,
             RegistryProtocol::Responses => ApiProtocol::Responses,
             RegistryProtocol::Decisions => ApiProtocol::Decisions,
-            // Matches the protocol the antigravity adapter registers under
-            // (`bitrouter_ai::providers::antigravity::protocol::PROTOCOL`).
-            RegistryProtocol::Antigravity => {
-                ApiProtocol::Custom(crate::providers::antigravity::protocol::PROTOCOL.to_string())
-            }
         }
     }
 }

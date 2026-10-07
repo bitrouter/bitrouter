@@ -1,10 +1,10 @@
 //! Bidirectional wire codecs and selected-target model transports.
 //!
-//! Four built-in wire protocols — Chat Completions, Responses,
-//! Messages, Generate Content — each convert to/from the
+//! Three built-in wire protocols — Chat Completions, Responses,
+//! Messages — each convert to/from the
 //! canonical internal representation ([`Prompt`] / [`GenerateResult`] /
 //! [`StreamPart`]). Any inbound protocol can be paired with any outbound
-//! protocol (the 4×4 conversion matrix).
+//! protocol (the 3×3 conversion matrix).
 //!
 //! ## The three traits
 //!
@@ -20,7 +20,7 @@
 //!   Bundled with an `OutboundAdapter` in the executor's
 //!   [`OutboundDispatch`] registry.
 //!
-//! The four built-in protocols implement all three.
+//! The three built-in protocols implement all three.
 //!
 //! ## Design rules
 //!
@@ -33,7 +33,7 @@
 //!
 //! ## Adding a provider with a non-standard wire (the `Custom` escape hatch)
 //!
-//! The big platform clouds — AWS Bedrock, Azure OpenAI — speak one of the four
+//! The big platform clouds — AWS Bedrock, Azure OpenAI — speak one of the three
 //! built-in protocols over HTTP+JSON+SSE and differ only in auth + base URL, so
 //! they are plain registry providers (Bearer/Header auth), **not** custom
 //! protocols. Bedrock reaches its OpenAI/Responses/Messages `bedrock-mantle`
@@ -62,7 +62,7 @@
 //! );
 //! ```
 //!
-//! Clients still call BitRouter using one of the four built-in inbound
+//! Clients still call BitRouter using one of the three built-in inbound
 //! protocols; the routing table directs the request to a target whose
 //! `api_protocol` is `ApiProtocol::Custom("my-wire")`, and the executor
 //! dispatches through the registered adapter + transport.
@@ -83,8 +83,7 @@ use crate::types::{
 /// The provider-metadata key under which a lossy finish-reason mapping stashes
 /// the **raw** provider finish reason. The canonical [`FinishReason`] enum maps
 /// several distinct native reasons onto one variant (Anthropic `stop_sequence`
-/// and `end_turn` both → `Stop`; Gemini `RECITATION` / `BLOCKLIST` /
-/// `PROHIBITED_CONTENT` and `SAFETY` all → `ContentFilter`; Chat Completions
+/// and `end_turn` both → `Stop`; Chat Completions
 /// `function_call` → `ToolCalls`), so re-rendering from the enum alone would
 /// lose the exact native string on a same-protocol round-trip. Adapters stash
 /// the raw string here under their own provider id when (and only when) the
@@ -94,7 +93,7 @@ pub(crate) const RAW_FINISH_REASON: &str = "rawFinishReason";
 /// Record the raw provider finish-reason string under
 /// `meta[provider_id]["rawFinishReason"]` **iff** re-rendering the unified
 /// `finish` through `render` would not reproduce `raw` verbatim. Reasons that
-/// already round-trip losslessly (e.g. Chat Completions `stop`, Gemini `STOP`)
+/// already round-trip losslessly (e.g. Chat Completions `stop`)
 /// store nothing, keeping the metadata map empty in the common case.
 ///
 /// This is the single source of truth every adapter's `parse_response` uses to
@@ -148,6 +147,7 @@ pub(crate) fn reject_unrepresentable_native_reasoning(
     result: &GenerateResult,
     protocol: &ApiProtocol,
 ) -> Result<()> {
+    reject_google_continuity(result, protocol)?;
     use crate::conversion::{
         ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
         ConversionReason, ConversionReport, ConversionStage,
@@ -184,6 +184,7 @@ pub(crate) fn reject_unrepresentable_native_reasoning_part(
     part: &StreamPart,
     protocol: &ApiProtocol,
 ) -> Result<()> {
+    reject_google_continuity_part(part, protocol)?;
     use crate::conversion::{
         ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
         ConversionReason, ConversionReport, ConversionStage,
@@ -211,9 +212,77 @@ pub(crate) fn reject_unrepresentable_native_reasoning_part(
     Ok(())
 }
 
+fn has_google_continuity(metadata: &ProviderMetadata) -> bool {
+    provider_namespace(metadata, "google")
+        .is_some_and(|fields| fields.contains_key("thoughtSignature"))
+}
+
+pub(crate) fn reject_google_continuity(
+    result: &GenerateResult,
+    protocol: &ApiProtocol,
+) -> Result<()> {
+    use crate::conversion::{
+        ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
+        ConversionReason, ConversionReport, ConversionStage,
+    };
+    ConversionReport {
+        issues: result
+            .content
+            .iter()
+            .enumerate()
+            .filter_map(|(block, content)| {
+                let metadata = match content {
+                    crate::types::Content::ToolCall {
+                        provider_metadata, ..
+                    } if *protocol != ApiProtocol::ChatCompletions => provider_metadata,
+                    crate::types::Content::Reasoning {
+                        provider_metadata, ..
+                    } => provider_metadata,
+                    _ => return None,
+                };
+                has_google_continuity(metadata).then(|| ConversionIssue {
+                    stage: ConversionStage::ResponseEncoding,
+                    protocol: protocol.into(),
+                    location: ConversionLocation::OutputContent { block },
+                    reason: ConversionReason::NativeContinuityUnrepresentable,
+                    effect: ConversionEffect::ReplayAuthority,
+                    disposition: ConversionDisposition::FailOutput,
+                })
+            })
+            .collect(),
+        ..Default::default()
+    }
+    .require_admitted()
+}
+
+pub(crate) fn reject_google_continuity_part(
+    part: &StreamPart,
+    protocol: &ApiProtocol,
+) -> Result<()> {
+    use crate::conversion::{
+        ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
+        ConversionReason, ConversionReport, ConversionStage,
+    };
+    if matches!(part, StreamPart::ToolCallDelta { provider_metadata, .. } if *protocol != ApiProtocol::ChatCompletions && has_google_continuity(provider_metadata))
+    {
+        return ConversionReport {
+            issues: vec![ConversionIssue {
+                stage: ConversionStage::StreamEncoding,
+                protocol: protocol.into(),
+                location: ConversionLocation::StreamToolCall,
+                reason: ConversionReason::NativeContinuityUnrepresentable,
+                effect: ConversionEffect::ReplayAuthority,
+                disposition: ConversionDisposition::FailOutput,
+            }],
+            ..Default::default()
+        }
+        .require_admitted();
+    }
+    Ok(())
+}
+
 pub mod chat_completions;
 pub mod decisions;
-pub mod generate_content;
 pub mod messages;
 pub mod responses;
 
@@ -224,8 +293,6 @@ mod tests;
 pub(crate) const PROVIDER_ID_OPENAI: &str = "openai";
 /// Provider-id prefix for Anthropic tools (Messages wire): `anthropic.<tool>`.
 pub(crate) const PROVIDER_ID_ANTHROPIC: &str = "anthropic";
-/// Provider-id prefix for Google tools (Generate Content wire): `google.<tool>`.
-pub(crate) const PROVIDER_ID_GOOGLE: &str = "google";
 
 /// Split a provider-namespaced tool id (`<provider-id>.<tool-name>`, e.g.
 /// `openai.web_search_preview`) into `(provider_id, tool_name)`. If the id has
@@ -251,8 +318,6 @@ pub(crate) fn split_provider_id(id: &str) -> (&str, &str) {
 /// - OpenAI / Responses — a flat object `{type:<tool>, …args}`.
 /// - Anthropic / Messages — `{type:<tool>, name, …args}` (versioned `type` + a
 ///   stable `name`).
-/// - Google / Generate Content — a single-key object `{<toolKey>: args}` (the
-///   `args` already carry the camelCase tool key's value).
 ///
 /// `args` must be a JSON object; a non-object `args` (only reachable from a
 /// hand-built canonical value) is treated as empty so this never panics.
@@ -271,16 +336,6 @@ pub(crate) fn provider_defined_native(
             obj.insert("name".into(), name.into());
             obj.extend(arg_fields);
             serde_json::Value::Object(obj)
-        }
-        PROVIDER_ID_GOOGLE => {
-            // Google tools live as a single camelCase key on the tool object:
-            // `{googleSearch:{}}`, `{codeExecution:{}}`, `{urlContext:{}}`, …
-            // The key is the tool name; its value is the (possibly empty) args.
-            let value = args.as_object().map_or_else(
-                || serde_json::json!({}),
-                |m| serde_json::Value::Object(m.clone()),
-            );
-            serde_json::json!({ tool: value })
         }
         PROVIDER_ID_OPENAI => {
             // Most Responses server tools are identified by `type` alone, but
@@ -320,7 +375,7 @@ pub struct SseEvent {
 /// and render the canonical result back. Used by the HTTP server to terminate
 /// one inbound wire protocol.
 ///
-/// Stateless. The four built-in adapters are zero-sized.
+/// Stateless. The three built-in adapters are zero-sized.
 pub trait InboundAdapter: Send + Sync {
     /// The wire protocol this adapter speaks.
     fn protocol(&self) -> ApiProtocol;
@@ -401,7 +456,7 @@ pub trait OutboundAdapter: Send + Sync {
     /// Whether this protocol can honour
     /// [`Prompt::response_format`](crate::types::Prompt::response_format).
     /// Default is `false` so callers can reject unsupported requests
-    /// rather than silently dropping the schema. The four built-in adapters
+    /// rather than silently dropping the schema. The three built-in adapters
     /// override this to `true`.
     fn supports_response_format(&self) -> bool {
         false
@@ -484,7 +539,6 @@ pub fn inbound_adapter_for(protocol: &ApiProtocol) -> Option<Box<dyn InboundAdap
         ApiProtocol::ChatCompletions => Some(Box::new(chat_completions::ChatCompletionsAdapter)),
         ApiProtocol::Messages => Some(Box::new(messages::MessagesAdapter)),
         ApiProtocol::Responses => Some(Box::new(responses::ResponsesAdapter)),
-        ApiProtocol::GenerateContent => Some(Box::new(generate_content::GenerateContentAdapter)),
         ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
     }
 }
@@ -517,7 +571,7 @@ impl OutboundDispatch {
         }
     }
 
-    /// A registry pre-populated with the four built-in protocols.
+    /// A registry pre-populated with the three built-in protocols.
     pub fn builtin() -> Self {
         let mut d = Self::empty();
         d.register(
@@ -531,10 +585,6 @@ impl OutboundDispatch {
         d.register(
             Arc::new(responses::ResponsesAdapter),
             Arc::new(responses::ResponsesTransport),
-        );
-        d.register(
-            Arc::new(generate_content::GenerateContentAdapter),
-            Arc::new(generate_content::GenerateContentTransport),
         );
         d
     }

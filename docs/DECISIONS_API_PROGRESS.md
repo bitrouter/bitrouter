@@ -273,3 +273,14 @@ immutable PR catalog through `registry.url`; no source fix or public deployment
 was needed. See [acceptance scope](DECISIONS_API_ACCEPTANCE.md) and
 [redacted live evidence](DECISIONS_API_LIVE_EVIDENCE.json). The gateway is stopped
 and the key was not saved in configuration, credentials or committed evidence.
+
+## Parent conflict resolution
+
+The stack now incorporates #962 at `0023b0a5`, including #964's Gemini
+retirement. Resolution preserves the three generation protocols, native
+Decisions, Google credential-bound replay/redaction and operation-specific
+usage settlement. Catalog/schema artifacts are current. Full all-feature
+nextest passed 3696 tests with 22 existing skips; the one leaky control fixture
+passed cleanly in isolation. Doctests, strict Clippy, formatting, minimal AI
+tests and pinned public API guards passed. See the acceptance ledger for run
+IDs and the separate scope of prior live/hosted evidence.

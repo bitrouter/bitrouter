@@ -23,6 +23,8 @@ pub enum ModelError {
     InvalidResponse {
         /// Provider diagnostic for trusted callers.
         message: String,
+        /// Provider-reported usage retained even when continuity validation fails.
+        usage: Option<Box<crate::types::Usage>>,
     },
     /// Completed Decisions response: fail delivery without retrying model work.
     #[error("invalid decision response: {failure}")]

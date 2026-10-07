@@ -948,6 +948,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
     };
     pricing.configure_endpoint("openai", None, &target.api_base);
     let tariff = pricing.snapshot(&target);

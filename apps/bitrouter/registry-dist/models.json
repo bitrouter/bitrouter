@@ -3315,14 +3315,17 @@
           "provider_model_id": "gemini-3.5-flash"
         },
         {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "google_extensions": true,
+              "supports_store": false
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.15,
@@ -3348,20 +3351,6 @@
           }
         },
         {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 9.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "gemini-3.5-flash"
-        },
-        {
           "api_protocol": [
             "openai",
             "responses",
@@ -3379,23 +3368,6 @@
           },
           "provider": "openrouter",
           "provider_model_id": "google/gemini-3.5-flash"
-        },
-        {
-          "api_protocol": "google",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 9.0
-            }
-          },
-          "provider": "vertex",
-          "provider_model_id": "gemini-3.5-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         }
       ],
       "release_date": "2026-05-19"
@@ -3440,14 +3412,17 @@
           "provider_model_id": "gemini-3.6-flash"
         },
         {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "google_extensions": true,
+              "supports_store": false
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.15,
@@ -3462,20 +3437,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "gemini-3.6-flash"
         },
         {
           "api_protocol": [
@@ -3495,23 +3456,6 @@
           },
           "provider": "openrouter",
           "provider_model_id": "google/gemini-3.6-flash"
-        },
-        {
-          "api_protocol": "google",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider": "vertex",
-          "provider_model_id": "gemini-3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         }
       ],
       "release_date": "2026-07-21"
@@ -3552,10 +3496,13 @@
           "provider_model_id": "gemini-3.7-flash"
         },
         {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
+          "api_protocol": "openai",
+          "compatibility": {
+            "chat_completions": {
+              "google_extensions": true,
+              "supports_store": false
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.075,
@@ -3570,20 +3517,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "gemini-3.7-flash"
         },
         {
           "api_protocol": [
@@ -3603,23 +3536,6 @@
           },
           "provider": "openrouter",
           "provider_model_id": "google/gemini-3.7-flash"
-        },
-        {
-          "api_protocol": "google",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.075,
-              "no_cache": 0.75
-            },
-            "output_tokens": {
-              "text": 3.75
-            }
-          },
-          "provider": "vertex",
-          "provider_model_id": "gemini-3.7-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         }
       ],
       "release_date": "2026-08-13"
@@ -3660,10 +3576,19 @@
           "provider_model_id": "gemini-3.8-flash"
         },
         {
-          "api_protocol": [
-            "google",
-            "openai"
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools",
+            "image_input",
+            "structured_outputs"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "google_extensions": true,
+              "supports_store": false
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.075,
@@ -3677,21 +3602,16 @@
           "provider_model_id": "gemini-3.8-flash",
           "rate_limits": {
             "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
           },
-          "provider": "opencode-zen",
-          "provider_model_id": "gemini-3.8-flash"
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
         },
         {
           "api_protocol": [
@@ -3711,23 +3631,6 @@
           },
           "provider": "openrouter",
           "provider_model_id": "google/gemini-3.8-flash"
-        },
-        {
-          "api_protocol": "google",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.075,
-              "no_cache": 0.75
-            },
-            "output_tokens": {
-              "text": 3.75
-            }
-          },
-          "provider": "vertex",
-          "provider_model_id": "gemini-3.8-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         }
       ],
       "release_date": "2026-09-02"
@@ -8964,23 +8867,6 @@
           "provider_model_id": "grok-4.3"
         },
         {
-          "api_protocol": "google",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider": "vertex",
-          "provider_model_id": "xai/grok-4.3",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
           "api_protocol": [
             "responses",
             "openai"
@@ -9215,23 +9101,6 @@
           ],
           "provider": "supergrok",
           "provider_model_id": "grok-4.6"
-        },
-        {
-          "api_protocol": "google",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 2.0
-            },
-            "output_tokens": {
-              "text": 6.0
-            }
-          },
-          "provider": "vertex",
-          "provider_model_id": "xai/grok-4.6",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         },
         {
           "api_protocol": [

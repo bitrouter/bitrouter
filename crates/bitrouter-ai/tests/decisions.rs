@@ -378,6 +378,16 @@ async fn operation_mismatch_and_cancellation_stop_before_dispatch() -> TestResul
             .await
             .is_err()
     );
+    for provider in ["google-ai", "vertex"] {
+        let mut retired = target(server.uri());
+        retired.provider_name = provider.into();
+        assert!(matches!(
+            client
+                .decide(&retired, &request, &CancellationToken::new())
+                .await,
+            Err(ModelError::Configuration { .. })
+        ));
+    }
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     assert!(matches!(

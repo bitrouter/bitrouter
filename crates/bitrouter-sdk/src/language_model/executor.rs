@@ -403,9 +403,15 @@ impl UpstreamErrorScrubber {
                 status,
                 message: self.scrub_text(&message),
             },
-            BitrouterError::UpstreamInvalidResponse { message } => {
+            BitrouterError::UpstreamInvalidResponse { message, mut usage } => {
                 BitrouterError::UpstreamInvalidResponse {
                     message: self.scrub_text(&message),
+                    usage: {
+                        if let Some(raw) = usage.as_mut().and_then(|usage| usage.raw.as_mut()) {
+                            self.scrub_value(raw);
+                        }
+                        usage
+                    },
                 }
             }
             BitrouterError::UpstreamAuth {
@@ -767,6 +773,10 @@ impl HttpExecutor {
         credential_authority =
             credential_authority.filter(|authority| authority.validates_final_request(&request));
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
+        bitrouter_ai::providers::google_chat::validate_authenticated_request(
+            &request,
+            &input.target.model_target(),
+        )?;
         input.ctx.record_credential_authority(credential_authority);
         Ok(request)
     }
@@ -1049,6 +1059,9 @@ impl Executor for HttpExecutor {
 
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
             .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
+        let result =
+            bitrouter_ai::providers::google_chat::bind_result(result, &target.model_target())
+                .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
@@ -1113,6 +1126,7 @@ impl Executor for HttpExecutor {
         let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
         let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
         error_scrubber.capture_effective_target_key(target);
+        error_scrubber.redactor.capture_prompt_continuity(prompt);
         let url = transport.endpoint_url(&target.model_target(), true);
         let trace_headers = ctx.take_outbound_trace_headers();
 
@@ -1168,11 +1182,13 @@ impl Executor for HttpExecutor {
             ));
         };
 
-        let stream = ModelClient::decode_stream(Arc::clone(adapter), response, cancellation).map(
-            move |part| {
-                part.map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))
-            },
-        );
+        let stream = bitrouter_ai::providers::google_chat::bind_stream(
+            ModelClient::decode_stream(Arc::clone(adapter), response, cancellation),
+            target.model_target(),
+        )
+        .map(move |part| {
+            part.map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))
+        });
 
         Ok(Box::pin(stream))
     }
@@ -1191,8 +1207,8 @@ impl Executor for HttpExecutor {
 /// the default `HttpExecutor` instead.
 ///
 /// The `default` executor handles every protocol that is **not** explicitly
-/// registered. The four built-in protocols (`openai` / `responses` /
-/// `anthropic` / `google`) should remain on the default `HttpExecutor`; only
+/// registered. The three built-in protocols (`chat_completions` / `responses` /
+/// `messages`) should remain on the default `HttpExecutor`; only
 /// route `ApiProtocol::Custom(_)` protocols away from it.
 ///
 /// ```no_run
@@ -1335,7 +1351,7 @@ mod error_classification_tests {
     use super::*;
     use bitrouter_ai::protocol::OutboundAdapter;
     use bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter;
-    use bitrouter_ai::protocol::generate_content::GenerateContentAdapter;
+
     use bitrouter_ai::protocol::messages::MessagesAdapter;
     use bitrouter_ai::protocol::responses::ResponsesAdapter;
 
@@ -1446,12 +1462,8 @@ mod error_classification_tests {
 
     #[test]
     fn malformed_success_is_upstream_502_for_every_builtin_protocol() {
-        let adapters: [&dyn OutboundAdapter; 4] = [
-            &ChatCompletionsAdapter,
-            &MessagesAdapter,
-            &ResponsesAdapter,
-            &GenerateContentAdapter,
-        ];
+        let adapters: [&dyn OutboundAdapter; 3] =
+            [&ChatCompletionsAdapter, &MessagesAdapter, &ResponsesAdapter];
         for adapter in adapters {
             let error = ModelClient::parse_response(adapter, &adapter.protocol(), "{}")
                 .map_err(BitrouterError::from)
@@ -1497,6 +1509,7 @@ mod error_classification_tests {
     fn stream_decoder_still_wraps_generic_parse_errors_as_upstream_502() {
         let error = BitrouterError::from(bitrouter_ai::error::ModelError::InvalidResponse {
             message: "malformed provider event".into(),
+            usage: None,
         });
 
         assert!(matches!(
@@ -1602,6 +1615,7 @@ mod beta_forward_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,
@@ -1818,6 +1832,7 @@ mod provider_continuation_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: Some("primary".into()),
             api_key_override: None,
@@ -2055,6 +2070,7 @@ mod client_selection_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,
@@ -2178,6 +2194,7 @@ mod client_selection_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,
@@ -2305,6 +2322,7 @@ mod openai_codex_stream_bridge_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,

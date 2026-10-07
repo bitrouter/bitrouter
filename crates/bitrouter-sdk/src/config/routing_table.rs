@@ -230,6 +230,8 @@ fn build_targets(
         chat_compatibility.and_then(|compatibility| compatibility.supports_store);
     let chat_supports_stream_options =
         chat_compatibility.and_then(|compatibility| compatibility.supports_stream_options);
+    let chat_google_extensions =
+        chat_compatibility.is_some_and(|compatibility| compatibility.google_extensions);
     let reasoning_effort = provider
         .model_config(model_id)
         .and_then(|model| model.reasoning_effort.clone());
@@ -248,6 +250,7 @@ fn build_targets(
             chat_token_limit_field,
             chat_supports_store,
             chat_supports_stream_options,
+            chat_google_extensions,
             reasoning_effort: reasoning_effort.clone(),
             account_label: None,
             api_key_override: None,
@@ -290,6 +293,7 @@ fn build_targets(
                 chat_token_limit_field,
                 chat_supports_store,
                 chat_supports_stream_options,
+                chat_google_extensions,
                 reasoning_effort: reasoning_effort.clone(),
                 account_label: Some(label),
                 api_key_override: None,
@@ -1703,23 +1707,6 @@ providers:
             .await
             .unwrap();
         assert_eq!(chain[0].api_protocol, ApiProtocol::Responses);
-        assert_eq!(chain[0].api_base, "https://api.minimax.io/v1");
-    }
-
-    #[tokio::test]
-    async fn falls_back_to_default_head_when_inbound_unsupported() {
-        // GenerateContent isn't in the set → fall back to the preferred head
-        // (chat_completions), at the default base.
-        let t = table(MULTI_PROTOCOL);
-        let chain = t
-            .route_chain(
-                "minimax:MiniMax-M2",
-                &prefs_inbound(ApiProtocol::GenerateContent),
-                &CallerContext::local(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(chain[0].api_protocol, ApiProtocol::ChatCompletions);
         assert_eq!(chain[0].api_base, "https://api.minimax.io/v1");
     }
 

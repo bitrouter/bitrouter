@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** remove native Gemini Generate Content HTTP endpoints, upstream codec, and Rust protocol variant. Metered `google` now uses the official Chat Completions endpoint with bearer `GEMINI_API_KEY`.
+- Retire `google-ai` subscription inference, Vertex Express, and bundled Gemini CLI routing. Active native configs fail with migration guidance; older catalogs quarantine retired entries. Saved credentials and historical records remain intact, with unsupported replay rejected. No automatic subscription-to-metered billing migration occurs.
+- Google Chat tool signatures carry credential-bound replay proof; clients must preserve each tool call’s `extra_content` in subsequent requests. Explicit cache references and unverified constraints are rejected. Replacement live-provider and SDK evidence is tracked in `docs/GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md`.
+
 ## [1.0.0-alpha.33](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.32...v1.0.0-alpha.33)
 
 

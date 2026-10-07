@@ -125,3 +125,33 @@ English/Chinese synchronization and the docs catalog refresh are a coordinated
 `bitrouter-docs` follow-up. Hosted CI and bounded live provider evidence are
 recorded above. No deployed Cloud, subscription access or upstream invoice
 evidence is implied.
+
+## Parent integration after #964
+
+Merged the updated #962 parent at
+`0023b0a50919242cede1580755b002154f2ddeb1` into the Decisions stack. Native
+Gemini and retired provider removal remain in force; generation uses Chat
+Completions, Messages and Responses, while Decisions retains its own native
+codec and endpoint. Shared selected-call transport now retains the parent's
+Google replay binding and continuity redaction, together with native completed
+failure usage and the no-retry rule. Native calls also reject retired providers
+before I/O. Catalog mirrors and the config schema were regenerated.
+
+Validation of this merged source:
+
+- Workspace all-feature nextest: **3696 passed, 22 existing skips**, run
+  `44efef5b-6847-4dce-b30d-af28b94ff108`. Nextest marked one existing trajectory
+  control test leaky; its isolated rerun passed cleanly, run
+  `b01a5c49-077a-408d-bd10-d5de3a1dddfe`.
+- The retry-observation fixture preserves the parent's strict tool requirement
+  through typed generation input. Its targeted regression passed before the
+  complete run, `506ea47c-97f9-496b-8afb-530131640b80`.
+- Workspace doctests: **6 passed, 1 ignored**. Strict all-feature Clippy with
+  tests, formatting, registry validate/build, schema generation and dist
+  freshness passed. AI tests without default features passed.
+- Pinned SDK public API listing: native envelopes and observability sentinels
+  present; foreign dependency manifest unchanged; no public OTel types.
+
+The A11 live evidence remains scoped to the original tested `aa378f7c` source
+and pinned catalog. No live request was repeated during conflict resolution.
+Hosted CI for the merged head is separate from the earlier completed CI run.

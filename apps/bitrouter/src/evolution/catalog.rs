@@ -161,7 +161,6 @@ pub(super) async fn route_contract(
             None,
             Some(ApiProtocol::ChatCompletions),
             Some(ApiProtocol::Messages),
-            Some(ApiProtocol::GenerateContent),
             Some(ApiProtocol::Responses),
         ] {
             let mut prefs = resolution.prefs.clone();
@@ -217,6 +216,7 @@ fn target_contract(config: &Config, target: &RoutingTarget) -> Result<Value> {
         "chat_token_limit_field": target.chat_token_limit_field,
         "chat_supports_store": target.chat_supports_store,
         "chat_supports_stream_options": target.chat_supports_stream_options,
+        "chat_google_extensions": target.chat_google_extensions,
         "reasoning_effort": target.reasoning_effort,
         "capabilities": metadata.map(|model| &model.capabilities),
         "pricing": metadata.map(|model| format!("{:?}", model.pricing)),

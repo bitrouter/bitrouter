@@ -26,6 +26,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   hook and pricing migration, with the read-only external Cloud inventory.
 - [`DECISIONS_API_ACCEPTANCE.md`](DECISIONS_API_ACCEPTANCE.md) — Requirement-by-requirement
   local/hosted/live evidence and qualified provider/Cloud delivery boundaries.
+- [`GEMINI_PROTOCOL_RETIREMENT_SPEC.md`](GEMINI_PROTOCOL_RETIREMENT_SPEC.md) —
+  **approved; implementation in progress.** Removes native Gemini Generate Content ingress and
+  upstream support, retains metered Gemini through Chat Completions, and defines
+  provider retirement, Antigravity SDK connectivity, and replacement validation.
 - [`LOCAL_DAEMON_UPGRADE_SPEC.md`](LOCAL_DAEMON_UPGRADE_SPEC.md) — **implemented
   in #932; local and CI verification passed.** Safe local daemon handoff after
   a CLI upgrade: version and capability detection, idle-only restart,

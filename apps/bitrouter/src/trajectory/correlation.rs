@@ -225,7 +225,6 @@ fn protocol_name(protocol: &ApiProtocol) -> &str {
         ApiProtocol::ChatCompletions => "chat_completions",
         ApiProtocol::Messages => "messages",
         ApiProtocol::Responses => "responses",
-        ApiProtocol::GenerateContent => "generate_content",
         ApiProtocol::Decisions => "decisions",
         ApiProtocol::Custom(name) => name,
     }

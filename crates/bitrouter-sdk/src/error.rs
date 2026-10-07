@@ -114,6 +114,8 @@ pub enum BitrouterError {
         /// Internal diagnostic detail. Public HTTP/SSE responses use a fixed
         /// safe message and never expose this value.
         message: String,
+        /// Available provider-reported usage from the failed successful response.
+        usage: Option<Box<bitrouter_ai::types::Usage>>,
     },
 
     /// 401 / 403 — upstream MCP server demanded authorization. Distinct from
@@ -272,7 +274,7 @@ impl BitrouterError {
             }
             Self::UpstreamPolicyViolation { message }
             | Self::Upstream { message, .. }
-            | Self::UpstreamInvalidResponse { message } => Some(message),
+            | Self::UpstreamInvalidResponse { message, .. } => Some(message),
             _ => None,
         }
     }
@@ -322,7 +324,7 @@ impl BitrouterError {
             Self::Upstream { status, message } => {
                 format!("upstream error ({status}): {message}")
             }
-            Self::UpstreamInvalidResponse { message } => {
+            Self::UpstreamInvalidResponse { message, .. } => {
                 format!("upstream returned an invalid response: {message}")
             }
             Self::UpstreamAuth { status, .. } => {
@@ -435,9 +437,12 @@ impl From<bitrouter_ai::error::ModelError> for BitrouterError {
         match error {
             ModelError::Incompatible { report } => Self::Incompatible { report },
             ModelError::InvalidRequest { message } => Self::bad_request(message),
-            ModelError::InvalidResponse { message } => Self::UpstreamInvalidResponse { message },
+            ModelError::InvalidResponse { message, usage } => {
+                Self::UpstreamInvalidResponse { message, usage }
+            }
             ModelError::DecisionResponse { failure } => Self::UpstreamInvalidResponse {
                 message: failure.message,
+                usage: failure.usage,
             },
             ModelError::Provider { status, message } => Self::Upstream { status, message },
             ModelError::PolicyViolation { message } => Self::UpstreamPolicyViolation { message },
