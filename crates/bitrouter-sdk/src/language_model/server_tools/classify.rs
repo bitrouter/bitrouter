@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::language_model::types::Content;
+use bitrouter_ai::types::Content;
 
 /// One router-owned tool call extracted from a model turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +72,7 @@ pub fn classify_turn(content: &[Content], owned: &BTreeSet<String>) -> TurnDispo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::ProviderMetadata;
+    use bitrouter_ai::types::ProviderMetadata;
 
     fn call(name: &str, provider_executed: bool) -> Content {
         Content::ToolCall {

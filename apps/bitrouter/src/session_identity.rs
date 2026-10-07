@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bitrouter_ai::types::ApiProtocol;
 use bitrouter_sdk::PipelineEvent;
-use bitrouter_sdk::language_model::{ApiProtocol, HookDecision, PipelineContext, PreRequestHook};
+use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
 use serde::Serialize;
 
 use crate::acp_runtime::AcpRuntime;
@@ -725,10 +726,10 @@ fn push_unique(values: &mut Vec<String>, candidate: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::language_model::{
-        ApiProtocol, GenerationParams, HookDecision, Message, PipelineContext, PipelineRequest,
-        PreRequestHook, Prompt, Role,
+        HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
     };
     use std::collections::BTreeSet;
     use std::sync::Arc;

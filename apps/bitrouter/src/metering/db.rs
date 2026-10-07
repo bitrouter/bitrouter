@@ -11,7 +11,7 @@
 //! pre-OSS-refactor `final_charge_micro_usd` column); this module only
 //! reads and writes rows.
 
-use bitrouter_sdk::language_model::UsageOrigin;
+use bitrouter_ai::types::UsageOrigin;
 use serde::{Deserialize, Serialize};
 
 use super::pricing::{ChargeEvidence, ChargeStatus};

@@ -253,13 +253,13 @@ fn digest_hex(digest: &str) -> Result<&str> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use bitrouter_ai::types::{
+        ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role, UsageOrigin,
+    };
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::EvalConfig;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role,
-        SettlementContext, SettlementRecorder, UsageOrigin,
-    };
+    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{

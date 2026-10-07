@@ -13,10 +13,10 @@ use super::classify::{RouterCall, TurnDisposition, classify_turn};
 use super::config::ServerToolLoopConfig;
 use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::types::{
-    Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
-    ServerToolCall, ServerToolKind, ServerToolStatus, Tool, ToolChoice, ToolResultOutput, Usage,
-    UsageOrigin,
+use crate::language_model::types::ExecutionResult;
+use bitrouter_ai::types::{
+    Content, FinishReason, Message, Prompt, ProviderMetadata, Role, ServerToolCall, ServerToolKind,
+    ServerToolStatus, Tool, ToolChoice, ToolResultOutput, Usage, UsageOrigin,
 };
 
 /// One upstream turn for a working prompt — the loop's callback into the
@@ -408,7 +408,7 @@ mod tests {
     use crate::caller::CallerContext;
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::toolset::RouterToolset;
-    use crate::language_model::types::{GenerateResult, Tool};
+    use bitrouter_ai::types::{GenerateResult, Tool};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -424,7 +424,7 @@ mod tests {
                 prompt_tokens: 10,
                 completion_tokens: 2,
                 web_search_count: 1,
-                origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
                 raw: Some(Box::new(first_raw.clone())),
                 ..Default::default()
             },
@@ -436,7 +436,7 @@ mod tests {
                 completion_tokens: 3,
                 cache_read_tokens: 5,
                 web_search_count: 2,
-                origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
                 raw: Some(Box::new(second_raw.clone())),
                 ..Default::default()
             },
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(total.web_search_count, 3);
         assert_eq!(
             total.origin,
-            crate::language_model::types::UsageOrigin::ProviderReported
+            bitrouter_ai::types::UsageOrigin::ProviderReported
         );
         assert_eq!(
             total.raw.as_deref(),
@@ -463,7 +463,7 @@ mod tests {
             &mut total,
             &Usage {
                 prompt_tokens: 1,
-                origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
                 raw: Some(Box::new(serde_json::json!({"input_tokens": 1}))),
                 ..Default::default()
             },
@@ -472,15 +472,12 @@ mod tests {
             &mut total,
             &Usage {
                 completion_tokens: 1,
-                origin: crate::language_model::types::UsageOrigin::Estimated,
+                origin: bitrouter_ai::types::UsageOrigin::Estimated,
                 ..Default::default()
             },
         );
 
-        assert_eq!(
-            total.origin,
-            crate::language_model::types::UsageOrigin::Estimated
-        );
+        assert_eq!(total.origin, bitrouter_ai::types::UsageOrigin::Estimated);
     }
 
     struct MockToolset {

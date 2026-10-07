@@ -21,7 +21,8 @@ use crate::config::Config;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
 use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
-use crate::language_model::types::{ApiProtocol, RoutingTarget};
+use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::types::ApiProtocol;
 
 fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
     let base = UsagePricingBracket {
@@ -141,7 +142,7 @@ impl ConfigRoutingTable {
     /// against the new config first. Used by the daemon's reload path
     /// when there's no source file to re-read from (zero-config mode):
     /// the caller produces a fresh `Config` from
-    /// `bitrouter_providers::zero_config` and hands it here. Holds the
+    /// the application's `providers::apply::zero_config` and hands it here. Holds the
     /// same `reload_lock` as the `RoutingTable::reload` impl so the two
     /// paths serialise against each other.
     pub async fn replace_config(&self, fresh: Config) -> Result<()> {
@@ -225,6 +226,8 @@ fn build_targets(
         chat_compatibility.and_then(|compatibility| compatibility.supports_store);
     let chat_supports_stream_options =
         chat_compatibility.and_then(|compatibility| compatibility.supports_stream_options);
+    let chat_google_extensions =
+        chat_compatibility.is_some_and(|compatibility| compatibility.google_extensions);
     let reasoning_effort = provider
         .model_config(model_id)
         .and_then(|model| model.reasoning_effort.clone());
@@ -243,6 +246,7 @@ fn build_targets(
             chat_token_limit_field,
             chat_supports_store,
             chat_supports_stream_options,
+            chat_google_extensions,
             reasoning_effort: reasoning_effort.clone(),
             account_label: None,
             api_key_override: None,
@@ -285,6 +289,7 @@ fn build_targets(
                 chat_token_limit_field,
                 chat_supports_store,
                 chat_supports_stream_options,
+                chat_google_extensions,
                 reasoning_effort: reasoning_effort.clone(),
                 account_label: Some(label),
                 api_key_override: None,
@@ -789,7 +794,7 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
 mod tests {
     use super::*;
     use crate::config::parse;
-    use crate::language_model::types::Capability;
+    use bitrouter_ai::types::Capability;
 
     fn table(yaml: &str) -> ConfigRoutingTable {
         ConfigRoutingTable::from_config(parse(yaml).unwrap())
@@ -1670,23 +1675,6 @@ providers:
     }
 
     #[tokio::test]
-    async fn falls_back_to_default_head_when_inbound_unsupported() {
-        // GenerateContent isn't in the set → fall back to the preferred head
-        // (chat_completions), at the default base.
-        let t = table(MULTI_PROTOCOL);
-        let chain = t
-            .route_chain(
-                "minimax:MiniMax-M2",
-                &prefs_inbound(ApiProtocol::GenerateContent),
-                &CallerContext::local(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(chain[0].api_protocol, ApiProtocol::ChatCompletions);
-        assert_eq!(chain[0].api_base, "https://api.minimax.io/v1");
-    }
-
-    #[tokio::test]
     async fn no_inbound_protocol_uses_default_head() {
         // Today's default path: no inbound protocol → the preferred head at the
         // provider base. Guards the backward-compatible behaviour.
@@ -1985,7 +1973,7 @@ providers:
             .unwrap();
         assert_eq!(
             chain[0].chat_token_limit_field,
-            Some(crate::language_model::types::ChatTokenLimitField::MaxCompletionTokens)
+            Some(bitrouter_ai::types::ChatTokenLimitField::MaxCompletionTokens)
         );
         assert_eq!(chain[0].chat_supports_store, Some(false));
         assert_eq!(chain[0].chat_supports_stream_options, Some(false));

@@ -201,6 +201,7 @@ pub async fn key_sign(
 /// than bubbling an error, but a caller on a hot path should prefer the
 /// daemon: see `crate::actions::models`.
 pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
+    config.validate_router_config()?;
     let mut resolved = resolve_static(config.clone());
     bitrouter_sdk::config::discover_models(&mut resolved).await;
     Ok(ConfigRoutingTable::from_config(resolved).list_models())
@@ -218,10 +219,12 @@ pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
 /// would then be missing exactly the providers the daemon routes to. Mirrors
 /// `assemble.rs`; best-effort, an unreadable store is a no-op.
 pub fn resolve_static(mut config: Config) -> Config {
-    bitrouter_providers::apply_builtin_defaults(&mut config);
-    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-    {
-        bitrouter_providers::activate_stored_credential_providers(&mut config, &store);
+    if config.validate_router_config().is_err() {
+        return config;
+    }
+    crate::providers::apply::apply_builtin_defaults(&mut config);
+    if let Ok(store) = crate::provider_credentials::load_default() {
+        crate::providers::apply::activate_stored_credential_providers(&mut config, &store);
     }
     config
 }
@@ -262,7 +265,7 @@ pub struct ProviderListing {
 /// and `active` state instead of empty placeholders.
 pub fn list_providers(config: &Config) -> Vec<ProviderListing> {
     let mut resolved = config.clone();
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    crate::providers::apply::apply_builtin_defaults(&mut resolved);
     let mut providers: Vec<ProviderListing> = resolved
         .providers
         .iter()
@@ -377,24 +380,24 @@ impl AuthMethod {
 /// token copy), so there is no vendor-CLI import for `anthropic`.
 fn import_cli_for(provider_id: &str) -> Option<&'static str> {
     match provider_id {
-        bitrouter_providers::codex::PROVIDER_ID => Some("Codex"),
-        bitrouter_providers::supergrok::PROVIDER_ID => Some("Grok"),
-        bitrouter_providers::antigravity::PROVIDER_ID => Some("Antigravity (agy)"),
+        bitrouter_ai::providers::codex::PROVIDER_ID => Some("Codex"),
+        bitrouter_ai::providers::supergrok::PROVIDER_ID => Some("Grok"),
+
         _ => None,
     }
 }
 
 /// Decide which auth methods are wired for `entry`. Order matters — the
 /// first entry is what runs when the user hits enter on the prompt.
-fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMethod> {
-    use bitrouter_providers::AuthScheme;
+fn available_methods(entry: &crate::providers::entry::ProviderEntry) -> Vec<AuthMethod> {
+    use crate::providers::entry::AuthScheme;
     let mut methods = Vec::new();
     // The Claude subscription's preferred (and only) path: read the user's live
     // Claude Code session and let the `claude` CLI own login. It belongs to the
     // dedicated `claude-code` subscription provider — `anthropic` is now the
     // platform / pay-as-you-go provider and offers the API-key path only.
     // Listed first so it's the default on <enter> / non-interactive runs.
-    let is_claude_code = entry.id == bitrouter_providers::claude_code::PROVIDER_ID;
+    let is_claude_code = entry.id == bitrouter_ai::providers::claude_code::PROVIDER_ID;
     if is_claude_code {
         methods.push(AuthMethod::ClaudeCodeSession);
     }
@@ -409,8 +412,8 @@ fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMeth
     // PKCE registry still carries an `anthropic` entry (the Claude subscription
     // browser flow), but that subscription path now belongs to the dedicated
     // `claude-code` provider, so it must not be offered under `anthropic`.
-    let is_anthropic = entry.id == bitrouter_providers::anthropic::PROVIDER_ID;
-    let has_pkce = !is_anthropic && bitrouter_providers::oauth::registry::has_pkce_flow(&entry.id);
+    let is_anthropic = entry.id == bitrouter_ai::providers::anthropic::PROVIDER_ID;
+    let has_pkce = !is_anthropic && bitrouter_ai::providers::login::has_pkce_flow(&entry.id);
     if has_pkce {
         methods.push(AuthMethod::PkceSubscription);
     }
@@ -463,7 +466,7 @@ async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<
 /// Resolves which auth methods are wired for `provider_id` (subscription
 /// PKCE / device-code / API key paste), prompts the user to pick when
 /// there's more than one, runs the chosen flow, and persists the
-/// resulting [`bitrouter_providers::oauth::credential_store::Credential`]
+/// resulting [`bitrouter_ai::auth::credentials::Credential`]
 /// under `(provider_id, label)`.
 /// What `login_provider` accomplished — surfaced as the CLI's JSON result while
 /// the interactive prompts and confirmation go to stderr.
@@ -497,11 +500,14 @@ pub async fn login_provider_with_options(
     label: &str,
     options: ProviderLoginOptions,
 ) -> Result<LoginOutcome> {
-    use bitrouter_providers::builtin;
+    use crate::providers::builtin;
+    if let Some(message) = bitrouter_ai::providers::retired::provider_message(provider_id) {
+        anyhow::bail!("{message}");
+    }
 
     // Cloud and the maintained ACP subscription providers have bundled login
     // defaults. Other providers resolve against the fetched/cached registry.
-    let entry: bitrouter_providers::ProviderEntry = match builtin::find(provider_id)
+    let entry: crate::providers::entry::ProviderEntry = match builtin::find(provider_id)
         .cloned()
         .or(crate::bundled_registry::provider(provider_id)?)
     {
@@ -536,19 +542,19 @@ pub async fn login_provider_with_options(
 
 /// Onboarding uses the exact registry entry shown in its provider list.
 pub(crate) async fn login_registry_provider(
-    provider: &bitrouter_providers::registry::types::RegistryProvider,
+    provider: &bitrouter_ai::catalog::types::RegistryProvider,
 ) -> Result<LoginOutcome> {
-    let entry = bitrouter_providers::builtin::entry_from_registry(provider)?;
+    let entry = crate::providers::builtin::entry_from_registry(provider)?;
     login_entry(
         &entry,
-        bitrouter_providers::oauth::credential_store::DEFAULT_LABEL,
+        bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
         ProviderLoginOptions::default(),
     )
     .await
 }
 
 async fn login_entry(
-    entry: &bitrouter_providers::ProviderEntry,
+    entry: &crate::providers::entry::ProviderEntry,
     label: &str,
     options: ProviderLoginOptions,
 ) -> Result<LoginOutcome> {
@@ -582,14 +588,14 @@ async fn login_entry(
                 if key.is_empty() {
                     anyhow::bail!("the supplied API key is empty — aborting login");
                 }
-                bitrouter_providers::oauth::credential_store::Credential::api_key(key)
+                bitrouter_ai::auth::credentials::Credential::api_key(key)
             }
             None => run_api_key_paste(&entry.display_name)?,
         },
     };
 
-    let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-        .context("opening credential store")?;
+    let mut store =
+        crate::provider_credentials::load_default().context("opening credential store")?;
     let kind = credential.kind_label();
     store
         .set(provider_id, label, credential)
@@ -608,7 +614,7 @@ async fn login_entry(
 }
 
 async fn choose_auth_method(
-    entry: &bitrouter_providers::ProviderEntry,
+    entry: &crate::providers::entry::ProviderEntry,
     methods: &[AuthMethod],
     options: &ProviderLoginOptions,
 ) -> Result<AuthMethod> {
@@ -690,12 +696,11 @@ async fn choose_auth_method(
 /// credential that has nothing to do with ACP, and would re-conflate the two
 /// axes §6.4 exists to keep apart. So the command is named here deliberately.
 /// What can be improved is the *seam*, which is what the framing below does.
-async fn run_claude_code_session()
--> Result<bitrouter_providers::oauth::credential_store::Credential> {
+async fn run_claude_code_session() -> Result<bitrouter_ai::auth::credentials::Credential> {
     use std::io::IsTerminal;
 
-    use bitrouter_providers::import::claude_code::ClaudeCodeStore;
-    use bitrouter_providers::oauth::credential_store::Credential;
+    use crate::providers::import::claude_code::ClaudeCodeStore;
+    use bitrouter_ai::auth::credentials::Credential;
 
     // Adopt a legacy #590 marker stored under `anthropic` before checking the
     // live session, so a returning user's existing sign-in is recognised under
@@ -787,11 +792,11 @@ async fn run_claude_code_session()
 
 /// Run the browser-based PKCE Authorization Code flow against the
 /// PKCE-registered provider. Errors when the provider isn't in
-/// `bitrouter_providers::oauth::registry`.
+/// `bitrouter_ai::providers::login`.
 async fn run_pkce_subscription(
     provider_id: &str,
-) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
-    let registry = bitrouter_providers::oauth::registry::find(provider_id).ok_or_else(|| {
+) -> Result<bitrouter_ai::auth::credentials::Credential> {
+    let registry = bitrouter_ai::providers::login::find(provider_id).ok_or_else(|| {
         anyhow::anyhow!(
             "provider '{provider_id}' has no PKCE login registration — \
              this should have been caught by available_methods()"
@@ -803,27 +808,37 @@ async fn run_pkce_subscription(
         .build()
         .context("building HTTP client for PKCE login")?;
     let ux = StderrLoginUx;
-    let outcome = bitrouter_providers::oauth::login::run_login(
+    let outcome = bitrouter_ai::auth::login::run_login(
         &client,
         &registry,
         &ux,
-        bitrouter_providers::oauth::auth_code::MANUAL_PASTE_TIMEOUT,
+        std::time::Duration::from_secs(15 * 60),
     )
     .await
+    .map_err(|error| match error {
+        bitrouter_ai::auth::login::LoginError::EmptyPaste => anyhow::anyhow!(
+            "manual redirect paste was empty — re-run `{} providers login <provider>` to try again",
+            bitrouter_sdk::invocation::name()
+        ),
+        bitrouter_ai::auth::login::LoginError::PinnedPortInUse { provider, port, source } => anyhow::anyhow!(
+            "{provider} requires loopback port {port} but it's already in use — quit any other client signing in to this provider (e.g. the official vendor CLI) and retry. ({source})"
+        ),
+        error => anyhow::Error::new(error),
+    })
     .with_context(|| format!("PKCE login for {provider_id}"))?;
     if outcome.manual_fallback_used {
         eprintln!("  (used manual paste fallback)");
     }
-    Ok(bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(outcome.token))
+    Ok(bitrouter_ai::auth::credentials::Credential::from_oauth_token(outcome.token))
 }
 
 /// Run the RFC 8628 Device Authorization Grant — the existing
 /// `github-copilot` flow, lifted out of the old `login_provider`.
 async fn run_device_code(
     provider_id: &str,
-    entry: &bitrouter_providers::ProviderEntry,
-) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
-    use bitrouter_providers::AuthScheme;
+    entry: &crate::providers::entry::ProviderEntry,
+) -> Result<bitrouter_ai::auth::credentials::Credential> {
+    use crate::providers::entry::AuthScheme;
     let params = match &entry.auth {
         AuthScheme::Oauth { params, .. } => params,
         _ => anyhow::bail!("provider '{provider_id}' is not OAuth — refusing device flow"),
@@ -850,8 +865,8 @@ async fn run_device_code(
         .ok_or_else(|| anyhow::anyhow!("'{provider_id}': auth.params.token_endpoint is missing"))?
         .to_string();
 
-    let flow = bitrouter_providers::oauth::DeviceCodeFlow::new(
-        bitrouter_providers::oauth::DeviceCodeParams {
+    let flow = bitrouter_ai::auth::device_code::DeviceCodeFlow::new(
+        bitrouter_ai::auth::device_code::DeviceCodeParams {
             client_id,
             scope,
             device_authorization_endpoint: device_url,
@@ -877,19 +892,8 @@ async fn run_device_code(
     eprintln!();
     eprintln!("  Waiting for authorization…");
 
-    let mut interval = std::time::Duration::from_secs(device_code.interval.max(1));
-    let token = loop {
-        tokio::time::sleep(interval).await;
-        match flow.poll_once(&device_code.device_code).await? {
-            bitrouter_providers::oauth::device_code::PollOutcome::Token(t) => break t,
-            bitrouter_providers::oauth::device_code::PollOutcome::Pending => continue,
-            bitrouter_providers::oauth::device_code::PollOutcome::SlowDown => {
-                // RFC 8628 §3.5: server requested back-off — add 5s.
-                interval += std::time::Duration::from_secs(5);
-            }
-        }
-    };
-    Ok(bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(token))
+    let token = flow.wait_for_token(&device_code).await?;
+    Ok(bitrouter_ai::auth::credentials::Credential::from_oauth_token(token))
 }
 
 /// Adopt an existing OAuth session from the provider's sibling vendor CLI
@@ -900,15 +904,10 @@ async fn run_device_code(
 /// provider now, and the Claude Code session is adopted *live* by the
 /// `claude-code` provider via [`run_claude_code_session`] — not copied in here
 /// (the one-shot copy is what risked the RFC 6749 §6 family-revoke).
-fn run_cli_import(
-    provider_id: &str,
-) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
+fn run_cli_import(provider_id: &str) -> Result<bitrouter_ai::auth::credentials::Credential> {
     let imported = match provider_id {
-        bitrouter_providers::codex::PROVIDER_ID => bitrouter_providers::import::codex::import(),
-        bitrouter_providers::supergrok::PROVIDER_ID => bitrouter_providers::import::grok::import(),
-        bitrouter_providers::antigravity::PROVIDER_ID => {
-            bitrouter_providers::import::antigravity::import()
-        }
+        bitrouter_ai::providers::codex::PROVIDER_ID => crate::providers::import::codex::import(),
+        bitrouter_ai::providers::supergrok::PROVIDER_ID => crate::providers::import::grok::import(),
         other => anyhow::bail!("no vendor-CLI import is available for provider '{other}'"),
     }
     .with_context(|| format!("importing a CLI credential for {provider_id}"))?;
@@ -919,21 +918,17 @@ fn run_cli_import(
         )
     })?;
     eprintln!("  Imported existing session from {}", imported.source);
-    Ok(bitrouter_providers::oauth::credential_store::Credential::from_oauth_token(imported.token))
+    Ok(bitrouter_ai::auth::credentials::Credential::from_oauth_token(imported.token))
 }
 
 /// Read a static API key from stdin. Input is **not** masked — the user
 /// sees what they're pasting, which is the simplest correct UX and
 /// matches `gh auth login --with-token`. Future work could wire
 /// `rpassword` for a hidden prompt.
-fn run_api_key_paste(
-    display_name: &str,
-) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
-    Ok(
-        bitrouter_providers::oauth::credential_store::Credential::api_key(read_api_key(
-            display_name,
-        )?),
-    )
+fn run_api_key_paste(display_name: &str) -> Result<bitrouter_ai::auth::credentials::Credential> {
+    Ok(bitrouter_ai::auth::credentials::Credential::api_key(
+        read_api_key(display_name)?,
+    ))
 }
 
 pub(crate) fn read_api_key(display_name: &str) -> Result<String> {
@@ -960,8 +955,14 @@ pub(crate) fn read_api_key(display_name: &str) -> Result<String> {
 struct StderrLoginUx;
 
 #[async_trait::async_trait]
-impl bitrouter_providers::oauth::login::LoginUx for StderrLoginUx {
-    async fn show_authorize_url(&self, url: &str, hint: &str) {
+impl bitrouter_ai::auth::login::LoginUx for StderrLoginUx {
+    async fn show_authorize_url(&self, url: &str, manual_only: bool) {
+        let hint = if manual_only {
+            "After signing in, paste the redirect URL here."
+        } else {
+            "After signing in, the browser will redirect back to bitrouter automatically. \
+             If that fails, paste the redirect URL here."
+        };
         eprintln!();
         eprintln!("  Open this URL in your browser to continue:");
         eprintln!();
@@ -970,30 +971,45 @@ impl bitrouter_providers::oauth::login::LoginUx for StderrLoginUx {
         eprintln!("  {hint}");
     }
 
+    fn callback_page(&self, succeeded: bool) -> &str {
+        if succeeded {
+            "<!doctype html><meta charset=utf-8><title>bitrouter — signed in</title>\
+             <body style='font:14px system-ui;padding:2rem;max-width:32rem'>\
+             <h1>You're signed in 👍</h1>\
+             <p>You can close this tab and return to your terminal.</p></body>"
+        } else {
+            "<!doctype html><meta charset=utf-8><title>bitrouter — sign-in failed</title>\
+             <body style='font:14px system-ui;padding:2rem;max-width:32rem'>\
+             <h1>Sign-in failed</h1>\
+             <p>The authorization server reported an error. Check the terminal for details.</p></body>"
+        }
+    }
+
     async fn prompt_pasted_redirect(
         &self,
-    ) -> std::result::Result<String, bitrouter_providers::oauth::login::LoginError> {
+    ) -> std::result::Result<String, bitrouter_ai::auth::login::LoginError> {
         // The login flow races this future against the loopback
         // listener. If the listener wins we never read stdin, so a
         // blocking read here would normally pin a thread for the whole
         // OAuth round trip. Run the read on a blocking thread so
-        // cancellation (the `tokio::select!` in `run_login` dropping
-        // this future when the listener finishes) actually frees it.
+        // the login can stop awaiting it when the listener finishes. An already
+        // started blocking stdin read cannot be interrupted by dropping this
+        // async future; that remains an application interaction limitation.
         let pasted = tokio::task::spawn_blocking(|| {
             use std::io::BufRead;
             eprint!("  Paste redirect URL (or just the code): ");
             let stdin = std::io::stdin();
             let mut line = String::new();
             stdin.lock().read_line(&mut line).map_err(|e| {
-                bitrouter_providers::oauth::login::LoginError::UserIo(format!(
+                bitrouter_ai::auth::login::LoginError::UserIo(format!(
                     "reading pasted redirect: {e}"
                 ))
             })?;
-            Ok::<_, bitrouter_providers::oauth::login::LoginError>(line)
+            Ok::<_, bitrouter_ai::auth::login::LoginError>(line)
         })
         .await
         .map_err(|e| {
-            bitrouter_providers::oauth::login::LoginError::UserIo(format!(
+            bitrouter_ai::auth::login::LoginError::UserIo(format!(
                 "join error reading pasted redirect: {e}"
             ))
         })??;
@@ -1004,8 +1020,8 @@ impl bitrouter_providers::oauth::login::LoginUx for StderrLoginUx {
 /// `bro providers logout <provider>` — drop every stored credential for
 /// the provider (subscription OAuth or pasted API key), if any.
 pub async fn logout_provider(provider_id: &str) -> Result<usize> {
-    let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-        .context("opening credential store")?;
+    let mut store =
+        crate::provider_credentials::load_default().context("opening credential store")?;
     let removed = store
         .remove_all_for(provider_id)
         .with_context(|| format!("removing stored credentials for {provider_id}"))?;
@@ -1223,10 +1239,10 @@ mod tests {
     /// Build a [`ProviderEntry`] from a registry-provider fixture — anthropic
     /// and openai-codex are no longer compiled-in built-ins, so `login` resolves
     /// their auth shape from the fetched registry via `entry_from_registry`.
-    fn entry_for(json: serde_json::Value) -> bitrouter_providers::ProviderEntry {
-        let p: bitrouter_providers::registry::types::RegistryProvider =
+    fn entry_for(json: serde_json::Value) -> crate::providers::entry::ProviderEntry {
+        let p: bitrouter_ai::catalog::types::RegistryProvider =
             serde_json::from_value(json).expect("valid registry-provider fixture");
-        bitrouter_providers::builtin::entry_from_registry(&p).expect("maps to an entry")
+        crate::providers::builtin::entry_from_registry(&p).expect("maps to an entry")
     }
 
     #[test]

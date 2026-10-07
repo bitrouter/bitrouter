@@ -14,13 +14,15 @@ use bitrouter::eval::types::{
 use bitrouter::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
+use bitrouter_ai::types::AuthScheme;
+use bitrouter_ai::types::{
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
+};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::event::EventBus;
-use bitrouter_sdk::language_model::types::AuthScheme;
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams,
-    HopOutcome, ObserveHook, PipelineContext, PipelineRequest, Prompt, RoutingTarget,
-    SettlementContext, SettlementRecorder, UsageOrigin,
+    ExecutionResult, HopOutcome, ObserveHook, PipelineContext, PipelineRequest, RoutingTarget,
+    SettlementContext, SettlementRecorder,
 };
 
 fn base_lock() -> PolicyLock {
@@ -325,6 +327,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
                 chat_token_limit_field: None,
                 chat_supports_store: None,
                 chat_supports_stream_options: None,
+                chat_google_extensions: false,
                 reasoning_effort: None,
                 account_label: None,
                 api_key_override: None,

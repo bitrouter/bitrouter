@@ -13,7 +13,7 @@ async fn request_capability_guard_records_the_original_intent_and_actual_fallbac
         .iter_mut()
         .find(|model| model.id == "cheap")
         .context("model missing")?;
-    cheap.capabilities = vec![bitrouter_sdk::language_model::Capability::ImageInput];
+    cheap.capabilities = vec![bitrouter_ai::types::Capability::ImageInput];
     fixture
         .assembled
         .routing_table

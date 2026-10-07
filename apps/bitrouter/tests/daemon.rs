@@ -12,9 +12,10 @@ use bitrouter::build_app_with_path;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, NoopObserveStatus, NoopReloader};
 use bitrouter::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use bitrouter::session_identity::{RequestOrigin, SessionIdentityObserved};
+use bitrouter_ai::types::UsageOrigin;
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
+use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 
 /// A reloader that re-reads only the routing table. Used by the reload test —
 /// production callers use the AppReloader in main.rs which also reloads the
@@ -626,7 +627,7 @@ providers:
 /// fetched registry, not a compiled-in snapshot.) If the reload path swapped in
 /// a bare file re-read (skipping `apply_builtin_defaults`), the provider would
 /// come back with an empty `api_base`. The SDK's own `RoutingTable::reload`
-/// cannot fix this — it sits below `bitrouter-providers` — so the reloader
+/// cannot fix this — it has no application provider bridge — so the reloader
 /// rebuilds the config in the app layer.
 #[tokio::test]
 async fn reload_re_applies_builtin_provider_catalog() -> anyhow::Result<()> {

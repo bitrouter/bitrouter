@@ -1028,6 +1028,7 @@ impl HttpControlClient {
                     "remote endpoint speaks unsupported protocol '{}'",
                     capabilities.protocol
                 ),
+                usage: None,
             }
             .into());
         }
@@ -1037,6 +1038,7 @@ impl HttpControlClient {
                     "remote control protocol version {} is incompatible with client version {}",
                     capabilities.protocol_version, PROTOCOL_VERSION
                 ),
+                usage: None,
             }
             .into());
         }
@@ -1069,6 +1071,7 @@ impl HttpControlClient {
                 message: format!(
                     "remote BitRouter does not support or grant control action '{action}'"
                 ),
+                usage: None,
             }
             .into());
         }
@@ -1126,10 +1129,12 @@ impl HttpControlClient {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| BitrouterError::UpstreamInvalidResponse {
                 message: format!("read remote control response: {error}"),
+                usage: None,
             })?;
             if body.len().saturating_add(chunk.len()) > 8 * 1024 * 1024 {
                 return Err(BitrouterError::UpstreamInvalidResponse {
                     message: "remote control response exceeded the 8 MiB client limit".to_string(),
+                    usage: None,
                 }
                 .into());
             }
@@ -1148,6 +1153,7 @@ impl HttpControlClient {
         serde_json::from_slice(&body).map_err(|error| {
             BitrouterError::UpstreamInvalidResponse {
                 message: format!("decode remote control response: {error}"),
+                usage: None,
             }
             .into()
         })

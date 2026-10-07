@@ -71,7 +71,7 @@ pub trait Plugin {
     fn install(&self, app: &mut AppBuilder);
 }
 
-/// An ingress-time rewrite of a parsed request [`Prompt`](language_model::types::Prompt),
+/// An ingress-time rewrite of a parsed request [`Prompt`](bitrouter_ai::types::Prompt),
 /// applied by the HTTP server after protocol parsing and before the request
 /// enters the pipeline.
 ///
@@ -83,7 +83,7 @@ pub trait Plugin {
 pub trait PromptTransform: Send + Sync {
     /// Rewrite the prompt in place. A transform that does not apply to this
     /// request leaves it untouched.
-    fn apply(&self, prompt: &mut language_model::types::Prompt);
+    fn apply(&self, prompt: &mut bitrouter_ai::types::Prompt);
 
     /// Like [`apply`](Self::apply), but with the inbound request headers
     /// available. The default delegates to [`apply`](Self::apply), ignoring the
@@ -93,7 +93,7 @@ pub trait PromptTransform: Send + Sync {
     /// server always calls this method.
     fn apply_with_headers(
         &self,
-        prompt: &mut language_model::types::Prompt,
+        prompt: &mut bitrouter_ai::types::Prompt,
         _headers: &http::HeaderMap,
     ) {
         self.apply(prompt);
@@ -321,7 +321,7 @@ impl Default for AppBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::{GenerationParams, Prompt, ProviderMetadata};
+    use bitrouter_ai::types::{GenerationParams, Prompt, ProviderMetadata};
 
     struct SetModel(&'static str);
     impl PromptTransform for SetModel {

@@ -5,10 +5,10 @@
 //!
 //! Both reload paths build a fresh `Config` **in the app layer** and swap
 //! it into the routing table via `ConfigRoutingTable::replace_config`.
-//! Building the config here — above `bitrouter-providers` — is what lets
-//! [`bitrouter_providers::apply_builtin_defaults`] fill the empty fields
-//! of a built-in provider (`openai: {}`). The SDK's own
-//! `RoutingTable::reload` sits *below* `bitrouter-providers` and so cannot
+//! Building the config in the application is what lets
+//! [`crate::providers::apply::apply_builtin_defaults`] fill the empty fields
+//! of the built-in Cloud gateway. The SDK's own
+//! `RoutingTable::reload` has no application provider bridge and cannot
 //! apply the catalog; routing through it on reload would leave a built-in
 //! provider with an empty `api_base`, and an `auto_discover` provider
 //! would then silently drop every model.
@@ -678,7 +678,6 @@ fn restart_required_fields(
         "claude-code",
         "openai-codex",
         "supergrok",
-        bitrouter_providers::antigravity::PROVIDER_ID,
     ] {
         if current.providers.contains_key(provider_id)
             != candidate.providers.contains_key(provider_id)
@@ -1086,9 +1085,8 @@ fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
 /// startup pass in `assemble.rs` so a subscription / Claude Code session
 /// provider survives a hot-reload instead of dropping out of routing.
 fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Config) {
-    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-    {
-        bitrouter_providers::activate_stored_credential_providers(config, &store);
+    if let Ok(store) = crate::provider_credentials::load_default() {
+        crate::providers::apply::activate_stored_credential_providers(config, &store);
     }
 }
 
@@ -1096,7 +1094,7 @@ fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Conf
 /// constructs a replacement routing snapshot. Keeping this in one helper makes
 /// the current and candidate shapes comparable before remote classification.
 async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
-    bitrouter_providers::apply_builtin_defaults(config);
+    crate::providers::apply::apply_builtin_defaults(config);
     crate::claude_code::enable_if_logged_in(config);
     crate::assemble::merge_registry_into(config).await;
     activate_stored_credential_providers(config);
@@ -1106,7 +1104,7 @@ async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
 
 /// Whether the daemon is running against a `bitrouter.yaml` on disk
 /// (re-readable on reload) or a zero-config in-memory default
-/// (rebuilt by re-running [`bitrouter_providers::zero_config`]).
+/// (rebuilt by re-running [`crate::providers::apply::zero_config`]).
 pub enum ReloadSource {
     /// File-backed; the reloader re-reads the `bitrouter.yaml` at this
     /// path (re-substituting `${VAR}` references), re-applies the
@@ -1418,7 +1416,7 @@ async fn load_configuration_baseline_at(
             })
         }
         crate::paths::ConfigSource::Default { .. } => {
-            let mut config = bitrouter_providers::zero_config();
+            let mut config = crate::providers::apply::zero_config();
             crate::cloud::enable_in_zero_config(&mut config);
             Ok(ConfigurationBaseline {
                 source: source.clone(),
@@ -1439,8 +1437,8 @@ async fn load_configuration_baseline_at(
 pub struct AppReloader {
     policy_store: Arc<PolicyStore>,
     /// Concrete handle on the routing table. Both reload paths build a
-    /// fresh `Config` in the app layer — so `bitrouter_providers`'
-    /// built-in catalog can be applied above the SDK — and swap it in
+    /// fresh `Config` in the app layer — so product provider
+    /// defaults can be applied above the SDK — and swap it in
     /// via `ConfigRoutingTable::replace_config`.
     routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
     /// The fully assembled configuration at daemon startup. Every reload
@@ -2297,10 +2295,11 @@ impl DaemonReloader for AppReloader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_ai::client::HttpTimeouts;
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use bitrouter_sdk::config::{self, ConfigRoutingTable};
     use bitrouter_sdk::language_model::{
-        ApiProtocol, Executor, GenerationParams, HttpExecutor, HttpTimeouts, Message,
-        PipelineContext, PipelineRequest, Prompt, Role, RoutingTarget,
+        Executor, HttpExecutor, PipelineContext, PipelineRequest, RoutingTarget,
     };
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2566,6 +2565,7 @@ policies:
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,

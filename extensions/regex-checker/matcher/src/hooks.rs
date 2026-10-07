@@ -19,12 +19,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use bitrouter_ai::types::{Content, StreamPart};
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::Result;
 use bitrouter_sdk::error::BitrouterError;
 use bitrouter_sdk::language_model::{
-    Content, DenyReason, HookDecision, PipelineContext, PreRequestHook, StreamAction,
-    StreamContext, StreamHook, StreamInterest, StreamOutcome, StreamPart,
+    DenyReason, HookDecision, PipelineContext, PreRequestHook, StreamAction, StreamContext,
+    StreamHook, StreamInterest, StreamOutcome,
 };
 
 use crate::rules::{RuleSet, SlidingWindowMatcher, WindowResult};
@@ -192,14 +193,10 @@ impl StreamHook for GuardrailStreamHook {
         if rules.is_empty() {
             return Ok(StreamAction::Pass);
         }
-        let (text, rebuild): (&str, fn(String) -> StreamPart) = match &part {
-            StreamPart::TextDelta { text } => {
-                (text.as_str(), |t| StreamPart::TextDelta { text: t })
+        let text = match &part {
+            StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text, .. } => {
+                text.as_str()
             }
-            StreamPart::ReasoningDelta { text } => {
-                (text.as_str(), |t| StreamPart::ReasoningDelta { text: t })
-            }
-            // not a text-bearing part — interest() should have filtered it out
             _ => return Ok(StreamAction::Pass),
         };
 
@@ -221,7 +218,17 @@ impl StreamHook for GuardrailStreamHook {
                 if emitted == text {
                     Ok(StreamAction::Pass)
                 } else {
-                    Ok(StreamAction::Replace(vec![rebuild(emitted)]))
+                    let replacement = match part {
+                        StreamPart::TextDelta { .. } => StreamPart::TextDelta { text: emitted },
+                        StreamPart::ReasoningDelta { source_kind, .. } => {
+                            StreamPart::ReasoningDelta {
+                                text: emitted,
+                                source_kind,
+                            }
+                        }
+                        _ => return Ok(StreamAction::Pass),
+                    };
+                    Ok(StreamAction::Replace(vec![replacement]))
                 }
             }
         }

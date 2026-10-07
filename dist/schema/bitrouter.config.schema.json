@@ -181,17 +181,16 @@
       "type": "object"
     },
     "ApiProtocol": {
-      "description": "Wire protocol. Known values: `chat_completions`, `messages`, `generate_content`, `responses`; any other string names an externally-registered (outbound-only) custom protocol.",
+      "description": "Wire protocol. Known values: `chat_completions`, `messages`, `responses`; any other string names an externally-registered (outbound-only) custom protocol.",
       "examples": [
         "chat_completions",
         "messages",
-        "generate_content",
         "responses"
       ],
       "type": "string"
     },
     "Capability": {
-      "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nA capability-aware [`RoutingTable`](crate::language_model::routing::RoutingTable)\ncan read the set a request requires ([`Prompt::required_capabilities`]) and\nrestrict the chain to providers advertising all of them.",
+      "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nA capability-aware `RoutingTable`\ncan read the set a request requires ([`Prompt::required_capabilities`]) and\nrestrict the chain to providers advertising all of them.",
       "oneOf": [
         {
           "const": "structured_outputs",
@@ -253,6 +252,11 @@
     "ChatCompletionsCompatibility": {
       "description": "Chat Completions request-shape compatibility settings.",
       "properties": {
+        "google_extensions": {
+          "default": false,
+          "description": "Enable the demonstrated Google Chat extensions for this selected model.\nSigned tool history additionally requires a credential-bound replay proof.",
+          "type": "boolean"
+        },
         "supports_store": {
           "default": null,
           "description": "Whether this target accepts the optional `store` request field. `None`\npreserves the OpenAI-compatible default (supported).",
@@ -782,6 +786,7 @@
         "chat_completions": {
           "$ref": "#/$defs/ChatCompletionsCompatibility",
           "default": {
+            "google_extensions": false,
             "supports_store": null,
             "supports_stream_options": null,
             "token_limit_field": null
@@ -1351,6 +1356,7 @@
           "$ref": "#/$defs/ModelCompatibility",
           "default": {
             "chat_completions": {
+              "google_extensions": false,
               "supports_store": null,
               "supports_stream_options": null,
               "token_limit_field": null

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
-use bitrouter_sdk::language_model::types::ReasoningEffortConfig;
+use bitrouter_ai::types::ReasoningEffortConfig;
 use chrono::{Days, NaiveDate, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -3936,6 +3936,8 @@ struct ModelCompatibility {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ChatCompletionsCompatibility {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    google_extensions: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token_limit_field: Option<ChatTokenLimitField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3956,11 +3958,7 @@ enum ChatTokenLimitField {
 enum ApiProtocol {
     Openai,
     Anthropic,
-    Google,
     Responses,
-    /// Google Antigravity Code Assist — a custom, externally-registered runtime
-    /// protocol (`bitrouter_providers::antigravity`). No models.dev source.
-    Antigravity,
 }
 
 impl ApiProtocol {
@@ -3968,9 +3966,7 @@ impl ApiProtocol {
         match self {
             Self::Openai => "openai",
             Self::Anthropic => "anthropic",
-            Self::Google => "google",
             Self::Responses => "responses",
-            Self::Antigravity => "antigravity",
         }
     }
 
@@ -3978,11 +3974,7 @@ impl ApiProtocol {
         match self {
             Self::Openai => "chat_completions",
             Self::Anthropic => "messages",
-            Self::Google => "generate_content",
             Self::Responses => "responses",
-            // The runtime maps any unknown protocol string to `Custom(_)`; this
-            // is the name the antigravity adapter registers under.
-            Self::Antigravity => "antigravity",
         }
     }
 }

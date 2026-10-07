@@ -56,10 +56,11 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
 
-use bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id;
+use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
+use bitrouter_ai::types::{ApiProtocol, Content, Prompt, StreamPart};
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
-    RequestOutcome, RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest, StreamPart,
+    ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome,
+    RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest,
 };
 
 use crate::otel::cardinality::CardinalityLimiter;
@@ -771,7 +772,7 @@ impl ObserveHook for OtelExporter {
                         buf.push_str(text);
                     }
                 }
-                StreamPart::ReasoningDelta { text }
+                StreamPart::ReasoningDelta { text, .. }
                     if self.config.content_capture == ContentCaptureMode::Full =>
                 {
                     // Reasoning is assembled separately so it renders as its own
@@ -1001,7 +1002,9 @@ impl ObserveHook for OtelExporter {
 
             // Optional prompt / response content capture (off by default).
             if self.config.content_capture == ContentCaptureMode::Full {
-                if let Ok(json) = serde_json::to_string(&ctx.prompt().messages) {
+                let mut redactor = bitrouter_ai::diagnostics::DiagnosticRedactor::default();
+                redactor.capture_prompt_continuity(ctx.prompt());
+                if let Some(json) = captured_content_json(&ctx.prompt().messages, &redactor) {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.input.messages",
                         truncate_utf8(json, self.config.content_attr_max_bytes),
@@ -1023,7 +1026,8 @@ impl ObserveHook for OtelExporter {
                     .map(|result| result.result.content.as_slice())
                     .unwrap_or_default();
                 let output_json = if !ir_content.is_empty() {
-                    serde_json::to_string(ir_content).ok()
+                    redactor.capture_content_continuity(ir_content);
+                    captured_content_json(ir_content, &redactor)
                 } else if !streamed_output.is_empty() || !streamed_reasoning.is_empty() {
                     // Reasoning first, then the answer — matching the IR's
                     // `[Reasoning, Text]` ordering for the non-streaming path.
@@ -1032,6 +1036,7 @@ impl ObserveHook for OtelExporter {
                         blocks.push(Content::Reasoning {
                             text: streamed_reasoning.clone(),
                             provider_metadata: Default::default(),
+                            native: None,
                         });
                     }
                     if !streamed_output.is_empty() {
@@ -1040,7 +1045,7 @@ impl ObserveHook for OtelExporter {
                             provider_metadata: Default::default(),
                         });
                     }
-                    serde_json::to_string(&blocks).ok()
+                    captured_content_json(&blocks, &redactor)
                 } else {
                     None
                 };
@@ -1235,8 +1240,8 @@ fn set_hop_client_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &Execu
     }
 }
 
-fn finish_reason_to_str(reason: &bitrouter_sdk::language_model::FinishReason) -> String {
-    use bitrouter_sdk::language_model::FinishReason::*;
+fn finish_reason_to_str(reason: &bitrouter_ai::types::FinishReason) -> String {
+    use bitrouter_ai::types::FinishReason::*;
     match reason {
         Stop => "stop".to_string(),
         Length => "length".to_string(),
@@ -1257,6 +1262,15 @@ fn error_type(err: &bitrouter_sdk::error::BitrouterError) -> String {
         .to_string()
 }
 
+fn captured_content_json<T: serde::Serialize + ?Sized>(
+    content: &T,
+    redactor: &bitrouter_ai::diagnostics::DiagnosticRedactor,
+) -> Option<String> {
+    let mut value = serde_json::to_value(content).ok()?;
+    redactor.scrub_value(&mut value);
+    serde_json::to_string(&value).ok()
+}
+
 #[cfg(test)]
 mod hop_tests {
     //! Unit tests for the per-hop `ObserveHook` surface added by issue #477.
@@ -1273,15 +1287,17 @@ mod hop_tests {
     use opentelemetry_sdk::error::OTelSdkResult;
     use opentelemetry_sdk::trace::{Span as SdkSpan, SpanData, SpanProcessor};
 
+    use bitrouter_ai::protocol::responses::ResponsesAdapter;
+    use bitrouter_ai::protocol::{OutboundAdapter, SseEvent};
+    use bitrouter_ai::types::{
+        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+        Role, Usage,
+    };
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::error::BitrouterError;
-    use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
-    use bitrouter_sdk::language_model::protocol::{OutboundAdapter, SseEvent};
     use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, DenyReason, FinishReason, GenerateResult, GenerationParams,
-        HookDecision, Message, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
-        PreRequestHook, Prompt, Role, SettlementContext, SettlementRecorder, StaticRoutingTable,
-        Usage,
+        DenyReason, HookDecision, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
+        PreRequestHook, SettlementContext, SettlementRecorder, StaticRoutingTable,
     };
 
     struct RejectingPreRequestHook;
@@ -1391,6 +1407,7 @@ mod hop_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: Some("primary".to_string()),
             api_key_override: None,
@@ -1691,20 +1708,19 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn responses_mismatch_native_ids_never_enter_failed_stream_spans() {
+    async fn responses_mismatch_native_ids_never_enter_failed_stream_spans()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         const CREATED_SENTINEL: &str = "native-created-otel-private-sentinel";
         const TERMINAL_SENTINEL: &str = "native-terminal-otel-private-sentinel";
         let mut decoder = ResponsesAdapter.stream_decoder();
-        decoder
-            .decode(&SseEvent {
-                event: Some("response.created".into()),
-                data: serde_json::json!({
-                    "type": "response.created",
-                    "response": {"id": CREATED_SENTINEL, "status": "in_progress"}
-                })
-                .to_string(),
+        decoder.decode(&SseEvent {
+            event: Some("response.created".into()),
+            data: serde_json::json!({
+                "type": "response.created",
+                "response": {"id": CREATED_SENTINEL, "status": "in_progress"}
             })
-            .expect("created event decodes");
+            .to_string(),
+        })?;
         let error = decoder
             .decode(&SseEvent {
                 event: Some("response.completed".into()),
@@ -1718,7 +1734,9 @@ mod hop_tests {
                 })
                 .to_string(),
             })
-            .expect_err("mismatched terminal id must fail");
+            .err()
+            .ok_or_else(|| std::io::Error::other("mismatched terminal id must fail"))?;
+        let error = bitrouter_sdk::BitrouterError::from(error);
 
         let (exporter, captured) = make_test_exporter();
         let ctx = PipelineContext::new(fresh_request());
@@ -1734,11 +1752,15 @@ mod hop_tests {
             .await;
         assert!(exporter.provider.force_flush().is_ok());
 
-        let spans = captured.lock().unwrap().clone();
+        let spans = captured
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .clone();
         let exported = format!("{spans:#?}");
         assert!(exported.contains("Responses terminal id"));
         assert!(!exported.contains(CREATED_SENTINEL));
         assert!(!exported.contains(TERMINAL_SENTINEL));
+        Ok(())
     }
 
     #[tokio::test]
@@ -1837,6 +1859,7 @@ mod hop_tests {
                 &sctx,
                 &StreamPart::ReasoningDelta {
                     text: "let me think".into(),
+                    source_kind: None,
                 },
             )
             .await;
@@ -3071,6 +3094,7 @@ mod hop_tests {
                     },
                     StreamPart::ReasoningDelta {
                         text: "thinking".into(),
+                        source_kind: None,
                     },
                     StreamPart::TextDelta {
                         text: "hello".into(),
@@ -3154,5 +3178,59 @@ mod hop_tests {
             "expected an `exception` event in the conformance run"
         );
         assert_conforms_to_span_schema(&spans);
+    }
+
+    #[tokio::test]
+    async fn full_capture_redacts_google_continuity_without_changing_transcript()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_ai::types::{Message, Role};
+        let signed = Content::ToolCall {
+            id: "fixture-call".into(),
+            name: "lookup".into(),
+            arguments: "{}".into(),
+            provider_executed: false,
+            dynamic: false,
+            provider_metadata: std::collections::BTreeMap::from([(
+                "google".into(),
+                serde_json::json!({"thoughtSignature":"fixture-private-signature","replayProof":"fixture-private-proof"}),
+            )]),
+        };
+        let mut request = fresh_request();
+        request.prompt.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![signed.clone()],
+        });
+        let mut ctx = PipelineContext::new(request);
+        let mut result = fresh_result(&fresh_target("google"));
+        result.result.content.push(signed.clone());
+        ctx.execution_result = Some(result);
+        let (exporter, captured) = make_test_exporter_with(OtelConfig {
+            content_capture: ContentCaptureMode::Full,
+            ..Default::default()
+        });
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush()?;
+        let spans = captured.lock().map_err(|_| "capture lock unavailable")?;
+        let root = spans
+            .iter()
+            .find(|span| span.name == "chat test-model" && span.span_kind == SpanKind::Internal)
+            .ok_or("root span unavailable")?;
+        for attribute in ["gen_ai.input.messages", "gen_ai.output.messages"] {
+            let recorded = str_attr(root, attribute).ok_or("content attribute unavailable")?;
+            assert!(!recorded.contains("fixture-private-signature"));
+            assert!(!recorded.contains("fixture-private-proof"));
+            assert!(recorded.contains("lookup"));
+        }
+        assert!(
+            ctx.prompt()
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|content| content == &signed)
+        );
+        Ok(())
     }
 }

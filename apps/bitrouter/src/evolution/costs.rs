@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
+use bitrouter_ai::types::{StreamPart, ToolChoice, UsageOrigin};
 use bitrouter_sdk::PipelineEvent;
 use bitrouter_sdk::language_model::hooks::{HopOutcome, Phase, RequestOutcome};
 use bitrouter_sdk::language_model::{
     HookDecision, ObserveHook, PipelineContext, PreRequestHook, RoutingTarget, SettlementContext,
-    SettlementRecorder, StreamContext, StreamPart, ToolChoice, UsageOrigin,
+    SettlementRecorder, StreamContext,
 };
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Serialize};

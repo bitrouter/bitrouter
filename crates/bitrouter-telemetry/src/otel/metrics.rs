@@ -15,7 +15,8 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
 
-use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome, StreamPart};
+use bitrouter_ai::types::StreamPart;
+use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome};
 
 use crate::otel::cardinality::CardinalityLimiter;
 use crate::otel::config::OtelConfig;
@@ -229,10 +230,9 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use bitrouter_ai::types::{GenerateResult, GenerationParams, Prompt};
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{
-        ExecutionResult, GenerateResult, GenerationParams, PipelineRequest, Prompt,
-    };
+    use bitrouter_sdk::language_model::{ExecutionResult, PipelineRequest};
 
     use super::*;
 
@@ -404,7 +404,7 @@ mod tests {
             account_label: Some("primary".into()),
             result: GenerateResult {
                 content: Vec::new(),
-                usage: Some(bitrouter_sdk::language_model::Usage {
+                usage: Some(bitrouter_ai::types::Usage {
                     prompt_tokens: 11,
                     completion_tokens: 7,
                     ..Default::default()

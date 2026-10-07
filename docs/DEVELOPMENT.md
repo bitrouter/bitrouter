@@ -8,8 +8,8 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, the ACP thin proxy (`acp` feature), config loading, the axum HTTP server, and the observability contract (`observe`) |
-| `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
+| `crates/bitrouter-ai`            | crate   | Model semantics, three-protocol codecs, SSE framing, selected-model HTTP calls, injected auth transactions and explicit catalog runtime; no router/application dependency |
+| `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, staged AI executor integration, the ACP thin proxy (`acp` feature), config loading, the axum HTTP server, and the observability contract (`observe`) |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback; optional `sdk` retains legacy hooks |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
 | `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bro code [<agent>]`) — ACP transcript, multiline composer, temporary inspectors, and explicit permission choices |
@@ -19,7 +19,7 @@ The `extensions/` directory expresses ownership and delivery boundaries; it does
 
 ### External interfaces
 
-Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from the SDK's four internal *wire-protocol adapters* (Chat Completions / Responses / Messages / Generate Content, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
+Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from AI's three internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
 
 | Interface                 | Where it lives                                                                                            | Entry point              |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
@@ -106,7 +106,133 @@ presentation.
 
 ### Dependency Logic
 
-The layering is strictly one-directional — every library crate points down at **`bitrouter-sdk`**, **`apps`** composes them all, and the SDK never depends back on anything above it.
+Model semantic types, wire codecs, authentication contracts and credential values
+have one owner in **`bitrouter-ai`**. The SDK, provider integrations and application
+consumers depend directly on AI; AI has no SDK, application or agent-runtime
+dependency. AI owns three-protocol codecs, SSE framing and selected-model HTTP
+invocation (`ModelClient` and `HttpTimeouts`); its errors carry domain facts rather
+than gateway status policy. Explicitly registered `AuthApplier`s can shape a body,
+authenticate and recover the same selected account once after a 401. `ModelClient`
+performs no implicit catalog loading, account selection, login or routing fallback.
+Codex subscription `generate` calls use upstream SSE and AI's canonical stream
+collector; the SDK shares that collector and retains its gateway request policy
+and execution envelope. Collection requires a terminal and consumes through EOF
+before returning success. It preserves fields already present in canonical
+events. Completed Responses reasoning now has a redacted AI-owned native capsule
+carrying the final item payload. Responses JSON/SSE output retains its identity,
+opaque encrypted content and native summary/content fields, while visible text
+lanes remain separate. Snapshot consistency checks prevent native data from
+restoring text changed by hooks. Responses ingress retains native reasoning, including
+encrypted-only items. Native replay still requires future target/account authority
+proofs. AI's content-free `ConversionReport` covers initial native-reasoning and
+structured-output admission; direct invocation and SDK HTTP preflight use the same
+request preparation. Router exclusions reach `ObserveHook::on_conversion_excluded`
+before hop observers or provider execution, while an all-excluded chain returns a
+typed incompatibility report. Other client codecs return output incompatibility
+when they cannot retain native reasoning. Gateway status mapping stays in the SDK.
+Built-in request parsing now also refuses initial ingress omissions before any partial
+Prompt can enter the pipeline: unknown items/blocks, unsupported content values,
+lossy system/tool-result shapes and unsigned Messages thinking.
+Reports carry original wire indices and remain content-free. HTTP handler tests verify
+400 responses before any executor call in ordinary and streaming modes. Shared request admission now also excludes initial structural history losses: omitted
+reasoning/sources, provider execution or MCP identity lost in projection, unsupported
+approval parts/reasons and omitted tool-result media/file IDs. Existing native-family
+tool declarations remain eligible; unknown cross-family translation and non-object
+argument loss are refused. Native continuity tokens cannot cross a wire that omits them. Native token
+presence/representation and local denial pairing are not complete authority proofs.
+Projection now also refuses explicit strict flags, schema names/descriptions and file
+names that the selected codec would omit, plus tool-result error/denial status loss.
+Google Chat admits a conservative target-scoped schema/option subset without rewriting constraints. Explicit cache resources and unverified strict/schema metadata are refused. A suppressed paired denial cannot lose its supplied reason.
+Malformed argument strings cannot become empty objects on Messages. Chat and
+Messages preserve text-only tool-result arrays, and Chat preserves multiple text parts.
+Unclassified Chat ordering/reasoning concatenation and selected three-wire ingress
+attribute/boundary losses are refused. Value-preserving JSON encoding into
+string-only tool slots remains eligible; error/denial status is checked separately.
+`ConversionReport.admitted` retains classified JSON encoding separately from refusal issues.
+Selected-target preparation can return
+the report through `ModelClient::render_request_with_report`; executor preflight returns
+that assessment. The SDK rechecks refusals and invokes `on_conversion_admitted` for
+eligible detected effects before hop start, without counting a candidate as an HTTP
+attempt. Empty assessments emit no conversion callback. Remaining ingress attributes,
+media/options/boundary effects, schema/model validation, other admitted classifications,
+Core/durable recording, output effects and degradation authorization remain open.
+
+`bitrouter-ai::catalog` owns the consumed provider/model schema, explicit bounded
+refresh and source-keyed injected stores. A catalog starts empty with memory-only
+storage; loading and network permission are separate explicit operations. Failed
+parse, validation or persistence retains its prior snapshot. `apps/bitrouter/src/catalog.rs`
+selects the 24-hour file cache and startup/reload refresh policy; `bundled_registry.rs`
+supplies the committed offline baseline for the default public source. Unbound
+legacy caches are preserved but not adopted as an assumed source. Activation,
+credential lookup and user-config merge remain in the application/provider bridge.
+
+`bitrouter_ai::providers::{anthropic,antigravity,claude_code,codex,copilot,hosted,supergrok}` implements
+request-time authentication and adaptations over caller-injected sessions/stores. Generic OAuth
+response decoding and bounded refresh live in `auth::oauth`; browser/login UI,
+CLI import and file-path policy stay above AI. Application assembly constructs
+the native sessions from its selected file backend and OAuth registration.
+The selected default account label is owned by `auth::store::DEFAULT_ACCOUNT`.
+Anthropic's API-key applier receives a credential backend directly. Claude Code
+receives an `OAuthSession` and an explicitly permitted fallback token. Its live
+CLI adoption backend and environment capture remain in
+`bitrouter::providers::claude_code`; application assembly chooses those sources
+and the public Anthropic OAuth client registration. These are explicit inputs;
+AI performs no ambient source discovery or interactive login.
+Explicit device authorization and bounded polling now live in
+`bitrouter_ai::auth::device_code`. AI's opt-in `pkce` feature supplies
+`auth::{pkce,auth_code,listener,login}` and `providers::login` registration inputs.
+The application's `LoginUx` implementation supplies terminal hints and callback
+HTML; the library owns state/redirect validation and the caller's total async
+login deadline. The application retains its existing 15-minute deadline and
+login-method/account selection. Dropping the library future releases its
+listener and pending async callbacks; already-started blocking stdin work
+remains an application limitation.
+AI's `hosted-login` feature supplies `providers::hosted::flow` over explicit
+`LoginParams`, including device authorization, deadline-bounded polling,
+revocation and complete hosted envelope construction. Cloud settings/default
+scopes and file persistence remain above AI. The `hosted` feature alone still
+supplies request authentication/refresh without login's random-number dependency.
+AI's opt-in `file-store` feature now owns ordinary explicit-path snapshots in
+`auth::file::snapshot` and selected-account leases in `auth::file::backend`.
+`apps/bitrouter/src/provider_credentials.rs` retains the existing XDG/Windows/home
+location precedence and `oauth-tokens.json` filename. Reads preserve labeled and
+legacy formats without writing; a later mutation uses the labeled format.
+Administrative writes and refresh/composite backends bind to the same selected
+path, including existing file/directory aliases and missing parent directories.
+Relative paths bind at construction rather than following a later cwd change.
+The [revised providers-retirement plan](BITROUTER_AI_REFACTOR_SPEC.md#revised-next-steps-retire-bitrouter-providers)
+now places product activation/configuration and credential discovery in
+`apps/bitrouter/src/providers`, and hosted account persistence/settings/assembly in
+`apps/bitrouter/src/cloud/account`. The old providers package is removed locally.
+Model, Cloud management and telemetry retain the same shared AI hosted session;
+external consumer migration and publication remain separate verification work.
+Native Gemini Generate Content and the private `google-ai` Antigravity transport are retired. Metered Google calls use the official Chat endpoint. Tool signatures retain canonical metadata and a selected-credential replay proof; clients must echo the entire tool-call `extra_content`. The proof is removed before upstream dispatch. See [retirement progress](GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md) for the actual SDK limitation and live validation gates.
+
+`ModelTarget` carries effective connection values, compatibility and an optional
+caller-selected account label. SDK routing, header policy, continuation admission
+and public error policy remain above AI. Stable credential/scheme proof primitives
+live in AI; the SDK enforces bindings against the final outbound request. SDK
+`HttpExecutor` delegates projection, HTTP I/O and decoding while retaining its
+pipeline retry budget, hooks and settlement integration.
+
+AI's injected account store holds a transaction through OAuth rotation and commit.
+After acquiring the lease, `OAuthSession` owns completion independently of a dropped
+caller future. The Codex applier uses this contract with either injected memory
+storage or AI's explicitly constructed optional file backend. The file backend serializes
+same-account refresh in process, preserves unrelated file entries, and rejects a
+commit after login/logout replaces its original credential. Failed persistence
+retains the rotated replacement for a later commit; this is volatile recovery,
+not a claim of crash durability or cross-process exclusion. Ordinary subscription providers and Claude CLI adoption also use these transactions.
+Explicit call overrides outrank stored credentials; permitted fallback is used only
+for an absent slot. Copilot caches are source-bound. Google Chat tool continuity is bound to the effective static credential, endpoint and model. Hosted OAuth uses the richer owned
+transaction contract in AI's optional `hosted` feature. `HostedSession` receives
+a selected slot, full-envelope store and HTTP client; its shared metadata/token
+decoders also serve application-driven device login. The application account
+manager assembles a process-local file backend, while model calls, telemetry and
+Cloud management all resolve through the same AI session. File policy, account
+activation, CLI defaults and onboarding text stay above AI. See
+[implementation progress](BITROUTER_AI_REFACTOR_PROGRESS.md).
+**`apps`** composes the libraries, and the SDK never depends back on the host.
 
 Note what that does *not* say: it constrains the direction of dependencies, not how much lives in the SDK. A capability belongs in the SDK when it is an **interop surface** — a *contract* the SDK's own domain model is rendered into, which must be identical across deployments to mean anything — and it goes behind a default-off feature so consumers who skip it pay nothing. Deployment business logic (auth, policy, charging, metering, content policy) stays out, whether it would point down cleanly or not.
 
@@ -116,18 +242,17 @@ Rendering the contract onto a wire is not the contract. OTLP transport, bearer r
 
 Because the schema is the contract, it is written down rather than inferred from a renderer's call sites. `crates/bitrouter-sdk/src/observe/schema.rs` declares every span, attribute, event, metric and silent-failure invariant, names no `opentelemetry` type, depends on nothing but `serde`, and renders to the committed artifact `crates/bitrouter-sdk/span-schema.json` — regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-sdk committed_artifact` (default features: the module is ungated, and a staleness guard that only fired under `--all-features` would let the artifact rot everywhere else), and the ordinary test run fails when it is stale. It sits beside `public-api-deps.txt`, the crate's other generated manifest — but unlike that one it *ships* with the crate, because it is the interop surface. The declaration is `pub` for the same reason: a second renderer needs it at compile time, not just as JSON. The three helpers only a conformance suite calls — `span_def_for`, `value_type_matches` and `render_json` — sit behind the default-off `testing` feature instead, since public API with no production caller is what CLAUDE.md rule 4 forbids; the feature carries no dependency, so a renderer enables it under `[dev-dependencies]` and pays nothing. Conformance tests in `bitrouter-telemetry`'s `otel/exporter.rs`, `otel/acp.rs` and `otel/http_layer.rs` drive real lifecycles and assert that nothing reaches the wire the declaration does not describe, so the artifact is checked rather than aspirational. See [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md).
 
-1. **`bitrouter-sdk`** — the foundation. Knows nothing about which providers exist or how the binary is wired. It owns:
+1. **`bitrouter-sdk`** — the pipeline and gateway foundation. Knows nothing about which providers exist or how the binary is wired. It consumes model semantics from `bitrouter-ai` and owns:
    - **Three independent pipelines**, one per wire family. They are deliberately *not* generic over a shared hook trait — each has its own hook set:
      - `language_model` — the main pipeline: LLM completions with the full hook chain (pre-request → route → execute → settle), an interleaved stream stage, and read-only observation.
      - `mcp` — Model Context Protocol routing (pure routing, no settlement).
      - `acp` — Agent Client Protocol routing (pure routing, no settlement).
-   - **Four wire-protocol adapters** — Chat Completions, Responses, Messages, Generate Content — each with an inbound side (parse a client request / encode a client response + SSE) and an outbound side (render a provider request / decode a provider response + SSE). Any inbound protocol can be served by any outbound protocol.
    - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — trusted host assembly interfaces used by builtins and legacy packages. New request-check extensions use the restricted author API rather than mutable pipeline hooks.
    - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
    - The **axum HTTP server** and the `App` builder.
-2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in provider entry is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
+2. **`bitrouter-ai`** — owns catalog metadata, protocol codecs, selected-target invocation and authentication. It has no SDK or application dependency. Explicit login and ordinary file storage are opt-in features; external CLI/Keychain discovery, account selection, product activation and Cloud management remain in the application.
 3. **`bitrouter-guardrails`** provides the regex matcher and the SDK request-check callback; its explicit `sdk` feature enables legacy global/stream hooks. It depends on `bitrouter-sdk` with default features disabled. The default host still has no normal/build dependency on the matcher. **`bitrouter-telemetry`** implements SDK hooks; telemetry's whole OpenTelemetry stack sits behind `otel-*` and its ingress span behind `server`, so `cargo add bitrouter-telemetry` on its own pulls neither. The `feature-isolation` CI job enforces all of it, plus the invariant that gives the split its point: **no `opentelemetry*` crate is in `bitrouter-sdk`'s tree at any feature combination**, and the two OTLP transports stay isolated from each other.
-4. **`apps/bitrouter`** — assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound native request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
+4. **`apps/bitrouter`** — owns `providers::{apply,builtin,entry,registry,import,claude_code,antigravity}` for configuration, activation and credential-source policy; `cloud::account::{credentials,transaction,manager,settings}` retains Cloud account files and shared AI session assembly. The only compiled-in provider entry is `apps/bitrouter/providers/bitrouter.toml`; other providers come from AI catalog metadata and the product registry bridge. The app assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound native request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
 
 ### Extension authors and host assembly
 
@@ -224,7 +349,7 @@ The daemon `chdir`s into the bitrouter home (the config file's directory, or `~/
 
 ### Zero-config and the provider catalog
 
-In zero-config mode `bitrouter_providers::zero_config()` builds a `Config` with `skip_auth: true`, `listen: 127.0.0.1:4356`, and the compiled-in hosted gateway auto-enabled when its API key is set in the environment. Every other public provider comes from the fetched-or-cached registry merge: an env-keyed registry provider becomes active when its credential is available, and a local-OAuth provider becomes active after `bro providers login <provider>`.
+In zero-config mode `bitrouter::providers::apply::zero_config()` builds a `Config` with `skip_auth: true`, `listen: 127.0.0.1:4356`, and the compiled-in hosted gateway auto-enabled when its API key is set in the environment. Every other public provider comes from the fetched-or-cached registry merge: an env-keyed registry provider becomes active when its credential is available, and a local-OAuth provider becomes active after `bro providers login <provider>`.
 
 ## HTTP Server Surface
 
@@ -277,15 +402,15 @@ The hosted mode `bro launch --tui` and its VT emulator (`tui/host.rs`, `tui/term
 
 ### Add or update a provider
 
-Add a provider definition under `registry/providers/*.yaml` (the registry source; `dist/` is regenerated by `helpers/dist-helper`). `bearer` / `header` auth needs no Rust. For a regional or per-account base URL, use `${VAR}` in `api_base` — it is resolved from the environment at merge time (e.g. Bedrock `https://bedrock-mantle.${AWS_REGION}.api.aws/v1`). For stateful auth (OAuth, token-exchange), add an `AuthApplier` impl in `crates/bitrouter-providers/` keyed by the registry `auth.handler` and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`). See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the step-by-step.
+Add a provider definition under `registry/providers/*.yaml` (the registry source; `dist/` is regenerated by `helpers/dist-helper`). `bearer` / `header` auth needs no Rust. For a regional or per-account base URL, use `${VAR}` in `api_base` — it is resolved from the environment at merge time (e.g. Bedrock `https://bedrock-mantle.${AWS_REGION}.api.aws/v1`). For stateful auth (OAuth, token-exchange), add an injected `AuthApplier` impl in `crates/bitrouter-ai/src/providers/` keyed by the registry `auth.handler` and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`). See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the step-by-step.
 
 ### Add a new wire protocol
 
-Protocol adapters live in `crates/bitrouter-sdk/src/language_model/protocol/`. A new protocol needs an inbound adapter (parse request / encode response + SSE), an outbound adapter (render request / decode response + SSE), a variant on `ApiProtocol`, dispatch wiring, and coverage in the protocol-conversion test matrix.
+Protocol adapters live in `crates/bitrouter-ai/src/protocol/`. A new protocol needs an inbound adapter (parse request / encode response + SSE), an outbound adapter (render request / decode response + SSE), a variant on `ApiProtocol`, dispatch wiring, and coverage in the protocol-conversion test matrix.
 
 ### Add a provider whose wire isn't HTTP+JSON+SSE
 
-Rare — no current registry provider needs this. The big clouds (Bedrock, Azure) speak one of BitRouter's built-in protocols over SSE and are ordinary Bearer registry providers. Only if an upstream uses a wire an existing outbound adapter can't decode (e.g. a vendor SDK's binary event-stream) do you add an `ApiProtocol::Custom` outbound adapter + `Transport` in a standalone crate, registered on the dispatch executor at startup. See the `Custom` escape-hatch docs in `crates/bitrouter-sdk/src/language_model/protocol/mod.rs`.
+Rare — no current registry provider needs this. The big clouds (Bedrock, Azure) speak one of BitRouter's built-in protocols over SSE and are ordinary Bearer registry providers. Only if an upstream uses a wire an existing outbound adapter can't decode (e.g. a vendor SDK's binary event-stream) do you add an `ApiProtocol::Custom` outbound adapter + `Transport` in a standalone crate, registered on the dispatch executor at startup. See the `Custom` escape-hatch docs in `crates/bitrouter-ai/src/protocol/mod.rs`.
 
 ### Add a hook (auth, policy, metering, guardrail, observability)
 

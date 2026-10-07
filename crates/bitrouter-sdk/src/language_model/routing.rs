@@ -17,7 +17,8 @@ use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::FallbackDecision;
 use crate::language_model::request_checks::RequestCheckBinding;
 use crate::language_model::stream::UsagePricing;
-use crate::language_model::types::{ApiProtocol, Capability, RoutingTarget};
+use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::types::{ApiProtocol, Capability};
 
 /// How a cascade chain should be ordered.
 #[derive(
@@ -51,7 +52,7 @@ pub struct RoutingPrefs {
     /// The capabilities a request needs; a capability-aware [`RoutingTable`]
     /// should treat only providers advertising all of these as eligible. The
     /// pipeline populates it from
-    /// [`Prompt::required_capabilities`](crate::language_model::Prompt::required_capabilities).
+    /// [`Prompt::required_capabilities`](bitrouter_ai::types::Prompt::required_capabilities).
     /// Empty (the default) imposes no capability constraint.
     pub require_capabilities: Vec<Capability>,
     /// The inbound wire protocol the request arrived on, if known. A
@@ -229,9 +230,9 @@ pub trait RoutingTable: Send + Sync {
 ///
 /// Returned by [`RoutingTable::preset_overrides`] and applied by the pipeline
 /// *before* the request is dispatched: a non-empty `system_prompt` is set on
-/// the canonical [`Prompt`](crate::language_model::Prompt) when it has none,
+/// the canonical [`Prompt`](bitrouter_ai::types::Prompt) when it has none,
 /// and `params` entries are inserted into
-/// [`GenerationParams::supplemental_extra`](crate::language_model::GenerationParams::supplemental_extra)
+/// [`GenerationParams::supplemental_extra`](bitrouter_ai::types::GenerationParams::supplemental_extra)
 /// for keys not already present.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PromptOverrides {

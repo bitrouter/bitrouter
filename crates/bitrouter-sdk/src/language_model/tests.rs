@@ -15,6 +15,9 @@ use crate::extension::request_check::{ContentRole, Decision, Input};
 use crate::language_model::executor::MockResponse;
 use crate::language_model::routing::{PromptOverrides, RouterRequestIdentity};
 use crate::language_model::*;
+use bitrouter_ai::auth::{AuthApplier, AuthAppliers};
+use bitrouter_ai::error::ModelError;
+use bitrouter_ai::types::*;
 
 // ===== test fixtures =====
 
@@ -28,6 +31,7 @@ fn target(provider: &str) -> RoutingTarget {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,
@@ -2598,6 +2602,7 @@ async fn streamed_fallback_attributes_timing_to_successful_target() {
             MockResponse::Stream(vec![
                 StreamPart::ReasoningDelta {
                     text: "thinking".into(),
+                    source_kind: None,
                 },
                 StreamPart::Finish {
                     reason: FinishReason::Stop,
@@ -3347,29 +3352,34 @@ async fn counting_pre_hook_runs_once() {
 }
 
 #[tokio::test]
-async fn executor_rejects_response_format_on_unsupported_outbound() {
+async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()> {
     // A custom outbound adapter that doesn't override `supports_response_format`
     // (so it defaults to `false`) must cause the executor to return a 400
     // rather than silently dropping the structured-output schema upstream.
     use crate::language_model::executor::HttpExecutor;
-    use crate::language_model::protocol::{
-        OutboundAdapter, OutboundDispatch, StreamDecoder, Transport,
-    };
-    use crate::language_model::types::ResponseFormat;
+    use bitrouter_ai::error::ModelError;
+    use bitrouter_ai::protocol::{OutboundAdapter, OutboundDispatch, StreamDecoder, Transport};
+    use bitrouter_ai::target::ModelTarget;
+    use bitrouter_ai::types::ResponseFormat;
 
     struct FakeAdapter;
     impl OutboundAdapter for FakeAdapter {
         fn protocol(&self) -> ApiProtocol {
             ApiProtocol::Custom("fake".into())
         }
-        fn render_request(&self, _: &Prompt) -> Result<serde_json::Value> {
-            unreachable!("gate must fire before render_request")
+        fn render_request(&self, _: &Prompt) -> bitrouter_ai::error::Result<serde_json::Value> {
+            Err(ModelError::invalid_request(
+                "gate must fire before render_request",
+            ))
         }
-        fn parse_response(&self, _: serde_json::Value) -> Result<GenerateResult> {
-            unreachable!()
+        fn parse_response(
+            &self,
+            _: serde_json::Value,
+        ) -> bitrouter_ai::error::Result<GenerateResult> {
+            Err(ModelError::invalid_request("unexpected fake response"))
         }
         fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
-            unreachable!()
+            bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter.stream_decoder()
         }
         // intentionally leaves `supports_response_format` at the default `false`
     }
@@ -3380,32 +3390,32 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         fn protocol(&self) -> ApiProtocol {
             ApiProtocol::Custom("fake".into())
         }
-        fn endpoint_url(&self, _: &RoutingTarget, _: bool) -> String {
-            "http://example.invalid".into()
+        fn endpoint_url(&self, _: &ModelTarget, _: bool) -> String {
+            "https://example.invalid".into()
         }
         async fn authorise(
             &self,
             r: reqwest::Request,
-            _: &RoutingTarget,
-        ) -> Result<reqwest::Request> {
+            _: &ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
             Ok(r)
         }
     }
 
     let mut dispatch = OutboundDispatch::empty();
     dispatch.register(Arc::new(FakeAdapter), Arc::new(FakeTransport));
-    let executor =
-        HttpExecutor::with_dispatch(Default::default(), dispatch).expect("build executor");
+    let executor = HttpExecutor::with_dispatch(Default::default(), dispatch)?;
 
     let target = RoutingTarget {
         provider_name: "fake".into(),
         service_id: "m".into(),
-        api_base: "http://example.invalid".into(),
+        api_base: "https://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Custom("fake".into()),
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,
@@ -3431,16 +3441,24 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
     };
     let req = PipelineRequest::new("m", CallerContext::new("k", "u"), prompt.clone());
     let ctx = PipelineContext::new(req);
-    let err = executor.execute(&target, &prompt, &ctx).await.unwrap_err();
-    match err {
-        BitrouterError::BadRequest { message } => {
-            assert!(
-                message.contains("response_format"),
-                "error must mention response_format, got: {message}"
-            );
+    let err = match executor.execute(&target, &prompt, &ctx).await {
+        Ok(_) => {
+            return Err(BitrouterError::internal(
+                "unsupported response format was accepted",
+            ));
         }
-        other => panic!("expected BadRequest, got {other:?}"),
-    }
+        Err(error) => error,
+    };
+    let BitrouterError::Incompatible { report } = err else {
+        return Err(BitrouterError::internal(
+            "expected structured conversion failure",
+        ));
+    };
+    assert_eq!(
+        report.issues[0].reason,
+        bitrouter_ai::conversion::ConversionReason::ResponseFormatUnsupported
+    );
+    Ok(())
 }
 
 struct AuthRecoveryApplier {
@@ -3453,8 +3471,8 @@ impl AuthApplier for AuthRecoveryApplier {
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _target: &RoutingTarget,
-    ) -> Result<reqwest::Request> {
+        _target: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         let token = if self.refreshes.load(Ordering::SeqCst) == 0 {
             "stale"
         } else {
@@ -3469,9 +3487,9 @@ impl AuthApplier for AuthRecoveryApplier {
 
     async fn refresh_after_unauthorized(
         &self,
-        _target: &RoutingTarget,
+        _target: &bitrouter_ai::target::ModelTarget,
         rejected_authorization: Option<&reqwest::header::HeaderValue>,
-    ) -> Result<bool> {
+    ) -> bitrouter_ai::error::Result<bool> {
         if let Some(value) = rejected_authorization.and_then(|v| v.to_str().ok()) {
             self.seen_rejected_auth
                 .lock()
@@ -3515,10 +3533,10 @@ impl AuthApplier for OpaqueFailingAuthApplier {
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _target: &RoutingTarget,
-    ) -> Result<reqwest::Request> {
+        _target: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         if matches!(self.0, OpaqueAuthFailurePoint::Apply) {
-            return Err(BitrouterError::internal(format!(
+            return Err(bitrouter_ai::error::ModelError::configuration(format!(
                 "opaque authentication plugin exposed {}",
                 self.0.sentinel()
             )));
@@ -3533,10 +3551,10 @@ impl AuthApplier for OpaqueFailingAuthApplier {
     async fn prepare_body(
         &self,
         _body: &mut serde_json::Value,
-        _target: &RoutingTarget,
-    ) -> Result<()> {
+        _target: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<()> {
         if matches!(self.0, OpaqueAuthFailurePoint::PrepareBody) {
-            return Err(BitrouterError::internal(format!(
+            return Err(bitrouter_ai::error::ModelError::configuration(format!(
                 "opaque authentication plugin exposed {}",
                 self.0.sentinel()
             )));
@@ -3546,11 +3564,11 @@ impl AuthApplier for OpaqueFailingAuthApplier {
 
     async fn refresh_after_unauthorized(
         &self,
-        _target: &RoutingTarget,
+        _target: &bitrouter_ai::target::ModelTarget,
         _rejected_authorization: Option<&reqwest::header::HeaderValue>,
-    ) -> Result<bool> {
+    ) -> bitrouter_ai::error::Result<bool> {
         if matches!(self.0, OpaqueAuthFailurePoint::Refresh) {
-            return Err(BitrouterError::internal(format!(
+            return Err(bitrouter_ai::error::ModelError::configuration(format!(
                 "opaque authentication plugin exposed {}",
                 self.0.sentinel()
             )));
@@ -3568,7 +3586,7 @@ enum SemanticAuthFailurePoint {
 
 struct SemanticFailingAuthApplier {
     point: SemanticAuthFailurePoint,
-    error: BitrouterError,
+    error: ModelError,
 }
 
 #[async_trait]
@@ -3576,8 +3594,8 @@ impl AuthApplier for SemanticFailingAuthApplier {
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _target: &RoutingTarget,
-    ) -> Result<reqwest::Request> {
+        _target: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         if matches!(self.point, SemanticAuthFailurePoint::Apply) {
             return Err(self.error.clone());
         }
@@ -3591,8 +3609,8 @@ impl AuthApplier for SemanticFailingAuthApplier {
     async fn prepare_body(
         &self,
         _body: &mut serde_json::Value,
-        _target: &RoutingTarget,
-    ) -> Result<()> {
+        _target: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<()> {
         if matches!(self.point, SemanticAuthFailurePoint::PrepareBody) {
             return Err(self.error.clone());
         }
@@ -3601,9 +3619,9 @@ impl AuthApplier for SemanticFailingAuthApplier {
 
     async fn refresh_after_unauthorized(
         &self,
-        _target: &RoutingTarget,
+        _target: &bitrouter_ai::target::ModelTarget,
         _rejected_authorization: Option<&reqwest::header::HeaderValue>,
-    ) -> Result<bool> {
+    ) -> bitrouter_ai::error::Result<bool> {
         if matches!(self.point, SemanticAuthFailurePoint::Refresh) {
             return Err(self.error.clone());
         }
@@ -3618,10 +3636,10 @@ impl AuthApplier for CountingFailingAuthApplier {
     async fn apply(
         &self,
         _request: reqwest::Request,
-        _target: &RoutingTarget,
-    ) -> Result<reqwest::Request> {
+        _target: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(BitrouterError::internal(
+        Err(bitrouter_ai::error::ModelError::configuration(
             "unexpected fail-fast fallback target",
         ))
     }
@@ -3637,7 +3655,7 @@ fn opaque_auth_executor(point: OpaqueAuthFailurePoint) -> HttpExecutor {
 fn semantic_auth_executor(
     provider: &str,
     point: SemanticAuthFailurePoint,
-    error: BitrouterError,
+    error: ModelError,
 ) -> HttpExecutor {
     let auth = AuthAppliers::new().with(
         provider,
@@ -3647,10 +3665,10 @@ fn semantic_auth_executor(
         .expect("executor")
 }
 
-async fn semantic_auth_error(error: BitrouterError) -> BitrouterError {
+async fn semantic_auth_error(error: ModelError) -> BitrouterError {
     let provider = "semantic-auth-failure";
     let executor = semantic_auth_executor(provider, SemanticAuthFailurePoint::Apply, error);
-    let mut target = auth_retry_target("http://example.invalid".into());
+    let mut target = auth_retry_target("https://example.invalid".into());
     target.provider_name = provider.into();
     let req = request();
     let ctx = PipelineContext::new(req.clone());
@@ -3786,6 +3804,7 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,
@@ -3796,7 +3815,7 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
 }
 
 async fn assert_semantic_auth_failure_falls_back(
-    error: BitrouterError,
+    error: ModelError,
     point: SemanticAuthFailurePoint,
     stream: bool,
 ) {
@@ -3993,7 +4012,7 @@ async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() {
             observed.push((
                 point,
                 stream,
-                opaque_auth_error(point, stream, "http://example.invalid".into()).await,
+                opaque_auth_error(point, stream, "https://example.invalid".into()).await,
             ));
         }
     }
@@ -4085,117 +4104,78 @@ async fn pipeline_settlement_never_receives_opaque_auth_failure_text() {
 
 #[tokio::test]
 async fn opaque_auth_failures_preserve_retryable_fallback_semantics_in_both_modes() {
-    const SENTINEL: &str = "semantic-auth-private-sentinel";
     for stream in [false, true] {
-        for (point, error) in [
-            (
-                SemanticAuthFailurePoint::PrepareBody,
-                BitrouterError::Upstream {
-                    status: 503,
-                    message: SENTINEL.into(),
-                },
-            ),
-            (
-                SemanticAuthFailurePoint::Apply,
-                BitrouterError::Upstream {
-                    status: 503,
-                    message: SENTINEL.into(),
-                },
-            ),
-            (
-                SemanticAuthFailurePoint::Apply,
-                BitrouterError::PaymentRequired(SENTINEL.into()),
-            ),
-            (
-                SemanticAuthFailurePoint::Refresh,
-                BitrouterError::Upstream {
-                    status: 503,
-                    message: SENTINEL.into(),
-                },
-            ),
+        for point in [
+            SemanticAuthFailurePoint::PrepareBody,
+            SemanticAuthFailurePoint::Apply,
+            SemanticAuthFailurePoint::Refresh,
         ] {
-            assert_semantic_auth_failure_falls_back(error, point, stream).await;
+            assert_semantic_auth_failure_falls_back(
+                ModelError::Provider {
+                    status: 503,
+                    message: "semantic-auth-private-sentinel".into(),
+                },
+                point,
+                stream,
+            )
+            .await;
         }
     }
 }
 
 #[tokio::test]
-async fn opaque_auth_failures_preserve_safe_error_variants_and_discard_private_fields() {
+async fn opaque_auth_failures_preserve_safe_domain_facts_and_discard_private_fields()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
     const SENTINEL: &str = "semantic-auth-private-sentinel";
-
-    let error = semantic_auth_error(BitrouterError::Upstream {
-        status: 503,
-        message: SENTINEL.into(),
-    })
-    .await;
-    assert_error_surfaces_omit(&error, SENTINEL);
-    match error {
-        BitrouterError::Upstream { status, message } => {
-            assert_eq!(status, 503);
-            assert_eq!(message, "upstream authentication failed");
+    for (input, status) in [
+        (
+            ModelError::Provider {
+                status: 503,
+                message: SENTINEL.into(),
+            },
+            503,
+        ),
+        (
+            ModelError::HttpResponse {
+                status: 429,
+                body: SENTINEL.into(),
+                retry_after: Some(17),
+            },
+            429,
+        ),
+        (
+            ModelError::HttpResponse {
+                status: 403,
+                body: SENTINEL.into(),
+                retry_after: None,
+            },
+            403,
+        ),
+        (ModelError::Timeout, 504),
+    ] {
+        let error = semantic_auth_error(input).await;
+        assert_error_surfaces_omit(&error, SENTINEL);
+        let public_status = match status {
+            503 | 403 => 502,
+            status => status,
+        };
+        assert_eq!(error.status(), public_status);
+        if matches!(status, 503 | 403) {
+            assert!(
+                matches!(&error, BitrouterError::Upstream { status: native, .. } if *native == status)
+            );
         }
-        other => panic!("upstream classification changed to {other:?}"),
-    }
-    let error = semantic_auth_error(BitrouterError::PaymentRequired(SENTINEL.into())).await;
-    assert_error_surfaces_omit(&error, SENTINEL);
-    match error {
-        BitrouterError::PaymentRequired(message) => {
-            assert_eq!(message, "upstream authentication failed");
+        if status == 429 {
+            assert!(matches!(
+                error,
+                BitrouterError::UpstreamRateLimited {
+                    retry_after: Some(17),
+                    detail: Some(_)
+                }
+            ));
         }
-        other => panic!("payment classification changed to {other:?}"),
     }
-    let error = semantic_auth_error(BitrouterError::UpstreamRateLimited {
-        retry_after: Some(17),
-        detail: Some(SENTINEL.into()),
-    })
-    .await;
-    assert_error_surfaces_omit(&error, SENTINEL);
-    match error {
-        BitrouterError::UpstreamRateLimited {
-            retry_after,
-            detail,
-        } => {
-            assert_eq!(retry_after, Some(17));
-            assert_eq!(detail, None);
-        }
-        other => panic!("rate-limit classification changed to {other:?}"),
-    }
-    let error = semantic_auth_error(BitrouterError::UpstreamBadRequest {
-        error: serde_json::json!({"secret": SENTINEL}),
-    })
-    .await;
-    assert_error_surfaces_omit(&error, SENTINEL);
-    match error {
-        BitrouterError::UpstreamBadRequest { error } => {
-            assert_eq!(error, serde_json::json!("upstream authentication failed"));
-        }
-        other => panic!("bad-request classification changed to {other:?}"),
-    }
-    let error = semantic_auth_error(BitrouterError::UpstreamAuth {
-        status: 403,
-        www_authenticate: Some(SENTINEL.into()),
-        required_scope: Some(SENTINEL.into()),
-    })
-    .await;
-    assert_error_surfaces_omit(&error, SENTINEL);
-    match error {
-        BitrouterError::UpstreamAuth {
-            status,
-            www_authenticate,
-            required_scope,
-        } => {
-            assert_eq!(status, 403);
-            assert_eq!(www_authenticate, None);
-            assert_eq!(required_scope, None);
-        }
-        other => panic!("upstream-auth classification changed to {other:?}"),
-    }
-    let error = semantic_auth_error(BitrouterError::UpstreamTimeout).await;
-    assert_error_surfaces_omit(&error, SENTINEL);
-    assert!(matches!(error, BitrouterError::UpstreamTimeout));
-    let error = semantic_auth_error(BitrouterError::UpstreamUnavailable).await;
-    assert_error_surfaces_omit(&error, SENTINEL);
-    assert!(matches!(error, BitrouterError::UpstreamUnavailable));
+    Ok(())
 }
 
 #[tokio::test]
@@ -4210,7 +4190,10 @@ async fn opaque_nonretryable_auth_failure_stays_fail_fast_in_both_modes() {
                 first_provider,
                 Arc::new(SemanticFailingAuthApplier {
                     point: SemanticAuthFailurePoint::Apply,
-                    error: BitrouterError::Unauthorized(SENTINEL.into()),
+                    error: ModelError::Provider {
+                        status: 401,
+                        message: SENTINEL.into(),
+                    },
                 }),
             )
             .with(
@@ -4234,7 +4217,11 @@ async fn opaque_nonretryable_auth_failure_stays_fail_fast_in_both_modes() {
                 .expect_err("non-retryable auth failure must fail")
         };
 
-        assert_eq!(error.status(), 401);
+        assert!(matches!(
+            &error,
+            BitrouterError::Upstream { status: 401, .. }
+        ));
+        assert_eq!(error.status(), 502);
         let diagnostic = format!("{error:?}\n{error}");
         assert!(!diagnostic.contains(SENTINEL));
         assert!(diagnostic.contains("upstream authentication failed"));
@@ -4997,4 +4984,877 @@ async fn server_tool_stream_handshake_failure_still_settles_and_observes_end() {
             "request:failed",
         ]
     );
+}
+
+// Conversion exclusions are preparation decisions, not provider failures.
+#[derive(Default)]
+struct AdmissionObserver {
+    excluded: AtomicUsize,
+    starts: AtomicUsize,
+    failures: AtomicUsize,
+}
+#[async_trait]
+impl ObserveHook for Arc<AdmissionObserver> {
+    async fn on_conversion_excluded(
+        &self,
+        _: &PipelineContext,
+        _: &RoutingTarget,
+        report: &bitrouter_ai::conversion::ConversionReport,
+    ) {
+        assert!(!report.issues.is_empty());
+        self.excluded.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_hop_start(&self, _: &PipelineContext, _: &RoutingTarget) {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+    }
+    async fn on_hop_end(&self, _: &PipelineContext, _: &RoutingTarget, outcome: HopOutcome<'_>) {
+        if matches!(outcome, HopOutcome::Failed(_)) {
+            self.failures.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    async fn after_phase(&self, _: Phase, _: &PipelineContext) {}
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+    async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
+}
+
+struct NoStructuredAdapter;
+impl bitrouter_ai::protocol::OutboundAdapter for NoStructuredAdapter {
+    fn protocol(&self) -> ApiProtocol {
+        ApiProtocol::ChatCompletions
+    }
+    fn render_request(&self, _: &Prompt) -> bitrouter_ai::error::Result<serde_json::Value> {
+        Err(ModelError::invalid_request(
+            "unsupported candidate reached rendering",
+        ))
+    }
+    fn parse_response(&self, _: serde_json::Value) -> bitrouter_ai::error::Result<GenerateResult> {
+        Err(ModelError::invalid_request(
+            "unsupported candidate reached decoding",
+        ))
+    }
+    fn stream_decoder(&self) -> Box<dyn bitrouter_ai::protocol::StreamDecoder> {
+        bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter.stream_decoder()
+    }
+}
+
+#[tokio::test]
+async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_failure_hops()
+-> Result<()> {
+    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
+    use bitrouter_ai::protocol::OutboundDispatch;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for streamed in [false, true] {
+        let server = MockServer::start().await;
+        let response = serde_json::json!({"id":"resp-ok","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"allowed"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}});
+        let template = if streamed {
+            let body = [
+                serde_json::json!({"type":"response.created","response":{"id":"resp-ok"}}),
+                serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"id":"msg-ok","type":"message","role":"assistant","content":[]}}),
+                serde_json::json!({"type":"response.output_text.delta","item_id":"msg-ok","delta":"allowed"}),
+                serde_json::json!({"type":"response.output_item.done","output_index":0,"item":{"id":"msg-ok","type":"message","role":"assistant","content":[{"type":"output_text","text":"allowed"}]}}),
+                serde_json::json!({"type":"response.completed","response":response}),
+            ].iter().map(|event|format!("data: {event}\n\n")).collect::<String>();
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        } else {
+            ResponseTemplate::new(200).set_body_json(response)
+        };
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(template)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut dispatch = OutboundDispatch::builtin();
+        let transport = dispatch
+            .lookup(&ApiProtocol::ChatCompletions)
+            .ok_or_else(|| BitrouterError::internal("missing transport"))?
+            .1
+            .clone();
+        dispatch.register(Arc::new(NoStructuredAdapter), transport);
+        let direct = ModelClient::with_dispatch(
+            HttpTimeouts::default(),
+            Arc::new({
+                let mut direct_dispatch = OutboundDispatch::builtin();
+                let transport = direct_dispatch
+                    .lookup(&ApiProtocol::ChatCompletions)
+                    .ok_or_else(|| BitrouterError::internal("missing direct transport"))?
+                    .1
+                    .clone();
+                direct_dispatch.register(Arc::new(NoStructuredAdapter), transport);
+                direct_dispatch
+            }),
+        )?;
+        let executor = HttpExecutor::with_dispatch(HttpTimeouts::default(), dispatch)?;
+        let mut rejected = target("a-unsupported");
+        rejected.api_base = server.uri();
+        let mut accepted = target("z-accepted");
+        accepted.api_base = server.uri();
+        accepted.api_protocol = ApiProtocol::Responses;
+        let mut req = request();
+        req.prompt.stream = streamed;
+        req.prompt.response_format = Some(ResponseFormat::JsonSchema {
+            name: None,
+            description: None,
+            strict: None,
+            schema: serde_json::json!({"type":"object"}),
+        });
+        let original = req.prompt.clone();
+        let report = match direct.render_request(&rejected.model_target(), &original, streamed) {
+            Err(ModelError::Incompatible { report }) => report,
+            _ => return Err(BitrouterError::internal("direct admission disagrees")),
+        };
+        assert_eq!(
+            report.issues[0].reason,
+            bitrouter_ai::conversion::ConversionReason::ResponseFormatUnsupported
+        );
+        let observer = Arc::new(AdmissionObserver::default());
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![rejected, accepted]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table)
+            .executor(Arc::new(DispatchExecutor::new(Arc::new(executor))))
+            .observe_hook(observer.clone());
+        let pipeline = Arc::new(builder.build()?);
+        if streamed {
+            for part in collect_stream(pipeline.execute_stream(req).await?).await {
+                let _ = part?;
+            }
+        } else {
+            let result = pipeline.execute(req).await?;
+            assert!(
+                result
+                    .result
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, Content::Text { text, .. } if text == "allowed"))
+            );
+        }
+        assert_eq!(observer.excluded.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.failures.load(Ordering::SeqCst), 0);
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("no HTTP inventory"))?;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]
+                .body_json::<serde_json::Value>()
+                .map_err(BitrouterError::internal)?["input"][0]["content"][0]["text"],
+            "hi"
+        );
+        assert_eq!(original.messages, request().prompt.messages);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn conversion_admission_all_excluded_returns_reports_without_attempting_or_resetting_history()
+-> Result<()> {
+    use bitrouter_ai::conversion::ConversionLocation;
+    use bitrouter_ai::protocol::{InboundAdapter, responses::ResponsesAdapter};
+    for streamed in [false, true] {
+        let mut req = request();
+        req.prompt = ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[{"type":"reasoning","id":"rs-secret","summary":[],"encrypted_content":"opaque-secret"},{"role":"user","content":"keep original history"}]}))?;
+        let original = req.prompt.clone();
+        let observer = Arc::new(AdmissionObserver::default());
+        let mut native_target = target("native");
+        native_target.api_protocol = ApiProtocol::Responses;
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![target("foreign"), native_target]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table)
+            .executor(Arc::new(MockExecutor::always_text("must not run")))
+            .observe_hook(observer.clone());
+        let pipeline = Arc::new(builder.build()?);
+        let error = if streamed {
+            pipeline.execute_stream(req).await.err()
+        } else {
+            pipeline.execute(req).await.err()
+        }
+        .ok_or_else(|| BitrouterError::internal("unsafe history was dispatched"))?;
+        assert_eq!(error.status(), 400);
+        assert!(!format!("{error:?}").contains("secret"));
+        let BitrouterError::Incompatible { report } = error else {
+            return Err(BitrouterError::internal("lost structured report"));
+        };
+        assert_eq!(report.issues.len(), 2);
+        assert_eq!(
+            report.issues[0].location,
+            ConversionLocation::MessageContent {
+                message: 0,
+                block: 0
+            }
+        );
+        assert_eq!(observer.excluded.load(Ordering::SeqCst), 2);
+        assert_eq!(observer.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(observer.failures.load(Ordering::SeqCst), 0);
+        assert_eq!(original.messages.len(), 2);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn projection_admission_routes_file_results_without_asset_loss_or_failure_hops() -> Result<()>
+{
+    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
+    use bitrouter_ai::protocol::{InboundAdapter, responses::ResponsesAdapter};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for streamed in [false, true] {
+        let server = MockServer::start().await;
+        let result = serde_json::json!({"id":"resp-ok","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"allowed"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}});
+        let template = if streamed {
+            let body=[
+                serde_json::json!({"type":"response.created","response":{"id":"resp-ok"}}),
+                serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg","role":"assistant","content":[]}}),
+                serde_json::json!({"type":"response.output_text.delta","item_id":"msg","delta":"allowed"}),
+                serde_json::json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg","role":"assistant","content":[{"type":"output_text","text":"allowed"}]}}),
+                serde_json::json!({"type":"response.completed","response":result}),
+            ].iter().map(|event|format!("data: {event}\n\n")).collect::<String>();
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        } else {
+            ResponseTemplate::new(200).set_body_json(result)
+        };
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(template)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut rejected = target("a-lossy");
+        rejected.api_base = server.uri();
+        let mut accepted = target("z-preserving");
+        accepted.api_base = server.uri();
+        accepted.api_protocol = ApiProtocol::Responses;
+        let mut req = request();
+        req.prompt=ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[
+            {"type":"function_call","call_id":"c","name":"f","arguments":"{}"},
+            {"type":"function_call_output","call_id":"c","output":[{"type":"input_text","text":"before"},{"type":"input_file","file_id":"file-secret"},{"type":"input_text","text":"after"}]}
+        ]}))?;
+        let original = req.prompt.clone();
+        let direct = ModelClient::new(HttpTimeouts::default())?;
+        let error = direct
+            .render_request(&rejected.model_target(), &original, streamed)
+            .err()
+            .ok_or_else(|| BitrouterError::internal("direct lossy projection admitted"))?;
+        let ModelError::Incompatible { report } = error else {
+            return Err(BitrouterError::internal("lost direct conversion report"));
+        };
+        assert_eq!(
+            report.issues[0].location,
+            bitrouter_ai::conversion::ConversionLocation::ToolResultContent {
+                message: 1,
+                block: 0,
+                part: 1
+            }
+        );
+        assert!(!format!("{report:?}").contains("file-secret"));
+        let observer = Arc::new(AdmissionObserver::default());
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![rejected, accepted]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .observe_hook(observer.clone());
+        let pipeline = Arc::new(builder.build()?);
+        if streamed {
+            for part in collect_stream(pipeline.execute_stream(req).await?).await {
+                let _ = part?;
+            }
+        } else {
+            let _ = pipeline.execute(req).await?;
+        }
+        assert_eq!(observer.excluded.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.failures.load(Ordering::SeqCst), 0);
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("no HTTP inventory"))?;
+        assert_eq!(requests.len(), 1);
+        let body = requests[0]
+            .body_json::<serde_json::Value>()
+            .map_err(BitrouterError::internal)?;
+        assert_eq!(
+            body["input"][1]["output"],
+            serde_json::json!([{"type":"input_text","text":"before"},{"type":"input_file","file_id":"file-secret"},{"type":"input_text","text":"after"}])
+        );
+        assert_eq!(original.messages[1].content[0],ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","input":[{"type":"function_call_output","call_id":"c","output":body["input"][1]["output"]}]}))?.messages[0].content[0]);
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ConversionEvents(tokio::sync::Mutex<Vec<String>>);
+
+#[async_trait]
+impl ObserveHook for Arc<ConversionEvents> {
+    async fn on_conversion_admitted(
+        &self,
+        _: &PipelineContext,
+        target: &RoutingTarget,
+        report: &bitrouter_ai::conversion::ConversionReport,
+    ) {
+        assert!(report.issues.is_empty());
+        assert_eq!(report.admitted.len(), 1);
+        assert_eq!(
+            report.admitted[0].effect,
+            bitrouter_ai::conversion::ConversionEffect::EquivalentRepresentation
+        );
+        assert!(!format!("{report:?}").contains("secret"));
+        self.0
+            .lock()
+            .await
+            .push(format!("admitted:{}", target.provider_name));
+    }
+    async fn on_conversion_excluded(
+        &self,
+        _: &PipelineContext,
+        target: &RoutingTarget,
+        report: &bitrouter_ai::conversion::ConversionReport,
+    ) {
+        assert!(!report.issues.is_empty());
+        self.0
+            .lock()
+            .await
+            .push(format!("excluded:{}", target.provider_name));
+    }
+    async fn on_hop_start(&self, _: &PipelineContext, target: &RoutingTarget) {
+        self.0
+            .lock()
+            .await
+            .push(format!("start:{}", target.provider_name));
+    }
+    async fn on_hop_end(
+        &self,
+        _: &PipelineContext,
+        target: &RoutingTarget,
+        outcome: HopOutcome<'_>,
+    ) {
+        if matches!(outcome, HopOutcome::Failed(_)) {
+            self.0
+                .lock()
+                .await
+                .push(format!("failed:{}", target.provider_name));
+        }
+    }
+    async fn after_phase(&self, _: Phase, _: &PipelineContext) {}
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+    async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
+}
+
+fn json_observation_request(streamed: bool) -> PipelineRequest {
+    let mut req = request();
+    req.prompt.tools = vec![Tool::Function {
+        name: "f".into(),
+        description: None,
+        parameters: serde_json::json!({"type":"object"}),
+        strict: Some(true),
+        provider_metadata: Default::default(),
+    }];
+    req.prompt.stream = streamed;
+    req.prompt.messages = vec![Message {
+        role: Role::Tool,
+        content: vec![Content::ToolResult {
+            call_id: "c".into(),
+            tool_name: Some("f".into()),
+            output: ToolResultOutput::Json {
+                value: serde_json::json!(["value-secret", 42]),
+            },
+            dynamic: false,
+            provider_metadata: Default::default(),
+        }],
+    }];
+    req
+}
+
+struct MisreportedAdmission;
+#[async_trait]
+impl Executor for MisreportedAdmission {
+    fn preflight(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        _: bool,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        Ok(bitrouter_ai::conversion::request_admission(
+            prompt,
+            &target.api_protocol,
+        ))
+    }
+    async fn execute(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        Err(BitrouterError::internal("refused report reached execution"))
+    }
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Err(BitrouterError::internal(
+            "refused report reached stream execution",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn projection_admission_preserves_tool_constraints_during_http_fallback() -> Result<()> {
+    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
+    use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation, ConversionReason};
+    use bitrouter_ai::protocol::{InboundAdapter, chat_completions::ChatCompletionsAdapter};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    for streamed in [false, true] {
+        let server = MockServer::start().await;
+        let result = serde_json::json!({"id":"chat-ok","object":"chat.completion","model":"test-model",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"allowed"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}});
+        let template = if streamed {
+            let body = [
+                serde_json::json!({"id":"chat-ok","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"allowed"},"finish_reason":null}]}),
+                serde_json::json!({"id":"chat-ok","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}),
+            ].iter().map(|event|format!("data: {event}\n\n")).collect::<String>() + "data: [DONE]\n\n";
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        } else {
+            ResponseTemplate::new(200).set_body_json(result)
+        };
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(template)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut rejected = target("a-lossy");
+        rejected.api_base = server.uri();
+        rejected.api_protocol = ApiProtocol::ChatCompletions;
+        rejected.chat_google_extensions = true;
+        let mut accepted = target("z-preserving");
+        accepted.api_base = server.uri();
+        let parameters = serde_json::json!({"type":"object","additionalProperties":false,
+            "properties":{"limit":{"type":"integer","exclusiveMinimum":0}},"required":["limit"]});
+        let mut req = request();
+        req.prompt = ChatCompletionsAdapter.parse_request(serde_json::json!({
+            "model":"test-model","stream":streamed,"messages":[{"role":"user","content":"keep"}],
+            "tools":[{"type":"function","function":{"name":"f","parameters":parameters}}]
+        }))?;
+        let original = req.prompt.clone();
+        let direct = ModelClient::new(HttpTimeouts::default())?;
+        let error = direct
+            .render_request(&rejected.model_target(), &original, streamed)
+            .err()
+            .ok_or_else(|| BitrouterError::internal("lossy schema admitted"))?;
+        let ModelError::Incompatible { report } = error else {
+            return Err(BitrouterError::internal("lost schema conversion report"));
+        };
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(
+            report.issues[0].reason,
+            ConversionReason::ToolSchemaProjectionUnclassified
+        );
+        assert_eq!(report.issues[0].effect, ConversionEffect::Unknown);
+        assert_eq!(
+            report.issues[0].location,
+            ConversionLocation::ToolDefinition { tool: 0 }
+        );
+        let observer = Arc::new(AdmissionObserver::default());
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![rejected, accepted]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .observe_hook(observer.clone());
+        let pipeline = Arc::new(builder.build()?);
+        if streamed {
+            for part in collect_stream(pipeline.execute_stream(req).await?).await {
+                let _ = part?;
+            }
+        } else {
+            let _ = pipeline.execute(req).await?;
+        }
+        assert_eq!(observer.excluded.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(observer.failures.load(Ordering::SeqCst), 0);
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("no HTTP inventory"))?;
+        assert_eq!(requests.len(), 1);
+        let body = requests[0]
+            .body_json::<serde_json::Value>()
+            .map_err(BitrouterError::internal)?;
+        assert_eq!(body["tools"][0]["function"]["parameters"], parameters);
+        assert_eq!(
+            ChatCompletionsAdapter.parse_request(body)?.tools,
+            original.tools
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_accounting()
+-> Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for streamed in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_json(
+                    serde_json::json!({"error":{"message":"retry","type":"api_error"}}),
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = serde_json::json!({"id":"resp-ok","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"allowed"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}});
+        let template = if streamed {
+            let body=[
+                serde_json::json!({"type":"response.created","response":{"id":"resp-ok"}}),
+                serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg","role":"assistant","content":[]}}),
+                serde_json::json!({"type":"response.output_text.delta","item_id":"msg","delta":"allowed"}),
+                serde_json::json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg","role":"assistant","content":[{"type":"output_text","text":"allowed"}]}}),
+                serde_json::json!({"type":"response.completed","response":result}),
+            ].iter().map(|event|format!("data: {event}\n\n")).collect::<String>();
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        } else {
+            ResponseTemplate::new(200).set_body_json(result)
+        };
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(template)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut excluded = target("a-excluded");
+        excluded.api_base = server.uri();
+        excluded.api_protocol = ApiProtocol::Messages;
+        let mut retry = target("b-retry");
+        retry.api_base = server.uri();
+        let mut final_target = target("z-final");
+        final_target.api_base = server.uri();
+        final_target.api_protocol = ApiProtocol::Responses;
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![excluded, retry, final_target]);
+        let events = Arc::new(ConversionEvents::default());
+        let http = Arc::new(HttpExecutor::with_defaults()?);
+        let dispatch = DispatchExecutor::new(http);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table)
+            .executor(Arc::new(dispatch))
+            .observe_hook(events.clone());
+        let pipeline = Arc::new(builder.build()?);
+        let req = json_observation_request(streamed);
+        let source = req.prompt.clone();
+        if streamed {
+            for part in collect_stream(pipeline.execute_stream(req).await?).await {
+                let _ = part?;
+            }
+        } else {
+            let _ = pipeline.execute(req).await?;
+        }
+        assert_eq!(
+            *events.0.lock().await,
+            vec![
+                "excluded:a-excluded",
+                "admitted:b-retry",
+                "start:b-retry",
+                "failed:b-retry",
+                "admitted:z-final",
+                "start:z-final"
+            ]
+        );
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("missing HTTP inventory"))?;
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            let body = request
+                .body_json::<serde_json::Value>()
+                .map_err(BitrouterError::internal)?;
+            let encoded = if request.url.path() == "/responses" {
+                &body["input"][0]["output"]
+            } else {
+                &body["messages"][0]["content"]
+            };
+            let value = serde_json::from_str::<serde_json::Value>(
+                encoded
+                    .as_str()
+                    .ok_or_else(|| BitrouterError::internal("missing JSON encoding"))?,
+            )
+            .map_err(BitrouterError::internal)?;
+            assert_eq!(value, serde_json::json!(["value-secret", 42]));
+        }
+        assert_eq!(source, json_observation_request(streamed).prompt);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_observations()
+-> Result<()> {
+    for streamed in [false, true] {
+        let table = Arc::new(StaticRoutingTable::new());
+        let mut refused = target("refused");
+        refused.api_protocol = ApiProtocol::Messages;
+        table.insert("test-model", vec![refused]);
+        let events = Arc::new(ConversionEvents::default());
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table)
+            .executor(Arc::new(MisreportedAdmission))
+            .observe_hook(events.clone());
+        let pipeline = Arc::new(builder.build()?);
+        let error = if streamed {
+            pipeline
+                .execute_stream(json_observation_request(true))
+                .await
+                .err()
+        } else {
+            pipeline
+                .execute(json_observation_request(false))
+                .await
+                .err()
+        }
+        .ok_or_else(|| BitrouterError::internal("refused report admitted"))?;
+        assert!(matches!(error, BitrouterError::Incompatible { .. }));
+        assert_eq!(*events.0.lock().await, vec!["excluded:refused"]);
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![target("unchanged")]);
+        let events = Arc::new(ConversionEvents::default());
+        let mut builder = PipelineBuilder::new();
+        let executor = if streamed {
+            MockExecutor::new(vec![MockResponse::Stream(vec![
+                StreamPart::TextDelta { text: "ok".into() },
+                StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ])])
+        } else {
+            MockExecutor::always_text("ok")
+        };
+        builder
+            .routing_table(table)
+            .executor(Arc::new(executor))
+            .observe_hook(events.clone());
+        let pipeline = Arc::new(builder.build()?);
+        if streamed {
+            for part in collect_stream(pipeline.execute_stream(request()).await?).await {
+                let _ = part?;
+            }
+        } else {
+            let _ = pipeline.execute(request()).await?;
+        }
+        assert_eq!(*events.0.lock().await, vec!["start:unchanged"]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn google_continuity_failure_keeps_reported_usage_in_settlement() -> Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/chat/completions")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "choices":[{"message":{"role":"assistant","tool_calls":[{"id":"","type":"function","function":{"name":"f","arguments":"{}"},"extra_content":{"google":{"thought_signature":"fixture-opaque"}}}]},"finish_reason":"tool_calls"}],
+        "usage":{"prompt_tokens":12,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":3}}
+    }))).expect(1).mount(&server).await;
+    let mut selected = target("google");
+    selected.api_base = server.uri();
+    selected.chat_google_extensions = true;
+    let table = Arc::new(StaticRoutingTable::new());
+    table.insert("test-model", vec![selected]);
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(table)
+        .executor(Arc::new(HttpExecutor::with_defaults()?))
+        .settlement_recorder(SettlementSnapshotRecorder(recorded.clone()));
+    let pipeline = builder.build()?;
+    let error = pipeline
+        .execute(request())
+        .await
+        .err()
+        .ok_or_else(|| BitrouterError::internal("invalid signed response accepted"))?;
+    assert!(matches!(
+        error,
+        BitrouterError::UpstreamInvalidResponse { usage: Some(_), .. }
+    ));
+    let snapshots = recorded
+        .lock()
+        .map_err(|_| BitrouterError::internal("settlement lock unavailable"))?;
+    assert_eq!(
+        *snapshots,
+        vec![SettlementSnapshot {
+            prompt_tokens: 12,
+            completion_tokens: 7,
+            has_error: true
+        }]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn google_signed_parallel_and_sequential_tools_survive_sdk_gateway_cycles() -> Result<()> {
+    use bitrouter_ai::protocol::{InboundAdapter, chat_completions::ChatCompletionsAdapter};
+    use bitrouter_ai::stream::collect::collect_generate;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for streamed in [false, true] {
+        let server = MockServer::start().await;
+        let mut selected = target("google");
+        selected.api_base = server.uri();
+        selected.chat_google_extensions = true;
+        let call = |id: &str, signature: Option<&str>| {
+            let mut call = serde_json::json!({"id":id,"type":"function","function":{"name":"lookup_city","arguments":"{\"city\":\"Paris\"}"}});
+            if let Some(signature) = signature {
+                call["extra_content"] =
+                    serde_json::json!({"google":{"thought_signature":signature}});
+            }
+            call
+        };
+        let responses = [
+            serde_json::json!({"role":"assistant","tool_calls":[call("one",Some("opaque-first")),call("two",None)]}),
+            serde_json::json!({"role":"assistant","tool_calls":[call("three",Some("opaque-second"))]}),
+            serde_json::json!({"role":"assistant","content":"completed"}),
+        ];
+        for (index, message) in responses.iter().enumerate() {
+            let body = serde_json::json!({"choices":[{"message":message,"finish_reason":if index<2 { "tool_calls" } else { "stop" }}],"usage":{"prompt_tokens":12,"completion_tokens":7}});
+            let response = if streamed {
+                let mut delta = message.clone();
+                if let Some(calls) = delta
+                    .get_mut("tool_calls")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for (index, call) in calls.iter_mut().enumerate() {
+                        call["index"] = index.into();
+                    }
+                }
+                let delta = serde_json::json!({"choices":[{"delta":delta,"finish_reason":null}]});
+                let terminal = serde_json::json!({"choices":[{"delta":{},"finish_reason":body["choices"][0]["finish_reason"]}],"usage":body["usage"]});
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!(
+                        "data: {delta}\n\ndata: {terminal}\n\ndata: [DONE]\n\n"
+                    ))
+            } else {
+                ResponseTemplate::new(200).set_body_json(body)
+            };
+            Mock::given(method("POST"))
+                .and(path("/chat/completions"))
+                .respond_with(response)
+                .up_to_n_times(1)
+                .with_priority(index as u8 + 1)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![selected.clone()]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table.clone())
+            .executor(Arc::new(HttpExecutor::with_defaults()?));
+        let pipeline = Arc::new(builder.build()?);
+        let mut req = request();
+        req.prompt.stream = streamed;
+        req.prompt.tools = vec![Tool::Function {
+            name: "lookup_city".into(),
+            description: None,
+            parameters: serde_json::json!({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}),
+            strict: None,
+            provider_metadata: Default::default(),
+        }];
+        for cycle in 0..3 {
+            let result = if streamed {
+                collect_generate(pipeline.clone().execute_stream(req.clone()).await?).await?
+            } else {
+                pipeline.execute(req.clone()).await?.result
+            };
+            let gateway =
+                ChatCompletionsAdapter.render_response(&result, &req.prompt, "fixture-gateway")?;
+            let mut messages = vec![gateway["choices"][0]["message"].clone()];
+            let mut count = 0;
+            for content in &result.content {
+                if let Content::ToolCall { id, .. } = content {
+                    messages.push(serde_json::json!({"role":"tool","tool_call_id":id,"content":"fixture-result"}));
+                    count += 1;
+                }
+            }
+            assert_eq!(
+                count,
+                match cycle {
+                    0 => 2,
+                    1 => 1,
+                    _ => 0,
+                }
+            );
+            let continuation = ChatCompletionsAdapter
+                .parse_request(serde_json::json!({"model":"test-model","messages":messages}))?;
+            req.prompt.messages.extend(continuation.messages);
+            let mut unrelated = selected.clone();
+            unrelated.provider_name = "unrelated".into();
+            unrelated.chat_google_extensions = false;
+            table.insert("test-model", vec![unrelated, selected.clone()]);
+        }
+        let sent = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("request inventory missing"))?;
+        assert_eq!(sent.len(), 3);
+        for request in sent.iter().skip(1) {
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .map_err(|_| BitrouterError::internal("invalid captured body"))?;
+            let calls = body["messages"]
+                .as_array()
+                .ok_or_else(|| BitrouterError::internal("missing messages"))?
+                .iter()
+                .flat_map(|message| {
+                    message
+                        .get("tool_calls")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                });
+            for call in calls {
+                assert!(call["extra_content"].get("bitrouter").is_none());
+                if call["id"] == "one" {
+                    assert_eq!(
+                        call["extra_content"]["google"]["thought_signature"],
+                        "opaque-first"
+                    );
+                }
+                if call["id"] == "three" {
+                    assert_eq!(
+                        call["extra_content"]["google"]["thought_signature"],
+                        "opaque-second"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }

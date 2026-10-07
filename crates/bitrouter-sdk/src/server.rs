@@ -1,11 +1,9 @@
 //! axum HTTP server — gated behind the `server` feature.
 //!
-//! Wires all four inbound protocols to the `language_model` pipeline:
+//! Wires all three inbound protocols to the `language_model` pipeline:
 //! - `POST /v1/messages` — Messages
 //! - `POST /v1/chat/completions` — Chat Completions
 //! - `POST /v1/responses` — Responses
-//! - `POST /v1beta/models/{*model_action}` — Google `generateContent` /
-//!   `streamGenerateContent`
 //!
 //! Each handler parses the inbound body with that protocol's adapter, runs the
 //! pipeline, and renders the result back in the **same** inbound protocol —
@@ -29,12 +27,14 @@ use crate::app::App;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::Pipeline;
-use crate::language_model::protocol::responses::encode_gateway_continuation_id;
-use crate::language_model::protocol::{inbound_adapter_for, sanitize_model_name};
-use crate::language_model::stream::{SseFrame, SseKeepaliveStream};
-use crate::language_model::types::{ApiProtocol, PipelineRequest};
+use crate::language_model::stream::SseKeepaliveStream;
+use crate::language_model::types::PipelineRequest;
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
+use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
+use bitrouter_ai::protocol::{inbound_adapter_for, sanitize_model_name};
+use bitrouter_ai::stream::SseFrame;
+use bitrouter_ai::types::ApiProtocol;
 
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 const REQUIRED_SHUTDOWN_RETRY_DELAY: Duration = Duration::from_millis(250);
@@ -300,8 +300,7 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
     let mut router = Router::new()
         .route("/v1/messages", post(messages))
         .route("/v1/chat/completions", post(chat_completions))
-        .route("/v1/responses", post(responses))
-        .route("/v1beta/models/{*model_action}", post(generate_content));
+        .route("/v1/responses", post(responses));
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
     }
@@ -1283,7 +1282,7 @@ async fn messages(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::Messages, body, None).await
+    handle(state, headers, ApiProtocol::Messages, body).await
 }
 
 async fn chat_completions(
@@ -1291,7 +1290,7 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::ChatCompletions, body, None).await
+    handle(state, headers, ApiProtocol::ChatCompletions, body).await
 }
 
 async fn responses(
@@ -1299,45 +1298,7 @@ async fn responses(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::Responses, body, None).await
-}
-
-/// Generate Content encodes the model and streaming verb in the path. The
-/// catch-all also admits slash selectors such as `bitrouter/coding`; Axum
-/// decodes a percent-escaped slash before this handler validates the selector.
-async fn generate_content(
-    State(state): State<AppState>,
-    Path(model_action): Path<String>,
-    headers: HeaderMap,
-    Json(mut body): Json<serde_json::Value>,
-) -> Response {
-    let (model, action) = match model_action.rsplit_once(':') {
-        Some((m, a))
-            if !m.is_empty() && matches!(a, "generateContent" | "streamGenerateContent") =>
-        {
-            (m.to_string(), a.to_string())
-        }
-        _ => {
-            return BitrouterError::bad_request(
-                "google path must be 'models/{model}:generateContent' or 'models/{model}:streamGenerateContent'",
-            )
-            .into_response();
-        }
-    };
-    // Generate Content carries the model in the URL, not the body — inject it so the
-    // adapter sees it, and set the stream flag from the verb.
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("model".into(), model.clone().into());
-        obj.insert("stream".into(), (action == "streamGenerateContent").into());
-    }
-    handle(
-        state,
-        headers,
-        ApiProtocol::GenerateContent,
-        body,
-        Some(model),
-    )
-    .await
+    handle(state, headers, ApiProtocol::Responses, body).await
 }
 
 /// Shared handler: parse with the inbound adapter, run the pipeline, render the
@@ -1347,7 +1308,6 @@ async fn handle(
     mut headers: HeaderMap,
     inbound: ApiProtocol,
     body: serde_json::Value,
-    model_override: Option<String>,
 ) -> Response {
     add_inbound_protocol_hint(&mut headers, &inbound);
     let request_id = match add_request_id_hint(&mut headers) {
@@ -1357,7 +1317,7 @@ async fn handle(
     if inbound == ApiProtocol::Responses
         && let Err(error) = encode_gateway_continuation_id(&request_id)
     {
-        return error.into_response();
+        return BitrouterError::from(error).into_response();
     }
     let adapter = match inbound_adapter_for(&inbound) {
         Some(a) => a,
@@ -1369,11 +1329,8 @@ async fn handle(
             .into_response();
         }
     };
-    let (prompt, original_model) = match adapter.parse_request(body) {
+    let (prompt, original_model) = match adapter.parse_request(body).map_err(BitrouterError::from) {
         Ok(mut p) => {
-            if let Some(model) = model_override {
-                p.model = model;
-            }
             p.model = sanitize_model_name(&p.model);
             let original_model = p.model.clone();
             // Ingress-time prompt transforms (e.g. the bitrouter/fusion model
@@ -1432,11 +1389,14 @@ async fn handle(
             Ok(prepared) => {
                 let mut response_prompt = prompt.clone();
                 response_prompt.model = prepared.model_id.clone();
-                match adapter.render_response(
-                    &prepared.response.result,
-                    &response_prompt,
-                    &prepared.response.request_id,
-                ) {
+                match adapter
+                    .render_response(
+                        &prepared.response.result,
+                        &response_prompt,
+                        &prepared.response.request_id,
+                    )
+                    .map_err(BitrouterError::from)
+                {
                     Ok(json) => match prepared.delivery.deliver().await {
                         Ok(()) => Json(json).into_response(),
                         Err(error) => error.into_response(),
@@ -1527,7 +1487,7 @@ async fn stream_response(
                         part,
                         mut delivery,
                     } = prepared;
-                    match encoder.encode(&part) {
+                    match encoder.encode(&part).map_err(BitrouterError::from) {
                         Ok(mut frames) => {
                             if let Some(permit) = delivery.take() {
                                 // A canonical success terminal ends the
@@ -1542,13 +1502,13 @@ async fn stream_response(
                                             permit.fail(error.clone()).await
                                         {
                                             for frame in encoder
-                                                .encode_bitrouter_error(&authorization_error)
+                                                .encode_stream_error(&authorization_error.stream_error())
                                             {
                                                 yield frame;
                                             }
                                             return;
                                         }
-                                        for frame in encoder.encode_bitrouter_error(&error) {
+                                        for frame in encoder.encode_stream_error(&error.stream_error()) {
                                             yield frame;
                                         }
                                         return;
@@ -1561,34 +1521,32 @@ async fn stream_response(
                                             permit.fail(error.clone()).await
                                         {
                                             for frame in encoder
-                                                .encode_bitrouter_error(&authorization_error)
+                                                .encode_stream_error(&authorization_error.stream_error())
                                             {
                                                 yield frame;
                                             }
                                             return;
                                         }
-                                        for frame in encoder.encode_bitrouter_error(
-                                            &error,
-                                        ) {
+                                        for frame in encoder.encode_stream_error(&error.stream_error()) {
                                             yield frame;
                                         }
                                         return;
                                     }
                                 }
-                                match encoder.finish() {
+                                match encoder.finish().map_err(BitrouterError::from) {
                                     Ok(finish_frames) => frames.extend(finish_frames),
                                     Err(error) => {
                                         if let Err(authorization_error) =
                                             permit.fail(error.clone()).await
                                         {
                                             for frame in encoder
-                                                .encode_bitrouter_error(&authorization_error)
+                                                .encode_stream_error(&authorization_error.stream_error())
                                             {
                                                 yield frame;
                                             }
                                             return;
                                         }
-                                        for frame in encoder.encode_bitrouter_error(&error) {
+                                        for frame in encoder.encode_stream_error(&error.stream_error()) {
                                             yield frame;
                                         }
                                         return;
@@ -1602,13 +1560,13 @@ async fn stream_response(
                                     if let Err(authorization_error) = permit.fail(error.clone()).await
                                     {
                                         for frame in
-                                            encoder.encode_bitrouter_error(&authorization_error)
+                                            encoder.encode_stream_error(&authorization_error.stream_error())
                                         {
                                             yield frame;
                                         }
                                         return;
                                     }
-                                    for frame in encoder.encode_bitrouter_error(&error) {
+                                    for frame in encoder.encode_stream_error(&error.stream_error()) {
                                         yield frame;
                                     }
                                     return;
@@ -1619,7 +1577,7 @@ async fn stream_response(
                                         && let Some(permit) = permit.take()
                                         && let Err(error) = permit.deliver().await
                                     {
-                                        for error_frame in encoder.encode_bitrouter_error(&error) {
+                                        for error_frame in encoder.encode_stream_error(&error.stream_error()) {
                                             yield error_frame;
                                         }
                                         return;
@@ -1637,12 +1595,12 @@ async fn stream_response(
                                 && let Err(authorization_error) =
                                     permit.fail(error.clone()).await
                             {
-                                for frame in encoder.encode_bitrouter_error(&authorization_error) {
+                                for frame in encoder.encode_stream_error(&authorization_error.stream_error()) {
                                     yield frame;
                                 }
                                 return;
                             }
-                            for f in encoder.encode_bitrouter_error(&error) {
+                            for f in encoder.encode_stream_error(&error.stream_error()) {
                                 yield f;
                             }
                             return;
@@ -1652,21 +1610,21 @@ async fn stream_response(
                 Err(e) => {
                     // HTTP status is immutable after streaming begins. Emit a
                     // typed protocol-shaped terminal event instead.
-                    for f in encoder.encode_bitrouter_error(&e) {
+                    for f in encoder.encode_stream_error(&e.stream_error()) {
                         yield f;
                     }
                     return;
                 }
             }
         }
-        match encoder.finish() {
+        match encoder.finish().map_err(BitrouterError::from) {
             Ok(frames) => {
                 for f in frames {
                     yield f;
                 }
             }
             Err(error) => {
-                for f in encoder.encode_bitrouter_error(&error) {
+                for f in encoder.encode_stream_error(&error.stream_error()) {
                     yield f;
                 }
             }
@@ -1778,15 +1736,14 @@ mod tests {
     use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
     use crate::language_model::routing::StaticRoutingTable;
     use crate::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
-    use crate::language_model::types::{
-        ApiProtocol, AuthScheme, ExecutionResult, Prompt, RoutingTarget,
-    };
+    use crate::language_model::types::{ExecutionResult, RoutingTarget};
     use crate::language_model::{
         HookDecision, PipelineBuilder, PipelineContext, PreRequestHook, StreamPartStream,
     };
     use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::{Request, header};
+    use bitrouter_ai::types::{ApiProtocol, AuthScheme, Prompt};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tower::ServiceExt;
 
@@ -1899,6 +1856,68 @@ mod tests {
         inner: MockExecutor,
     }
 
+    #[tokio::test]
+    async fn ingress_conversion_refusals_are_http_400_before_any_executor_call() -> Result<()> {
+        for stream in [false, true] {
+            let cases = [
+                (
+                    "/v1/chat/completions".to_owned(),
+                    serde_json::json!({"model":"gpt-5.5","stream":stream,"messages":[{"role":"user","content":[{"type":"text","text":"keep"},{"type":"future-secret","data":"opaque-secret"}]}]}),
+                ),
+                (
+                    "/v1/responses".to_owned(),
+                    serde_json::json!({"model":"gpt-5.5","stream":stream,"input":[{"role":"user","content":"keep"},{"type":"future-secret","id":"opaque-secret"}]}),
+                ),
+                (
+                    "/v1/messages".to_owned(),
+                    serde_json::json!({"model":"gpt-5.5","stream":stream,"max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"keep"},{"type":"future-secret","data":"opaque-secret"}]}]}),
+                ),
+                (
+                    "/v1/chat/completions".to_owned(),
+                    serde_json::json!({"model":"gpt-5.5","stream":stream,"messages":[{"role":"tool","tool_call_id":"c","content":[{"type":"file","file":{"file_data":"data:application/pdf;base64,payload-secret","filename":"name-secret"}}]}]}),
+                ),
+                (
+                    "/v1/responses".to_owned(),
+                    serde_json::json!({"model":"gpt-5.5","stream":stream,"input":[{"type":"function_call_output","call_id":"c","output":[{"type":"input_file","file_id":"file-secret","filename":"name-secret"}]}]}),
+                ),
+                (
+                    "/v1/messages".to_owned(),
+                    serde_json::json!({"model":"gpt-5.5","stream":stream,"max_tokens":8,"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"payload-secret"},"context":"context-secret"}]}]}),
+                ),
+            ];
+            for (url, body) in cases {
+                let calls = Arc::new(AtomicUsize::new(0));
+                let executor = Arc::new(CountingExecutor {
+                    calls: calls.clone(),
+                    inner: MockExecutor::always_text("must not run"),
+                });
+                let response = build_router(test_state_with_executor(executor))
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(url)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                serde_json::to_vec(&body).map_err(BitrouterError::internal)?,
+                            ))
+                            .map_err(BitrouterError::internal)?,
+                    )
+                    .await
+                    .map_err(BitrouterError::internal)?;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let bytes = to_bytes(response.into_body(), 64 * 1024)
+                    .await
+                    .map_err(BitrouterError::internal)?;
+                let wire: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(BitrouterError::internal)?;
+                assert_eq!(wire["error"]["code"], "model_conversion_incompatible");
+                assert!(!wire.to_string().contains("secret"));
+                assert_eq!(calls.load(Ordering::SeqCst), 0);
+            }
+        }
+        Ok(())
+    }
+
     struct RecoveringDrainFinalizer {
         attempts: Arc<AtomicUsize>,
         recovered: Arc<AtomicBool>,
@@ -1972,67 +1991,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn google_slash_selectors_and_actions_reach_the_pipeline()
+    async fn retired_google_endpoints_never_execute()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let calls = Arc::new(AtomicUsize::new(0));
-        let scripted = (0..2)
-            .flat_map(|_| {
-                [
-                    MockResponse::Generate(crate::language_model::GenerateResult {
-                        content: vec![crate::language_model::Content::Text {
-                            text: "ok".into(),
-                            provider_metadata: Default::default(),
-                        }],
-                        usage: None,
-                        finish_reason: Some(crate::language_model::FinishReason::Stop),
-                        response_id: Some("response-fixture".into()),
-                        stop_details: None,
-                        provider_metadata: Default::default(),
-                    }),
-                    MockResponse::Stream(vec![
-                        crate::language_model::StreamPart::TextDelta { text: "ok".into() },
-                        crate::language_model::StreamPart::Finish {
-                            reason: crate::language_model::FinishReason::Stop,
-                        },
-                    ]),
-                ]
-            })
-            .collect();
-        let table = StaticRoutingTable::new();
-        table.insert(
-            "gpt-5.5",
-            vec![RoutingTarget {
-                provider_name: "fixture".into(),
-                service_id: "gpt-5.5".into(),
-                api_base: "https://fixture.invalid".into(),
-                api_key: String::new(),
-                api_protocol: ApiProtocol::ChatCompletions,
-                chat_token_limit_field: None,
-                chat_supports_store: None,
-                chat_supports_stream_options: None,
-                reasoning_effort: None,
-                account_label: None,
-                api_key_override: None,
-                api_base_override: None,
-                auth_scheme: AuthScheme::Bearer,
-                headers: Vec::new(),
-            }],
-        );
-        let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(Arc::new(table))
-            .executor(Arc::new(CountingExecutor {
-                calls: calls.clone(),
-                inner: MockExecutor::new(scripted),
-            }));
-        let app = build_router(AppState {
-            language_model: Arc::new(builder.build()?),
-            mcp: None,
-            skip_auth: true,
-            metrics_renderer: None,
-            prompt_transforms: vec![Arc::new(RewriteModel("gpt-5.5"))],
-        });
-        for selector in ["bitrouter/coding", "bitrouter%2Fcoding"] {
+        let app = build_router(test_state_with_executor(Arc::new(CountingExecutor {
+            calls: calls.clone(),
+            inner: MockExecutor::always_text("must not execute"),
+        })));
+        for selector in ["bitrouter/coding", "bitrouter%2Fcoding", "gemini-fixture"] {
             for action in ["generateContent", "streamGenerateContent"] {
                 let response = app
                     .clone()
@@ -2041,42 +2007,13 @@ mod tests {
                             .method("POST")
                             .uri(format!("/v1beta/models/{selector}:{action}"))
                             .header(header::CONTENT_TYPE, "application/json")
-                            .body(Body::from(
-                                r#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}"#,
-                            ))?,
+                            .body(Body::from("{}"))?,
                     )
                     .await?;
-                assert_eq!(response.status(), axum::http::StatusCode::OK);
-                assert!(
-                    !to_bytes(response.into_body(), MAX_BODY_BYTES)
-                        .await?
-                        .is_empty()
-                );
+                assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 4);
-        for invalid in [
-            "bitrouter/coding:unknown",
-            "bitrouter/coding",
-            ":generateContent",
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(format!("/v1beta/models/{invalid}"))
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from("{}"))?,
-                )
-                .await?;
-            assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
-        }
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            4,
-            "invalid action must not execute upstream"
-        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
         Ok(())
     }
 
@@ -2100,6 +2037,7 @@ mod tests {
                 chat_token_limit_field: None,
                 chat_supports_store: None,
                 chat_supports_stream_options: None,
+                chat_google_extensions: false,
                 reasoning_effort: None,
                 account_label: None,
                 api_key_override: None,
@@ -2143,6 +2081,7 @@ mod tests {
                 chat_token_limit_field: None,
                 chat_supports_store: None,
                 chat_supports_stream_options: None,
+                chat_google_extensions: false,
                 reasoning_effort: None,
                 account_label: None,
                 api_key_override: None,

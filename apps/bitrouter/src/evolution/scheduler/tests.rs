@@ -1,11 +1,12 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use bitrouter_ai::types::ToolChoice;
 use bitrouter_sdk::App;
 use bitrouter_sdk::acp::capture::{CaptureDirection, CapturePort};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::executor::MockExecutor;
-use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook, ToolChoice};
+use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
 use serde_json::json;
 
 use crate::acp_trajectory::checkpoint::types::AssessmentSource;

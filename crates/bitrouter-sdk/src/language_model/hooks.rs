@@ -11,7 +11,8 @@ use async_trait::async_trait;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::{PipelineContext, StreamContext};
 use crate::language_model::stream::{StreamAction, StreamInterest, StreamOutcome};
-use crate::language_model::types::{ExecutionResult, RoutingTarget, StreamPart};
+use crate::language_model::types::{ExecutionResult, RoutingTarget};
+use bitrouter_ai::types::StreamPart;
 
 /// A PreRequest hook's verdict.
 #[derive(Debug)]
@@ -190,6 +191,28 @@ pub enum StreamHopOutcome<'a> {
 /// swallows them.
 #[async_trait]
 pub trait ObserveHook: Send + Sync {
+    /// An eligible candidate has detected equivalent conversions. Called before
+    /// hop start; this is an admission observation, not proof of an HTTP attempt.
+    /// It carries no transcript, opaque payload, credential or account identity.
+    async fn on_conversion_admitted(
+        &self,
+        _ctx: &PipelineContext,
+        _target: &RoutingTarget,
+        _report: &bitrouter_ai::conversion::ConversionReport,
+    ) {
+    }
+
+    /// A candidate was excluded before a provider attempt. It must not be
+    /// recorded as an upstream reliability failure. The report contains no
+    /// transcript, native item IDs, credentials or selected-account identity.
+    async fn on_conversion_excluded(
+        &self,
+        _ctx: &PipelineContext,
+        _target: &RoutingTarget,
+        _report: &bitrouter_ai::conversion::ConversionReport,
+    ) {
+    }
+
     /// Called once when the pipeline accepts a request, before pre-request
     /// checks run. Default: no-op.
     async fn on_request_start(&self, _ctx: &PipelineContext) {

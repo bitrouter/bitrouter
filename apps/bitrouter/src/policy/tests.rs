@@ -9,11 +9,11 @@ use crate::metering::{
 use crate::policy::hook::PolicyHook;
 use crate::policy::policy::Policy;
 use crate::policy::store::PolicyStore;
+use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role, Tool};
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{
-    GenerationParams, HookDecision, Message, PipelineContext, PipelineRequest, PreRequestHook,
-    Prompt, Role, Tool,
+    HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
 };
 
 #[tokio::test]

@@ -15,11 +15,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use bitrouter_ai::types::{FinishReason, Usage, UsageOrigin};
 use bitrouter_sdk::Result;
 use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::{
-    FinishReason, SettlementContext, SettlementRecorder, Usage, UsageOrigin,
-};
+use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 use serde::Serialize;
 
 use crate::auth::events::ApiPrincipalEstablished;
