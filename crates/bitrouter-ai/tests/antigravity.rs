@@ -82,10 +82,86 @@ fn applier(
     )
 }
 
+async fn mount_project(server: &MockServer, access: &str, project: &str) {
+    Mock::given(method("POST"))
+        .and(path("/v1internal:loadCodeAssist"))
+        .and(header("authorization", format!("Bearer {access}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cloudaicompanionProject": project
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+async fn mount_generation(server: &MockServer, access: &str, stream: bool, count: u64) {
+    let endpoint = if stream {
+        "streamGenerateContent"
+    } else {
+        "generateContent"
+    };
+    let response = if stream {
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(format!("data: {}\n\n", reply()))
+    } else {
+        ResponseTemplate::new(200).set_body_json(reply())
+    };
+    let mock = Mock::given(method("POST"))
+        .and(path(format!("/v1internal:{endpoint}")))
+        .and(header("authorization", format!("Bearer {access}")));
+    let mock = if stream {
+        mock.and(query_param("alt", "sse"))
+    } else {
+        mock
+    };
+    mock.respond_with(response)
+        .expect(count)
+        .mount(server)
+        .await;
+}
+
+async fn assert_model_requests(server: &MockServer, projects: &[(&str, &str)]) -> TestResult {
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or("missing Google requests")?;
+    for request in requests.iter().filter(|request| {
+        request.url.path().contains("GenerateContent")
+            || request.url.path().ends_with("generateContent")
+    }) {
+        let bearer = request
+            .headers
+            .get("authorization")
+            .ok_or("missing bearer")?
+            .to_str()?;
+        let access = bearer.strip_prefix("Bearer ").ok_or("not a bearer")?;
+        let project = projects
+            .iter()
+            .find(|(token, _)| *token == access)
+            .ok_or("unexpected bearer")?
+            .1;
+        let body: Value = serde_json::from_slice(&request.body)?;
+        assert_eq!(body["project"], project);
+        assert_eq!(body["model"], "selected-service");
+        assert_eq!(body["request"]["contents"][0]["parts"][0]["text"], "hello");
+        assert!(!request.headers.contains_key("x-goog-api-key"));
+        assert!(
+            request
+                .headers
+                .get("user-agent")
+                .ok_or("missing UA")?
+                .to_str()?
+                .starts_with("antigravity/")
+        );
+        assert!(request.headers.contains_key("client-metadata"));
+    }
+    Ok(())
+}
+
 #[tokio::test]
-async fn google_json_and_sse_probe_secrets_recover_once_and_bind_each_origin() -> TestResult {
+async fn google_json_and_sse_probe_secrets_and_recover_once() -> TestResult {
     let server = MockServer::start().await;
-    let other = MockServer::start().await;
     let sources = Arc::new(AtomicUsize::new(0));
     let source_count = sources.clone();
     let rotations = Arc::new(AtomicUsize::new(0));
@@ -104,16 +180,7 @@ async fn google_json_and_sse_probe_secrets_recover_once_and_bind_each_origin() -
             ResponseTemplate::new(200).set_body_json(json!({"access_token":format!("access-{count}"),"refresh_token":format!("refresh-{count}"),"expires_in":3600}))
         }).expect(2).mount(&server).await;
     for access in ["access-1", "access-2"] {
-        Mock::given(method("POST"))
-            .and(path("/v1internal:loadCodeAssist"))
-            .and(header("authorization", format!("Bearer {access}")))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"cloudaicompanionProject":format!("project-{access}")})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        mount_project(&server, access, &format!("project-{access}")).await;
     }
     Mock::given(method("POST"))
         .and(path("/v1internal:generateContent"))
@@ -122,42 +189,8 @@ async fn google_json_and_sse_probe_secrets_recover_once_and_bind_each_origin() -
         .expect(1)
         .mount(&server)
         .await;
-    Mock::given(method("POST"))
-        .and(path("/v1internal:generateContent"))
-        .and(header("authorization", "Bearer access-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(reply()))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1internal:streamGenerateContent"))
-        .and(query_param("alt", "sse"))
-        .and(header("authorization", "Bearer access-2"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(format!("data: {}\n\n", reply())),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1internal:loadCodeAssist"))
-        .and(header("authorization", "Bearer access-2"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"cloudaicompanionProject":"other-project"})),
-        )
-        .expect(1)
-        .mount(&other)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1internal:generateContent"))
-        .and(header("authorization", "Bearer access-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(reply()))
-        .expect(1)
-        .mount(&other)
-        .await;
+    mount_generation(&server, "access-2", false, 1).await;
+    mount_generation(&server, "access-2", true, 1).await;
     let unrelated = Credential::api_key("other-account");
     let store = Arc::new(MemoryCredentialStore::new([
         (key("selected"), Credential::Oauth(expired())),
@@ -175,7 +208,6 @@ async fn google_json_and_sse_probe_secrets_recover_once_and_bind_each_origin() -
     let client = client(applier(store.clone(), refresher))?;
     let selected = target(&server.uri());
     let source = prompt()?;
-    let original = source.clone();
     let result = client
         .generate(&selected, &source, &CancellationToken::new())
         .await?;
@@ -189,10 +221,6 @@ async fn google_json_and_sse_probe_secrets_recover_once_and_bind_each_origin() -
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
     assert!(parts.iter().any(StreamPart::is_terminal));
-    client
-        .generate(&target(&other.uri()), &source, &CancellationToken::new())
-        .await?;
-    assert_eq!(source, original);
     assert_eq!(sources.load(Ordering::SeqCst), 1);
     assert_eq!(rotations.load(Ordering::SeqCst), 2);
     assert_eq!(
@@ -208,44 +236,14 @@ async fn google_json_and_sse_probe_secrets_recover_once_and_bind_each_origin() -
             .and_then(|token| token.refresh_token.as_deref()),
         Some("refresh-2")
     );
-    for (origin, foreign) in [(&server, false), (&other, true)] {
-        let requests = origin
-            .received_requests()
-            .await
-            .ok_or("missing Google requests")?;
-        for request in requests.iter().filter(|request| {
-            request.url.path().contains("GenerateContent")
-                || request.url.path().ends_with("generateContent")
-        }) {
-            let bearer = request
-                .headers
-                .get("authorization")
-                .ok_or("missing bearer")?
-                .to_str()?;
-            let body: Value = serde_json::from_slice(&request.body)?;
-            let access = bearer.strip_prefix("Bearer ").ok_or("not a bearer")?;
-            assert_eq!(
-                body["project"],
-                if foreign {
-                    "other-project".into()
-                } else {
-                    format!("project-{access}")
-                }
-            );
-            assert_eq!(body["model"], "selected-service");
-            assert_eq!(body["request"]["contents"][0]["parts"][0]["text"], "hello");
-            assert!(!request.headers.contains_key("x-goog-api-key"));
-            assert!(
-                request
-                    .headers
-                    .get("user-agent")
-                    .ok_or("missing UA")?
-                    .to_str()?
-                    .starts_with("antigravity/")
-            );
-            assert!(request.headers.contains_key("client-metadata"));
-        }
-    }
+    assert_model_requests(
+        &server,
+        &[
+            ("access-1", "project-access-1"),
+            ("access-2", "project-access-2"),
+        ],
+    )
+    .await?;
     let requests = server
         .received_requests()
         .await
@@ -256,6 +254,47 @@ async fn google_json_and_sse_probe_secrets_recover_once_and_bind_each_origin() -
         .collect::<Vec<_>>();
     assert_eq!(grants.len(), 3);
     assert!(std::str::from_utf8(&grants[2].body)?.contains("refresh_token=refresh-1"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_cache_is_scoped_to_origin_and_reused_on_return() -> TestResult {
+    let first = MockServer::start().await;
+    let second = MockServer::start().await;
+    mount_project(&first, "fresh-access", "first-project").await;
+    mount_project(&second, "fresh-access", "second-project").await;
+    mount_generation(&first, "fresh-access", false, 2).await;
+    mount_generation(&second, "fresh-access", false, 1).await;
+    let store = Arc::new(MemoryCredentialStore::new([(
+        key("selected"),
+        Credential::Oauth(OAuthToken {
+            access_token: "fresh-access".into(),
+            expires_at: 0,
+            refresh_token: None,
+        }),
+    )]));
+    let refresh = Arc::new(AntigravityRefresher::new(
+        reqwest::Client::new(),
+        "https://fixture.invalid/token",
+        "explicit-client",
+        Arc::new(|| {
+            Err(ModelError::configuration(
+                "fresh credentials must not refresh",
+            ))
+        }),
+    ));
+    let client = client(applier(store, refresh))?;
+    let source = prompt()?;
+    for server in [&first, &second, &first] {
+        let result = client
+            .generate(&target(&server.uri()), &source, &CancellationToken::new())
+            .await?;
+        assert!(
+            matches!(result.content.as_slice(), [Content::Text { text, .. }] if text == "done")
+        );
+    }
+    assert_model_requests(&first, &[("fresh-access", "first-project")]).await?;
+    assert_model_requests(&second, &[("fresh-access", "second-project")]).await?;
     Ok(())
 }
 
@@ -436,23 +475,8 @@ async fn dropping_generate_during_refresh_still_commits_for_the_next_call() -> T
     Mock::given(method("POST")).and(path("/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600})))
         .expect(1).mount(&server).await;
-    Mock::given(method("POST"))
-        .and(path("/v1internal:loadCodeAssist"))
-        .and(header("authorization", "Bearer rotated-access"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"cloudaicompanionProject":"rotated-project"})),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1internal:generateContent"))
-        .and(header("authorization", "Bearer rotated-access"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(reply()))
-        .expect(1)
-        .mount(&server)
-        .await;
+    mount_project(&server, "rotated-access", "rotated-project").await;
+    mount_generation(&server, "rotated-access", false, 1).await;
     let store = Arc::new(MemoryCredentialStore::new([(
         key("selected"),
         Credential::Oauth(expired()),
