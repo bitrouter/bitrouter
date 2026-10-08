@@ -67,7 +67,7 @@ mod tests {
     use anyhow::{Context, Result};
     use bitrouter_sdk::config::Config;
     use bitrouter_sdk::config::routing_table::resolve_route_chain;
-    use bitrouter_sdk::language_model::routing::RoutingPrefs;
+    use bitrouter_sdk::model_call::routing::RoutingPrefs;
 
     fn config() -> Result<Config> {
         Ok(bitrouter_sdk::config::parse_with(

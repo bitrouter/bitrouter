@@ -38,7 +38,7 @@ async fn request_capability_guard_records_the_original_intent_and_actual_fallbac
     fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?
         .execute(request)
         .await?;
@@ -91,7 +91,7 @@ async fn mode_changes_fence_a_prepared_request_and_session_overrides_keep_preced
     fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?
         .execute(request(&manual, "manual-request", "coding")?)
         .await?;
@@ -139,7 +139,7 @@ async fn streaming_completion_and_disconnect_both_leave_execution_evidence() -> 
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?
         .clone();
     let complete = session(&fixture, "stream-complete", "fixture").await?;

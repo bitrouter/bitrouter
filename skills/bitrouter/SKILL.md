@@ -76,7 +76,7 @@ Auth is catalog-derived; `references/providers.md` lists each login method.
 **c. BYOK for anything they want to own directly.** Export the key and start —
 the daemon auto-enables every provider whose key is present, and
 `export ...; bro reload` rotates one without a restart.
-Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not `GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
+Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not `GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go), `TYPESAFE_API_KEY`.
 
 `providers login` also takes `--api-key` / `--key-stdin`; `references/cloud-setup.md`
 covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supplements subscriptions.
@@ -159,7 +159,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 | `references/remote-administration.md` | Remote contexts, operator credentials, and host boundaries |
 | `references/guardrails.md` | Independent input checker, router binding, and blocked legacy guardrails migration |
 | `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |
-| `references/decisions.md` | Native Decisions requests, API-key setup, operation routing and tariff limits |
+| `references/classifier.md` | Decisions and System One classifier APIs, credentials, conversion and tariff limits |
 | `references/cloud-setup.md` | Cloud signup, key mint, billing, wallet path |
 | `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |

@@ -5821,7 +5821,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                         bitrouter::build_app_with_path(&judge_config, Some(&judge_path)).await?;
                     let pipeline = assembled
                         .app
-                        .language_model()
+                        .model_call()
                         .context("judge requires a language model pipeline")?;
                     let result = jobs.run(&job.job_id, pipeline).await.with_context(|| {
                         format!("judge job {} failed; inspect it with judge-job", job.job_id)
@@ -5859,7 +5859,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                             &job_id,
                             assembled
                                 .app
-                                .language_model()
+                                .model_call()
                                 .context("judge requires a language model pipeline")?,
                         )
                         .await?

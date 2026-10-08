@@ -282,9 +282,11 @@ pub(crate) fn reject_google_continuity_part(
 }
 
 pub mod chat_completions;
+pub mod classifier;
 pub mod decisions;
 pub mod messages;
 pub mod responses;
+pub mod systemone;
 
 #[cfg(test)]
 mod tests;
@@ -539,7 +541,7 @@ pub fn inbound_adapter_for(protocol: &ApiProtocol) -> Option<Box<dyn InboundAdap
         ApiProtocol::ChatCompletions => Some(Box::new(chat_completions::ChatCompletionsAdapter)),
         ApiProtocol::Messages => Some(Box::new(messages::MessagesAdapter)),
         ApiProtocol::Responses => Some(Box::new(responses::ResponsesAdapter)),
-        ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => None,
     }
 }
 

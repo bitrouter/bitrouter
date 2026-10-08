@@ -65,8 +65,8 @@ impl<'a> Wire<'a> {
         policy: &Policy,
     ) -> (Decision, Prompt) {
         let prompt = self.admit(request);
-        let (decision, effect) = bitrouter_tui::machine::decide(policy, &prompt);
-        // `decide` only ever produces a `Resolve`, which `apply` consumes.
+        let (decision, effect) = bitrouter_tui::machine::classify(policy, &prompt);
+        // `classify` only ever produces a `Resolve`, which `apply` consumes.
         let _ = self.apply(effect).await;
         (decision, prompt)
     }

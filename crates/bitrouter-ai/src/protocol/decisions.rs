@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, HashSet};
 use base64::Engine;
 use serde_json::{Map, Value};
 
-use crate::decisions::{
-    DecisionAnswer, DecisionChoiceValue, DecisionContent, DecisionInput, DecisionInputPart,
-    DecisionQuestion, DecisionRequest, DecisionResponseFailure, DecisionResult,
+use crate::classifier::{
+    ClassifierAnswer, ClassifierChoiceValue, ClassifierContent, ClassifierInput,
+    ClassifierInputPart, ClassifierQuestion, ClassifierRequest, ClassifierResponseFailure,
+    ClassifierResult,
 };
 use crate::error::{ModelError, Result};
 use crate::protocol::Transport;
@@ -24,22 +25,57 @@ pub struct DecisionsCodec;
 
 impl DecisionsCodec {
     /// Parse native evidence/questions, refusing unknown fields without echoing them.
-    pub fn parse_request(body: Value) -> Result<DecisionRequest> {
+    pub fn parse_request(body: Value) -> Result<ClassifierRequest> {
         validate_request_shape(&body)?;
-        let request: DecisionRequest =
+        let mut body = body;
+        let input = body
+            .get("input")
+            .cloned()
+            .ok_or_else(|| request_error("input"))?;
+        body["input"] = if input.is_string() {
+            serde_json::json!({"kind":"text","value":input})
+        } else {
+            serde_json::json!({"kind":"messages","value":input})
+        };
+        let request: ClassifierRequest =
             serde_json::from_value(body).map_err(|_| request_error("request structure"))?;
         validate_request(&request)?;
+        let mut request = request;
+        request.source_protocol = Some(ApiProtocol::Decisions);
         Ok(request)
     }
 
     /// Encode a validated typed request without changing it.
-    pub fn render_request(request: &DecisionRequest) -> Result<Value> {
+    pub fn render_request(request: &ClassifierRequest) -> Result<Value> {
         validate_request(request)?;
-        serde_json::to_value(request).map_err(|_| request_error("request structure"))
+        let mut body =
+            serde_json::to_value(request).map_err(|_| request_error("request structure"))?;
+        let object = body
+            .as_object_mut()
+            .ok_or_else(|| request_error("request structure"))?;
+        object.remove("source_protocol");
+        object.insert(
+            "input".into(),
+            match &request.input {
+                ClassifierInput::Text(value) => Value::String(value.clone()),
+                ClassifierInput::Messages(value) => {
+                    serde_json::to_value(value).map_err(|_| request_error("input"))?
+                }
+                ClassifierInput::Structured(_) => return Err(request_error("input.structured")),
+            },
+        );
+        if let Some(questions) = object.get_mut("questions").and_then(Value::as_array_mut) {
+            for question in questions {
+                if let Some(question) = question.as_object_mut() {
+                    question.remove("key");
+                }
+            }
+        }
+        Ok(body)
     }
 
     /// Decode a complete response, retaining usable usage before validating answers.
-    pub fn parse_response(body: Value, request: &DecisionRequest) -> Result<DecisionResult> {
+    pub fn parse_response(body: Value, request: &ClassifierRequest) -> Result<ClassifierResult> {
         let usage = body.get("usage").and_then(|raw| decode_usage(raw).ok());
         let fail = |location: &str| completed_error(location, usage.clone());
         let object = body.as_object().ok_or_else(|| fail("response structure"))?;
@@ -58,7 +94,16 @@ impl DecisionsCodec {
         {
             return Err(fail("answers.name"));
         }
-        let answers: Vec<DecisionAnswer> =
+        if raw_answers
+            .iter()
+            .filter(|answer| answer.get("type").and_then(Value::as_str) == Some("score"))
+            .filter_map(|answer| answer.get("probabilities").and_then(Value::as_array))
+            .flatten()
+            .any(|entry| !entry.get("label").is_some_and(Value::is_string))
+        {
+            return Err(fail("answers.label"));
+        }
+        let answers: Vec<ClassifierAnswer> =
             serde_json::from_value(Value::Array(raw_answers.clone()))
                 .map_err(|_| fail("answers structure"))?;
         validate_answers(&answers, request).map_err(|location| fail(&location))?;
@@ -67,8 +112,9 @@ impl DecisionsCodec {
             .filter(|(key, _)| !matches!(key.as_str(), "model" | "answers" | "usage"))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
-        let result = DecisionResult {
+        let result = ClassifierResult {
             model,
+            protocol: ApiProtocol::Decisions,
             answers,
             usage: usage.clone().ok_or_else(|| fail("usage"))?,
             extensions,
@@ -78,7 +124,10 @@ impl DecisionsCodec {
     }
 
     /// Render native results, preserving additive fields and original usage.
-    pub fn render_response(result: &DecisionResult, request: &DecisionRequest) -> Result<Value> {
+    pub fn render_response(
+        result: &ClassifierResult,
+        request: &ClassifierRequest,
+    ) -> Result<Value> {
         validate_answers(&result.answers, request)
             .map_err(|location| completed_error(&location, Some(result.usage.clone())))?;
         validate_extensions(result)
@@ -140,19 +189,38 @@ fn request_error(location: &str) -> ModelError {
     ))
 }
 
-fn completed_error(location: &str, usage: Option<Usage>) -> ModelError {
+pub(crate) fn completed_error(location: &str, usage: Option<Usage>) -> ModelError {
     // Canonical fields supplied by a custom executor are not independent
     // accounting proof. Re-decode valid provider usage before retaining it.
     let usage = usage.and_then(|usage| {
         let raw = usage.raw.as_deref()?;
-        let mut decoded = decode_usage(raw).ok()?;
-        if usage_extension_bytes(raw).ok()? > EXTENSION_BYTES {
-            decoded.raw = Some(Box::new(known_usage_fields(raw)));
+        let mut decoded = decode_usage(raw)
+            .ok()
+            .or_else(|| crate::protocol::systemone::decode_usage(raw))?;
+        if usage_extension_bytes(
+            raw,
+            &if decoded.availability.is_some() {
+                ApiProtocol::SystemOne
+            } else {
+                ApiProtocol::Decisions
+            },
+        )
+        .ok()?
+            > EXTENSION_BYTES
+        {
+            decoded.raw = Some(Box::new(known_usage_fields(
+                raw,
+                &if decoded.availability.is_some() {
+                    ApiProtocol::SystemOne
+                } else {
+                    ApiProtocol::Decisions
+                },
+            )));
         }
         Some(decoded)
     });
-    ModelError::DecisionResponse {
-        failure: DecisionResponseFailure {
+    ModelError::ClassifierResponse {
+        failure: ClassifierResponseFailure {
             message: format!("invalid Decisions field at {location}"),
             usage: usage.map(Box::new),
         },
@@ -245,28 +313,29 @@ fn text_limit(text: &str, max: usize, location: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_request(request: &DecisionRequest) -> Result<()> {
+fn validate_request(request: &ClassifierRequest) -> Result<()> {
     text_limit(&request.model, 1_048_576, "model")?;
     if let Some(Some(identifier)) = &request.safety_identifier {
         text_limit(identifier, 128, "safety_identifier")?;
     }
     let mut images = 0_usize;
     match &request.input {
-        DecisionInput::Text(text) => text_limit(text, 10_485_760, "input")?,
-        DecisionInput::Messages(messages) => {
+        ClassifierInput::Text(text) => text_limit(text, 10_485_760, "input")?,
+        ClassifierInput::Structured(_) => return Err(request_error("input.structured")),
+        ClassifierInput::Messages(messages) => {
             for (index, message) in messages.iter().enumerate() {
                 match &message.content {
-                    DecisionContent::Text(text) => {
+                    ClassifierContent::Text(text) => {
                         text_limit(text, 10_485_760, &format!("input[{index}].content"))?
                     }
-                    DecisionContent::Parts(parts) => {
+                    ClassifierContent::Parts(parts) => {
                         for (part_index, part) in parts.iter().enumerate() {
                             let location = format!("input[{index}].content[{part_index}]");
                             match part {
-                                DecisionInputPart::InputText { text } => {
+                                ClassifierInputPart::InputText { text } => {
                                     text_limit(text, 10_485_760, &location)?
                                 }
-                                DecisionInputPart::InputImage { image_url, .. } => {
+                                ClassifierInputPart::InputImage { image_url, .. } => {
                                     images = images.saturating_add(1);
                                     if images > 128 || image_url.len() > 1_073_741_824 {
                                         return Err(request_error("input.images"));
@@ -297,7 +366,10 @@ fn validate_request(request: &DecisionRequest) -> Result<()> {
     for (index, question) in request.questions.iter().enumerate() {
         let location = format!("questions[{index}]");
         text_limit(
-            question.instructions(),
+            question
+                .instructions()
+                .and_then(|value| value.as_text())
+                .ok_or_else(|| request_error("instructions.structured"))?,
             1_048_576,
             &format!("{location}.instructions"),
         )?;
@@ -305,8 +377,15 @@ fn validate_request(request: &DecisionRequest) -> Result<()> {
             text_limit(name, 1_048_576, &format!("{location}.name"))?;
         }
         match question {
-            DecisionQuestion::Predicate { .. } => {}
-            DecisionQuestion::Choice { choices, .. } => {
+            ClassifierQuestion::Predicate { criteria, .. } => {
+                if criteria.is_some() {
+                    return Err(request_error("predicate.criteria"));
+                }
+            }
+            ClassifierQuestion::Choice { choices, .. } => {
+                if !(2..=255).contains(&choices.len()) {
+                    return Err(request_error("choices.count"));
+                }
                 let mut seen = HashSet::new();
                 for choice in choices {
                     if !seen.insert(&choice.value) {
@@ -314,19 +393,29 @@ fn validate_request(request: &DecisionRequest) -> Result<()> {
                     }
                     if let Some(description) = &choice.description {
                         text_limit(
-                            description,
+                            description
+                                .as_text()
+                                .ok_or_else(|| request_error("description.structured"))?,
                             1_048_576,
                             &format!("{location}.choices.description"),
                         )?;
                     }
                 }
             }
-            DecisionQuestion::Score { levels, .. } => {
+            ClassifierQuestion::Score { levels, .. } => {
+                if !(2..=10).contains(&levels.len()) {
+                    return Err(request_error("levels.count"));
+                }
                 for level in levels {
+                    if level.criteria.is_some() {
+                        return Err(request_error("levels.criteria"));
+                    }
                     text_limit(&level.label, 1_048_576, &format!("{location}.levels.label"))?;
                     if let Some(description) = &level.description {
                         text_limit(
-                            description,
+                            description
+                                .as_text()
+                                .ok_or_else(|| request_error("description.structured"))?,
                             1_048_576,
                             &format!("{location}.levels.description"),
                         )?;
@@ -342,9 +431,9 @@ fn probability(value: f64) -> bool {
     value.is_finite() && (0.0..=1.0).contains(&value)
 }
 
-fn validate_answers(
-    answers: &[DecisionAnswer],
-    request: &DecisionRequest,
+pub(crate) fn validate_answers(
+    answers: &[ClassifierAnswer],
+    request: &ClassifierRequest,
 ) -> std::result::Result<(), String> {
     if answers.len() != request.questions.len() {
         return Err("answers cardinality".into());
@@ -355,23 +444,23 @@ fn validate_answers(
             return Err(format!("{location}.name"));
         }
         match (answer, question) {
-            (DecisionAnswer::Refusal { .. }, _) => {}
+            (ClassifierAnswer::Refusal { .. }, _) => {}
             (
-                DecisionAnswer::Predicate {
+                ClassifierAnswer::Predicate {
                     probability: value, ..
                 },
-                DecisionQuestion::Predicate { .. },
+                ClassifierQuestion::Predicate { .. },
             ) if probability(*value) => {}
             (
-                DecisionAnswer::Choice {
+                ClassifierAnswer::Choice {
                     choice,
                     probabilities,
                     confidence,
                     ..
                 },
-                DecisionQuestion::Choice { choices, .. },
+                ClassifierQuestion::Choice { choices, .. },
             ) => {
-                let mut seen: HashSet<&DecisionChoiceValue> = HashSet::new();
+                let mut seen: HashSet<&ClassifierChoiceValue> = HashSet::new();
                 if !confidence.is_finite()
                     || !choices.iter().any(|option| &option.value == choice)
                     || probabilities.len() != choices.len()
@@ -392,13 +481,13 @@ fn validate_answers(
                 }
             }
             (
-                DecisionAnswer::Score {
+                ClassifierAnswer::Score {
                     score,
                     probabilities,
                     confidence,
                     ..
                 },
-                DecisionQuestion::Score { levels, .. },
+                ClassifierQuestion::Score { levels, .. },
             ) => {
                 let mut seen = HashSet::new();
                 if !score.is_finite()
@@ -408,10 +497,12 @@ fn validate_answers(
                     || probabilities.len() != levels.len()
                     || probabilities.iter().any(|entry| {
                         !probability(entry.probability)
+                            || !entry.label.is_valid()
                             || !seen.insert(entry.value)
-                            || levels
-                                .get(entry.value as usize)
-                                .is_none_or(|level| level.label != entry.label)
+                            || levels.get(entry.value as usize).is_none_or(|level| {
+                                level.criteria.is_none()
+                                    && Some(level.label.as_str()) != entry.label.as_text()
+                            })
                     })
                     || (probabilities
                         .iter()
@@ -437,7 +528,7 @@ fn validate_answers(
     Ok(())
 }
 
-fn decode_usage(raw: &Value) -> std::result::Result<Usage, ()> {
+pub(crate) fn decode_usage(raw: &Value) -> std::result::Result<Usage, ()> {
     let input = raw.get("input_tokens").and_then(Value::as_u64).ok_or(())?;
     let output = raw.get("output_tokens").and_then(Value::as_u64).ok_or(())?;
     let total = raw.get("total_tokens").and_then(Value::as_u64).ok_or(())?;
@@ -469,12 +560,14 @@ fn decode_usage(raw: &Value) -> std::result::Result<Usage, ()> {
     Ok(usage)
 }
 
-fn validate_extensions(result: &DecisionResult) -> std::result::Result<(), &'static str> {
+pub(crate) fn validate_extensions(
+    result: &ClassifierResult,
+) -> std::result::Result<(), &'static str> {
     let mut size = serde_json::to_vec(&result.extensions)
         .map_err(|_| "extensions")?
         .len();
     if let Some(raw) = result.usage.raw.as_deref() {
-        size = size.saturating_add(usage_extension_bytes(raw)?);
+        size = size.saturating_add(usage_extension_bytes(raw, &result.protocol)?);
     }
     if result
         .extensions
@@ -485,15 +578,23 @@ fn validate_extensions(result: &DecisionResult) -> std::result::Result<(), &'sta
     }
     for answer in &result.answers {
         let (extensions, reserved): (&BTreeMap<String, Value>, &[&str]) = match answer {
-            DecisionAnswer::Predicate { extensions, .. } => {
-                (extensions, &["type", "name", "probability"])
-            }
-            DecisionAnswer::Choice {
+            ClassifierAnswer::Predicate { extensions, .. } => (
+                extensions,
+                if result.protocol == ApiProtocol::SystemOne {
+                    &["type", "noul"]
+                } else {
+                    &["type", "name", "probability"]
+                },
+            ),
+            ClassifierAnswer::Choice {
                 extensions,
                 probabilities,
                 ..
             } => {
                 for entry in probabilities {
+                    if result.protocol == ApiProtocol::SystemOne && !entry.extensions.is_empty() {
+                        return Err("extensions");
+                    }
                     if entry
                         .extensions
                         .keys()
@@ -509,15 +610,22 @@ fn validate_extensions(result: &DecisionResult) -> std::result::Result<(), &'sta
                 }
                 (
                     extensions,
-                    &["type", "name", "choice", "probabilities", "confidence"],
+                    if result.protocol == ApiProtocol::SystemOne {
+                        &["type", "choice", "probabilities", "confidence"]
+                    } else {
+                        &["type", "name", "choice", "probabilities", "confidence"]
+                    },
                 )
             }
-            DecisionAnswer::Score {
+            ClassifierAnswer::Score {
                 extensions,
                 probabilities,
                 ..
             } => {
                 for entry in probabilities {
+                    if result.protocol == ApiProtocol::SystemOne && !entry.extensions.is_empty() {
+                        return Err("extensions");
+                    }
                     if entry
                         .extensions
                         .keys()
@@ -533,10 +641,14 @@ fn validate_extensions(result: &DecisionResult) -> std::result::Result<(), &'sta
                 }
                 (
                     extensions,
-                    &["type", "name", "score", "probabilities", "confidence"],
+                    if result.protocol == ApiProtocol::SystemOne {
+                        &["type", "score", "legend", "probabilities", "confidence"]
+                    } else {
+                        &["type", "name", "score", "probabilities", "confidence"]
+                    },
                 )
             }
-            DecisionAnswer::Refusal { extensions, .. } => (extensions, &["type", "name"]),
+            ClassifierAnswer::Refusal { extensions, .. } => (extensions, &["type", "name"]),
         };
         if extensions
             .keys()
@@ -556,7 +668,10 @@ fn validate_extensions(result: &DecisionResult) -> std::result::Result<(), &'sta
     Ok(())
 }
 
-fn usage_extension_bytes(raw: &Value) -> std::result::Result<usize, &'static str> {
+fn usage_extension_bytes(
+    raw: &Value,
+    protocol: &ApiProtocol,
+) -> std::result::Result<usize, &'static str> {
     fn extra_bytes(value: &Value, known: &[&str]) -> std::result::Result<usize, &'static str> {
         let fields = value.as_object().ok_or("usage extensions")?;
         let extras = fields
@@ -566,6 +681,9 @@ fn usage_extension_bytes(raw: &Value) -> std::result::Result<usize, &'static str
         serde_json::to_vec(&extras)
             .map(|bytes| bytes.len())
             .map_err(|_| "usage extensions")
+    }
+    if *protocol == ApiProtocol::SystemOne {
+        return extra_bytes(raw, &["input_tokens", "output_tokens"]);
     }
     let mut bytes = extra_bytes(
         raw,
@@ -584,22 +702,29 @@ fn usage_extension_bytes(raw: &Value) -> std::result::Result<usize, &'static str
         ),
         ("output_tokens_details", &["reasoning_tokens"][..]),
     ] {
-        bytes = bytes.saturating_add(extra_bytes(
-            raw.get(field).ok_or("usage extensions")?,
-            known,
-        )?);
+        if let Some(details) = raw.get(field) {
+            bytes = bytes.saturating_add(extra_bytes(details, known)?);
+        }
     }
     Ok(bytes)
 }
 
 /// Invalid oversized additive metadata is not retained as unbounded evidence;
 /// the original required counters remain available on the completed failure.
-fn known_usage_fields(raw: &Value) -> Value {
+pub(crate) fn known_usage_fields(raw: &Value, protocol: &ApiProtocol) -> Value {
     let mut fields = Map::new();
-    for key in ["input_tokens", "output_tokens", "total_tokens"] {
+    let keys: &[&str] = if *protocol == ApiProtocol::SystemOne {
+        &["input_tokens", "output_tokens"]
+    } else {
+        &["input_tokens", "output_tokens", "total_tokens"]
+    };
+    for key in keys {
         if let Some(value) = raw.get(key) {
-            fields.insert(key.into(), value.clone());
+            fields.insert((*key).into(), value.clone());
         }
+    }
+    if *protocol == ApiProtocol::SystemOne {
+        return Value::Object(fields);
     }
     for (field, known) in [
         (
@@ -614,7 +739,9 @@ fn known_usage_fields(raw: &Value) -> Value {
                 details.insert((*key).into(), value.clone());
             }
         }
-        fields.insert(field.into(), Value::Object(details));
+        if raw.get(field).is_some() {
+            fields.insert(field.into(), Value::Object(details));
+        }
     }
     Value::Object(fields)
 }

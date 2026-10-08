@@ -50,7 +50,7 @@ BitRouter 同样应让使用已编译能力的人通过 router 配置操作，�
 
 - [ExtensionApi](../crates/bitrouter-sdk/src/extension/mod.rs)
 - [业务输入和判定](../crates/bitrouter-sdk/src/extension/request_check.rs)
-- [投影和 host runner](../crates/bitrouter-sdk/src/language_model/request_checks.rs)
+- [投影和 host runner](../crates/bitrouter-sdk/src/model_call/request_checks.rs)
 - [共享装配](../apps/bitrouter/src/assemble.rs)
 - [共享服务编排](../apps/bitrouter/src/host.rs)
 - [CLI 入口](../apps/bitrouter/src/main.rs)

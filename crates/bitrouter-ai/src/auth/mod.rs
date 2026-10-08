@@ -67,7 +67,7 @@ pub fn normalize_auth_extension_error(error: ModelError, operation: AuthOperatio
             message,
             usage: None,
         },
-        ModelError::DecisionResponse { .. } => ModelError::InvalidResponse {
+        ModelError::ClassifierResponse { .. } => ModelError::InvalidResponse {
             message,
             usage: None,
         },
@@ -190,9 +190,10 @@ impl std::fmt::Debug for ContinuationAuthority {
 
 fn static_effective_auth_scheme(target: &ModelTarget) -> AuthScheme {
     match target.api_protocol {
-        ApiProtocol::ChatCompletions | ApiProtocol::Responses | ApiProtocol::Decisions => {
-            AuthScheme::Bearer
-        }
+        ApiProtocol::ChatCompletions
+        | ApiProtocol::Responses
+        | ApiProtocol::Decisions
+        | ApiProtocol::SystemOne => AuthScheme::Bearer,
         ApiProtocol::Messages => target.auth_scheme,
 
         ApiProtocol::Custom(_) => target.auth_scheme,

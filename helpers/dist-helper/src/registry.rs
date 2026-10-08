@@ -3952,6 +3952,7 @@ enum ApiProtocol {
     Anthropic,
     Responses,
     Decisions,
+    Systemone,
 }
 
 impl ApiProtocol {
@@ -3961,6 +3962,7 @@ impl ApiProtocol {
             Self::Anthropic => "anthropic",
             Self::Responses => "responses",
             Self::Decisions => "decisions",
+            Self::Systemone => "systemone",
         }
     }
 
@@ -3970,6 +3972,7 @@ impl ApiProtocol {
             Self::Anthropic => "messages",
             Self::Responses => "responses",
             Self::Decisions => "decisions",
+            Self::Systemone => "systemone",
         }
     }
 }

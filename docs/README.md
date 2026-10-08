@@ -26,6 +26,14 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   hook and pricing migration, with the read-only external Cloud inventory.
 - [`DECISIONS_API_ACCEPTANCE.md`](DECISIONS_API_ACCEPTANCE.md) — Requirement-by-requirement
   local/hosted/live evidence and qualified provider/Cloud delivery boundaries.
+- [`CLASSIFIER_API_SPEC.md`](CLASSIFIER_API_SPEC.md) — **v0.2, implemented and verified locally; live provider validation pending.**
+  Canonical Classifier representation for Decisions and System One, conversion
+  admission, shared lifecycle and usage evidence, migration, and the boundary
+  for future model representations.
+- [`CLASSIFIER_API_MIGRATION.md`](CLASSIFIER_API_MIGRATION.md) — Alpha source,
+  persisted evidence and external Cloud migration boundaries.
+- [`CLASSIFIER_API_ACCEPTANCE.md`](CLASSIFIER_API_ACCEPTANCE.md) — Current
+  classifier implementation, deterministic tests, validation and live gates.
 - [`GEMINI_PROTOCOL_RETIREMENT_SPEC.md`](GEMINI_PROTOCOL_RETIREMENT_SPEC.md) —
   **approved; implementation in progress.** Removes native Gemini Generate Content ingress and
   upstream support, retains metered Gemini through Chat Completions, and defines

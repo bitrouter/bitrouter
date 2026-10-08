@@ -42,6 +42,8 @@ fn provider_usage(request_id: &str) -> CloudUsageRecord {
         final_charge_micro_usd: Some(120),
         charge_status: ChargeStatus::Computed,
         charge_evidence: Some(ChargeEvidence {
+            billable_input_tokens: None,
+            usage_availability: None,
             tariff_snapshot: None,
             status: ChargeStatus::Computed,
             charge_micro_usd: Some(120),

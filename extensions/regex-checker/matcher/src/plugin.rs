@@ -18,7 +18,7 @@
 //! - [`GuardrailsPlugin::dynamic`] — no built-in rules. It installs only the
 //!   two guardrail hooks; the host resolves a per-request (e.g. per-account)
 //!   [`RuleSet`] in an earlier pre-request stage and deposits it via
-//!   [`PipelineContext::insert_extension`](bitrouter_sdk::language_model::PipelineContext::insert_extension).
+//!   [`PipelineContext::insert_extension`](bitrouter_sdk::model_call::context::PipelineContext::insert_extension).
 //!   With nothing deposited, the hooks no-op.
 
 use std::sync::Arc;
@@ -63,7 +63,7 @@ impl Plugin for GuardrailsPlugin {
     }
 
     fn install(&self, app: &mut AppBuilder) {
-        let lm = app.language_model_builder();
+        let lm = app.model_call_builder();
         if let Some(rules) = &self.static_rules {
             // Runs ahead of the guardrail hooks (registration order), depositing
             // the shared rule set the two hooks then read.

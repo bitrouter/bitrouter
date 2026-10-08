@@ -9,7 +9,7 @@
 //! the SDK: every future attribute rides for free, named by the emitter (e.g.
 //! PostHog's `$ai_total_cost_usd`).
 //!
-//! [`SettlementRecorder`]: crate::language_model::SettlementRecorder
+//! [`SettlementRecorder`]: crate::model_call::settlement::SettlementRecorder
 
 use crate::PipelineEvent;
 use serde::Serialize;

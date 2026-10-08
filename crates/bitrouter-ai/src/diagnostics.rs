@@ -197,14 +197,14 @@ impl DiagnosticRedactor {
                     usage
                 },
             },
-            ModelError::DecisionResponse { mut failure } => {
+            ModelError::ClassifierResponse { mut failure } => {
                 failure.message = self.scrub_text(&failure.message);
                 if let Some(usage) = &mut failure.usage
                     && let Some(raw) = &mut usage.raw
                 {
                     self.scrub_value(raw);
                 }
-                ModelError::DecisionResponse { failure }
+                ModelError::ClassifierResponse { failure }
             }
             ModelError::Provider { status, message } => ModelError::Provider {
                 status,

@@ -49,20 +49,20 @@ use serde::Serialize;
 /// release bump, turning a guard that should be silent into routine noise. The
 /// crate version reaches the wire through the instrumentation scope instead
 /// (see [`SpanSchema::scope_version`]).
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 /// Attribute-key prefixes this schema owns outright. See [`ExtensionRegion`].
 const RESERVED_PREFIXES: &[&str] = &["bitrouter.", "gen_ai."];
 
 /// The type of an attribute value on the wire.
 ///
-/// Only the shapes this schema actually declares. An OTel attribute can also
-/// be a bool or a numeric array; the extension region accepts a bool from a
-/// deployment (see [`ExtensionRegion::value_types`]), but no *declared*
-/// attribute is one, so there is no variant for it.
+/// Only the shapes this schema actually declares, including partial-usage
+/// availability flags. Numeric arrays remain outside its declared vocabulary.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttrType {
+    /// Boolean evidence-availability flag.
+    Bool,
     /// UTF-8 string.
     String,
     /// 64-bit signed integer.
@@ -283,10 +283,10 @@ const RESOURCE_ATTRIBUTES: &[AttrDef] = &[
 const SPANS: &[SpanDef] = &[
     SERVER_SPAN,
     ROOT_CHAT_SPAN,
-    ROOT_DECISIONS_SPAN,
+    ROOT_CLASSIFICATION_SPAN,
     ROUTE_SPAN,
     HOP_CHAT_SPAN,
-    HOP_DECISIONS_SPAN,
+    HOP_CLASSIFICATION_SPAN,
     SETTLE_SPAN,
     INVOKE_AGENT_SPAN,
     EXECUTE_TOOL_SPAN,
@@ -353,7 +353,7 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
             key: "bitrouter.operation",
             ty: AttrType::String,
             requirement: Requirement::Required,
-            note: "Operation derived from the typed input: generation or decisions.",
+            note: "Operation derived from the typed input: generation or classification.",
         },
         AttrDef {
             key: "bitrouter.inbound_protocol",
@@ -368,13 +368,13 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
             note: "Actual final serving or attempted target wire, when dispatch was reached.",
         },
         AttrDef {
-            key: "bitrouter.decisions.input",
+            key: "bitrouter.classifier.input",
             ty: AttrType::String,
             requirement: Requirement::Conditional,
             note: "Native evidence and questions only under full content capture, with the configured byte cap; safety identifier excluded.",
         },
         AttrDef {
-            key: "bitrouter.decisions.answers",
+            key: "bitrouter.classifier.answers",
             ty: AttrType::String,
             requirement: Requirement::Conditional,
             note: "Native ordered answers only under full content capture, with the configured byte cap.",
@@ -401,7 +401,7 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
             key: "gen_ai.operation.name",
             ty: AttrType::String,
             requirement: Requirement::Required,
-            note: "`chat` for generation; `decisions` for the native Decisions operation.",
+            note: "`chat` for generation; `classification` for the classifier operation.",
         },
         AttrDef {
             key: "gen_ai.request.model",
@@ -557,6 +557,30 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
             note: "When the upstream reported usage.",
         },
         AttrDef {
+            key: "bitrouter.usage.cache_read_available",
+            ty: AttrType::Bool,
+            requirement: Requirement::Conditional,
+            note: "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns.",
+        },
+        AttrDef {
+            key: "bitrouter.usage.cache_write_available",
+            ty: AttrType::Bool,
+            requirement: Requirement::Conditional,
+            note: "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns.",
+        },
+        AttrDef {
+            key: "bitrouter.usage.reasoning_available",
+            ty: AttrType::Bool,
+            requirement: Requirement::Conditional,
+            note: "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns.",
+        },
+        AttrDef {
+            key: "bitrouter.usage.reported_total_available",
+            ty: AttrType::Bool,
+            requirement: Requirement::Conditional,
+            note: "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns.",
+        },
+        AttrDef {
             key: "gen_ai.usage.reasoning_tokens",
             ty: AttrType::Int,
             requirement: Requirement::Conditional,
@@ -588,10 +612,10 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
     events: &[EXCEPTION_EVENT, TOOL_CALL_STARTED_EVENT],
 };
 
-/// Native Decisions has its own name while sharing model-call observation rules.
-const ROOT_DECISIONS_SPAN: SpanDef = SpanDef {
-    name: "decisions {gen_ai.request.model}",
-    note: "Full native Decisions request lifetime; no first token, generated messages, or continuation is invented.",
+/// Classifier has its own name while sharing model-call observation rules.
+const ROOT_CLASSIFICATION_SPAN: SpanDef = SpanDef {
+    name: "classification {gen_ai.request.model}",
+    note: "Full classifier request lifetime; no first token, generated messages, or continuation is invented.",
     ..ROOT_CHAT_SPAN
 };
 
@@ -692,10 +716,10 @@ const HOP_CHAT_SPAN: SpanDef = SpanDef {
     events: &[EXCEPTION_EVENT],
 };
 
-/// One native Decisions upstream HTTP attempt.
-const HOP_DECISIONS_SPAN: SpanDef = SpanDef {
-    name: "decisions {bitrouter.model_id}",
-    parent: "The root decisions span.",
+/// One classifier upstream HTTP attempt.
+const HOP_CLASSIFICATION_SPAN: SpanDef = SpanDef {
+    name: "classification {bitrouter.model_id}",
+    parent: "The root classification span.",
     note: "Plain HTTP client attempt; native usage is recorded once on the root model-call span.",
     ..HOP_CHAT_SPAN
 };
@@ -994,7 +1018,7 @@ const TOKEN_USAGE_DIMENSIONS: &[AttrDef] = &[
 
 const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
     carrier: "observe.span_attributes",
-    target_span: "chat {gen_ai.request.model} or decisions {gen_ai.request.model}",
+    target_span: "chat {gen_ai.request.model} or classification {gen_ai.request.model}",
     reserved_prefixes: RESERVED_PREFIXES,
     rule: "A deployment may stamp any attribute onto the root model-call span except keys under a \
            reserved prefix and keys this schema already declares on any span. Reserved keys are \
@@ -1009,7 +1033,7 @@ const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
 const INVARIANTS: &[Invariant] = &[
     Invariant {
         id: "single-generation",
-        rule: "Only the root `chat` or `decisions` INTERNAL span carries `gen_ai.*` attributes. The auxiliary \
+        rule: "Only the root `chat` or `classification` INTERNAL span carries `gen_ai.*` attributes. The auxiliary \
                spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and \
                `server.*` only.",
         failure: "A gen_ai-aware backend renders any span carrying `gen_ai.*` as its own \
@@ -1096,6 +1120,7 @@ pub fn value_type_matches(declared: AttrType, observed: &str) -> bool {
     matches!(
         (declared, observed),
         (AttrType::String, "string")
+            | (AttrType::Bool, "bool")
             | (AttrType::Int, "int")
             | (AttrType::Double, "double")
             | (AttrType::StringArray, "string_array")
@@ -1264,7 +1289,7 @@ mod tests {
         // spans actually emitted.
         for span in SCHEMA.spans {
             let is_root_generation = (span.name.starts_with("chat ")
-                || span.name.starts_with("decisions "))
+                || span.name.starts_with("classification "))
                 && span.kind == SpanKind::Internal;
             let is_agent_span =
                 span.name.starts_with("invoke_agent ") || span.name.starts_with("execute_tool ");

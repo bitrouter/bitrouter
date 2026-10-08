@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::config::checker::CheckerConfig;
 use crate::config::{Config, PresetConfig, RoutingConfig};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::request_checks::{MAX_REQUEST_CHECKS_PER_ROUTER, RequestCheckBinding};
-use crate::language_model::routing::{PromptOverrides, SortOrder};
+use crate::model_call::request_checks::{MAX_REQUEST_CHECKS_PER_ROUTER, RequestCheckBinding};
+use crate::model_call::routing::{PromptOverrides, SortOrder};
 
 /// One named router definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

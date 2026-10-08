@@ -19,9 +19,9 @@ use async_trait::async_trait;
 use crate::caller::CallerContext;
 use crate::config::Config;
 use crate::error::{BitrouterError, Result};
-use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
-use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
-use crate::language_model::types::RoutingTarget;
+use crate::model_call::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
+use crate::model_call::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
+use crate::model_call::types::RoutingTarget;
 use bitrouter_ai::types::{ApiProtocol, ModelOperation};
 
 fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
@@ -198,6 +198,53 @@ fn build_targets(
     inbound: Option<&ApiProtocol>,
     operation: ModelOperation,
 ) -> Result<Vec<RoutingTarget>> {
+    if operation == ModelOperation::Generation {
+        return build_targets_selected(provider_id, provider, model_id, inbound, operation, None);
+    }
+    let mut protocols: Vec<ApiProtocol> = Vec::new();
+    for protocol in provider.protocols_for(model_id) {
+        if protocol.operation() == operation && !protocols.contains(&protocol) {
+            protocols.push(protocol);
+        }
+    }
+    if let Some(index) = protocols
+        .iter()
+        .position(|protocol| Some(protocol) == inbound)
+    {
+        let preferred = protocols.remove(index);
+        protocols.insert(0, preferred);
+    }
+    if protocols.is_empty() {
+        return Ok(Vec::new());
+    }
+    let offset = match (provider.account_strategy, provider.accounts.len()) {
+        (crate::config::AccountStrategy::Balance, count) if count > 0 => {
+            balance_offset(provider_id, count)
+        }
+        _ => 0,
+    };
+    let mut targets = Vec::new();
+    for protocol in protocols {
+        targets.extend(build_targets_selected(
+            provider_id,
+            provider,
+            model_id,
+            Some(&protocol),
+            operation,
+            Some(offset),
+        )?);
+    }
+    Ok(targets)
+}
+
+fn build_targets_selected(
+    provider_id: &str,
+    provider: &crate::config::ProviderConfig,
+    model_id: &str,
+    inbound: Option<&ApiProtocol>,
+    operation: ModelOperation,
+    account_offset: Option<usize>,
+) -> Result<Vec<RoutingTarget>> {
     // Protocol-native routing: prefer the inbound protocol when this upstream
     // supports it (a faithful same-protocol round-trip), else the provider's
     // configured default head.
@@ -261,10 +308,10 @@ fn build_targets(
     }
 
     let n = provider.accounts.len();
-    let offset = match provider.account_strategy {
+    let offset = account_offset.unwrap_or_else(|| match provider.account_strategy {
         crate::config::AccountStrategy::Failover => 0,
         crate::config::AccountStrategy::Balance => balance_offset(provider_id, n),
-    };
+    });
     Ok((0..n)
         .map(|i| {
             let idx = (i + offset) % n;
@@ -435,7 +482,7 @@ fn resolve_virtual_model(
 
     let chain: Vec<RoutingTarget> = endpoints.into_iter().flat_map(|(_, t)| t).collect();
     if chain.is_empty() {
-        if prefs.operation == ModelOperation::Decisions {
+        if prefs.operation == ModelOperation::Classification {
             return require_compatible_chain(chain, prefs.operation);
         }
         return Err(BitrouterError::NotFound(format!(
@@ -579,7 +626,7 @@ fn require_compatible_chain(
     chain: Vec<RoutingTarget>,
     operation: ModelOperation,
 ) -> Result<Vec<RoutingTarget>> {
-    if chain.is_empty() && operation == ModelOperation::Decisions {
+    if chain.is_empty() && operation == ModelOperation::Classification {
         return Err(BitrouterError::bad_request(
             "no compatible Decisions target for the selected model",
         ));
@@ -632,12 +679,31 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
         let mut models = config
             .models
             .iter()
-            .map(|(id, vm)| ModelInfo {
-                id: id.clone(),
-                providers: vm.endpoints.iter().map(|e| e.provider.clone()).collect(),
+            .filter_map(|(id, vm)| {
+                let mut info = ModelInfo {
+                    id: id.clone(),
+                    ..Default::default()
+                };
+                for endpoint in &vm.endpoints {
+                    if let Some(provider) = config
+                        .providers
+                        .get(&endpoint.provider)
+                        .filter(|provider| provider.active)
+                    {
+                        if !info.providers.contains(&endpoint.provider) {
+                            info.providers.push(endpoint.provider.clone());
+                        }
+                        for protocol in provider.protocols_for(&endpoint.service_id) {
+                            info.add_protocol(protocol);
+                        }
+                    }
+                }
+                (!info.providers.is_empty()).then_some(info)
             })
             .collect::<Vec<_>>();
         models.extend(config.routers.keys().map(|id| ModelInfo {
+            operations: Vec::new(),
+            api_protocols: Vec::new(),
             id: format!("bitrouter/{id}"),
             providers: Vec::new(),
         }));
@@ -670,10 +736,28 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
         .into_iter()
         .map(|(id, mut providers)| {
             providers.sort();
-            ModelInfo { id, providers }
+            let mut info = ModelInfo {
+                id,
+                providers,
+                ..Default::default()
+            };
+            for provider_id in &info.providers.clone() {
+                if let Some(provider) = config.providers.get(provider_id) {
+                    let model = info
+                        .id
+                        .strip_prefix(&format!("{provider_id}:"))
+                        .unwrap_or(&info.id);
+                    for protocol in provider.protocols_for(model) {
+                        info.add_protocol(protocol);
+                    }
+                }
+            }
+            info
         })
         .collect::<Vec<_>>();
     models.extend(config.routers.keys().map(|id| ModelInfo {
+        operations: Vec::new(),
+        api_protocols: Vec::new(),
         id: format!("bitrouter/{id}"),
         providers: Vec::new(),
     }));
@@ -686,10 +770,10 @@ impl RoutingTable for ConfigRoutingTable {
     async fn resolve_model(
         &self,
         model: &str,
-    ) -> Result<crate::language_model::routing::ModelResolution> {
+    ) -> Result<crate::model_call::routing::ModelResolution> {
         let config = self.config.read().expect("config lock poisoned");
         let resolution = config.resolve_router(model)?;
-        Ok(crate::language_model::routing::ModelResolution {
+        Ok(crate::model_call::routing::ModelResolution {
             clean_model: resolution.clean_model,
             prefs: resolution.prefs,
             overrides: resolution.overrides,
@@ -1033,10 +1117,14 @@ providers:
             models,
             vec![
                 ModelInfo {
+                    operations: vec![ModelOperation::Generation],
+                    api_protocols: vec![ApiProtocol::Messages],
                     id: "claude-code:shared-model".to_string(),
                     providers: vec!["claude-code".to_string()],
                 },
                 ModelInfo {
+                    operations: vec![ModelOperation::Generation],
+                    api_protocols: vec![ApiProtocol::Messages],
                     id: "shared-model".to_string(),
                     providers: vec!["anthropic".to_string()],
                 },

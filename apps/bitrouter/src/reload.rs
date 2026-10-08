@@ -1488,7 +1488,7 @@ pub struct AppReloader {
     environment_revision: AtomicU64,
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
-    upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+    upstream_executor: Arc<bitrouter_sdk::model_call::executor::HttpExecutor>,
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
     /// The live `policy_table:` transform, when one was wired at assembly.
     /// Reload rebuilds its spec from the fresh config and swaps it in —
@@ -1538,7 +1538,7 @@ impl TestPreparationPause {
 struct PreparedReload {
     baseline: ConfigurationBaseline,
     config: bitrouter_sdk::config::Config,
-    timeout_clients: bitrouter_sdk::language_model::executor::PreparedProviderTimeouts,
+    timeout_clients: bitrouter_sdk::model_call::executor::PreparedProviderTimeouts,
     policy_table: PreparedPolicyTable,
     named_policy_runtime: Option<crate::policy_lock::PreparedPolicySnapshot>,
     access_policy_store: Option<crate::policy::store::PreparedPolicyStore>,
@@ -1581,7 +1581,7 @@ impl AppReloader {
     pub fn new(
         policy_store: Arc<PolicyStore>,
         routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
-        upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+        upstream_executor: Arc<bitrouter_sdk::model_call::executor::HttpExecutor>,
         source: ReloadSource,
     ) -> Self {
         let startup_config = routing_table.snapshot_config();
@@ -2326,9 +2326,11 @@ mod tests {
     use bitrouter_ai::client::HttpTimeouts;
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use bitrouter_sdk::config::{self, ConfigRoutingTable};
-    use bitrouter_sdk::language_model::{
-        Executor, HttpExecutor, PipelineContext, PipelineRequest, RoutingTarget,
-    };
+    use bitrouter_sdk::model_call::context::PipelineContext;
+    use bitrouter_sdk::model_call::executor::Executor;
+    use bitrouter_sdk::model_call::executor::HttpExecutor;
+    use bitrouter_sdk::model_call::types::PipelineRequest;
+    use bitrouter_sdk::model_call::types::RoutingTarget;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -2630,7 +2632,8 @@ policies:
     async fn reload_rebuilds_the_policy_table_and_routes_to_the_new_provider() -> anyhow::Result<()>
     {
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
+        use bitrouter_sdk::model_call::routing::RoutingPrefs;
+        use bitrouter_sdk::model_call::routing::RoutingTable;
 
         let (path, dir) = temp_config_path();
         // Two providers, each serving a model of its own. The policy table's

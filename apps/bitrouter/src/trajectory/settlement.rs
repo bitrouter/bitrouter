@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use bitrouter_sdk::language_model::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementContext;
 use chrono::{DateTime, SecondsFormat, TimeDelta};
 
 use crate::eval::settlement::PredictionObservationSnapshot;
@@ -259,7 +259,8 @@ mod tests {
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::EvalConfig;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+    use bitrouter_sdk::model_call::settlement::SettlementContext;
+    use bitrouter_sdk::model_call::settlement::SettlementRecorder;
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{
@@ -1619,6 +1620,7 @@ mod tests {
             cache_write_tokens: 0,
             usage_origin: UsageOrigin::Unknown,
             raw_usage: None,
+            usage_availability: None,
             web_search_count: 0,
             media_input_count: 0,
             media_output_count: 0,

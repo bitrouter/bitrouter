@@ -11,7 +11,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use bitrouter_ai::decisions::DecisionRequest;
+use bitrouter_ai::classifier::ClassifierRequest;
 use bitrouter_ai::protocol::decisions::DecisionsCodec;
 use bitrouter_ai::types::{ApiProtocol, ModelOperation, UsageOrigin};
 use bitrouter_sdk::App;
@@ -19,20 +19,20 @@ use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::error::{BitrouterError, Result};
 use bitrouter_sdk::extension::request_check::{ContentFragmentKind, Decision, Input};
-use bitrouter_sdk::language_model::builder::PipelineBuilder;
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::executor::{HttpExecutor, MockExecutor, MockResponse};
-use bitrouter_sdk::language_model::hooks::{FallbackDecision, HookDecision, PreRequestHook};
-use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
-use bitrouter_sdk::language_model::request_checks::{
+use bitrouter_sdk::model_call::builder::PipelineBuilder;
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::executor::{HttpExecutor, MockExecutor, MockResponse};
+use bitrouter_sdk::model_call::hooks::{FallbackDecision, HookDecision, PreRequestHook};
+use bitrouter_sdk::model_call::operations::{HookStage, OperationScope};
+use bitrouter_sdk::model_call::request_checks::{
     CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
-use bitrouter_sdk::language_model::routing::{
+use bitrouter_sdk::model_call::routing::{
     FallbackPolicy, ModelInfo, ModelResolution, RouterRequestIdentity, RoutingPrefs, RoutingTable,
     StaticRoutingTable,
 };
-use bitrouter_sdk::language_model::settlement::{SettlementContext, SettlementRecorder};
-use bitrouter_sdk::language_model::types::{PipelineRequest, RoutingTarget};
+use bitrouter_sdk::model_call::settlement::{SettlementContext, SettlementRecorder};
+use bitrouter_sdk::model_call::types::{PipelineRequest, RoutingTarget};
 use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -40,7 +40,7 @@ use tower::ServiceExt;
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-fn request() -> TestResult<DecisionRequest> {
+fn request() -> TestResult<ClassifierRequest> {
     Ok(DecisionsCodec::parse_request(json!({
         "model":"test", "input":"private evidence", "safety_identifier":"private-safety",
         "questions":[{"type":"predicate", "name":"q", "instructions":"Evaluate the evidence"}]
@@ -85,9 +85,9 @@ fn builder(targets: Vec<RoutingTarget>) -> TestResult<PipelineBuilder> {
     Ok(builder)
 }
 
-fn router(pipeline: Arc<bitrouter_sdk::language_model::pipeline::Pipeline>) -> Router {
+fn router(pipeline: Arc<bitrouter_sdk::model_call::pipeline::Pipeline>) -> Router {
     build_router(AppState {
-        language_model: pipeline,
+        model_call: pipeline,
         mcp: None,
         skip_auth: true,
         metrics_renderer: None,
@@ -96,11 +96,19 @@ fn router(pipeline: Arc<bitrouter_sdk::language_model::pipeline::Pipeline>) -> R
 }
 
 async fn post_decision(router: Router, body: Value) -> TestResult<(StatusCode, HeaderMap, Value)> {
+    post_classifier(router, "/v1/decisions", body).await
+}
+
+async fn post_classifier(
+    router: Router,
+    endpoint: &str,
+    body: Value,
+) -> TestResult<(StatusCode, HeaderMap, Value)> {
     let response = router
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/decisions")
+                .uri(endpoint)
                 .header("content-type", "application/json")
                 .header("x-bitrouter-request-id", "decision-request")
                 .body(Body::from(serde_json::to_vec(&body)?))?,
@@ -172,6 +180,7 @@ impl Fixture {
         let (shutdown, shutdown_rx) = oneshot::channel();
         let router = Router::new()
             .route("/v1/decisions", post(upstream))
+            .route("/v1/systemone", post(upstream))
             .with_state(state.clone());
         let task = tokio::spawn(async move {
             axum::serve(listener, router)
@@ -220,6 +229,7 @@ struct Evidence {
     origin: UsageOrigin,
     failed: bool,
     protocol: Option<ApiProtocol>,
+    availability: Option<bitrouter_ai::types::UsageAvailability>,
 }
 struct Record(mpsc::UnboundedSender<Evidence>);
 #[async_trait]
@@ -231,6 +241,7 @@ impl SettlementRecorder for Record {
                 input_tokens: ctx.prompt_tokens,
                 origin: ctx.usage_origin,
                 failed: ctx.error.is_some(),
+                availability: ctx.usage_availability.clone(),
                 protocol: ctx
                     .target
                     .as_ref()
@@ -254,6 +265,237 @@ impl FallbackPolicy for RetryAll {
     }
 }
 
+fn systemone_request() -> Value {
+    json!({"model":"test","state":"Build passed.","questions":{"original/key":{"type":"noul","instructions":"Did the build pass?"}}})
+}
+
+fn systemone_response(valid: bool) -> Value {
+    json!({"model":"native-test","answers":{"original/key":{"type":"noul","noul":if valid {0.8} else {1.5}}},"usage":{"input_tokens":12,"output_tokens":3}})
+}
+
+#[tokio::test]
+async fn native_systemone_gateway_retains_map_identity_and_partial_usage() -> TestResult {
+    let fixture = Fixture::start(vec![(StatusCode::OK, systemone_response(true))], false).await?;
+    let (sender, mut settled) = mpsc::unbounded_channel();
+    let mut builder = builder(vec![target(
+        &fixture.base,
+        "typesafe-fixture",
+        ApiProtocol::SystemOne,
+    )])?;
+    builder.settlement_recorder_for(Record(sender), OperationScope::Both);
+    let pipeline = Arc::new(builder.build()?);
+    let (status, _, body) = post_classifier(
+        router(pipeline.clone()),
+        "/v1/systemone",
+        systemone_request(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, systemone_response(true));
+    assert_eq!(fixture.requests().len(), 1);
+    assert_eq!(fixture.requests()[0].1["model"], "native-test");
+    let evidence = settled.recv().await.ok_or("missing settlement")?;
+    assert_eq!(evidence.operation, ModelOperation::Classification);
+    assert_eq!(evidence.protocol, Some(ApiProtocol::SystemOne));
+    assert_eq!(evidence.input_tokens, 12);
+    assert!(
+        !evidence
+            .availability
+            .ok_or("missing availability")?
+            .cache_read
+    );
+    assert!(!evidence.failed);
+    pipeline.drain_required_pending_settlements().await?;
+    assert!(settled.try_recv().is_err());
+    fixture.stop().await
+}
+
+#[tokio::test]
+async fn systemone_caller_uses_decisions_upstream_and_destination_confidence() -> TestResult {
+    let response = json!({"model":"native-test","answers":[{"type":"choice","name":null,"choice":"pass","probabilities":[{"value":"pass","probability":0.6},{"value":"fail","probability":0.4}],"confidence":0.95}],"usage":{"input_tokens":12,"output_tokens":0,"total_tokens":12,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}});
+    let fixture = Fixture::start(vec![(StatusCode::OK, response)], false).await?;
+    let (sender, mut settled) = mpsc::unbounded_channel();
+    let mut builder = builder(vec![target(
+        &fixture.base,
+        "openai-fixture",
+        ApiProtocol::Decisions,
+    )])?;
+    builder.settlement_recorder_for(Record(sender), OperationScope::Both);
+    let pipeline = Arc::new(builder.build()?);
+    let request = json!({"model":"test","state":"Build passed.","questions":{"client-choice":{"type":"choice","instructions":"Choose status.","criteria":{"pass":null,"fail":null}}}});
+    let (status, _, body) =
+        post_classifier(router(pipeline.clone()), "/v1/systemone", request).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answers"]["client-choice"]["choice"], "pass");
+    let confidence = body["answers"]["client-choice"]["confidence"]
+        .as_f64()
+        .ok_or("missing confidence")?;
+    assert!((confidence - 0.2).abs() < 1e-10);
+    assert_eq!(body["usage"], json!({"input_tokens":12,"output_tokens":0}));
+    let requests = fixture.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].1["input"], "Build passed.");
+    assert!(requests[0].1["questions"].is_array());
+    assert!(requests[0].1.get("state").is_none());
+    let evidence = settled.recv().await.ok_or("missing settlement")?;
+    assert_eq!(evidence.protocol, Some(ApiProtocol::Decisions));
+    assert!(!evidence.failed);
+    pipeline.drain_required_pending_settlements().await?;
+    fixture.stop().await
+}
+
+#[tokio::test]
+async fn systemone_refusal_fails_delivery_and_cannot_enter_fallback() -> TestResult {
+    let refusal = json!({"model":"native-test","answers":[{"type":"refusal","name":null}],"usage":{"input_tokens":12,"output_tokens":0,"total_tokens":12,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}});
+    let primary = Fixture::start(vec![(StatusCode::OK, refusal)], false).await?;
+    let fallback = Fixture::start(vec![(StatusCode::OK, native_response(true))], false).await?;
+    let (sender, mut settled) = mpsc::unbounded_channel();
+    let mut builder = builder(vec![
+        target(&primary.base, "a-primary", ApiProtocol::Decisions),
+        target(&fallback.base, "z-fallback", ApiProtocol::Decisions),
+    ])?;
+    builder
+        .fallback_policy(Arc::new(RetryAll))
+        .settlement_recorder_for(Record(sender), OperationScope::Both);
+    let pipeline = Arc::new(builder.build()?);
+    let (status, _, _) = post_classifier(
+        router(pipeline.clone()),
+        "/v1/systemone",
+        systemone_request(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(primary.requests().len(), 1);
+    assert!(fallback.requests().is_empty());
+    let evidence = settled.recv().await.ok_or("missing settlement")?;
+    assert_eq!(evidence.input_tokens, 12);
+    assert!(evidence.failed);
+    pipeline.drain_required_pending_settlements().await?;
+    assert!(settled.try_recv().is_err());
+    primary.stop().await?;
+    fallback.stop().await
+}
+
+#[tokio::test]
+async fn systemone_malformed_completion_preserves_unknown_breakdowns_without_retry() -> TestResult {
+    let primary = Fixture::start(vec![(StatusCode::OK, systemone_response(false))], false).await?;
+    let fallback = Fixture::start(vec![(StatusCode::OK, systemone_response(true))], false).await?;
+    let (sender, mut settled) = mpsc::unbounded_channel();
+    let mut builder = builder(vec![
+        target(&primary.base, "a-primary", ApiProtocol::SystemOne),
+        target(&fallback.base, "z-fallback", ApiProtocol::SystemOne),
+    ])?;
+    builder
+        .fallback_policy(Arc::new(RetryAll))
+        .settlement_recorder_for(Record(sender), OperationScope::Both);
+    let pipeline = Arc::new(builder.build()?);
+    let (status, _, _) = post_classifier(
+        router(pipeline.clone()),
+        "/v1/systemone",
+        systemone_request(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(primary.requests().len(), 1);
+    assert!(fallback.requests().is_empty());
+    let evidence = settled.recv().await.ok_or("missing settlement")?;
+    assert_eq!(evidence.input_tokens, 12);
+    assert!(
+        !evidence
+            .availability
+            .ok_or("missing availability")?
+            .reasoning
+    );
+    assert!(evidence.failed);
+    pipeline.drain_required_pending_settlements().await?;
+    assert!(settled.try_recv().is_err());
+    primary.stop().await?;
+    fallback.stop().await
+}
+
+#[tokio::test]
+async fn unresolved_decisions_usage_projection_excludes_systemone_before_io() -> TestResult {
+    let fixture = Fixture::start(vec![(StatusCode::OK, systemone_response(true))], false).await?;
+    let pipeline = Arc::new(
+        builder(vec![target(
+            &fixture.base,
+            "fixture",
+            ApiProtocol::SystemOne,
+        )])?
+        .build()?,
+    );
+    let request = json!({"model":"test","input":"Build passed.","questions":[{"type":"predicate","instructions":"Did the build pass?"}]});
+    let (status, _, _) = post_decision(router(pipeline), request).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(fixture.requests().is_empty());
+    fixture.stop().await
+}
+
+#[tokio::test]
+async fn classifier_discovery_identifies_operation_and_native_protocol() -> TestResult {
+    let pipeline = Arc::new(
+        builder(vec![target(
+            "https://fixture.invalid/v1",
+            "fixture",
+            ApiProtocol::SystemOne,
+        )])?
+        .build()?,
+    );
+    let response = router(pipeline)
+        .oneshot(Request::builder().uri("/v1/models").body(Body::empty())?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
+    assert_eq!(body["data"][0]["operations"], json!(["classification"]));
+    assert_eq!(body["data"][0]["api_protocols"], json!(["systemone"]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn typed_classifier_considers_alternate_protocol_for_same_provider() -> TestResult {
+    use bitrouter_ai::classifier::{ClassifierInput, ClassifierQuestion};
+    let fixture = Fixture::start(vec![(StatusCode::OK,json!({"model":"native-test","answers":{"q0":{"type":"noul","noul":0.8}},"usage":{"input_tokens":12,"output_tokens":3}}))],false).await?;
+    let config: Config = serde_json::from_value(
+        json!({"providers":{"fixture":{"api_base":fixture.base,"api_key":"fixture-secret","active":true,"api_protocol":[{"*": ["decisions","systemone"]}],"models":[{"id":"test","provider_model_id":"native-test"}]}}}),
+    )?;
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(ConfigRoutingTable::from_config(config)))
+        .executor(Arc::new(HttpExecutor::with_defaults()?))
+        .served_operations(OperationScope::Both);
+    let pipeline = builder.build()?;
+    let request = ClassifierRequest {
+        model: "test".into(),
+        source_protocol: None,
+        input: ClassifierInput::Structured(json!({"build":"passed"})),
+        questions: vec![ClassifierQuestion::Predicate {
+            criteria: None,
+            instructions: Some("Check?".into()),
+            name: None,
+            key: None,
+        }],
+        safety_identifier: None,
+    };
+    let result = pipeline
+        .execute(PipelineRequest::new_classification(
+            "test",
+            CallerContext::local(),
+            request,
+        ))
+        .await?;
+    assert_eq!(
+        result
+            .result
+            .classification()
+            .ok_or("missing classifier result")?
+            .protocol,
+        ApiProtocol::SystemOne
+    );
+    assert_eq!(fixture.requests().len(), 1);
+    assert_eq!(fixture.requests()[0].1["state"], json!({"build":"passed"}));
+    fixture.stop().await
+}
+
 #[tokio::test]
 async fn custom_executor_malformed_native_success_keeps_usage_and_cannot_retry() -> TestResult {
     let request = request()?;
@@ -261,7 +503,7 @@ async fn custom_executor_malformed_native_success_keeps_usage_and_cannot_retry()
     let mut invalid = valid.clone();
     invalid.usage.prompt_tokens = 1_000_000;
     match invalid.answers.first_mut() {
-        Some(bitrouter_ai::decisions::DecisionAnswer::Predicate { probability, .. }) => {
+        Some(bitrouter_ai::classifier::ClassifierAnswer::Predicate { probability, .. }) => {
             *probability = 2.0;
         }
         _ => return Err("missing predicate fixture".into()),
@@ -281,14 +523,14 @@ async fn custom_executor_malformed_native_success_keeps_usage_and_cannot_retry()
     ])?;
     builder
         .executor(Arc::new(MockExecutor::new(vec![
-            MockResponse::Decisions(invalid),
-            MockResponse::Decisions(valid),
+            MockResponse::Classification(invalid),
+            MockResponse::Classification(valid),
         ])))
         .fallback_policy(Arc::new(RetryAll))
         .settlement_recorder_for(Record(sender), OperationScope::Both);
     let pipeline = builder.build()?;
     let outcome = pipeline
-        .execute(PipelineRequest::new_decisions(
+        .execute(PipelineRequest::new_classification(
             "test",
             CallerContext::local(),
             request,
@@ -322,8 +564,11 @@ async fn native_gateway_projects_selected_model_and_preserves_wire() -> TestResu
     builder.require_hook::<Count>(HookStage::PreRequest, OperationScope::Both);
     builder.settlement_recorder_for(Record(settled_tx), OperationScope::Both);
     let pipeline = Arc::new(builder.build()?);
-    let (status, headers, body) =
-        post_decision(router(pipeline.clone()), serde_json::to_value(request()?)?).await?;
+    let (status, headers, body) = post_decision(
+        router(pipeline.clone()),
+        DecisionsCodec::render_request(&request()?)?,
+    )
+    .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         headers
@@ -335,7 +580,7 @@ async fn native_gateway_projects_selected_model_and_preserves_wire() -> TestResu
     assert_eq!(generation_count.load(Ordering::SeqCst), 0);
     assert_eq!(shared_count.load(Ordering::SeqCst), 1);
     let evidence = settled.recv().await.ok_or("settlement missing")?;
-    assert_eq!(evidence.operation, ModelOperation::Decisions);
+    assert_eq!(evidence.operation, ModelOperation::Classification);
     assert_eq!(evidence.input_tokens, 10);
     assert_eq!(evidence.origin, UsageOrigin::ProviderReported);
     assert!(!evidence.failed);
@@ -382,8 +627,11 @@ async fn malformed_completed_output_settles_once_without_custom_fallback() -> Te
         .fallback_policy(Arc::new(RetryAll))
         .settlement_recorder_for(Record(tx), OperationScope::Both);
     let pipeline = Arc::new(builder.build()?);
-    let (status, _, body) =
-        post_decision(router(pipeline.clone()), serde_json::to_value(request()?)?).await?;
+    let (status, _, body) = post_decision(
+        router(pipeline.clone()),
+        DecisionsCodec::render_request(&request()?)?,
+    )
+    .await?;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     let message = body.to_string();
     assert!(!message.contains("private evidence"));
@@ -423,13 +671,13 @@ async fn provider_status_failure_can_advance_before_completion() -> TestResult {
         .build()?,
     );
     let response = pipeline
-        .execute(PipelineRequest::new_decisions(
+        .execute(PipelineRequest::new_classification(
             "test",
             CallerContext::local(),
             request()?,
         ))
         .await?;
-    assert!(response.result.decisions().is_some());
+    assert!(response.result.classification().is_some());
     assert_eq!(fixture.requests().len(), 2);
     pipeline.drain_required_pending_settlements().await?;
     fixture.stop().await
@@ -446,18 +694,21 @@ async fn unsupported_request_and_generation_target_do_not_dispatch() -> TestResu
         )])?
         .build()?,
     );
-    let mut unsupported = serde_json::to_value(request()?)?;
+    let mut unsupported = DecisionsCodec::render_request(&request()?)?;
     unsupported["stream"] = json!(false);
     let (status, _, body) = post_decision(router(pipeline.clone()), unsupported).await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(!body.to_string().contains("private evidence"));
-    let (status, _, _) =
-        post_decision(router(pipeline.clone()), serde_json::to_value(request()?)?).await?;
+    let (status, _, _) = post_decision(
+        router(pipeline.clone()),
+        DecisionsCodec::render_request(&request()?)?,
+    )
+    .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(fixture.requests().is_empty());
     let streamed = pipeline
         .clone()
-        .execute_stream(PipelineRequest::new_decisions(
+        .execute_stream(PipelineRequest::new_classification(
             "test",
             CallerContext::local(),
             request()?,
@@ -494,7 +745,7 @@ async fn config_filters_operation_before_native_preference_or_provider_pin() -> 
     }}))?;
     let table = ConfigRoutingTable::from_config(config);
     let prefs = RoutingPrefs {
-        operation: ModelOperation::Decisions,
+        operation: ModelOperation::Classification,
         inbound_protocol: Some(ApiProtocol::ChatCompletions),
         ..Default::default()
     };
@@ -577,10 +828,10 @@ impl RoutingTable for LivePrices {
         &self,
         _model: &str,
         _target: &RoutingTarget,
-    ) -> Option<bitrouter_sdk::language_model::stream::UsagePricing> {
+    ) -> Option<bitrouter_sdk::model_call::stream::UsagePricing> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
-        Some(bitrouter_sdk::language_model::stream::UsagePricing {
-            base: bitrouter_sdk::language_model::stream::UsagePricingBracket {
+        Some(bitrouter_sdk::model_call::stream::UsagePricing {
+            base: bitrouter_sdk::model_call::stream::UsagePricingBracket {
                 input_micro_usd_per_token: Some(1.0),
                 output_micro_usd_per_token: Some(100.0),
                 ..Default::default()
@@ -590,9 +841,9 @@ impl RoutingTable for LivePrices {
     }
 }
 
-struct FrozenProjection(Option<bitrouter_sdk::language_model::stream::UsagePricing>);
+struct FrozenProjection(Option<bitrouter_sdk::model_call::stream::UsagePricing>);
 #[async_trait]
-impl bitrouter_sdk::language_model::hooks::RouteHook for FrozenProjection {
+impl bitrouter_sdk::model_call::hooks::RouteHook for FrozenProjection {
     async fn after_resolve(
         &self,
         chain: &[RoutingTarget],
@@ -601,14 +852,10 @@ impl bitrouter_sdk::language_model::hooks::RouteHook for FrozenProjection {
         let target = chain
             .first()
             .ok_or_else(|| BitrouterError::internal("missing test target"))?;
-        ctx.emit(
-            bitrouter_sdk::language_model::stream::UsagePricingSnapshot {
-                target: bitrouter_sdk::language_model::stream::PricingTargetKey::from_target(
-                    target,
-                ),
-                pricing: self.0.clone(),
-            },
-        );
+        ctx.emit(bitrouter_sdk::model_call::stream::UsagePricingSnapshot {
+            target: bitrouter_sdk::model_call::stream::PricingTargetKey::from_target(target),
+            pricing: self.0.clone(),
+        });
         Ok(())
     }
 }
@@ -616,7 +863,7 @@ impl bitrouter_sdk::language_model::hooks::RouteHook for FrozenProjection {
 #[tokio::test]
 async fn stream_usage_uses_frozen_rates_and_unknown_disables_live_lookup() -> TestResult {
     use bitrouter_ai::types::{FinishReason, Message, Prompt, Role, StreamPart, Usage};
-    use bitrouter_sdk::language_model::stream::{UsagePricing, UsagePricingBracket};
+    use bitrouter_sdk::model_call::stream::{UsagePricing, UsagePricingBracket};
     use futures::TryStreamExt;
     for pricing in [
         Some(UsagePricing {
@@ -772,9 +1019,9 @@ fn bound_builder(
     let mut builder = PipelineBuilder::new();
     builder
         .routing_table(Arc::new(BoundTable { resolution, routes }))
-        .executor(Arc::new(MockExecutor::new(vec![MockResponse::Decisions(
-            result,
-        )])))
+        .executor(Arc::new(MockExecutor::new(vec![
+            MockResponse::Classification(result),
+        ])))
         .served_operations(OperationScope::Both)
         .request_checker_runner(Arc::new(Checker {
             operations,
@@ -789,7 +1036,7 @@ async fn incompatible_bound_checker_fails_before_preparation_or_callback() -> Te
     let (builder, mut inputs, count) = bound_builder(1024, OperationScope::Generation)?;
     let error = builder
         .build()?
-        .execute(PipelineRequest::new_decisions(
+        .execute(PipelineRequest::new_classification(
             "test",
             CallerContext::local(),
             request()?,
@@ -808,19 +1055,19 @@ async fn decisions_projection_covers_names_and_preserves_boolean_choice_identity
         json!({"model":"test","input":[{"role":"user","content":[{"type":"input_text","text":"evidence"},{"type":"input_image","image_url":"data:image/png;base64,eA=="}]}],"safety_identifier":"excluded-safety","questions":[{"type":"choice","name":"name","instructions":"instruction","choices":[{"value":true,"description":"description"},{"value":"true"}]},{"type":"score","name":"rubric","instructions":"score instruction","levels":[{"label":"low","description":"low criterion"},{"label":"high","description":"high criterion"}]}]}),
     )?;
     let response = json!({"model":"native-test","answers":[{"type":"choice","name":"name","choice":true,"confidence":0.9,"probabilities":[{"value":true,"probability":0.8},{"value":"true","probability":0.2}]},{"type":"score","name":"rubric","score":0.25,"confidence":0.55,"probabilities":[{"value":0,"label":"low","probability":0.75},{"value":1,"label":"high","probability":0.25}]}],"usage":native_response(true)["usage"]});
-    builder.executor(Arc::new(MockExecutor::new(vec![MockResponse::Decisions(
-        DecisionsCodec::parse_response(response, &req)?,
-    )])));
+    builder.executor(Arc::new(MockExecutor::new(vec![
+        MockResponse::Classification(DecisionsCodec::parse_response(response, &req)?),
+    ])));
     let pipeline = builder.build()?;
     pipeline
-        .execute(PipelineRequest::new_decisions(
+        .execute(PipelineRequest::new_classification(
             "test",
             CallerContext::local(),
             req,
         ))
         .await?;
     let input = inputs.recv().await.ok_or("checker was not invoked")?;
-    assert_eq!(input.operation, ModelOperation::Decisions);
+    assert_eq!(input.operation, ModelOperation::Classification);
     assert_eq!(input.coverage.excluded_media_fragments, 1);
     let kinds = input
         .content
@@ -830,18 +1077,18 @@ async fn decisions_projection_covers_names_and_preserves_boolean_choice_identity
     assert_eq!(
         kinds,
         vec![
-            ContentFragmentKind::DecisionEvidence,
-            ContentFragmentKind::DecisionQuestionName,
-            ContentFragmentKind::DecisionInstructions,
-            ContentFragmentKind::DecisionBooleanChoice,
-            ContentFragmentKind::DecisionChoiceDescription,
-            ContentFragmentKind::DecisionStringChoice,
-            ContentFragmentKind::DecisionQuestionName,
-            ContentFragmentKind::DecisionInstructions,
-            ContentFragmentKind::DecisionLevelLabel,
-            ContentFragmentKind::DecisionLevelDescription,
-            ContentFragmentKind::DecisionLevelLabel,
-            ContentFragmentKind::DecisionLevelDescription
+            ContentFragmentKind::ClassifierEvidence,
+            ContentFragmentKind::ClassifierQuestionName,
+            ContentFragmentKind::ClassifierInstructions,
+            ContentFragmentKind::ClassifierBooleanChoice,
+            ContentFragmentKind::ClassifierChoiceDescription,
+            ContentFragmentKind::ClassifierStringChoice,
+            ContentFragmentKind::ClassifierQuestionName,
+            ContentFragmentKind::ClassifierInstructions,
+            ContentFragmentKind::ClassifierLevelLabel,
+            ContentFragmentKind::ClassifierLevelDescription,
+            ContentFragmentKind::ClassifierLevelLabel,
+            ContentFragmentKind::ClassifierLevelDescription
         ]
     );
     assert!(!format!("{input:?}").contains("excluded-safety"));
@@ -867,7 +1114,7 @@ async fn decisions_projection_covers_names_and_preserves_boolean_choice_identity
     assert!(matches!(
         builder
             .build()?
-            .execute(PipelineRequest::new_decisions(
+            .execute(PipelineRequest::new_classification(
                 "test",
                 CallerContext::local(),
                 request()?
@@ -891,7 +1138,7 @@ async fn client_disconnect_and_shutdown_join_admitted_work_and_settlement() -> T
     let (tx, mut settled) = mpsc::unbounded_channel();
     let app = App::builder()
         .skip_auth(true)
-        .language_model(|lm| {
+        .model_call(|lm| {
             lm.routing_table(routes)
                 .executor(executor)
                 .served_operations(OperationScope::Both)
@@ -907,7 +1154,7 @@ async fn client_disconnect_and_shutdown_join_admitted_work_and_settlement() -> T
         })
         .await
     });
-    let body = serde_json::to_value(request()?)?;
+    let body = DecisionsCodec::render_request(&request()?)?;
     let client = tokio::spawn(async move {
         reqwest::Client::builder()
             .no_proxy()
@@ -1013,5 +1260,41 @@ async fn sdk_live_usage_prices_reject_mismatched_declared_profiles() -> TestResu
     assert!(table.usage_pricing("test", target).is_none());
     target.api_base_override = Some("https://unknown.invalid/v1".into());
     assert!(table.usage_pricing("test", target).is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn classifier_endpoint_identity_cannot_bypass_usage_admission() -> TestResult {
+    let fixture = Fixture::start(vec![(StatusCode::OK, native_response(true))], false).await?;
+    let pipeline = builder(vec![target(&fixture.base, "a", ApiProtocol::Decisions)])?.build()?;
+    let mut caller_request =
+        PipelineRequest::new_classification("test", CallerContext::local(), request()?);
+    caller_request.inbound_protocol = Some(ApiProtocol::SystemOne);
+    assert!(matches!(
+        pipeline.execute(caller_request).await,
+        Err(BitrouterError::BadRequest { .. })
+    ));
+    assert!(fixture.requests().is_empty());
+    fixture.stop().await
+}
+
+#[test]
+fn semantic_scope_and_checker_fragments_read_legacy_names() -> TestResult {
+    assert_eq!(
+        serde_json::from_value::<OperationScope>(json!("decisions"))?,
+        OperationScope::Classification
+    );
+    assert_eq!(
+        serde_json::to_value(OperationScope::Classification)?,
+        json!("classification")
+    );
+    assert_eq!(
+        serde_json::from_value::<ContentFragmentKind>(json!("decision_evidence"))?,
+        ContentFragmentKind::ClassifierEvidence
+    );
+    assert_eq!(
+        serde_json::to_value(ContentFragmentKind::ClassifierEvidence)?,
+        json!("classifier_evidence")
+    );
     Ok(())
 }

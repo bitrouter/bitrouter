@@ -18,7 +18,8 @@ use async_trait::async_trait;
 use bitrouter_ai::types::{FinishReason, UsageOrigin};
 use bitrouter_sdk::Result;
 use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementRecorder;
 use serde::Serialize;
 
 use crate::auth::events::ApiPrincipalEstablished;
@@ -217,7 +218,7 @@ impl SettlementRecorder for MeteringRecorder {
             })
             .transpose()?;
         let router = ctx
-            .get_event::<bitrouter_sdk::language_model::routing::RouterRequestIdentity>()
+            .get_event::<bitrouter_sdk::model_call::routing::RouterRequestIdentity>()
             .cloned();
         if let Some(event) = &session_event {
             ctx.emit(bitrouter_sdk::observe::SpanAttributes(

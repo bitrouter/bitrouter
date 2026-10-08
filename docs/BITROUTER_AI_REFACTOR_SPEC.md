@@ -55,13 +55,13 @@ against PR #953 head `8e267e720795b1b770bd1a72c758fda8f909f612`.
 - At the baseline, protocol adapters accepted SDK `RoutingTarget`. The moved
   [`protocol/mod.rs`](../crates/bitrouter-ai/src/protocol/mod.rs) now uses the
   selected `ModelTarget`; SDK routing and public-error policy remain above AI.
-- [`executor.rs`](../crates/bitrouter-sdk/src/language_model/executor.rs)
+- [`executor.rs`](../crates/bitrouter-sdk/src/model_call/executor.rs)
   combined HTTP execution, pipeline context, credential authority and native
   Responses continuation substitution at the baseline. It now delegates
   request projection, HTTP I/O and decoding to
   [`ModelClient`](../crates/bitrouter-ai/src/client.rs), retaining account
   refresh, gateway policy and continuation authority during extraction.
-- [`types.rs`](../crates/bitrouter-sdk/src/language_model/types.rs)
+- [`types.rs`](../crates/bitrouter-sdk/src/model_call/types.rs)
   combined model content with routing and pipeline envelopes at the baseline;
   model content is now owned by [`AI types`](../crates/bitrouter-ai/src/types.rs).
 

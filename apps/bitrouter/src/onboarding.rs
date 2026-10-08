@@ -39,7 +39,7 @@ const PROBE_ENV_VARS: &[(&str, &str)] = &[
     ("OPENCODE_ZEN_API_KEY", "opencode-zen"),
 ];
 
-/// Purely-local signals that decide "configured vs not" without any network
+/// Purely-local signals that classify "configured vs not" without any network
 /// call, registry load, or `merge_registry_into`. See [`probe`].
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ProbeSignals {

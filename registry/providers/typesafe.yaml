@@ -1,0 +1,34 @@
+name: typesafe
+display_name: TypeSafe
+kind: first_party
+api_base: https://api.typesafe.ai/v1
+doc_url: https://docs.typesafe.ai/api
+auth:
+  kind: bearer
+  env: TYPESAFE_API_KEY
+api_protocol:
+  - "*": systemone
+rate_limits: []
+# Input-only prices from https://docs.typesafe.ai/models, checked 2026-10-08.
+# Output counts remain observable even though output tokens are free.
+# Aliases move; use the versioned ID for evaluation and threshold tuning.
+models:
+  - id: typesafe/jev-1.13.0
+    provider_model_id: jev-1.13.0
+    pricing_by_protocol:
+      systemone: &jev_pricing
+        input_tokens:
+          no_cache: 0.042
+          cache_read: 0
+          cache_write: 0
+        output_tokens:
+          text: 0
+  - id: typesafe/jev-latest
+    provider_model_id: jev-latest
+    pricing_by_protocol:
+      systemone: *jev_pricing
+  - id: typesafe/jev-preview
+    provider_model_id: jev-preview
+    pricing_by_protocol:
+      systemone: *jev_pricing
+status: active

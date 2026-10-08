@@ -224,7 +224,7 @@ pub struct RouteReport {
     pub policy_decision: Option<PolicySelection>,
     /// Stable identity of the named router resolved during Stage 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+    pub router: Option<bitrouter_sdk::model_call::routing::RouterRequestIdentity>,
     /// Whether the router came from canonical configuration or legacy preset
     /// compatibility syntax.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,7 +268,8 @@ use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, R
 use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
+use bitrouter_sdk::model_call::routing::RoutingPrefs;
+use bitrouter_sdk::model_call::routing::RoutingTable;
 
 use crate::daemon::{DaemonCommand, DaemonResponse, RouteHop};
 use crate::metering::PricingTable;
@@ -278,7 +279,7 @@ use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
 #[derive(Default)]
 struct RouteMetadata {
     effective_effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+    router: Option<bitrouter_sdk::model_call::routing::RouterRequestIdentity>,
     router_source: Option<crate::actions::models::RouterSource>,
     bound_policy: Option<String>,
     policy_decision_executed: Option<bool>,

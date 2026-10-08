@@ -2,7 +2,7 @@
 //!
 //! Drawn from a `_bitrouter/route/list` response and nothing else: the routes
 //! the daemon suggests, and the lease it confirms is in force. Whether the
-//! control should appear at all is the caller's to decide and is passed in —
+//! control should appear at all is the caller's to classify and is passed in —
 //! [`Picker::open`] takes `available`, the controller's three-condition
 //! `routeControl` capability gate, and there is no way to draw a picker
 //! without answering it.

@@ -1,5 +1,8 @@
 # Native Decisions API
 
+Decisions and System One now share the Classifier representation. See
+[Classifier APIs](classifier.md) for both protocols and their conversion gates.
+
 `POST http://127.0.0.1:4356/v1/decisions` accepts native evidence and typed
 predicate, choice and score questions. It returns native answers, including
 refusals, with provider-reported usage. Choose a model whose provider metadata

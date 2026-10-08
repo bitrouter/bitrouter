@@ -16,7 +16,8 @@ use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
 
 use bitrouter_ai::types::StreamPart;
-use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::RequestOutcome;
 
 use crate::otel::cardinality::CardinalityLimiter;
 use crate::otel::config::OtelConfig;
@@ -232,7 +233,8 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
 mod tests {
     use bitrouter_ai::types::{GenerateResult, GenerationParams, Prompt};
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{ExecutionResult, PipelineRequest};
+    use bitrouter_sdk::model_call::types::ExecutionResult;
+    use bitrouter_sdk::model_call::types::PipelineRequest;
 
     use super::*;
 

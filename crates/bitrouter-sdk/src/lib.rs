@@ -11,14 +11,14 @@
 //! ## What's in the SDK
 //!
 //! - **Three independent protocol pipelines** — one per wire family:
-//!   - [`language_model`] — the main pipeline. Handles LLM completions with the
+//!   - [`model_call`] — the main pipeline. Handles LLM completions with the
 //!     full hook set (pre-request → route → execute → settle, plus an
 //!     interleaved stream stage and read-only observation).
 //!   - [`mcp`] — Model Context Protocol routing (pure routing, no settlement).
 //!   - [`acp`] — Agent Client Protocol routing (pure routing, no settlement).
 //!
 //!   The pipelines are deliberately **not** generic over a shared hook trait:
-//!   each one has its own hooks so a stage in `language_model` can't be
+//!   each one has its own hooks so a stage in `model_call` can't be
 //!   accidentally registered on `mcp`. Cross-cutting reuse goes through the
 //!   crate-root library code below, never a shared trait.
 //!
@@ -51,44 +51,45 @@
 //!
 //! ## Anatomy of a request
 //!
-//! For the LLM pipeline (`language_model`):
+//! For the LLM pipeline (`model_call`):
 //!
 //! 1. **Pre-request** — every [`PreRequestHook`] runs; auth, policy, and
 //!    upstream guardrails reject early. Returns
 //!    [`HookDecision::Allow`] or denies.
 //! 2. **Route** — a [`RoutingTable`] resolves the `model` field into an
 //!    ordered chain of [`RoutingTarget`]s; every
-//!    [`RouteHook`](language_model::RouteHook) can mutate it (e.g. BYOK swaps
+//!    [`RouteHook`](model_call::hooks::RouteHook) can mutate it (e.g. BYOK swaps
 //!    in the caller's own provider key).
-//! 3. **Execute** — the [`Executor`](language_model::Executor) calls the first
+//! 3. **Execute** — the [`Executor`](model_call::executor::Executor) calls the first
 //!    target. On a retriable failure the [`FallbackPolicy`] advances to the
 //!    next target. Streaming responses run through every
-//!    [`StreamHook`](language_model::StreamHook) on each canonical part.
+//!    [`StreamHook`](model_call::hooks::StreamHook) on each canonical part.
 //! 4. **Settle** — every registered
-//!    [`SettlementRecorder`](language_model::SettlementRecorder) runs in
+//!    [`SettlementRecorder`](model_call::settlement::SettlementRecorder) runs in
 //!    registration order against the immutable
-//!    [`SettlementContext`](language_model::SettlementContext). Deployments
+//!    [`SettlementContext`](model_call::settlement::SettlementContext). Deployments
 //!    use recorders for metering, charging, signed receipts, etc.; the SDK
 //!    is opinionated only about pipeline-data correctness.
-//! 5. **Observe** — [`ObserveHook`](language_model::ObserveHook)s see every
+//! 5. **Observe** — [`ObserveHook`](model_call::hooks::ObserveHook)s see every
 //!    phase boundary and the final outcome; they never influence the request.
 //!
 //! See each hook trait's docs for the exact contract.
 //!
 //! ## Building an `App`
 //!
-//! At minimum a `language_model` pipeline needs a routing table and an
+//! At minimum a `model_call` pipeline needs a routing table and an
 //! executor:
 //!
 //! ```no_run
 //! use std::sync::Arc;
 //! use bitrouter_sdk::App;
-//! use bitrouter_sdk::language_model::{HttpExecutor, StaticRoutingTable};
+//! use bitrouter_sdk::model_call::executor::HttpExecutor;
+//! use bitrouter_sdk::model_call::routing::StaticRoutingTable;
 //!
 //! # fn run() -> bitrouter_sdk::Result<()> {
 //! let executor = Arc::new(HttpExecutor::with_defaults()?);
 //! let app = App::builder()
-//!     .language_model(|lm| {
+//!     .model_call(|lm| {
 //!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
 //!           .executor(executor);
 //!     })
@@ -132,7 +133,7 @@
 //! What the SDK does *not* own is any rendering of it. OTLP transport,
 //! credentials, batch processing, endpoint configuration and cardinality
 //! limiting are one egress path's implementation, not contract, and they ship
-//! in `bitrouter-telemetry`. [`ObserveHook`](language_model::ObserveHook) is
+//! in `bitrouter-telemetry`. [`ObserveHook`](model_call::hooks::ObserveHook) is
 //! the seam they plug into — a seam with more than one production
 //! implementation, since the OSS binary registers its own observers alongside
 //! the OTLP one.
@@ -186,8 +187,8 @@ pub mod server;
 
 // ===== per-protocol modules =====
 pub mod acp;
-pub mod language_model;
 pub mod mcp;
+pub mod model_call;
 
 pub use app::{App, AppBuilder, Plugin, PromptTransform};
 // Re-exported so downstream `PromptTransform` impls can name the header map
@@ -196,8 +197,5 @@ pub use caller::CallerContext;
 pub use error::{BitrouterError, Result};
 pub use event::{EventBus, PipelineEvent};
 pub use http::HeaderMap;
-pub use language_model::{
-    FallbackPolicy, HookDecision, PreRequestHook, RoutingTable, RoutingTarget,
-};
 pub use metrics::MetricsRenderer;
 pub use plugin::{MigrationContent, MigrationItem, PluginId};

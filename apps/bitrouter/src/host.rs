@@ -547,7 +547,7 @@ async fn serve_with_options(
         // failure still returns directly; a HUP listener failure only disables
         // reload signaling and leaves the server running.
         let evolution_stop = tokio_util::sync::CancellationToken::new();
-        let evolution_worker = app.language_model().cloned().map(|pipeline| {
+        let evolution_worker = app.model_call().cloned().map(|pipeline| {
             let worker =
                 crate::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
                     .with_handoff_gate(handoff_gate.clone());

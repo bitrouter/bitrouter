@@ -8,11 +8,15 @@ use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bitrouter_ai::types::{StreamPart, ToolChoice, UsageOrigin};
 use bitrouter_sdk::PipelineEvent;
-use bitrouter_sdk::language_model::hooks::{HopOutcome, Phase, RequestOutcome};
-use bitrouter_sdk::language_model::{
-    HookDecision, ObserveHook, PipelineContext, PreRequestHook, RoutingTarget, SettlementContext,
-    SettlementRecorder, StreamContext,
-};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::context::StreamContext;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::ObserveHook;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
+use bitrouter_sdk::model_call::hooks::{HopOutcome, Phase, RequestOutcome};
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementRecorder;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Serialize};
 
@@ -260,11 +264,11 @@ mod native_admission_tests {
     use crate::metering::store::{MeteringStore, TimeWindow};
     use bitrouter_ai::protocol::decisions::DecisionsCodec;
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::builder::PipelineBuilder;
-    use bitrouter_sdk::language_model::executor::MockExecutor;
-    use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
-    use bitrouter_sdk::language_model::routing::StaticRoutingTable;
-    use bitrouter_sdk::language_model::types::PipelineRequest;
+    use bitrouter_sdk::model_call::builder::PipelineBuilder;
+    use bitrouter_sdk::model_call::executor::MockExecutor;
+    use bitrouter_sdk::model_call::operations::{HookStage, OperationScope};
+    use bitrouter_sdk::model_call::routing::StaticRoutingTable;
+    use bitrouter_sdk::model_call::types::PipelineRequest;
 
     #[tokio::test]
     async fn native_reserved_identity_rejection_keeps_metering_namespace_untouched() -> Result<()> {
@@ -299,7 +303,7 @@ mod native_admission_tests {
             "model":"test","input":"evidence","questions":[{"type":"predicate","name":"q","instructions":"check"}]
         }))?;
         let mut invocation =
-            PipelineRequest::new_decisions("test", CallerContext::local(), request);
+            PipelineRequest::new_classification("test", CallerContext::local(), request);
         invocation.request_id = request_id.into();
         let error = pipeline
             .execute(invocation)

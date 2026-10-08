@@ -1,5 +1,5 @@
 {
-  "schema_version": "2",
+  "schema_version": "3",
   "scope_name": "io.bitrouter.observe",
   "scope_version": "{rendering crate version}",
   "resource_attributes": [
@@ -66,7 +66,7 @@
           "key": "bitrouter.operation",
           "type": "string",
           "requirement": "required",
-          "note": "Operation derived from the typed input: generation or decisions."
+          "note": "Operation derived from the typed input: generation or classification."
         },
         {
           "key": "bitrouter.inbound_protocol",
@@ -81,13 +81,13 @@
           "note": "Actual final serving or attempted target wire, when dispatch was reached."
         },
         {
-          "key": "bitrouter.decisions.input",
+          "key": "bitrouter.classifier.input",
           "type": "string",
           "requirement": "conditional",
           "note": "Native evidence and questions only under full content capture, with the configured byte cap; safety identifier excluded."
         },
         {
-          "key": "bitrouter.decisions.answers",
+          "key": "bitrouter.classifier.answers",
           "type": "string",
           "requirement": "conditional",
           "note": "Native ordered answers only under full content capture, with the configured byte cap."
@@ -114,7 +114,7 @@
           "key": "gen_ai.operation.name",
           "type": "string",
           "requirement": "required",
-          "note": "`chat` for generation; `decisions` for the native Decisions operation."
+          "note": "`chat` for generation; `classification` for the classifier operation."
         },
         {
           "key": "gen_ai.request.model",
@@ -265,6 +265,30 @@
           "type": "int",
           "requirement": "conditional",
           "note": "When the upstream reported usage."
+        },
+        {
+          "key": "bitrouter.usage.cache_read_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
+        },
+        {
+          "key": "bitrouter.usage.cache_write_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
+        },
+        {
+          "key": "bitrouter.usage.reasoning_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
+        },
+        {
+          "key": "bitrouter.usage.reported_total_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
         },
         {
           "key": "gen_ai.usage.reasoning_tokens",
@@ -325,16 +349,16 @@
       ]
     },
     {
-      "name": "decisions {gen_ai.request.model}",
+      "name": "classification {gen_ai.request.model}",
       "kind": "internal",
       "parent": "The ingress SERVER span when one exists; otherwise the inbound W3C trace context; otherwise a trace root.",
-      "note": "Full native Decisions request lifetime; no first token, generated messages, or continuation is invented.",
+      "note": "Full classifier request lifetime; no first token, generated messages, or continuation is invented.",
       "attributes": [
         {
           "key": "bitrouter.operation",
           "type": "string",
           "requirement": "required",
-          "note": "Operation derived from the typed input: generation or decisions."
+          "note": "Operation derived from the typed input: generation or classification."
         },
         {
           "key": "bitrouter.inbound_protocol",
@@ -349,13 +373,13 @@
           "note": "Actual final serving or attempted target wire, when dispatch was reached."
         },
         {
-          "key": "bitrouter.decisions.input",
+          "key": "bitrouter.classifier.input",
           "type": "string",
           "requirement": "conditional",
           "note": "Native evidence and questions only under full content capture, with the configured byte cap; safety identifier excluded."
         },
         {
-          "key": "bitrouter.decisions.answers",
+          "key": "bitrouter.classifier.answers",
           "type": "string",
           "requirement": "conditional",
           "note": "Native ordered answers only under full content capture, with the configured byte cap."
@@ -382,7 +406,7 @@
           "key": "gen_ai.operation.name",
           "type": "string",
           "requirement": "required",
-          "note": "`chat` for generation; `decisions` for the native Decisions operation."
+          "note": "`chat` for generation; `classification` for the classifier operation."
         },
         {
           "key": "gen_ai.request.model",
@@ -533,6 +557,30 @@
           "type": "int",
           "requirement": "conditional",
           "note": "When the upstream reported usage."
+        },
+        {
+          "key": "bitrouter.usage.cache_read_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
+        },
+        {
+          "key": "bitrouter.usage.cache_write_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
+        },
+        {
+          "key": "bitrouter.usage.reasoning_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
+        },
+        {
+          "key": "bitrouter.usage.reported_total_available",
+          "type": "bool",
+          "requirement": "conditional",
+          "note": "Explicit provider evidence availability on partially reported usage; absent for legacy full breakdowns."
         },
         {
           "key": "gen_ai.usage.reasoning_tokens",
@@ -702,9 +750,9 @@
       ]
     },
     {
-      "name": "decisions {bitrouter.model_id}",
+      "name": "classification {bitrouter.model_id}",
       "kind": "client",
-      "parent": "The root decisions span.",
+      "parent": "The root classification span.",
       "note": "Plain HTTP client attempt; native usage is recorded once on the root model-call span.",
       "attributes": [
         {
@@ -1101,7 +1149,7 @@
   ],
   "extension_region": {
     "carrier": "observe.span_attributes",
-    "target_span": "chat {gen_ai.request.model} or decisions {gen_ai.request.model}",
+    "target_span": "chat {gen_ai.request.model} or classification {gen_ai.request.model}",
     "reserved_prefixes": [
       "bitrouter.",
       "gen_ai."
@@ -1113,7 +1161,7 @@
   "invariants": [
     {
       "id": "single-generation",
-      "rule": "Only the root `chat` or `decisions` INTERNAL span carries `gen_ai.*` attributes. The auxiliary spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and `server.*` only.",
+      "rule": "Only the root `chat` or `classification` INTERNAL span carries `gen_ai.*` attributes. The auxiliary spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and `server.*` only.",
       "failure": "A gen_ai-aware backend renders any span carrying `gen_ai.*` as its own generation. Stamping a hop makes it count two generations per request and double the reported cost. Nothing errors; the bill is just wrong."
     },
     {

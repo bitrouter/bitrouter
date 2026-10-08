@@ -58,10 +58,17 @@ use serde::{Deserialize, Serialize};
 
 use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
 use bitrouter_ai::types::{ApiProtocol, Content, Prompt, StreamPart};
-use bitrouter_sdk::language_model::{
-    ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome,
-    RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest,
-};
+use bitrouter_sdk::error::BitrouterError;
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::context::StreamContext;
+use bitrouter_sdk::model_call::hooks::HopOutcome;
+use bitrouter_sdk::model_call::hooks::ObserveHook;
+use bitrouter_sdk::model_call::hooks::Phase;
+use bitrouter_sdk::model_call::hooks::RequestOutcome;
+use bitrouter_sdk::model_call::hooks::StreamHopOutcome;
+use bitrouter_sdk::model_call::stream::StreamInterest;
+use bitrouter_sdk::model_call::types::ExecutionResult;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 
 use crate::otel::cardinality::CardinalityLimiter;
 use crate::otel::config::{ContentCaptureMode, OtelConfig, SamplerKind};
@@ -460,7 +467,7 @@ impl OtelExporter {
         let model = ctx.model().to_string();
         let operation = match ctx.operation() {
             bitrouter_ai::types::ModelOperation::Generation => "chat",
-            bitrouter_ai::types::ModelOperation::Decisions => "decisions",
+            bitrouter_ai::types::ModelOperation::Classification => "classification",
         };
         let span_name = format!("{operation} {model}");
         let mut attributes = vec![
@@ -476,7 +483,7 @@ impl OtelExporter {
                 if operation == "chat" {
                     "generation"
                 } else {
-                    "decisions"
+                    "classification"
                 },
             ),
             KeyValue::new("gen_ai.request.model", model),
@@ -639,8 +646,10 @@ impl ObserveHook for OtelExporter {
             return;
         };
 
-        let operation = if target.api_protocol == ApiProtocol::Decisions {
-            "decisions"
+        let operation = if target.api_protocol.operation()
+            == bitrouter_ai::types::ModelOperation::Classification
+        {
+            "classification"
         } else {
             "chat"
         };
@@ -936,23 +945,6 @@ impl ObserveHook for OtelExporter {
                     }
                 }
 
-                if let Some(usage) = result.result.usage() {
-                    span.set_attribute(KeyValue::new(
-                        "gen_ai.usage.input_tokens",
-                        usage.prompt_tokens as i64,
-                    ));
-                    span.set_attribute(KeyValue::new(
-                        "gen_ai.usage.output_tokens",
-                        usage.completion_tokens as i64,
-                    ));
-                    if usage.reasoning_tokens > 0 {
-                        span.set_attribute(KeyValue::new(
-                            "gen_ai.usage.reasoning_tokens",
-                            usage.reasoning_tokens as i64,
-                        ));
-                    }
-                }
-
                 // Spec: gen_ai.response.finish_reasons is an array of strings.
                 if let Some(reason) = result
                     .result
@@ -964,6 +956,61 @@ impl ObserveHook for OtelExporter {
                         opentelemetry::Value::Array(opentelemetry::Array::String(vec![
                             finish_reason_to_str(reason).into(),
                         ])),
+                    ));
+                }
+            }
+
+            if let Some(usage) = ctx
+                .execution_result
+                .as_ref()
+                .and_then(|result| result.result.usage())
+                .or(match outcome {
+                    RequestOutcome::Failed(BitrouterError::UpstreamInvalidResponse {
+                        usage,
+                        ..
+                    }) => usage.as_deref(),
+                    _ => None,
+                })
+            {
+                span.set_attribute(KeyValue::new(
+                    "gen_ai.usage.input_tokens",
+                    usage.prompt_tokens as i64,
+                ));
+                span.set_attribute(KeyValue::new(
+                    "gen_ai.usage.output_tokens",
+                    usage.completion_tokens as i64,
+                ));
+                if let Some(availability) = &usage.availability {
+                    for (key, value) in [
+                        (
+                            "bitrouter.usage.cache_read_available",
+                            availability.cache_read,
+                        ),
+                        (
+                            "bitrouter.usage.cache_write_available",
+                            availability.cache_write,
+                        ),
+                        (
+                            "bitrouter.usage.reasoning_available",
+                            availability.reasoning,
+                        ),
+                        (
+                            "bitrouter.usage.reported_total_available",
+                            availability.reported_total,
+                        ),
+                    ] {
+                        span.set_attribute(KeyValue::new(key, value));
+                    }
+                }
+                if usage.reasoning_tokens > 0
+                    && usage
+                        .availability
+                        .as_ref()
+                        .is_none_or(|availability| availability.reasoning)
+                {
+                    span.set_attribute(KeyValue::new(
+                        "gen_ai.usage.reasoning_tokens",
+                        usage.reasoning_tokens as i64,
                     ));
                 }
             }
@@ -1052,7 +1099,7 @@ impl ObserveHook for OtelExporter {
                         truncate_utf8(json, self.config.content_attr_max_bytes),
                     ));
                 }
-                if let Some(request) = ctx.decision_request() {
+                if let Some(request) = ctx.classifier_request() {
                     let safety_identifier = request
                         .safety_identifier
                         .as_ref()
@@ -1061,19 +1108,19 @@ impl ObserveHook for OtelExporter {
                         serde_json::json!({"input": request.input, "questions": request.questions});
                     if let Some(json) = captured_decision_content_json(&input, safety_identifier) {
                         span.set_attribute(KeyValue::new(
-                            "bitrouter.decisions.input",
+                            "bitrouter.classifier.input",
                             truncate_utf8(json, self.config.content_attr_max_bytes),
                         ));
                     }
                     if let Some(result) = ctx
                         .execution_result
                         .as_ref()
-                        .and_then(|result| result.result.decisions())
+                        .and_then(|result| result.result.classification())
                         && let Some(json) =
                             captured_decision_content_json(&result.answers, safety_identifier)
                     {
                         span.set_attribute(KeyValue::new(
-                            "bitrouter.decisions.answers",
+                            "bitrouter.classifier.answers",
                             truncate_utf8(json, self.config.content_attr_max_bytes),
                         ));
                     }
@@ -1282,8 +1329,10 @@ fn build_hop_client_attrs(target: &RoutingTarget) -> Vec<KeyValue> {
     let mut attrs = vec![
         KeyValue::new(
             "bitrouter.operation",
-            if target.api_protocol == ApiProtocol::Decisions {
-                "decisions"
+            if target.api_protocol.operation()
+                == bitrouter_ai::types::ModelOperation::Classification
+            {
+                "classification"
             } else {
                 "generation"
             },
@@ -1407,10 +1456,16 @@ mod hop_tests {
     };
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::error::BitrouterError;
-    use bitrouter_sdk::language_model::{
-        DenyReason, HookDecision, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
-        PreRequestHook, SettlementContext, SettlementRecorder, StaticRoutingTable,
-    };
+    use bitrouter_sdk::model_call::builder::PipelineBuilder;
+    use bitrouter_sdk::model_call::executor::MockExecutor;
+    use bitrouter_sdk::model_call::executor::MockResponse;
+    use bitrouter_sdk::model_call::hooks::DenyReason;
+    use bitrouter_sdk::model_call::hooks::HookDecision;
+    use bitrouter_sdk::model_call::hooks::PreRequestHook;
+    use bitrouter_sdk::model_call::routing::StaticRoutingTable;
+    use bitrouter_sdk::model_call::settlement::SettlementContext;
+    use bitrouter_sdk::model_call::settlement::SettlementRecorder;
+    use bitrouter_sdk::model_call::types::PipelineRequest;
 
     struct RejectingPreRequestHook;
 
@@ -1796,7 +1851,7 @@ mod hop_tests {
         exporter.after_phase(Phase::PreRequest, &ctx).await;
         exporter.on_hop_start(&ctx, &target).await;
         let mut result = fresh_result(&target);
-        if let bitrouter_sdk::language_model::types::PipelineOutput::Generation(generation) =
+        if let bitrouter_sdk::model_call::types::PipelineOutput::Generation(generation) =
             &mut result.result
         {
             generation.response_id = Some("native-nonstream-sentinel".into());
@@ -2283,6 +2338,71 @@ mod hop_tests {
     }
 
     #[tokio::test]
+    async fn classifier_partial_usage_is_explicit_on_success_and_completed_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_ai::protocol::systemone::SystemOneCodec;
+        for valid in [true, false] {
+            let (exporter, captured) = make_test_exporter_with(OtelConfig::default());
+            let request = SystemOneCodec::parse_request(
+                serde_json::json!({"model":"test-model","state":"evidence","questions":{"original/key":{"type":"noul","instructions":"Check?"}}}),
+            )?;
+            let mut target = fresh_target("typesafe");
+            target.api_protocol = ApiProtocol::SystemOne;
+            let mut ctx = PipelineContext::new(PipelineRequest::new_classification(
+                "test-model",
+                CallerContext::new("k1", "u1"),
+                request.clone(),
+            ));
+            exporter.after_phase(Phase::PreRequest, &ctx).await;
+            exporter.on_hop_start(&ctx, &target).await;
+            let outcome = match SystemOneCodec::parse_response(
+                serde_json::json!({"model":"jev-test","answers":{"original/key":{"type":"noul","noul":if valid {0.8} else {1.5}}},"usage":{"input_tokens":10,"output_tokens":2}}),
+                &request,
+            ) {
+                Ok(native) => {
+                    let mut result = fresh_result(&target);
+                    result.result = native.into();
+                    exporter
+                        .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
+                        .await;
+                    ctx.execution_result = Some(result);
+                    RequestOutcome::Completed
+                }
+                Err(error) => {
+                    let error = BitrouterError::from(error);
+                    exporter
+                        .on_hop_end(&ctx, &target, HopOutcome::Failed(&error))
+                        .await;
+                    RequestOutcome::Failed(error)
+                }
+            };
+            exporter.on_request_end(&ctx, &outcome).await;
+            assert!(exporter.provider.force_flush().is_ok());
+            let spans = captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            assert_conforms_to_span_schema(&spans);
+            let root = spans
+                .iter()
+                .find(|span| {
+                    span.name == "classification test-model" && span.span_kind == SpanKind::Internal
+                })
+                .ok_or("missing classifier root")?;
+            assert_eq!(i64_attr(root, "gen_ai.usage.input_tokens"), Some(10));
+            assert_eq!(i64_attr(root, "gen_ai.usage.output_tokens"), Some(2));
+            assert_eq!(i64_attr(root, "gen_ai.usage.reasoning_tokens"), None);
+            for field in ["cache_read", "cache_write", "reasoning", "reported_total"] {
+                assert_eq!(
+                    bool_attr(root, &format!("bitrouter.usage.{field}_available")),
+                    Some(false)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn native_decision_spans_conform_and_exclude_safety_identifier()
     -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use bitrouter_ai::protocol::decisions::DecisionsCodec;
@@ -2315,7 +2435,7 @@ mod hop_tests {
             );
             let mut target = fresh_target("openai");
             target.api_protocol = ApiProtocol::Decisions;
-            let mut ctx = PipelineContext::new(PipelineRequest::new_decisions(
+            let mut ctx = PipelineContext::new(PipelineRequest::new_classification(
                 "test-model",
                 CallerContext::new("k1", "u1"),
                 request,
@@ -2340,10 +2460,13 @@ mod hop_tests {
             let root = spans
                 .iter()
                 .find(|span| {
-                    span.name == "decisions test-model" && span.span_kind == SpanKind::Internal
+                    span.name == "classification test-model" && span.span_kind == SpanKind::Internal
                 })
                 .ok_or("missing native root span")?;
-            assert_eq!(str_attr(root, "bitrouter.operation"), Some("decisions"));
+            assert_eq!(
+                str_attr(root, "bitrouter.operation"),
+                Some("classification")
+            );
             assert_eq!(
                 str_attr(root, "bitrouter.inbound_protocol"),
                 Some("decisions")
@@ -2351,8 +2474,8 @@ mod hop_tests {
             assert_eq!(i64_attr(root, "gen_ai.usage.input_tokens"), Some(10));
             assert_eq!(str_attr(root, "gen_ai.input.messages"), None);
             assert_eq!(str_attr(root, "gen_ai.output.messages"), None);
-            let input = str_attr(root, "bitrouter.decisions.input");
-            let answers = str_attr(root, "bitrouter.decisions.answers");
+            let input = str_attr(root, "bitrouter.classifier.input");
+            let answers = str_attr(root, "bitrouter.classifier.answers");
             if mode == ContentCaptureMode::Full {
                 assert!(input.is_some_and(|input| input.contains("private-native-evidence")));
                 assert!(answers.is_some_and(|answers| answers.contains("probability")));
@@ -2374,9 +2497,9 @@ mod hop_tests {
             let wire_after = DecisionsCodec::render_response(
                 ctx.execution_result
                     .as_ref()
-                    .and_then(|result| result.result.decisions())
+                    .and_then(|result| result.result.classification())
                     .ok_or("missing native result")?,
-                ctx.decision_request().ok_or("missing native request")?,
+                ctx.classifier_request().ok_or("missing native request")?,
             )?;
             assert_eq!(wire_after, wire_before);
             let hop = spans
@@ -3467,7 +3590,7 @@ mod hop_tests {
             });
         let mut ctx = PipelineContext::new(request);
         let mut result = fresh_result(&fresh_target("google"));
-        if let bitrouter_sdk::language_model::types::PipelineOutput::Generation(generation) =
+        if let bitrouter_sdk::model_call::types::PipelineOutput::Generation(generation) =
             &mut result.result
         {
             generation.content.push(signed.clone());

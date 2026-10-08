@@ -20,10 +20,14 @@ use bitrouter_ai::types::{
 };
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::event::EventBus;
-use bitrouter_sdk::language_model::{
-    ExecutionResult, HopOutcome, ObserveHook, PipelineContext, PipelineRequest, RoutingTarget,
-    SettlementContext, SettlementRecorder,
-};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::HopOutcome;
+use bitrouter_sdk::model_call::hooks::ObserveHook;
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementRecorder;
+use bitrouter_sdk::model_call::types::ExecutionResult;
+use bitrouter_sdk::model_call::types::PipelineRequest;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 
 fn base_lock() -> PolicyLock {
     PolicyLock {
@@ -277,7 +281,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         model: "model".into(),
         caller: CallerContext::local(),
         headers: http::HeaderMap::new(),
-        input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(Prompt {
+        input: bitrouter_sdk::model_call::types::PipelineInput::Generation(Box::new(Prompt {
             model: "model".into(),
             system: None,
             system_provider_metadata: BTreeMap::new(),
@@ -356,6 +360,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         cache_write_tokens: 0,
         usage_origin: UsageOrigin::ProviderReported,
         raw_usage: None,
+        usage_availability: None,
         web_search_count: 0,
         media_input_count: 0,
         media_output_count: 0,

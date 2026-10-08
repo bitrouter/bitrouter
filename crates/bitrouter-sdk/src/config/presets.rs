@@ -37,14 +37,14 @@ use crate::config::checker::CheckerConfig;
 use crate::config::router::{EffectiveRouterDefinition, RouterConfig};
 use crate::config::{PresetConfig, RoutingConfig, VariantConfig};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::request_checks::RequestCheckBinding;
-use crate::language_model::routing::{RouterRequestIdentity, RoutingPrefs};
+use crate::model_call::request_checks::RequestCheckBinding;
+use crate::model_call::routing::{RouterRequestIdentity, RoutingPrefs};
 
-// `PromptOverrides` is defined in `language_model::routing` because it is the
-// return type of [`crate::language_model::RoutingTable::preset_overrides`],
+// `PromptOverrides` is defined in `model_call::routing` because it is the
+// return type of [`crate::model_call::routing::RoutingTable::preset_overrides`],
 // which must stay available without the `config_file` feature. Re-exported
 // here so callers reading the config still find it under its old path.
-pub use crate::language_model::routing::PromptOverrides;
+pub use crate::model_call::routing::PromptOverrides;
 
 /// The reserved BitRouter model namespace — the `bitrouter/` in
 /// `bitrouter/auto`. Everything under it is resolved by BitRouter itself and
@@ -330,7 +330,7 @@ mod tests {
     use super::*;
     use crate::config::RoutingConfig;
     use crate::config::router::{RouterDefaults, RouterSelection};
-    use crate::language_model::routing::SortOrder;
+    use crate::model_call::routing::SortOrder;
 
     fn presets() -> HashMap<String, PresetConfig> {
         let mut m = HashMap::new();

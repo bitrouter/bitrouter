@@ -91,6 +91,8 @@ pub struct MeteringUsageRecord {
     pub usage_origin: UsageOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_usage: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
     pub final_charge_micro_usd: Option<u64>,
     #[serde(default)]
     pub charge_status: ChargeStatus,
@@ -1135,6 +1137,8 @@ impl MeteringStore {
                         )
                     })?;
                     ChargeEvidence {
+                        billable_input_tokens: None,
+                        usage_availability: usage.availability.clone(),
                         tariff_snapshot: None,
                         status: ChargeStatus::Computed,
                         charge_micro_usd: Some(charge),
@@ -1526,6 +1530,9 @@ impl From<requests::Model> for MeteringUsageRecord {
             raw_usage,
             final_charge_micro_usd,
             charge_status,
+            usage_availability: charge_evidence
+                .as_ref()
+                .and_then(|evidence| evidence.usage_availability.clone()),
             charge_evidence,
             reconciliation_status: ReconciliationStatus::from_persisted(&row.reconciliation_status),
             reconciliation_attempts: row.reconciliation_attempts.max(0) as u32,

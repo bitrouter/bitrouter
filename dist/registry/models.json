@@ -8591,6 +8591,90 @@
       "release_date": "2026-09-21"
     },
     {
+      "family": "jev",
+      "id": "typesafe/jev-1.13.0",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 64000,
+      "name": "TypeSafe: Jev 1.13",
+      "providers": [
+        {
+          "api_protocol": "systemone",
+          "pricing_by_protocol": {
+            "systemone": {
+              "input_tokens": {
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+                "no_cache": 0.042
+              },
+              "output_tokens": {
+                "text": 0.0
+              }
+            }
+          },
+          "provider": "typesafe",
+          "provider_model_id": "jev-1.13.0"
+        }
+      ]
+    },
+    {
+      "family": "jev",
+      "id": "typesafe/jev-latest",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 64000,
+      "name": "TypeSafe: Jev Latest",
+      "providers": [
+        {
+          "api_protocol": "systemone",
+          "pricing_by_protocol": {
+            "systemone": {
+              "input_tokens": {
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+                "no_cache": 0.042
+              },
+              "output_tokens": {
+                "text": 0.0
+              }
+            }
+          },
+          "provider": "typesafe",
+          "provider_model_id": "jev-latest"
+        }
+      ]
+    },
+    {
+      "family": "jev",
+      "id": "typesafe/jev-preview",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 64000,
+      "name": "TypeSafe: Jev Preview",
+      "providers": [
+        {
+          "api_protocol": "systemone",
+          "pricing_by_protocol": {
+            "systemone": {
+              "input_tokens": {
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+                "no_cache": 0.042
+              },
+              "output_tokens": {
+                "text": 0.0
+              }
+            }
+          },
+          "provider": "typesafe",
+          "provider_model_id": "jev-preview"
+        }
+      ]
+    },
+    {
       "deprecation_date": "2026-10-22",
       "family": "grok",
       "id": "x-ai/grok-4.20",

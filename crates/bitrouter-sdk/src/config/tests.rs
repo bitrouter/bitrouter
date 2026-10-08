@@ -166,7 +166,7 @@ providers:
     let chain = routing_table::resolve_route_chain(
         &config,
         "opencode-go:test-model",
-        &crate::language_model::RoutingPrefs::default(),
+        &crate::model_call::routing::RoutingPrefs::default(),
     )?;
     let target = chain
         .first()
@@ -1028,7 +1028,10 @@ routers:
     match &project.selection {
         router::RouterSelection::Model { model, routing } => {
             assert_eq!(model, "vendor:base");
-            assert_eq!(routing.sort, Some(crate::language_model::SortOrder::Cost));
+            assert_eq!(
+                routing.sort,
+                Some(crate::model_call::routing::SortOrder::Cost)
+            );
             assert_eq!(routing.only, vec!["vendor"]);
         }
         router::RouterSelection::Policy { .. } => {

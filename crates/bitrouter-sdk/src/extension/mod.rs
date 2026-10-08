@@ -48,7 +48,7 @@ impl ExtensionApi {
             id,
             revision,
             callback,
-            crate::language_model::operations::OperationScope::Generation,
+            crate::model_call::operations::OperationScope::Generation,
         )
     }
 
@@ -58,7 +58,7 @@ impl ExtensionApi {
         id: &str,
         revision: &str,
         callback: Arc<Callback>,
-        supported_operations: crate::language_model::operations::OperationScope,
+        supported_operations: crate::model_call::operations::OperationScope,
     ) -> Result<()> {
         if let Some(message) = &self.invalid {
             return Err(BitrouterError::bad_request(message.clone()));

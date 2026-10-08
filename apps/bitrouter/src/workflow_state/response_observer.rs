@@ -3,10 +3,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use bitrouter_ai::types::{Content, StreamPart, Tool};
-use bitrouter_sdk::language_model::{
-    HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome, RoutingTarget, StreamContext,
-    StreamInterest,
-};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::context::StreamContext;
+use bitrouter_sdk::model_call::hooks::HopOutcome;
+use bitrouter_sdk::model_call::hooks::ObserveHook;
+use bitrouter_sdk::model_call::hooks::Phase;
+use bitrouter_sdk::model_call::hooks::RequestOutcome;
+use bitrouter_sdk::model_call::stream::StreamInterest;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use sha2::{Digest, Sha256};
 
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
@@ -1064,10 +1068,15 @@ mod tests {
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, StreamPart, Tool,
     };
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{
-        ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, PipelineRequest,
-        RequestOutcome, RoutingTarget, StreamProcessor,
-    };
+    use bitrouter_sdk::model_call::context::PipelineContext;
+    use bitrouter_sdk::model_call::hooks::HopOutcome;
+    use bitrouter_sdk::model_call::hooks::ObserveHook;
+    use bitrouter_sdk::model_call::hooks::Phase;
+    use bitrouter_sdk::model_call::hooks::RequestOutcome;
+    use bitrouter_sdk::model_call::stream::StreamProcessor;
+    use bitrouter_sdk::model_call::types::ExecutionResult;
+    use bitrouter_sdk::model_call::types::PipelineRequest;
+    use bitrouter_sdk::model_call::types::RoutingTarget;
 
     use super::{ObservedActionClass, PredictiveResponseObserver};
     use crate::eval::settlement::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
@@ -2207,9 +2216,7 @@ mod tests {
             model: "model".into(),
             caller,
             headers: http::HeaderMap::new(),
-            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
-                prompt,
-            )),
+            input: bitrouter_sdk::model_call::types::PipelineInput::Generation(Box::new(prompt)),
             inbound_protocol: Some(ApiProtocol::Responses),
         });
         context.emit(invocation.clone());

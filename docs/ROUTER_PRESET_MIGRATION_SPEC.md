@@ -61,8 +61,8 @@ Guardrails 独立发布及其他 extension 默认排除仍是后续发布门槛�
 | 已核验接点 | 当前事实 | 本批行动 |
 | --- | --- | --- |
 | [config/mod.rs](../crates/bitrouter-sdk/src/config/mod.rs) / [presets.rs](../crates/bitrouter-sdk/src/config/presets.rs) | Preset 混合 model、policy、prompt/params、provider 偏好；解析必须产生 model | 引入单一有效 router 定义；旧格式转换到它 |
-| [routing.rs](../crates/bitrouter-sdk/src/language_model/routing.rs) / [pipeline.rs](../crates/bitrouter-sdk/src/language_model/pipeline.rs) | ModelResolution 保存默认值及 policy；resolve_route 再执行 selector | 固定 router 身份，保留已有 selector、fallback、交付与计量 |
-| [context.rs](../crates/bitrouter-sdk/src/language_model/context.rs) | 请求显式参数优先；system 缺失时才填默认值 | 保持默认值语义，避免重命名时改变请求 |
+| [routing.rs](../crates/bitrouter-sdk/src/model_call/routing.rs) / [pipeline.rs](../crates/bitrouter-sdk/src/model_call/pipeline.rs) | ModelResolution 保存默认值及 policy；resolve_route 再执行 selector | 固定 router 身份，保留已有 selector、fallback、交付与计量 |
+| [context.rs](../crates/bitrouter-sdk/src/model_call/context.rs) | 请求显式参数优先；system 缺失时才填默认值 | 保持默认值语义，避免重命名时改变请求 |
 | [policy_lock.rs](../apps/bitrouter/src/policy_lock.rs) | 加载、校验、配置编辑、初始化遍历 config.presets；policy 绑定需要文件配置与 base model | 逐项迁移消费者，不能只修改 resolver |
 | [actions/administration.rs](../apps/bitrouter/src/actions/administration.rs) / [actions/route.rs](../apps/bitrouter/src/actions/route.rs) | 已有 policy 绑定查询；route preview 的 live/config 能力不同 | 复用 action，明确来源和模拟范围 |
 | [reload.rs](../apps/bitrouter/src/reload.rs) | 有 participant、mixed、unknown、restart-required | 对新 router 配置做明确分类，不宣称完整原子热替换 |

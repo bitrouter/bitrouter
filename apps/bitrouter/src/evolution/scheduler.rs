@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_sdk::acp::capture::{CaptureEvent, CaptureKind};
-use bitrouter_sdk::language_model::pipeline::Pipeline;
+use bitrouter_sdk::model_call::pipeline::Pipeline;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder, TransactionTrait,

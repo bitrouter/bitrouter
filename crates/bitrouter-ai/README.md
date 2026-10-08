@@ -156,7 +156,7 @@ encoder; encoding does not sanitize arbitrary diagnostics.
 AI has no SDK, router, application configuration, server or agent-runtime
 dependency. Consumers depend directly on `bitrouter-ai`; the SDK retains no
 aliases for the moved types/codecs/framing. SDK routing targets and pipeline
-envelopes remain under `bitrouter_sdk::language_model::types`.
+envelopes remain under `bitrouter_sdk::model_call::types`.
 
 Remaining application/provider glue retirement, Core integration and conversion-loss admission
 are tracked in the
@@ -230,3 +230,13 @@ relocation does not add crash recovery or cross-process exclusion. Local workspa
 migration is separate from external consumer migration and publication.
 
 Google reasoning uses the canonical declared `reasoning_effort` path (`minimal` through `high`) plus scoped `include_thoughts`. Raw `thinking_level`/`thinking_budget`, `none`/`xhigh`/`max`, seeds and penalties remain excluded until selected-model equivalence is demonstrated. Static-auth validation rejects duplicate bearer headers and conflicting Google key headers/query credentials.
+
+Classifier calls use `classifier::{ClassifierRequest, ClassifierResult}` and
+`ModelClient::classify` with an explicit Decisions or System One target.
+`protocol::classifier::ClassifierCodec` provides pure native conversion without
+stream methods. System One supports structured state/instructions and named
+question maps; destination confidence and usage are projected under explicit
+conversion admission. The canonical JSON encoding is an internal typed format;
+HTTP bodies must be rendered through the selected native codec. See the
+[classifier spec](../../docs/CLASSIFIER_API_SPEC.md) for supported directions,
+partial usage, refusal handling and source migration.

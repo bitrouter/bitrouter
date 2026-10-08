@@ -41,7 +41,7 @@ async fn judge_costs_count_invalid_responses_retries_and_retired_jobs_once() -> 
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     for _ in 0..3 {
         assert!(jobs.run(&job.job_id, pipeline).await.is_err());
@@ -130,7 +130,7 @@ async fn judge_costs_preserve_unknown_fallback_and_prove_zero_before_dispatch() 
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     let (jobs, fallback) = setup_job(&fixture, "cost-fallback", "fallback").await?;
     assert!(jobs.run(&fallback.job_id, pipeline).await.is_err());
@@ -174,7 +174,7 @@ async fn judge_costs_reuse_cached_response_and_refresh_authoritative_receipts() 
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     let completed = jobs.run(&job.job_id, pipeline).await?;
     assert_eq!(completed.status, JobStatus::Completed);
@@ -264,7 +264,7 @@ async fn judge_costs_distinguish_missing_usage_from_confirmed_no_charge() -> Res
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     assert!(jobs.run(&job.job_id, pipeline).await.is_err());
     let unknown = status(&fixture).await?.judge_costs;
@@ -320,7 +320,7 @@ async fn judge_costs_keep_cancelled_attempts_unknown_after_worker_restart() -> R
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?
         .clone();
     let running_jobs = jobs.clone();
@@ -356,7 +356,7 @@ async fn judge_costs_do_not_promote_normalized_rejection_usage_to_observed_zero(
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     assert!(jobs.run(&job.job_id, pipeline).await.is_err());
     let report = status(&fixture).await?.judge_costs;

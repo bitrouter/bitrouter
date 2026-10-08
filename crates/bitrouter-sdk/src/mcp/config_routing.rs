@@ -95,7 +95,7 @@ impl ConfigMcpRoutingTable {
         })
     }
 
-    /// True if no servers are configured. The binary uses this to decide
+    /// True if no servers are configured. The binary uses this to classify
     /// whether to call `app_builder.mcp(...)` at all.
     pub fn is_empty(&self) -> bool {
         self.servers.is_empty()

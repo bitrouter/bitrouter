@@ -6,9 +6,10 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::ApiProtocol;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{AccountStrategy, Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::{
-    PipelineContext, PipelineRequest, RoutingTable, RoutingTarget,
-};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::routing::RoutingTable;
+use bitrouter_sdk::model_call::types::PipelineRequest;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use serde_json::{Value, json};
 
 use super::control::BlockDefinition;

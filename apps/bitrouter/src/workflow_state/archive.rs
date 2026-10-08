@@ -920,8 +920,15 @@ fn validate_authoritative_receipt(
 }
 
 fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
-    calculate_normalized_charge_micro_usd(&evidence.normalized_usage, &evidence.effective_rates)
-        .ok()
+    let normalized = if let Some(tokens) = evidence.billable_input_tokens {
+        bitrouter_ai::types::NormalizedUsage {
+            uncached_input_tokens: tokens,
+            ..Default::default()
+        }
+    } else {
+        evidence.normalized_usage
+    };
+    calculate_normalized_charge_micro_usd(&normalized, &evidence.effective_rates).ok()
 }
 
 fn valid_pricing_version(version: &str) -> bool {

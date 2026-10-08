@@ -24,7 +24,7 @@
 //! A pipe has nobody to ask, and until now every headless path answered every
 //! question with the reject option. [`Policy`] is the one rule a headless
 //! caller states instead — approve everything, approve reads, deny everything,
-//! and a per-tool override list — and [`Policy::decide`] applies it to a
+//! and a per-tool override list — and [`Policy::classify`] applies it to a
 //! [`Prompt`]. It chooses only among what the agent offered: a policy that
 //! says *approve* against a request with no allow option still resolves to the
 //! reject option, and reports that it denied, because the alternative is a
@@ -256,7 +256,7 @@ pub enum Mode {
 pub struct Policy {
     /// The rule for requests no list names.
     pub mode: Mode,
-    /// Patterns that approve. See [`Policy::decide`] for what a pattern matches.
+    /// Patterns that approve. See [`Policy::classify`] for what a pattern matches.
     pub auto_approve: Vec<String>,
     /// Patterns that deny. Outrank `auto_approve`.
     pub auto_deny: Vec<String>,
@@ -270,7 +270,7 @@ impl Policy {
     /// A pattern matches, case-insensitively, the tool kind's wire name
     /// (`read`, `execute`, …), the whole title, or the title's first word — so
     /// `Write` names every `Write src/main.rs` without naming a path.
-    pub fn decide(&self, prompt: &Prompt) -> Decision {
+    pub fn classify(&self, prompt: &Prompt) -> Decision {
         let matches = |patterns: &[String]| patterns.iter().any(|pattern| prompt.matches(pattern));
         if matches(&self.auto_deny) {
             return Decision::Deny;
@@ -532,9 +532,12 @@ mod tests {
             mode: Mode::ApproveReads,
             ..Policy::default()
         };
-        assert_eq!(reads.decide(&with(Some(ToolKind::Read))), Decision::Approve);
         assert_eq!(
-            reads.decide(&with(Some(ToolKind::Search))),
+            reads.classify(&with(Some(ToolKind::Read))),
+            Decision::Approve
+        );
+        assert_eq!(
+            reads.classify(&with(Some(ToolKind::Search))),
             Decision::Approve
         );
         for not_a_read in [
@@ -544,7 +547,7 @@ mod tests {
             None,
         ] {
             assert_eq!(
-                reads.decide(&with(not_a_read)),
+                reads.classify(&with(not_a_read)),
                 Decision::Deny,
                 "{not_a_read:?}"
             );
@@ -554,11 +557,11 @@ mod tests {
             ..Policy::default()
         };
         assert_eq!(
-            all.decide(&with(Some(ToolKind::Execute))),
+            all.classify(&with(Some(ToolKind::Execute))),
             Decision::Approve
         );
         assert_eq!(
-            Policy::default().decide(&with(Some(ToolKind::Read))),
+            Policy::default().classify(&with(Some(ToolKind::Read))),
             Decision::Deny
         );
     }
@@ -578,7 +581,7 @@ mod tests {
             };
         // The title's first word, and the kind, both name it — and deny wins.
         assert_eq!(
-            policy(&["write"], &["edit"], None, Mode::ApproveAll).decide(&prompt),
+            policy(&["write"], &["edit"], None, Mode::ApproveAll).classify(&prompt),
             Decision::Deny
         );
         // The approve list beats a deny default and a deny mode.
@@ -589,23 +592,23 @@ mod tests {
                 Some(Decision::Deny),
                 Mode::DenyAll
             )
-            .decide(&prompt),
+            .classify(&prompt),
             Decision::Approve
         );
         // The default action beats the mode.
         assert_eq!(
-            policy(&[], &[], Some(Decision::Approve), Mode::DenyAll).decide(&prompt),
+            policy(&[], &[], Some(Decision::Approve), Mode::DenyAll).classify(&prompt),
             Decision::Approve
         );
         // Nothing matched, no default: the mode answers.
         assert_eq!(
-            policy(&["read"], &["execute"], None, Mode::DenyAll).decide(&prompt),
+            policy(&["read"], &["execute"], None, Mode::DenyAll).classify(&prompt),
             Decision::Deny
         );
         // A pattern that is neither the kind, the title, nor its first word
         // matches nothing — a path fragment does not name a tool.
         assert_eq!(
-            policy(&["main.rs"], &[], None, Mode::DenyAll).decide(&prompt),
+            policy(&["main.rs"], &[], None, Mode::DenyAll).classify(&prompt),
             Decision::Deny
         );
     }

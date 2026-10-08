@@ -5,19 +5,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bitrouter_ai::types::{ApiProtocol, Usage, UsageOrigin};
 use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::hooks::RouteHook;
-use bitrouter_sdk::language_model::settlement::SettlementContext;
-use bitrouter_sdk::language_model::stream::{
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::RouteHook;
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::stream::{
     PricingTargetKey, UsagePricing, UsagePricingBracket, UsagePricingSnapshot, UsagePricingTier,
 };
-use bitrouter_sdk::language_model::types::RoutingTarget;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::pricing::{
     ChargeEvidence, ModelPricing, PricingSource, PricingTable, calculate_charge_evidence,
-    pricing_version, unavailable_charge_evidence,
+    calculate_total_input_charge_evidence, pricing_version, systemone_input_only_rates,
+    unavailable_charge_evidence,
 };
 
 /// Full tariff and applicability frozen for one effective target.
@@ -56,6 +57,9 @@ impl FrozenTariff {
         };
         let mut evidence = match (reason, &self.pricing) {
             (Some(reason), _) => unavailable_charge_evidence(usage, reason),
+            (None, Some(pricing)) if self.protocol == ApiProtocol::SystemOne => {
+                calculate_total_input_charge_evidence(usage, pricing, source)
+            }
             (None, Some(pricing)) => calculate_charge_evidence(usage, pricing, source),
             (None, None) => unavailable_charge_evidence(usage, "pricing_not_found"),
         };
@@ -71,9 +75,16 @@ impl FrozenTariff {
             return false;
         }
         self.pricing.as_ref().is_some_and(|pricing| {
-            complete_rates(pricing)
+            let applicable = |pricing: &ModelPricing| {
+                if self.protocol == ApiProtocol::SystemOne {
+                    systemone_input_only_rates(pricing)
+                } else {
+                    complete_rates(pricing)
+                }
+            };
+            applicable(pricing)
                 && pricing.context_tiers.iter().all(|tier| {
-                    complete_rates(
+                    applicable(
                         &pricing
                             .resolve_for_input_tokens(tier.above_input_tokens.saturating_add(1)),
                     )
@@ -105,6 +116,8 @@ pub(crate) fn override_charge_evidence(
         && (usage.cache_read_tokens != 0 || usage.cache_write_tokens != 0)
     {
         unavailable_charge_evidence(usage, "decisions_cache_billing_unverified")
+    } else if admitted.is_some_and(|tariff| tariff.protocol == ApiProtocol::SystemOne) {
+        calculate_total_input_charge_evidence(usage, pricing, PricingSource::Override)
     } else {
         calculate_charge_evidence(usage, pricing, PricingSource::Override)
     };
@@ -163,7 +176,9 @@ impl PricingTable {
             }
             Some(_) => None,
         };
-        let basis = if target.api_protocol == ApiProtocol::Decisions {
+        let basis = if target.api_protocol == ApiProtocol::SystemOne {
+            "systemone-total-input-v1"
+        } else if target.api_protocol == ApiProtocol::Decisions {
             "decisions-zero-cache-only-v1"
         } else {
             "normalized-disjoint-usage-v1"
@@ -309,6 +324,7 @@ pub fn settlement_charge_evidence(ctx: &SettlementContext) -> ChargeEvidence {
         web_search_count: ctx.web_search_count,
         origin: ctx.usage_origin,
         raw: ctx.raw_usage.clone().map(Box::new),
+        availability: ctx.usage_availability.clone(),
     };
     let Some(target) = &ctx.target else {
         let reason = if usage.origin == UsageOrigin::Unknown {

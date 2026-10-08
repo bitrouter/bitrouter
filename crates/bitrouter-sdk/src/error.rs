@@ -440,7 +440,7 @@ impl From<bitrouter_ai::error::ModelError> for BitrouterError {
             ModelError::InvalidResponse { message, usage } => {
                 Self::UpstreamInvalidResponse { message, usage }
             }
-            ModelError::DecisionResponse { failure } => Self::UpstreamInvalidResponse {
+            ModelError::ClassifierResponse { failure } => Self::UpstreamInvalidResponse {
                 message: failure.message,
                 usage: failure.usage,
             },
@@ -460,9 +460,7 @@ impl From<bitrouter_ai::error::ModelError> for BitrouterError {
                 status,
                 body,
                 retry_after,
-            } => {
-                crate::language_model::executor::classify_upstream_error(status, &body, retry_after)
-            }
+            } => crate::model_call::executor::classify_upstream_error(status, &body, retry_after),
         }
     }
 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_sdk::language_model::pipeline::Pipeline;
+use bitrouter_sdk::model_call::pipeline::Pipeline;
 use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Serialize};

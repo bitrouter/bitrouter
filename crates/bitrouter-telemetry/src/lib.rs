@@ -7,7 +7,7 @@
 //! Today there is exactly one renderer — [`otel`], an OpenTelemetry exporter
 //! with multi-tenant attribution, over OTLP/HTTP (`otel-http`, the default) or
 //! OTLP/gRPC (`otel-grpc`). It plugs into the SDK as an ordinary
-//! [`ObserveHook`](bitrouter_sdk::language_model::ObserveHook), which is a
+//! [`ObserveHook`](bitrouter_sdk::model_call::hooks::ObserveHook), which is a
 //! seam with more than one production implementation: the OSS binary registers
 //! its own observers alongside this one.
 //!

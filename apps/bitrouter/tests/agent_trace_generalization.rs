@@ -1857,11 +1857,7 @@ async fn generalization_server_from_config(
         );
     }
     let state = AppState {
-        language_model: assembled
-            .app
-            .language_model()
-            .expect("language model")
-            .clone(),
+        model_call: assembled.app.model_call().expect("language model").clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),

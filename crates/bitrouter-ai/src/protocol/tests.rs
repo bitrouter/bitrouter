@@ -35,7 +35,7 @@ fn adapter_for(protocol: ApiProtocol) -> crate::error::Result<Box<dyn BothAdapte
         ApiProtocol::ChatCompletions => Box::new(chat_completions::ChatCompletionsAdapter),
         ApiProtocol::Messages => Box::new(messages::MessagesAdapter),
         ApiProtocol::Responses => Box::new(responses::ResponsesAdapter),
-        ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => {
             return Err(ModelError::invalid_request(
                 "generation fixture requires a generation protocol",
             ));
@@ -63,7 +63,7 @@ fn minimal_request(protocol: ApiProtocol) -> crate::error::Result<serde_json::Va
             "model": "m", "messages": [{ "role": "user", "content": "hi" }],
         }),
         ApiProtocol::Responses => serde_json::json!({ "model": "m", "input": "hi" }),
-        ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => {
             return Err(ModelError::invalid_request(
                 "generation fixture requires a generation protocol",
             ));
@@ -234,7 +234,9 @@ fn official_usage_response(protocol: ApiProtocol) -> serde_json::Value {
                 "cache_creation_input_tokens": 100
             }
         }),
-        ApiProtocol::Custom(_) | ApiProtocol::Decisions => serde_json::Value::Null,
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => {
+            serde_json::Value::Null
+        }
     }
 }
 
@@ -333,7 +335,7 @@ fn official_usage_stream(protocol: ApiProtocol) -> Vec<SseEvent> {
                 data: serde_json::json!({"type": "message_stop"}).to_string(),
             },
         ],
-        ApiProtocol::Custom(_) | ApiProtocol::Decisions => Vec::new(),
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => Vec::new(),
     }
 }
 
@@ -429,7 +431,7 @@ fn assert_official_usage_wire(protocol: ApiProtocol, wire: &serde_json::Value, u
                 usage.cache_write_tokens,
             );
         }
-        ApiProtocol::Custom(_) | ApiProtocol::Decisions => (),
+        ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => (),
     }
 }
 
@@ -479,7 +481,7 @@ fn usage_wire_from_frames(protocol: ApiProtocol, frames: &[SseFrame]) -> Option<
                 == Some("message_delta"))
             .then(|| json.get("usage").cloned())
             .flatten(),
-            ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => None,
         }
     })
 }
@@ -1055,7 +1057,7 @@ fn token_limit_translates_across_every_protocol_pair() -> crate::error::Result<(
             ApiProtocol::ChatCompletions => body["max_completion_tokens"] = 777.into(),
             ApiProtocol::Messages => body["max_tokens"] = 777.into(),
             ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
-            ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => {
                 return Err(ModelError::invalid_request(
                     "generation fixture requires a generation protocol",
                 ));
@@ -1087,7 +1089,7 @@ fn token_limit_translates_across_every_protocol_pair() -> crate::error::Result<(
                 }
                 ApiProtocol::Messages => assert_eq!(rendered["max_tokens"], 777),
                 ApiProtocol::Responses => assert_eq!(rendered["max_output_tokens"], 777),
-                ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+                ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => {
                     return Err(ModelError::invalid_request(
                         "generation fixture requires a generation protocol",
                     ));
@@ -3252,7 +3254,7 @@ fn tool_call_streaming_still_frames_distinctly_with_markers_present() -> crate::
 #[test]
 fn messages_stream_error_preserves_provider_status() -> crate::error::Result<()> {
     // Messages mid-stream `error` events carry `error.type` — a 4xx must
-    // be threaded to `Upstream.status` so the fallback policy can decide
+    // be threaded to `Upstream.status` so the fallback policy can classify
     // "don't retry" instead of always treating these as 5xx. Ref:
     // docs.anthropic.com/en/api/errors.
     let adapter = adapter_for(ApiProtocol::Messages)?;
@@ -5746,7 +5748,7 @@ fn tool_choice_round_trips_across_protocol_matrix() -> crate::error::Result<()> 
                 "tool_choice",
                 serde_json::json!({ "type": "function", "name": "X" }),
             ),
-            ApiProtocol::Custom(_) | ApiProtocol::Decisions => {
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => {
                 return Err(ModelError::invalid_request(
                     "generation fixture requires a generation protocol",
                 ));
@@ -5767,7 +5769,7 @@ fn tool_choice_round_trips_across_protocol_matrix() -> crate::error::Result<()> 
             ApiProtocol::Responses => {
                 req["tool_choice"]["type"] == "function" && req["tool_choice"]["name"] == "X"
             }
-            ApiProtocol::Custom(_) | ApiProtocol::Decisions => false,
+            ApiProtocol::Custom(_) | ApiProtocol::Decisions | ApiProtocol::SystemOne => false,
         }
     }
 

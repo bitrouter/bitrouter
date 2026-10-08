@@ -22,7 +22,7 @@ use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
-use bitrouter_sdk::language_model::PipelineRequest;
+use bitrouter_sdk::model_call::types::PipelineRequest;
 use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
@@ -59,9 +59,9 @@ async fn named_router_migration_protocol_matrix() -> anyhow::Result<()> {
             let cfg = config::parse(&raw)?;
             let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path)).await?;
             let server = TestServer::new(build_router(AppState {
-                language_model: assembled
+                model_call: assembled
                     .app
-                    .language_model()
+                    .model_call()
                     .context("missing pipeline")?
                     .clone(),
                 mcp: assembled.app.mcp().cloned(),
@@ -127,7 +127,7 @@ async fn named_router_migration_protocol_matrix() -> anyhow::Result<()> {
             }
             assembled
                 .app
-                .language_model()
+                .model_call()
                 .context("missing pipeline")?
                 .drain_required_pending_settlements()
                 .await?;
@@ -195,9 +195,9 @@ async fn named_router_fallback_keeps_one_settled_identity() -> anyhow::Result<()
         ))?;
         let assembled = bitrouter::build_app(&cfg).await?;
         let server = TestServer::new(build_router(AppState {
-            language_model: assembled
+            model_call: assembled
                 .app
-                .language_model()
+                .model_call()
                 .context("missing pipeline")?
                 .clone(),
             mcp: assembled.app.mcp().cloned(),
@@ -225,7 +225,7 @@ async fn named_router_fallback_keeps_one_settled_identity() -> anyhow::Result<()
         );
         assembled
             .app
-            .language_model()
+            .model_call()
             .context("missing pipeline")?
             .drain_required_pending_settlements()
             .await?;
@@ -400,12 +400,12 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> 
     let cfg = config_for(&upstream.uri());
 
     // Assemble the FULL app — db + migrations + routing + auth + policy +
-    // settlement + the language_model pipeline.
+    // settlement + the model_call pipeline.
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
     let pipeline = assembled
         .app
-        .language_model()
-        .expect("language_model pipeline configured")
+        .model_call()
+        .expect("model_call pipeline configured")
         .clone();
 
     // skip_auth is on → a local caller passes through AuthHook.
@@ -467,7 +467,7 @@ async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
     );
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
     let state = AppState {
-        language_model: assembled.app.language_model().unwrap().clone(),
+        model_call: assembled.app.model_call().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -506,7 +506,7 @@ async fn e2e_http_server_chat_completions_end_to_end() {
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
 
     let state = AppState {
-        language_model: assembled.app.language_model().unwrap().clone(),
+        model_call: assembled.app.model_call().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -620,7 +620,7 @@ policy_table:
     let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
     let state = AppState {
-        language_model: assembled.app.language_model().unwrap().clone(),
+        model_call: assembled.app.model_call().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -732,13 +732,13 @@ policy_table:
     );
     let cfg = config::parse_with(&yaml, |_| None)?;
     let assembled = bitrouter::build_app(&cfg).await?;
-    let language_model = assembled
+    let model_call = assembled
         .app
-        .language_model()
+        .model_call()
         .ok_or_else(|| anyhow::anyhow!("language-model pipeline is missing"))?
         .clone();
     let state = AppState {
-        language_model,
+        model_call,
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -839,7 +839,7 @@ policy_table:
     let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
     let state = AppState {
-        language_model: assembled.app.language_model().unwrap().clone(),
+        model_call: assembled.app.model_call().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -970,7 +970,7 @@ policy_table:
     let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
     let state = AppState {
-        language_model: assembled.app.language_model().unwrap().clone(),
+        model_call: assembled.app.model_call().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -1038,7 +1038,7 @@ async fn e2e_unknown_model_is_a_clean_404() {
     let upstream = mock_chat_completions_upstream().await;
     let cfg = config_for(&upstream.uri());
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
-    let pipeline = assembled.app.language_model().unwrap().clone();
+    let pipeline = assembled.app.model_call().unwrap().clone();
 
     let mut prompt = chat_prompt();
     prompt.model = "no-such-model".to_string();
@@ -1128,7 +1128,7 @@ plugins:
     .await
     .unwrap();
 
-    let pipeline = assembled.app.language_model().unwrap().clone();
+    let pipeline = assembled.app.model_call().unwrap().clone();
 
     // First request: anonymous caller + bearer credential → AuthHook
     // upgrades; PolicyHook sees 0µ$ accrued < 50µ$ cap → Allow; metering
@@ -1177,12 +1177,12 @@ plugins:
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
     use bitrouter_sdk::App;
-    use bitrouter_sdk::language_model::HookDecision;
     use bitrouter_sdk::mcp::transport::McpTransport;
     use bitrouter_sdk::mcp::{
         Executor, McpContext, McpRequest, McpResponse, McpTarget, PreRequestHook, RoutingTable,
         ServerSelector,
     };
+    use bitrouter_sdk::model_call::hooks::HookDecision;
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -1280,26 +1280,26 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     }
 
     // Minimal LM executor — never actually called by the MCP route. We only
-    // need a Pipeline to satisfy AppState.language_model.
+    // need a Pipeline to satisfy AppState.model_call.
     struct UnusedLmExecutor;
     #[async_trait]
-    impl bitrouter_sdk::language_model::Executor for UnusedLmExecutor {
+    impl bitrouter_sdk::model_call::executor::Executor for UnusedLmExecutor {
         async fn execute(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter_sdk::model_call::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
+            _ctx: &bitrouter_sdk::model_call::context::PipelineContext,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::model_call::types::ExecutionResult> {
             Err(bitrouter_sdk::BitrouterError::internal(
                 "unused in this test",
             ))
         }
         async fn execute_stream(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter_sdk::model_call::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+            _ctx: &bitrouter_sdk::model_call::context::PipelineContext,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::model_call::executor::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal(
                 "unused in this test",
             ))
@@ -1309,9 +1309,9 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     // Build an App with both pipelines — the LM is just enough to satisfy
     // AppState; the test exercises POST /mcp/{name}.
     let app = App::builder()
-        .language_model(|lm| {
+        .model_call(|lm| {
             lm.routing_table(Arc::new(
-                bitrouter_sdk::language_model::StaticRoutingTable::new(),
+                bitrouter_sdk::model_call::routing::StaticRoutingTable::new(),
             ))
             .executor(Arc::new(UnusedLmExecutor));
         })
@@ -1325,7 +1325,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         .expect("app builds");
 
     let state = AppState {
-        language_model: app.language_model().unwrap().clone(),
+        model_call: app.model_call().unwrap().clone(),
         mcp: app.mcp().cloned(),
         skip_auth: true,
         metrics_renderer: None,
@@ -1742,19 +1742,19 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     use async_trait::async_trait;
     use bitrouter_ai::types::{ApiProtocol, AuthScheme, FinishReason, GenerateResult, Usage};
     use bitrouter_sdk::App;
-    use bitrouter_sdk::language_model::types::{ExecutionResult, RoutingTarget};
+    use bitrouter_sdk::model_call::types::{ExecutionResult, RoutingTarget};
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
 
     struct EchoLmExecutor;
     #[async_trait]
-    impl bitrouter_sdk::language_model::Executor for EchoLmExecutor {
+    impl bitrouter_sdk::model_call::executor::Executor for EchoLmExecutor {
         async fn execute(
             &self,
             target: &RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
+            _ctx: &bitrouter_sdk::model_call::context::PipelineContext,
         ) -> bitrouter_sdk::Result<ExecutionResult> {
             Ok(ExecutionResult {
                 provider_id: target.provider_name.clone(),
@@ -1789,13 +1789,13 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
             &self,
             _target: &RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+            _ctx: &bitrouter_sdk::model_call::context::PipelineContext,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::model_call::executor::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
         }
     }
 
-    let table = Arc::new(bitrouter_sdk::language_model::StaticRoutingTable::new());
+    let table = Arc::new(bitrouter_sdk::model_call::routing::StaticRoutingTable::new());
     table.insert(
         "gpt-5.5",
         vec![RoutingTarget {
@@ -1818,7 +1818,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     );
 
     let app = App::builder()
-        .language_model(|lm| {
+        .model_call(|lm| {
             lm.routing_table(table.clone())
                 .executor(Arc::new(EchoLmExecutor));
         })
@@ -1826,7 +1826,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
         .build()
         .expect("app builds");
     let state = AppState {
-        language_model: app.language_model().unwrap().clone(),
+        model_call: app.model_call().unwrap().clone(),
         mcp: None,
         skip_auth: true,
         metrics_renderer: None,
@@ -1939,29 +1939,29 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
 
     struct UnusedLmExecutor;
     #[async_trait]
-    impl bitrouter_sdk::language_model::Executor for UnusedLmExecutor {
+    impl bitrouter_sdk::model_call::executor::Executor for UnusedLmExecutor {
         async fn execute(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter_sdk::model_call::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
+            _ctx: &bitrouter_sdk::model_call::context::PipelineContext,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::model_call::types::ExecutionResult> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
         }
         async fn execute_stream(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter_sdk::model_call::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+            _ctx: &bitrouter_sdk::model_call::context::PipelineContext,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::model_call::executor::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
         }
     }
 
     let app = App::builder()
-        .language_model(|lm| {
+        .model_call(|lm| {
             lm.routing_table(Arc::new(
-                bitrouter_sdk::language_model::StaticRoutingTable::new(),
+                bitrouter_sdk::model_call::routing::StaticRoutingTable::new(),
             ))
             .executor(Arc::new(UnusedLmExecutor));
         })
@@ -1979,7 +1979,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
         .expect("app builds");
 
     let state = AppState {
-        language_model: app.language_model().unwrap().clone(),
+        model_call: app.model_call().unwrap().clone(),
         mcp: app.mcp().cloned(),
         skip_auth: true,
         metrics_renderer: None,
@@ -2089,7 +2089,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
 //
 // Capability-gate coverage (a `Custom` outbound adapter without
 // `supports_response_format()` produces a 400) lives at the SDK level in
-// `crates/bitrouter-sdk/src/language_model/tests.rs ::
+// `crates/bitrouter-sdk/src/model_call/tests.rs ::
 // executor_rejects_response_format_on_unsupported_outbound`. We don't
 // duplicate it here because the gate fires inside `HttpExecutor` before
 // any HTTP-level transport detail (URL, auth) matters.
@@ -2225,7 +2225,7 @@ async fn matrix_server() -> (TestServer, MockServer, tempfile::TempDir) {
         .await
         .expect("app assembles");
     let state = AppState {
-        language_model: assembled.app.language_model().unwrap().clone(),
+        model_call: assembled.app.model_call().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),

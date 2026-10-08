@@ -2,7 +2,7 @@
 //!
 //! This is the home of v0's `load_builtin_plugins` logic — it lives in the
 //! `apps/bitrouter` **lib** (above the SDK and the plugins), wiring the builtin
-//! hooks onto the `language_model` pipeline from config.
+//! hooks onto the `model_call` pipeline from config.
 
 use std::sync::Arc;
 
@@ -16,41 +16,38 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
-use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
-use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
-use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
-use bitrouter_sdk::language_model::server_tools::declarations::ServerToolDeclarationsHook;
-use bitrouter_sdk::language_model::server_tools::declarations::forwarded_tools;
-use bitrouter_sdk::language_model::server_tools::fusion::FusionToolset;
-use bitrouter_sdk::language_model::server_tools::fusion::alias::FusionAliasConfig;
-use bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop;
-use bitrouter_sdk::language_model::server_tools::mcp_toolset::McpRouterToolset;
-use bitrouter_sdk::language_model::server_tools::nested::{NestedRunner, PipelineNestedRunner};
-use bitrouter_sdk::language_model::server_tools::sub_agent::SubAgentToolset;
-use bitrouter_sdk::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
-use bitrouter_sdk::language_model::server_tools::web_fetch::backend::WebFetchBackend;
-use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
-    DEFAULT_MAX_CONTENT_TOKENS, WebFetchBackendConfig, WebFetchSettings,
-};
-use bitrouter_sdk::language_model::server_tools::web_fetch::http::{
-    HttpFetchBackend, HttpFetchEngine,
-};
-use bitrouter_sdk::language_model::server_tools::web_fetch::toolset::WebFetchToolset;
-use bitrouter_sdk::language_model::server_tools::web_search::backend::WebSearchBackend;
-use bitrouter_sdk::language_model::server_tools::web_search::config::{
-    DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
-};
-use bitrouter_sdk::language_model::server_tools::web_search::http::{
-    HttpEngine, HttpSearchBackend,
-};
-use bitrouter_sdk::language_model::server_tools::web_search::nested::NestedSearchBackend;
-use bitrouter_sdk::language_model::server_tools::web_search::toolset::WebSearchToolset;
-use bitrouter_sdk::language_model::{HttpExecutor, PipelineBuilder};
 use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
 use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
 use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
+use bitrouter_sdk::model_call::builder::PipelineBuilder;
+use bitrouter_sdk::model_call::executor::HttpExecutor;
+use bitrouter_sdk::model_call::operations::{HookStage, OperationScope};
+use bitrouter_sdk::model_call::server_tools::advisor::AdvisorToolset;
+use bitrouter_sdk::model_call::server_tools::approval::AllowAll;
+use bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig;
+use bitrouter_sdk::model_call::server_tools::declarations::ServerToolDeclarationsHook;
+use bitrouter_sdk::model_call::server_tools::declarations::forwarded_tools;
+use bitrouter_sdk::model_call::server_tools::fusion::FusionToolset;
+use bitrouter_sdk::model_call::server_tools::fusion::alias::FusionAliasConfig;
+use bitrouter_sdk::model_call::server_tools::loop_controller::ServerToolLoop;
+use bitrouter_sdk::model_call::server_tools::mcp_toolset::McpRouterToolset;
+use bitrouter_sdk::model_call::server_tools::nested::{NestedRunner, PipelineNestedRunner};
+use bitrouter_sdk::model_call::server_tools::sub_agent::SubAgentToolset;
+use bitrouter_sdk::model_call::server_tools::toolset::{RouterToolset, ToolsetRegistry};
+use bitrouter_sdk::model_call::server_tools::web_fetch::backend::WebFetchBackend;
+use bitrouter_sdk::model_call::server_tools::web_fetch::config::{
+    DEFAULT_MAX_CONTENT_TOKENS, WebFetchBackendConfig, WebFetchSettings,
+};
+use bitrouter_sdk::model_call::server_tools::web_fetch::http::{HttpFetchBackend, HttpFetchEngine};
+use bitrouter_sdk::model_call::server_tools::web_fetch::toolset::WebFetchToolset;
+use bitrouter_sdk::model_call::server_tools::web_search::backend::WebSearchBackend;
+use bitrouter_sdk::model_call::server_tools::web_search::config::{
+    DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
+};
+use bitrouter_sdk::model_call::server_tools::web_search::http::{HttpEngine, HttpSearchBackend};
+use bitrouter_sdk::model_call::server_tools::web_search::nested::NestedSearchBackend;
+use bitrouter_sdk::model_call::server_tools::web_search::toolset::WebSearchToolset;
 
 use bitrouter_sdk::MetricsRenderer;
 use bitrouter_telemetry::OTEL_ENABLED;
@@ -85,7 +82,7 @@ pub struct Assembled {
     pub db: DatabaseConnection,
     /// In-memory API-principal-scoped ACP route leases.
     pub acp_runtime: Arc<AcpRuntime>,
-    /// The policy store wired into the language_model pipeline. Held by the
+    /// The policy store wired into the model_call pipeline. Held by the
     /// caller (the daemon) so `bro reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
@@ -384,7 +381,7 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
 
 /// Assemble an [`App`] from a parsed config: connect the database, run the
 /// host's migrations, build the routing table + executor, and wire the
-/// builtin hooks onto the `language_model` pipeline.
+/// builtin hooks onto the `model_call` pipeline.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
     build_app_with_path(config, None).await
 }
@@ -623,7 +620,7 @@ async fn assemble_app(
 
     // Optional MCP pure-routing pipeline — wired only when the config
     // declares at least one upstream MCP server. The pipeline is independent
-    // of the language_model pipeline (different hook traits, different
+    // of the model_call pipeline (different hook traits, different
     // routing table) and carries no settlement.
     let mcp_aggregate_route = if config.mcp.aggregate.enabled {
         Some(config.mcp.aggregate.route.clone())
@@ -848,7 +845,7 @@ async fn assemble_app(
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
-        .language_model(move |lm| {
+        .model_call(move |lm| {
             lm.routing_table(routing_table).executor(executor);
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
@@ -987,7 +984,7 @@ async fn assemble_app(
         None => (app, None),
     };
     // Apply the optional MCP pipeline configuration in a second builder step
-    // so the language_model configuration above stays the same shape it has
+    // so the model_call configuration above stays the same shape it has
     // had since v0.
     let app = match (mcp_routing, mcp_executor) {
         (Some(table), Some(exec)) => {
@@ -1594,7 +1591,7 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
 }
 
 /// An exporter config plus the account-bearer resolution plan for it. Returned
-/// by [`build_otel_config`] so the async `OtelExporter::new` call site can decide
+/// by [`build_otel_config`] so the async `OtelExporter::new` call site can classify
 /// whether to build a live bearer source (which needs `.await` + network I/O,
 /// neither appropriate inside this pure config builder).
 struct OtelConfigPlan {
@@ -2324,10 +2321,10 @@ mod otel_config_tests {
 mod server_tools_tests {
     use std::sync::Arc;
 
-    use bitrouter_sdk::language_model::server_tools::nested::{
+    use bitrouter_sdk::model_call::server_tools::nested::{
         NestedOutcome, NestedRequest, NestedRunner,
     };
-    use bitrouter_sdk::language_model::server_tools::toolset::ToolContext;
+    use bitrouter_sdk::model_call::server_tools::toolset::ToolContext;
 
     use super::{Config, build_fusion_alias, build_server_tool_loop};
 
@@ -2380,7 +2377,7 @@ mod server_tools_tests {
     fn assembly_rejects_a_fusion_alias_that_hijacks_reserved_routing() {
         let mut config = Config::default();
         config.server_tools.fusion = Some(
-            bitrouter_sdk::language_model::server_tools::fusion::config::FusionSettings {
+            bitrouter_sdk::model_call::server_tools::fusion::config::FusionSettings {
                 alias: Some("bitrouter/auto".to_string()),
                 outer_model: Some("anthropic/claude-opus-4.8".to_string()),
                 ..Default::default()
@@ -2406,7 +2403,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_nested_backend_builds_loop() {
-        use bitrouter_sdk::language_model::server_tools::web_search::config::{
+        use bitrouter_sdk::model_call::server_tools::web_search::config::{
             WebSearchBackendConfig, WebSearchSettings,
         };
         // A native (nested) backend resolves over the runner and builds the loop.
@@ -2425,7 +2422,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use bitrouter_sdk::language_model::server_tools::web_search::config::{
+        use bitrouter_sdk::model_call::server_tools::web_search::config::{
             WebSearchBackendConfig, WebSearchSettings,
         };
         // An HTTP backend with an explicit key resolves with no nested runner.
@@ -2442,7 +2439,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_fetch_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
+        use bitrouter_sdk::model_call::server_tools::web_fetch::config::{
             WebFetchBackendConfig, WebFetchSettings,
         };
         // A web_fetch-only config (no advisor/subagent/fusion/web_search) must
@@ -2462,7 +2459,7 @@ mod server_tools_tests {
 
     #[test]
     fn assembles_web_fetch_exa_backend_from_explicit_key() {
-        use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
+        use bitrouter_sdk::model_call::server_tools::web_fetch::config::{
             WebFetchBackendConfig, WebFetchSettings,
         };
         // An HTTP backend with an explicit key resolves without needing an env
@@ -2485,7 +2482,7 @@ mod trajectory_assembly_tests {
 
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::PipelineRequest;
+    use bitrouter_sdk::model_call::types::PipelineRequest;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2621,7 +2618,7 @@ presets:
         request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
         assembled
             .app
-            .language_model()
+            .model_call()
             .ok_or_else(|| anyhow::anyhow!("assembled App has no language model pipeline"))?
             .execute(request)
             .await?;
@@ -2776,7 +2773,9 @@ presets:
         use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
         use bitrouter_sdk::config::PresetConfig;
-        use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, PipelineRequest};
+        use bitrouter_sdk::model_call::context::PipelineContext;
+        use bitrouter_sdk::model_call::routing::ModelSelector;
+        use bitrouter_sdk::model_call::types::PipelineRequest;
 
         use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
         use crate::trajectory::correlation::CorrelatedRequest;

@@ -7,12 +7,15 @@ use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bitrouter_ai::types::StreamPart;
 use bitrouter_sdk::config::ConfigRoutingTable;
-use bitrouter_sdk::language_model::StreamContext;
-use bitrouter_sdk::language_model::hooks::{HopOutcome, ObserveHook, Phase, RequestOutcome};
-use bitrouter_sdk::language_model::{
-    HookDecision, PipelineContext, PreRequestHook, RouteHook, RoutingTarget, SettlementContext,
-    SettlementRecorder,
-};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::context::StreamContext;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
+use bitrouter_sdk::model_call::hooks::RouteHook;
+use bitrouter_sdk::model_call::hooks::{HopOutcome, ObserveHook, Phase, RequestOutcome};
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementRecorder;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use bitrouter_sdk::{BitrouterError, PipelineEvent};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};

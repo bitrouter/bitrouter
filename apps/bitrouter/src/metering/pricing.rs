@@ -277,6 +277,12 @@ pub struct EffectivePricingRates {
 /// Auditable result of normalizing usage and applying effective pricing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChargeEvidence {
+    /// Reported input total used by input-only tariffs, independently of breakdowns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billable_input_tokens: Option<u64>,
+    /// Which provider breakdowns are actually known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
     /// Frozen wire/profile/tariff evidence; absent for legacy or explicit offline calculations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tariff_snapshot: Option<crate::metering::tariff::FrozenTariff>,
@@ -491,16 +497,19 @@ pub fn calculate_charge_evidence(
         Ok(normalized) => normalized,
         Err(error) => {
             let reason = match error {
+                UsageNormalizationError::BreakdownUnavailable => "usage_breakdown_unavailable",
                 UsageNormalizationError::InputBucketsOverlap => "invalid_input_buckets",
                 UsageNormalizationError::OutputBucketsOverlap => "invalid_output_buckets",
             };
-            return unknown_evidence(
+            let mut evidence = unknown_evidence(
                 NormalizedUsage::default(),
                 effective_rates,
                 pricing_source,
                 pricing_version,
                 reason,
             );
+            evidence.usage_availability = usage.availability.clone();
+            return evidence;
         }
     };
 
@@ -519,6 +528,8 @@ pub fn calculate_charge_evidence(
         };
 
     ChargeEvidence {
+        billable_input_tokens: None,
+        usage_availability: usage.availability.clone(),
         tariff_snapshot: None,
         status: ChargeStatus::Computed,
         charge_micro_usd: Some(charge_micro_usd),
@@ -528,6 +539,43 @@ pub fn calculate_charge_evidence(
         pricing_version,
         unknown_reason: None,
     }
+}
+
+/// Apply a documented total-input tariff without inventing provider cache buckets.
+pub fn calculate_total_input_charge_evidence(
+    usage: &Usage,
+    pricing: &ModelPricing,
+    pricing_source: PricingSource,
+) -> ChargeEvidence {
+    let billing_projection = Usage {
+        prompt_tokens: usage.prompt_tokens,
+        origin: usage.origin,
+        ..Default::default()
+    };
+    let mut evidence = calculate_charge_evidence(&billing_projection, pricing, pricing_source);
+    if !systemone_input_only_rates(&pricing.resolve_for_input_tokens(usage.prompt_tokens)) {
+        evidence.status = ChargeStatus::Unknown;
+        evidence.charge_micro_usd = None;
+        evidence.unknown_reason = Some("systemone_billing_basis_unverified".into());
+    }
+    evidence.normalized_usage = NormalizedUsage::default();
+    evidence.billable_input_tokens = Some(usage.prompt_tokens);
+    evidence.usage_availability = usage.availability.clone();
+    evidence
+}
+
+/// Rates admitted by the verified System One total-input billing contract.
+pub(crate) fn systemone_input_only_rates(pricing: &ModelPricing) -> bool {
+    pricing
+        .input_micro_usd_per_token
+        .is_some_and(|rate| rate.is_finite() && rate >= 0.0)
+        && [
+            pricing.cache_read_micro_usd_per_token,
+            pricing.cache_write_micro_usd_per_token,
+            pricing.output_micro_usd_per_token,
+        ]
+        .into_iter()
+        .all(|rate| rate == Some(0.0))
 }
 
 /// Reconstruct a charge from frozen normalized usage and rates.
@@ -609,13 +657,15 @@ pub(crate) fn calculate_normalized_charge_micro_usd(
 /// Evidence for a request with no usable pricing entry.
 pub fn unavailable_charge_evidence(usage: &Usage, reason: &str) -> ChargeEvidence {
     let normalized = usage.normalized_buckets().unwrap_or_default();
-    unknown_evidence(
+    let mut evidence = unknown_evidence(
         normalized,
         EffectivePricingRates::default(),
         PricingSource::Unknown,
         "sha256:unavailable".to_string(),
         reason,
-    )
+    );
+    evidence.usage_availability = usage.availability.clone();
+    evidence
 }
 
 fn unknown_evidence(
@@ -626,6 +676,8 @@ fn unknown_evidence(
     reason: &str,
 ) -> ChargeEvidence {
     ChargeEvidence {
+        billable_input_tokens: None,
+        usage_availability: None,
         tariff_snapshot: None,
         status: ChargeStatus::Unknown,
         charge_micro_usd: None,

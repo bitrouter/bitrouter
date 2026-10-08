@@ -1,4 +1,4 @@
-//! `AuthHook` — the `language_model::PreRequestHook` that authenticates a
+//! `AuthHook` — the `model_call::hooks::PreRequestHook` that authenticates a
 //! request against a `brvk_` virtual key.
 //!
 //! v1 has **no JWT path**: the only credential form is a virtual key,
@@ -30,8 +30,11 @@ use chrono::Utc;
 use sea_orm::DatabaseConnection;
 
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
 use bitrouter_sdk::mcp::{McpContext, PreRequestHook as McpPreRequestHook};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::DenyReason;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
 use bitrouter_sdk::{PluginId, Result};
 use http::HeaderMap;
 

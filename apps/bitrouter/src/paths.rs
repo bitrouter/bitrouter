@@ -18,7 +18,7 @@
 //!
 //! The two outcomes are surfaced as [`ConfigSource`] variants
 //! ([`ConfigSource::File`] / [`ConfigSource::Default`]) so each
-//! subcommand can decide whether to load from disk or build from
+//! subcommand can classify whether to load from disk or build from
 //! [`crate::providers::apply::zero_config`].
 //!
 //! On Windows `$HOME` is usually unset, so step 4/5 fall back to
