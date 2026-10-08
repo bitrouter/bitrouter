@@ -493,10 +493,10 @@ fn decisions_response_renderer_requires_native_string_labels() -> TestResult {
         json!({"model":"test","answers":[{"type":"score","name":null,"score":0.7,"confidence":0.5,"probabilities":[{"value":0,"label":"low","probability":0.3},{"value":1,"label":"high","probability":0.7}]}],"usage":full_usage()}),
         &request,
     )?;
-    if let Some(ClassifierAnswer::Score { probabilities, .. }) = result.answers.first_mut() {
-        if let Some(level) = probabilities.first_mut() {
-            level.label = ClassifierText::Structured(json!({"level":"low"}));
-        }
+    if let Some(ClassifierAnswer::Score { probabilities, .. }) = result.answers.first_mut()
+        && let Some(level) = probabilities.first_mut()
+    {
+        level.label = ClassifierText::Structured(json!({"level":"low"}));
     }
     let error = DecisionsCodec::render_response(&result, &request)
         .err()

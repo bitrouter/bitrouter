@@ -21,6 +21,15 @@ use super::pricing::{ModelPricing, PricingTable};
 use super::recorder::MeteringRecorder;
 use super::store::{MeteringStore, TimeWindow};
 
+struct LiveTarget {
+    provider: &'static str,
+    base: &'static str,
+    file_var: &'static str,
+    model: String,
+    input_price: f64,
+    outbound: ApiProtocol,
+}
+
 async fn smoke(outbound: ApiProtocol, inbound: ApiProtocol, case: &str) -> anyhow::Result<()> {
     let (provider, base, file_var, model_var, default_model, input_price) = match outbound {
         ApiProtocol::SystemOne => (
@@ -41,13 +50,37 @@ async fn smoke(outbound: ApiProtocol, inbound: ApiProtocol, case: &str) -> anyho
         ),
         _ => anyhow::bail!("unsupported live classifier protocol"),
     };
+    let model = std::env::var(model_var).unwrap_or_else(|_| default_model.into());
+    smoke_target(
+        LiveTarget {
+            provider,
+            base,
+            file_var,
+            model,
+            input_price,
+            outbound,
+        },
+        inbound,
+        case,
+    )
+    .await
+}
+
+async fn smoke_target(target: LiveTarget, inbound: ApiProtocol, case: &str) -> anyhow::Result<()> {
+    let LiveTarget {
+        provider,
+        base,
+        file_var,
+        model,
+        input_price,
+        outbound,
+    } = target;
     let key_path = std::env::var(file_var)
         .map_err(|_| anyhow::anyhow!("{file_var} must name a local credential file"))?;
     let key = std::fs::read_to_string(key_path)
         .map_err(|_| anyhow::anyhow!("cannot read classifier credential file"))?;
     let key = key.trim().to_owned();
     anyhow::ensure!(!key.is_empty(), "classifier credential file is empty");
-    let model = std::env::var(model_var).unwrap_or_else(|_| default_model.into());
     let target = RoutingTarget {
         provider_name: provider.into(),
         service_id: model.clone(),
@@ -142,9 +175,23 @@ async fn smoke(outbound: ApiProtocol, inbound: ApiProtocol, case: &str) -> anyho
         "selected target mismatch"
     );
     anyhow::ensure!(
+        row.status.as_deref() == Some("completed"),
+        "live settlement did not complete"
+    );
+    anyhow::ensure!(
         row.prompt_tokens == decoded.usage.prompt_tokens
             && row.completion_tokens == decoded.usage.completion_tokens,
         "live usage did not match settlement"
+    );
+    let native_usage = row
+        .raw_usage
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("missing native settlement usage"))?;
+    anyhow::ensure!(
+        native_usage.get("input_tokens").and_then(Value::as_u64) == Some(row.prompt_tokens)
+            && native_usage.get("output_tokens").and_then(Value::as_u64)
+                == Some(row.completion_tokens),
+        "native usage counters did not survive settlement"
     );
     let tariff = row
         .charge_evidence
@@ -152,6 +199,27 @@ async fn smoke(outbound: ApiProtocol, inbound: ApiProtocol, case: &str) -> anyho
         .and_then(|evidence| evidence.tariff_snapshot.as_ref())
         .ok_or_else(|| anyhow::anyhow!("missing frozen live tariff"))?;
     anyhow::ensure!(tariff.protocol == outbound, "frozen wire mismatch");
+    if outbound == ApiProtocol::SystemOne {
+        anyhow::ensure!(
+            row.final_charge_micro_usd
+                == Some((decoded.usage.prompt_tokens as f64 * input_price).round() as u64),
+            "input-only charge did not match the selected tariff"
+        );
+        let native_usage = response_body
+            .get("usage")
+            .ok_or_else(|| anyhow::anyhow!("missing caller usage"))?;
+        anyhow::ensure!(
+            row.raw_usage.as_ref() == Some(native_usage),
+            "native usage did not survive settlement"
+        );
+        if let Some(cost) = native_usage.get("cost").and_then(Value::as_f64) {
+            let expected_cost = decoded.usage.prompt_tokens as f64 * input_price / 1_000_000.0;
+            anyhow::ensure!(
+                (cost - expected_cost).abs() < 1e-10,
+                "reported upstream cost did not match the selected tariff"
+            );
+        }
+    }
     let evidence = json!({"case":case,"recorded_at":chrono::Utc::now(),"selected_model":model,
         "actual_reported_model":decoded.model,"inbound_protocol":inbound,"outbound_protocol":outbound,
         "response":response_body,"settlement":row,"scope":"local credentialed gateway; no invoice or production proof"});
@@ -193,6 +261,39 @@ async fn live_systemone_caller_decisions_upstream_and_settlement() -> anyhow::Re
         ApiProtocol::Decisions,
         ApiProtocol::SystemOne,
         "classifier-live-conversion",
+    )
+    .await
+}
+
+async fn openrouter_smoke(model: &str, input_price: f64, case: &str) -> anyhow::Result<()> {
+    smoke_target(
+        LiveTarget {
+            provider: "openrouter",
+            base: "https://openrouter.ai/api/v1",
+            file_var: "OPENROUTER_API_KEY_FILE",
+            model: model.into(),
+            input_price,
+            outbound: ApiProtocol::SystemOne,
+        },
+        ApiProtocol::SystemOne,
+        case,
+    )
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires OPENROUTER_API_KEY_FILE; performs a paid provider call"]
+async fn live_openrouter_jev_systemone_gateway_and_settlement() -> anyhow::Result<()> {
+    openrouter_smoke("typesafe/jev-1.13", 0.042, "classifier-live-openrouter-jev").await
+}
+
+#[tokio::test]
+#[ignore = "requires OPENROUTER_API_KEY_FILE; performs a paid provider call"]
+async fn live_openrouter_openai_systemone_gateway_and_settlement() -> anyhow::Result<()> {
+    openrouter_smoke(
+        "openai/gpt-6-luna-decisions",
+        0.10,
+        "classifier-live-openrouter-openai",
     )
     .await
 }

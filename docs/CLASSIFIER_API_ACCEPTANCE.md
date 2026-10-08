@@ -3,9 +3,11 @@
 Date: 2026-10-08. Branch: `codex/classifier-api`. Starting source:
 `d6dfc245be38c7e6d3977b0528cbcdf694fac246`.
 
-Status: implemented and verified locally; credentialed provider conformance
-remains pending. All 3,730 executed workspace tests pass; 25 opt-in tests are
-skipped. Doctests, Clippy, formatting and generated artifact checks pass. The governing contract is
+Status: implemented and verified locally, with four credentialed gateway cases
+passing against OpenRouter and OpenAI. Jev is verified through OpenRouter;
+direct TypeSafe endpoint conformance remains pending. All 3,730 executed
+workspace tests pass; 27 opt-in tests are skipped. Doctests, Clippy, formatting
+and generated artifact checks pass. The governing contract is
 [CLASSIFIER_API_SPEC.md](CLASSIFIER_API_SPEC.md); public source and persisted
 evidence migration is recorded in [CLASSIFIER_API_MIGRATION.md](CLASSIFIER_API_MIGRATION.md).
 
@@ -66,7 +68,7 @@ frozen tariff through the existing evidence columns.
 | Partial-usage consumers | Requests JSON/human views; workflow archive validation and mixed summaries | Availability and provenance survive; unavailable totals differ from reported zero; input-only evidence rejects invented buckets |
 | Registry and configuration schema | dist-helper validate/build/check | Passed; generated source catalog and schema are current |
 | Generation regressions and workspace migration | Full nextest: 3,730 passed, 25 skipped; doctests: 6 passed, 1 ignored; Clippy and formatting passed | Ignored live cases remain unrun; no hosted CI claim |
-| Credentialed native and converted gateway | Opt-in `classifier_live_tests.rs` | Not run; credentials absent from this process |
+| Credentialed native and converted gateway | Four opt-in cases in `classifier_live_tests.rs` passed | Jev and OpenAI via OpenRouter System One, native OpenAI Decisions, and System One-to-Decisions conversion; direct TypeSafe endpoint pending |
 | External Cloud and production | [Migration inventory](CLASSIFIER_API_MIGRATION.md) | Read-only inventory only; no Cloud build/deploy |
 
 The GPT-6 Astra specification review identified a destination-confidence gap.
@@ -77,8 +79,9 @@ credentialed conformance.
 
 ## Credentialed validation
 
-Three ignored app tests exercise native System One, native Decisions, and a
-System One caller served by Decisions. Each sends Predicate/Choice/Score through
+Five ignored app tests exercise native TypeSafe System One, native OpenAI
+Decisions, a System One caller served by Decisions, and Jev/OpenAI models through
+OpenRouter's compatible System One endpoint. Each sends Predicate/Choice/Score through
 the actual selected HTTP executor, validates caller correlation and usage, and
 checks exactly one SQLite settlement with the actual outbound frozen tariff.
 They fail explicitly if their local key file is unavailable.
@@ -91,7 +94,9 @@ TYPESAFE_API_KEY_FILE=/absolute/path/to/local-key \
   live_systemone_native_gateway_and_settlement -- --ignored
 ```
 
-The OpenAI cases use `OPENAI_API_KEY_FILE`. Optional
+The OpenAI cases use `OPENAI_API_KEY_FILE`. OpenRouter cases use
+`OPENROUTER_API_KEY_FILE` and select `typesafe/jev-1.13` or
+`openai/gpt-6-luna-decisions` explicitly. Optional
 `TYPESAFE_CLASSIFIER_MODEL`/`OPENAI_CLASSIFIER_MODEL` select an explicitly tested
 model; defaults are `jev-1.13.0`/`gpt-6-luna`. Recheck the independent catalog
 tariff when changing a model. Set `BITROUTER_CLASSIFIER_SMOKE_EVIDENCE_DIR` to
@@ -144,10 +149,52 @@ The completion audit added direct proof for previously indirect claims:
   propagating its body-read error. The regression proves one failed settlement
   and no fallback call; ordinary pre-success HTTP failures retain their policy.
 
-These are local deterministic proofs. Credentialed TypeSafe/OpenAI native and
-converted calls remain unrun until the required key-file paths are supplied.
+These are local deterministic proofs. The credentialed follow-up below records
+the subsequently executed OpenRouter/OpenAI cases separately.
 
 The final audit suite passes all 3,730 executed tests, with 25 opt-in tests
 skipped. The full run flagged an output-pipe leak for the existing ACP
 `unpinned_codex_acp_never_receives_cli_config_arguments` case; its isolated rerun passed without a leak flag. Doctests, Clippy, formatting and dist freshness
 checks passed against the audit changes.
+
+## Credentialed OpenRouter and OpenAI follow-up
+
+Executed on 2026-10-08 at approximately 15:26 UTC using user-supplied test keys
+stored in ignored, mode-0600 local files. Four gateway tests passed. Each sends
+all three primitives through the real HTTP executor and verifies caller
+correlation, reported usage, the selected model/wire, and exactly one completed
+SQLite settlement with a frozen outbound tariff.
+
+| Case | Actual reported model | Inbound / outbound wire | Input / output tokens | Computed charge, micro-USD |
+| --- | --- | --- | --- | --- |
+| OpenRouter Jev | `typesafe/jev-1.13-20260917` | System One / System One | 359 / 64 | 15 |
+| OpenRouter OpenAI | `openai/gpt-6-luna-decisions-20261006` | System One / System One | 373 / 0 | 37 |
+| Native OpenAI Decisions | `gpt-6-luna` | Decisions / Decisions | 373 / 0 | 37 |
+| System One caller, OpenAI upstream | `gpt-6-luna` | System One / Decisions | 373 / 0 | 37 |
+
+Both OpenRouter cases preserve the complete native usage object, including
+reported cost, and verify that cost against the configured input-only rate
+before local micro-USD rounding. Native OpenAI reported zero cache-read,
+cache-write and reasoning counters; conversion retains that upstream evidence
+in settlement while rendering the caller's System One usage shape.
+
+The OpenRouter compatibility endpoint `https://openrouter.ai/api/v1/systemone`
+returned HTTP 200 for both models. An OpenAI-shaped request to
+`https://openrouter.ai/api/v1/decisions` returned HTTP 404, so native Decisions
+and conversion use `https://api.openai.com/v1/decisions` with the OpenAI key.
+OpenRouter's documented `/api/alpha/decisions` API uses the System One-shaped
+contract; its name does not identify the OpenAI Decisions wire.
+
+These smoke tests configure explicit classifier routes. OpenRouter's committed
+registry declaration remains generation-only. The TypeSafe-hosted endpoint
+`https://api.typesafe.ai/v1/systemone` remains untested with a direct TypeSafe
+credential. Redacted response/settlement JSON remains in the ignored local
+`.bitrouter/classifier-live-openrouter/` evidence directory. This establishes
+bounded local provider conformance, with invoice reconciliation, hosted CI and
+production deployment outside the tested scope.
+
+The final smoke rerun also passed all four cases with explicit completed-status
+and preserved native-usage counter assertions. The workspace follow-up passed
+3,730 tests with 27 opt-in tests skipped, and doctests passed 6 with 1 ignored.
+Clippy includes all targets; its classifier fixture style warning was corrected
+without suppression. Formatting and whitespace checks passed.
