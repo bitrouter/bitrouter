@@ -91,6 +91,7 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         model: options.model,
         effort: options.effort.map(|effort| effort.to_string()),
         max_output_tokens: Some(options.max_output_tokens),
+        context_limit_bytes: None,
         routing: Default::default(),
         max_concurrent_subagents: None,
         discardable_history: None,

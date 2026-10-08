@@ -1,7 +1,7 @@
 # Unified decision-native routing
 
-PR #961 on `codex/decision-native` extends #956 and #945. Request and Core
-session are input adapters to one routing pipeline. Their available signals,
+PR #961 on `codex/decision-native` extends the #945 → #956 → #960 stack.
+Request and Core session are input adapters to one routing pipeline. Their available signals,
 context authority and constraints determine what that pipeline can do. No
 HTTP/Core mode chooses a different classifier or routing algorithm.
 
