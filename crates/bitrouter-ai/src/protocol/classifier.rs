@@ -3,7 +3,7 @@
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
-use crate::classifier::{ClassifierRequest, ClassifierResult};
+use crate::classifier::{ClassifierQuestion, ClassifierRequest, ClassifierResult};
 use crate::conversion::{
     ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation, ConversionReason,
     ConversionReport, ConversionStage,
@@ -190,6 +190,12 @@ pub fn admission(protocol: &ApiProtocol, request: &ClassifierRequest) -> Convers
     }
     if *protocol == ApiProtocol::Decisions
         && request.source_protocol == Some(ApiProtocol::SystemOne)
+        && request.questions.iter().any(|question| {
+            matches!(
+                question,
+                ClassifierQuestion::Choice { .. } | ClassifierQuestion::Score { .. }
+            )
+        })
     {
         report.admitted.push(ConversionIssue {
             stage: ConversionStage::ResponseEncoding,

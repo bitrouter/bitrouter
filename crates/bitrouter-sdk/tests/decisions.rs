@@ -1298,3 +1298,61 @@ fn semantic_scope_and_checker_fragments_read_legacy_names() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn successful_classifier_headers_with_broken_body_never_replay_work() -> TestResult {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let base = format!("http://{}/v1", listener.local_addr()?);
+    let primary = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut request = Vec::new();
+        loop {
+            let mut buffer = [0; 4096];
+            let read = stream.read(&mut buffer).await?;
+            if read == 0 || request.len() > 64 * 1024 {
+                return Err(std::io::Error::other("incomplete fixture request"));
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]);
+                let length = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .ok_or_else(|| std::io::Error::other("missing fixture content length"))?;
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4096\r\nConnection: close\r\n\r\n{\"model\":").await?;
+        stream.shutdown().await
+    });
+    let fallback = Fixture::start(vec![(StatusCode::OK, systemone_response(true))], false).await?;
+    let (sender, mut settled) = mpsc::unbounded_channel();
+    let mut builder = builder(vec![
+        target(&base, "a-primary", ApiProtocol::SystemOne),
+        target(&fallback.base, "z-fallback", ApiProtocol::SystemOne),
+    ])?;
+    builder
+        .fallback_policy(Arc::new(RetryAll))
+        .settlement_recorder_for(Record(sender), OperationScope::Both);
+    let pipeline = Arc::new(builder.build()?);
+    let (status, _, _) = post_classifier(
+        router(pipeline.clone()),
+        "/v1/systemone",
+        systemone_request(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(fallback.requests().is_empty());
+    pipeline.drain_required_pending_settlements().await?;
+    let settlement = settled.recv().await.ok_or("missing failed settlement")?;
+    assert!(settlement.failed);
+    assert_eq!(settlement.protocol, Some(ApiProtocol::SystemOne));
+    assert!(settled.try_recv().is_err());
+    tokio::time::timeout(Duration::from_secs(10), primary).await???;
+    fallback.stop().await
+}

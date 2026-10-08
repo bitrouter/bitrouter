@@ -414,3 +414,96 @@ fn custom_native_systemone_result_must_obey_confidence_range() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn conversion_report_derives_confidence_only_for_answers_that_have_it() -> TestResult {
+    use bitrouter_ai::conversion::ConversionReason;
+    for (question, derived) in [
+        (json!({"type":"noul","instructions":"Check?"}), false),
+        (
+            json!({"type":"choice","instructions":"Choose.","criteria":{"yes":null,"no":null}}),
+            true,
+        ),
+        (
+            json!({"type":"score","instructions":"Rate.","criteria":["low","high"]}),
+            true,
+        ),
+    ] {
+        let request = SystemOneCodec::parse_request(
+            json!({"model":"test","state":"evidence","questions":{"q":question}}),
+        )?;
+        let report = admission(&ApiProtocol::Decisions, &request);
+        report.require_admitted()?;
+        assert_eq!(
+            report
+                .admitted
+                .iter()
+                .any(|issue| issue.reason == ConversionReason::ClassifierConfidenceDerived),
+            derived
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn equivalent_native_requests_share_the_three_primitive_semantics() -> TestResult {
+    use bitrouter_ai::classifier::ClassifierQuestion;
+    let decisions = DecisionsCodec::parse_request(
+        json!({"model":"test","input":"evidence","questions":[
+            {"type":"predicate","instructions":"Check?"},
+            {"type":"choice","instructions":"Choose.","choices":[{"value":"a"},{"value":"b","description":"Second option"}]},
+            {"type":"score","instructions":"Rate.","levels":[{"label":"low"},{"label":"high"}]}
+        ]}),
+    )?;
+    let mut systemone = SystemOneCodec::parse_request(
+        json!({"model":"test","state":"evidence","questions":{
+            "q0":{"type":"noul","instructions":"Check?"},
+            "q1":{"type":"choice","instructions":"Choose.","criteria":{"a":null,"b":"Second option"}},
+            "q2":{"type":"score","instructions":"Rate.","criteria":["low","high"]}
+        }}),
+    )?;
+    assert_eq!(
+        SystemOneCodec::render_request(&decisions)?,
+        SystemOneCodec::render_request(&systemone)?
+    );
+    assert_eq!(
+        DecisionsCodec::render_request(&systemone)?,
+        DecisionsCodec::render_request(&decisions)?
+    );
+    // Wire provenance and client correlation keys are independent of the task.
+    systemone.source_protocol = decisions.source_protocol.clone();
+    for question in &mut systemone.questions {
+        match question {
+            ClassifierQuestion::Predicate { key, .. }
+            | ClassifierQuestion::Choice { key, .. }
+            | ClassifierQuestion::Score { key, .. } => *key = None,
+        }
+    }
+    assert_eq!(systemone, decisions);
+    Ok(())
+}
+
+#[test]
+fn decisions_response_renderer_requires_native_string_labels() -> TestResult {
+    use bitrouter_ai::classifier::{ClassifierAnswer, ClassifierText};
+    let request = SystemOneCodec::parse_request(
+        json!({"model":"test","state":"evidence","questions":{"q":{"type":"score","instructions":"Rate.","criteria":[{"level":"low"},{"level":"high"}]}}}),
+    )?;
+    let mut result = DecisionsCodec::parse_response(
+        json!({"model":"test","answers":[{"type":"score","name":null,"score":0.7,"confidence":0.5,"probabilities":[{"value":0,"label":"low","probability":0.3},{"value":1,"label":"high","probability":0.7}]}],"usage":full_usage()}),
+        &request,
+    )?;
+    if let Some(ClassifierAnswer::Score { probabilities, .. }) = result.answers.first_mut() {
+        if let Some(level) = probabilities.first_mut() {
+            level.label = ClassifierText::Structured(json!({"level":"low"}));
+        }
+    }
+    let error = DecisionsCodec::render_response(&result, &request)
+        .err()
+        .ok_or("non-string Decisions label rendered")?;
+    assert_eq!(
+        error.classifier_usage().map(|usage| usage.prompt_tokens),
+        Some(100)
+    );
+    Ok(())
+}

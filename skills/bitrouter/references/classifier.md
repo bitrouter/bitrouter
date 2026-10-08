@@ -71,6 +71,11 @@ tokens remain visible even when their rate is zero. Charge evidence records
 `billable_input_tokens` independently of unknown normalized breakdowns and
 retains explicit usage availability. `bro requests` preserves the native
 usage and frozen tariff evidence; a charge estimate is not an invoice receipt.
+Its JSON rows expose `usage_origin` and `usage_availability`; `unknown` totals
+and a false breakdown flag indicate placeholders. A false flag means the corresponding
+numeric breakdown is a placeholder. Workflow usage records and summaries retain
+these flags, and validate input-only charges against reported native totals.
+The human requests table shows `?` for unavailable totals and `~` for estimates.
 
 Decisions cache billing remains unverified: nonzero cache counters retain usage
 but make cost unavailable. `server.require_known_pricing` still rejects routes

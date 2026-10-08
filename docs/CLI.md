@@ -326,6 +326,15 @@ The spend rollup covers every caller of the daemon, not one session. `bro code <
 
 Each row also carries `episode_id` — the trajectory episode to hand to `bro trajectory inspect`, or `null` when trajectory capture recorded nothing for it (capture is opt-in and off by default, so `null` is the common case). It is the thread from a settled request to its structural record, which is otherwise reachable only by an episode id nothing else hands out.
 
+Partially reported classifier usage adds `usage_availability` to each JSON row.
+Its flags distinguish missing cache/reasoning breakdowns from known zero;
+numeric breakdown fields are placeholders where the corresponding flag is
+false. `usage_origin` identifies reported, estimated or unavailable totals;
+`unknown` totals are placeholders too. The availability field is absent for
+legacy complete reports. System One input-only pricing does not require these
+unknown breakdowns to become zero.
+The human table shows `?` for unavailable totals and prefixes estimates with `~`.
+
 Portable — there is no terminal-only path left to gate.
 
 > **`--requests` emits JSON by default as of 1.0.0-alpha.28.** It previously printed the table unconditionally, ignoring `--json` — the only `status` path that did. Scripts that parsed the table need `--human`; anything that wanted the data now gets one clean JSON object with a stable `rows[]`.

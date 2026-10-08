@@ -128,6 +128,12 @@ impl DecisionsCodec {
         result: &ClassifierResult,
         request: &ClassifierRequest,
     ) -> Result<Value> {
+        if result.answers.iter().any(|answer| {
+            matches!(answer, ClassifierAnswer::Score { probabilities, .. }
+                if probabilities.iter().any(|entry| entry.label.as_text().is_none()))
+        }) {
+            return Err(completed_error("answers.label", Some(result.usage.clone())));
+        }
         validate_answers(&result.answers, request)
             .map_err(|location| completed_error(&location, Some(result.usage.clone())))?;
         validate_extensions(result)

@@ -334,6 +334,10 @@ pub struct RequestRow {
     pub prompt_tokens: i64,
     /// Completion tokens produced.
     pub completion_tokens: i64,
+    /// Availability of provider breakdowns; absent for legacy complete reports.
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
+    /// Whether totals are reported, estimated, or unavailable.
+    pub usage_origin: UsageOrigin,
     /// Cache-read prompt tokens.
     pub cache_read_tokens: i64,
     /// Cache-write prompt tokens.
@@ -374,6 +378,13 @@ pub struct RequestPage {
 impl From<requests::Model> for RequestRow {
     fn from(m: requests::Model) -> Self {
         Self {
+            usage_origin: serde_json::from_value(serde_json::Value::String(m.usage_origin.clone()))
+                .unwrap_or_default(),
+            usage_availability: m
+                .charge_evidence_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<ChargeEvidence>(json).ok())
+                .and_then(|evidence| evidence.usage_availability),
             request_id: m.request_id,
             created_at: m.created_at,
             router_id: m.router_id,

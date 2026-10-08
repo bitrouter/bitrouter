@@ -159,6 +159,18 @@ async fn systemone_input_only_charge_preserves_unknown_breakdowns_in_sqlite() ->
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("missing availability"))?;
         assert!(!availability.cache_read && !availability.cache_write && !availability.reasoning);
+        let inspected = store
+            .recent_requests(TimeWindow::ThisMonth, 10, None)
+            .await?;
+        let inspected = inspected
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing request view"))?;
+        let view = crate::output::reports::requests::RequestView::from(inspected.clone());
+        let view = serde_json::to_value(view)?;
+        assert_eq!(view["usage_availability"]["cache_read"], false);
+        assert_eq!(view["usage_availability"]["reasoning"], false);
+        assert_eq!(view["prompt_tokens"], 100);
+        assert_eq!(view["completion_tokens"], 12);
         let evidence = row
             .charge_evidence
             .as_ref()
@@ -905,4 +917,125 @@ fn systemone_total_input_tariff_does_not_ignore_nonzero_rates() {
         assert_eq!(charge.billable_input_tokens, Some(100));
         assert_eq!(charge.usage_availability, usage.availability);
     }
+}
+
+#[tokio::test]
+async fn same_systemone_caller_uses_actual_outbound_tariff_in_sqlite() -> anyhow::Result<()> {
+    use wiremock::matchers::{body_json, header};
+    let caller_body = json!({"model":"test","state":"evidence","questions":{"same/key":{"type":"noul","instructions":"Check?"}}});
+    for (protocol, expected_charge, upstream_model) in [
+        (ApiProtocol::SystemOne, 4, "systemone-test"),
+        (ApiProtocol::Decisions, 10, "decisions-test"),
+    ] {
+        let upstream = MockServer::start().await;
+        let base = format!("{}/v1", upstream.uri());
+        let (native_request, native_response) = match protocol {
+            ApiProtocol::SystemOne => (
+                json!({"model":upstream_model,"state":"evidence","questions":{"same/key":{"type":"noul","instructions":"Check?"}}}),
+                json!({"model":upstream_model,"answers":{"same/key":{"type":"noul","noul":0.8}},"usage":{"input_tokens":100,"output_tokens":12}}),
+            ),
+            ApiProtocol::Decisions => (
+                json!({"model":upstream_model,"input":"evidence","questions":[{"type":"predicate","instructions":"Check?"}]}),
+                json!({"model":upstream_model,"answers":[{"type":"predicate","name":null,"probability":0.8}],"usage":{"input_tokens":100,"output_tokens":12,"total_tokens":112,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}),
+            ),
+            _ => anyhow::bail!("unsupported classifier fixture"),
+        };
+        let reported_usage = native_response["usage"].clone();
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/{}", protocol.as_str())))
+            .and(header("authorization", "Bearer fixture-key"))
+            .and(body_json(native_request))
+            .respond_with(ResponseTemplate::new(200).set_body_json(native_response))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = MeteringStore::new(db);
+        let mut prices = PricingTable::new();
+        prices.configure_endpoint("fixture", None, &base);
+        // A generation tariff must never serve either classifier wire.
+        prices.insert("fixture", upstream_model, ModelPricing::new(2.0, 9.0));
+        prices.insert_for_protocol(
+            "fixture",
+            upstream_model,
+            ApiProtocol::SystemOne,
+            ModelPricing::cache_aware(Some(0.042), Some(0.0), Some(0.0), Some(0.0)),
+        );
+        prices.insert_for_protocol(
+            "fixture",
+            upstream_model,
+            ApiProtocol::Decisions,
+            ModelPricing::cache_aware(Some(0.1), Some(0.0), Some(0.0), Some(0.0)),
+        );
+        let recorder = MeteringRecorder::new(store.clone(), Arc::new(prices));
+        let mut selected = target();
+        selected.service_id = upstream_model.into();
+        selected.api_protocol = protocol.clone();
+        selected.api_base = base;
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("test", vec![selected]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .served_operations(OperationScope::Both)
+            .route_hook_for(recorder.tariff_capture(false), OperationScope::Both)
+            .settlement_recorder_for(recorder, OperationScope::Both);
+        let pipeline = Arc::new(builder.build()?);
+        let router = build_router(AppState {
+            model_call: pipeline.clone(),
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: Vec::new(),
+        });
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/systemone")
+                    .header("content-type", "application/json")
+                    .header("x-bitrouter-request-id", "same-caller")
+                    .body(Body::from(serde_json::to_vec(&caller_body)?))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let output: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
+        assert_eq!(output["model"], upstream_model);
+        assert_eq!(
+            output["answers"]["same/key"],
+            json!({"type":"noul","noul":0.8})
+        );
+        assert_eq!(
+            output["usage"],
+            json!({"input_tokens":100,"output_tokens":12})
+        );
+        pipeline.drain_required_pending_settlements().await?;
+        let rows = store.export_usage(TimeWindow::ThisMonth).await?;
+        assert_eq!(rows.len(), 1);
+        let row = rows
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing settlement"))?;
+        assert_eq!(row.request_id.as_deref(), Some("same-caller"));
+        assert_eq!(row.provider_id, "fixture");
+        assert_eq!(row.model_id, upstream_model);
+        assert_eq!(row.raw_usage.as_ref(), Some(&reported_usage));
+        assert_eq!(row.final_charge_micro_usd, Some(expected_charge));
+        let evidence = row
+            .charge_evidence
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing charge evidence"))?;
+        let tariff = evidence
+            .tariff_snapshot
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing actual tariff"))?;
+        assert_eq!(tariff.protocol, protocol);
+        assert_eq!(
+            row.usage_availability.is_some(),
+            protocol == ApiProtocol::SystemOne
+        );
+    }
+    Ok(())
 }

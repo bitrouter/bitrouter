@@ -376,6 +376,7 @@ fn computed_usage(
         cache_write_tokens: 0,
         output_tokens: completion_tokens,
         usage_origin: UsageOrigin::ProviderReported,
+        usage_availability: None,
         raw_usage: Some(json!({
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens

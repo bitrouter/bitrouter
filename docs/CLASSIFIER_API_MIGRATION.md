@@ -45,7 +45,8 @@ question position. `source_protocol` and the SDK inbound protocol must agree.
 | Semantic request/hop telemetry | Span schema v3 emits `classification`, classifier content keys and explicit partial-usage availability; query consumers must include historical `decisions` records |
 | Usage evidence in settlement and exported metering records | Optional `UsageAvailability` distinguishes unavailable breakdowns; absence retains existing full-breakdown semantics |
 | Charge evidence stored in the existing JSON column | Add optional `billable_input_tokens` and availability; no SQL schema migration |
-| Workflow archive charge verification | Recompute input-only evidence using its explicit billable input units and frozen rates |
+| Workflow archive charge verification | Preserve availability through decoding and summaries; validate input-only units against native totals and the actual wire |
+| Requests JSON and human views | Add `usage_origin` and optional availability; render unavailable totals as `?` and estimates with `~` |
 
 `OperationScope::Both` explicitly includes only Generation and Classification.
 Default registrations remain Generation. Hosts must opt shared protections into

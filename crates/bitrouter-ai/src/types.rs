@@ -1662,7 +1662,9 @@ pub enum UsageNormalizationError {
 }
 
 /// Provenance of the canonical usage counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageOrigin {
     /// The upstream provider supplied this usage payload.
@@ -1751,7 +1753,7 @@ pub struct Usage {
 }
 
 /// Availability of the optional token breakdowns, independently of totals.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UsageAvailability {
     /// Provider-reported cache-read count is available.
     pub cache_read: bool,

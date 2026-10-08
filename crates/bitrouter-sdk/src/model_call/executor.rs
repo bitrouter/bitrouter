@@ -891,7 +891,14 @@ impl HttpExecutor {
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
             let text = ModelClient::read_body(response, &cancellation)
                 .await
-                .map_err(|error| scrubber.scrub_error(error.into()))?;
+                .map_err(|error| {
+                    if status.is_success() && matches!(input, SelectedRequest::Classification(_)) {
+                        // The native endpoint acknowledged success. Delivery
+                        // failure must not replay work under a retry-all policy.
+                        ctx.record_classifier_failure_usage(None);
+                    }
+                    scrubber.scrub_error(error.into())
+                })?;
             if status.is_success() {
                 return Ok((text, scrubber, started.elapsed().as_millis() as u64));
             }
