@@ -49,7 +49,15 @@ pub(super) async fn collect(
         };
         let part = match next {
             Ok(part) => part,
-            Err(_) => break Some(invalid("provider stream interrupted")),
+            Err(error) => {
+                if let BitrouterError::UpstreamInvalidResponse {
+                    usage: Some(usage), ..
+                } = &error
+                {
+                    processor.record_failed_response_usage(usage);
+                }
+                break Some(invalid("provider stream interrupted"));
+            }
         };
         // Bound custom executor frames before policy callbacks can clone them.
         if !super::native_output::fits(&part, collector.remaining) {
