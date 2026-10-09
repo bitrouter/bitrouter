@@ -1199,7 +1199,8 @@ mod tests {
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::PolicyKeyStrategy;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+    use bitrouter_sdk::model_call::settlement::SettlementContext;
+    use bitrouter_sdk::model_call::settlement::SettlementRecorder;
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -2807,6 +2808,7 @@ mod tests {
             cache_write_tokens: 0,
             usage_origin: UsageOrigin::ProviderReported,
             raw_usage: None,
+            usage_availability: None,
             web_search_count: 0,
             media_input_count: 0,
             media_output_count: 0,

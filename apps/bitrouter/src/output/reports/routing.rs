@@ -93,8 +93,10 @@ mod tests {
     use super::*;
     use crate::output::{Format, Output};
 
-    fn model(id: &str, providers: &[&str]) -> bitrouter_sdk::language_model::routing::ModelInfo {
-        bitrouter_sdk::language_model::routing::ModelInfo {
+    fn model(id: &str, providers: &[&str]) -> bitrouter_sdk::model_call::routing::ModelInfo {
+        bitrouter_sdk::model_call::routing::ModelInfo {
+            operations: Vec::new(),
+            api_protocols: Vec::new(),
             id: id.into(),
             providers: providers.iter().map(|p| (*p).into()).collect(),
         }

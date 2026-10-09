@@ -519,9 +519,9 @@ async fn write_policy_lock(home: &Path, lock: &PolicyLock) -> anyhow::Result<()>
 
 fn server(assembled: &bitrouter::Assembled) -> TestServer {
     let state = AppState {
-        language_model: assembled
+        model_call: assembled
             .app
-            .language_model()
+            .model_call()
             .expect("language model configured")
             .clone(),
         mcp: assembled.app.mcp().cloned(),
@@ -1399,7 +1399,7 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     assert_ne!(first_id, second_id);
     first_app
         .app
-        .language_model()
+        .model_call()
         .ok_or_else(|| anyhow::anyhow!("language-model pipeline missing"))?
         .drain_required_pending_settlements()
         .await?;
@@ -1458,7 +1458,7 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     assert_ne!(second_id, third_id);
     restarted_app
         .app
-        .language_model()
+        .model_call()
         .ok_or_else(|| anyhow::anyhow!("restarted language-model pipeline missing"))?
         .drain_required_pending_settlements()
         .await?;
@@ -1749,7 +1749,7 @@ async fn hidden_continuation_fails_closed_when_reload_removes_its_model() -> any
     .await?;
     first_app
         .app
-        .language_model()
+        .model_call()
         .ok_or_else(|| anyhow::anyhow!("language-model pipeline missing"))?
         .drain_required_pending_settlements()
         .await?;
@@ -2182,7 +2182,7 @@ async fn hidden_continuation_keeps_the_original_authority_when_policy_changes() 
     .await?;
     assert!(third_id.starts_with("brc_"));
     app.app
-        .language_model()
+        .model_call()
         .ok_or_else(|| anyhow::anyhow!("language-model pipeline missing"))?
         .drain_required_pending_settlements()
         .await?;

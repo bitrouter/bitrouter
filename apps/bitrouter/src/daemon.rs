@@ -20,7 +20,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::RoutingPrefs;
+use bitrouter_sdk::model_call::routing::RoutingPrefs;
 
 use chrono::{DateTime, Utc};
 
@@ -328,7 +328,7 @@ pub enum DaemonResponse {
     /// The live routing table's catalog.
     Models {
         /// Every routable model, each with all the providers declaring it.
-        models: Vec<bitrouter_sdk::language_model::routing::ModelInfo>,
+        models: Vec<bitrouter_sdk::model_call::routing::ModelInfo>,
         /// Routers from the same live routing snapshot.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         routers: Option<Vec<crate::actions::models::RouterStatus>>,
@@ -342,7 +342,7 @@ pub enum DaemonResponse {
         resolved_model: Option<String>,
         /// Stable named-router identity, when the selector resolved one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+        router: Option<bitrouter_sdk::model_call::routing::RouterRequestIdentity>,
         /// Canonical or legacy source of the named-router definition.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         router_source: Option<crate::actions::models::RouterSource>,
@@ -1066,7 +1066,7 @@ async fn dispatch(
         },
         DaemonCommand::Status => {
             let routable = app
-                .language_model()
+                .model_call()
                 .map(|p| p.routing_table().list_models())
                 .unwrap_or_default();
             // One pass over the table the model count already walks: the
@@ -1118,7 +1118,7 @@ async fn dispatch(
                 // language-model pipeline routes nothing, which is an empty
                 // catalog rather than an error.
                 models: app
-                    .language_model()
+                    .model_call()
                     .map(|p| p.routing_table().list_models())
                     .unwrap_or_default(),
                 routers,
@@ -1211,9 +1211,9 @@ async fn dispatch(
             session_id,
             route,
         } => {
-            let Some(pipeline) = app.language_model() else {
+            let Some(pipeline) = app.model_call() else {
                 return DaemonResponse::Error {
-                    message: "no language_model pipeline configured".to_string(),
+                    message: "no model_call pipeline configured".to_string(),
                 };
             };
             if api_principal.trim().is_empty()
@@ -1274,9 +1274,9 @@ async fn dispatch(
             }
         }
         DaemonCommand::Route { model } => {
-            let Some(pipeline) = app.language_model() else {
+            let Some(pipeline) = app.model_call() else {
                 return DaemonResponse::Error {
-                    message: "no language_model pipeline configured".to_string(),
+                    message: "no model_call pipeline configured".to_string(),
                 };
             };
             let table = pipeline.routing_table();
@@ -1442,7 +1442,7 @@ async fn inspection_response(
 }
 
 fn route_suggestions(app: &Arc<App>) -> Vec<String> {
-    app.language_model()
+    app.model_call()
         .map(|pipeline| {
             pipeline
                 .routing_table()
@@ -1477,7 +1477,7 @@ pub async fn connect_control(socket_path: &Path) -> Result<impl AsyncRead + Asyn
 
 /// True when something is already bound to the control endpoint at `path`
 /// (i.e. a daemon is — or was — running). On Unix this is "the socket file
-/// exists"; on Windows it probes the named pipe. `restart` uses it to decide
+/// exists"; on Windows it probes the named pipe. `restart` uses it to classify
 /// whether to send a `Stop` and to wait for the old daemon to release the
 /// endpoint before the replacement binds.
 pub fn endpoint_in_use(path: &Path) -> bool {

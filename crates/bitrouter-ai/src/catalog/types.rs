@@ -122,6 +122,9 @@ pub enum RegistryProtocol {
     Responses,
     /// Native Decisions.
     Decisions,
+    /// TypeSafe System One.
+    #[serde(rename = "systemone")]
+    SystemOne,
 }
 
 impl RegistryProtocol {
@@ -132,6 +135,7 @@ impl RegistryProtocol {
             RegistryProtocol::Anthropic => ApiProtocol::Messages,
             RegistryProtocol::Responses => ApiProtocol::Responses,
             RegistryProtocol::Decisions => ApiProtocol::Decisions,
+            RegistryProtocol::SystemOne => ApiProtocol::SystemOne,
         }
     }
 }

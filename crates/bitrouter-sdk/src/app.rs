@@ -1,12 +1,12 @@
 //! [`App`] and [`AppBuilder`] — the top-level entry point.
 //!
 //! An [`App`] holds one pipeline per enabled protocol
-//! ([`crate::language_model::Pipeline`], [`crate::mcp::Pipeline`]) plus the
+//! ([`crate::model_call::pipeline::Pipeline`], [`crate::mcp::Pipeline`]) plus the
 //! injected infrastructure (metrics store, metrics renderer, the aggregated
 //! migration set).
 //!
 //! [`AppBuilder`] configures each protocol through its own sub-builder closure
-//! ([`language_model`](AppBuilder::language_model), [`mcp`](AppBuilder::mcp)).
+//! ([`model_call`](AppBuilder::model_call), [`mcp`](AppBuilder::mcp)).
 //! A pipeline is built only for protocols that have something configured.
 //!
 //! # Legacy custom-host assembly
@@ -27,13 +27,14 @@
 //! ```no_run
 //! use std::sync::Arc;
 //! use bitrouter_sdk::App;
-//! use bitrouter_sdk::language_model::{HttpExecutor, StaticRoutingTable};
+//! use bitrouter_sdk::model_call::executor::HttpExecutor;
+//! use bitrouter_sdk::model_call::routing::StaticRoutingTable;
 //!
 //! # fn run() -> bitrouter_sdk::Result<()> {
 //! let executor = Arc::new(HttpExecutor::with_defaults()?);
 //! let app = App::builder()
 //!     .skip_auth(true)
-//!     .language_model(|lm| {
+//!     .model_call(|lm| {
 //!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
 //!           .executor(executor);
 //!     })
@@ -44,9 +45,10 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::language_model::{self, PipelineBuilder};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
+use crate::model_call;
+use crate::model_call::builder::PipelineBuilder;
 use crate::plugin::{MigrationItem, PluginId};
 
 /// Legacy custom-host assembly convenience for registering hooks and migrations.
@@ -103,7 +105,7 @@ pub trait PromptTransform: Send + Sync {
 /// A fully assembled application: one pipeline per enabled protocol, plus the
 /// injected infrastructure and the collected migration set.
 pub struct App {
-    language_model: Option<Arc<language_model::Pipeline>>,
+    model_call: Option<Arc<model_call::pipeline::Pipeline>>,
     mcp: Option<Arc<mcp::Pipeline>>,
     /// Optional Prometheus-style metrics renderer; if set, the HTTP server
     /// exposes `GET /metrics` against it.
@@ -121,9 +123,9 @@ impl App {
         AppBuilder::new()
     }
 
-    /// The `language_model` pipeline, if that protocol was configured.
-    pub fn language_model(&self) -> Option<&Arc<language_model::Pipeline>> {
-        self.language_model.as_ref()
+    /// The `model_call` pipeline, if that protocol was configured.
+    pub fn model_call(&self) -> Option<&Arc<model_call::pipeline::Pipeline>> {
+        self.model_call.as_ref()
     }
 
     /// The `mcp` (Model Context Protocol) pipeline, if configured. v1.0 ships
@@ -169,7 +171,7 @@ impl App {
 /// New request-check extension authors use the restricted `ExtensionApi` in the
 /// `bitrouter` host crate rather than receive this builder.
 pub struct AppBuilder {
-    language_model: PipelineBuilder,
+    model_call: PipelineBuilder,
     mcp: mcp::PipelineBuilder,
     metrics_renderer: Option<Arc<dyn MetricsRenderer>>,
     migrations: Vec<MigrationItem>,
@@ -182,7 +184,7 @@ impl AppBuilder {
     /// A fresh, empty builder.
     pub fn new() -> Self {
         Self {
-            language_model: PipelineBuilder::new(),
+            model_call: PipelineBuilder::new(),
             mcp: mcp::PipelineBuilder::new(),
             metrics_renderer: None,
             migrations: Vec::new(),
@@ -209,12 +211,12 @@ impl AppBuilder {
         self
     }
 
-    /// Configure the `language_model` protocol pipeline.
-    pub fn language_model<F>(mut self, configure: F) -> Self
+    /// Configure the `model_call` protocol pipeline.
+    pub fn model_call<F>(mut self, configure: F) -> Self
     where
         F: FnOnce(&mut PipelineBuilder),
     {
-        configure(&mut self.language_model);
+        configure(&mut self.model_call);
         self
     }
 
@@ -261,10 +263,10 @@ impl AppBuilder {
         self
     }
 
-    /// Mutable access to the `language_model` sub-builder — the entry point a
+    /// Mutable access to the `model_call` sub-builder — the entry point a
     /// `Plugin::install` implementation uses.
-    pub fn language_model_builder(&mut self) -> &mut PipelineBuilder {
-        &mut self.language_model
+    pub fn model_call_builder(&mut self) -> &mut PipelineBuilder {
+        &mut self.model_call
     }
 
     /// Add migrations directly (used by `Plugin::install` when it wants to add
@@ -274,11 +276,11 @@ impl AppBuilder {
     }
 
     /// Finalise into an [`App`]. Builds a pipeline for each protocol that was
-    /// configured (the `language_model` pipeline needs at least a routing table
+    /// configured (the `model_call` pipeline needs at least a routing table
     /// and an executor).
     pub fn build(mut self) -> Result<App> {
-        let language_model = if self.language_model.is_configured() {
-            Some(Arc::new(self.language_model.build()?))
+        let model_call = if self.model_call.is_configured() {
+            Some(Arc::new(self.model_call.build()?))
         } else {
             None
         };
@@ -301,7 +303,7 @@ impl AppBuilder {
         };
 
         Ok(App {
-            language_model,
+            model_call,
             mcp,
             metrics_renderer: self.metrics_renderer,
             migrations: self.migrations,

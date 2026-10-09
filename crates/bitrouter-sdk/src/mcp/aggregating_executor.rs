@@ -33,7 +33,7 @@
 //! Resource URIs are not prefixed the way tool names are — they are whatever
 //! the upstream chose, so two members can legitimately serve the same URI.
 //! This dispatcher used to try each member in turn and return the first
-//! success, which let configuration order silently decide which server
+//! success, which let configuration order silently classify which server
 //! answered. That is the impersonation surface SEP-2640 names for skills, and
 //! a silent misroute for every other resource.
 //!

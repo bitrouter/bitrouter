@@ -2347,7 +2347,7 @@ impl Run {
             permission.resolve(outcome);
             return;
         }
-        if let Some(decision) = self.permission_policy.decide(&snapshot) {
+        if let Some(decision) = self.permission_policy.classify(&snapshot) {
             let prompt = permission_prompt(&snapshot);
             let (_, outcome) = prompt.answer(decision);
             let selected = selected_option(&outcome);
@@ -3204,7 +3204,7 @@ impl RunState {
 }
 
 impl PermissionPolicy {
-    fn decide(
+    fn classify(
         &self,
         permission: &PendingPermissionSnapshot,
     ) -> Option<bitrouter_tui::permission::Decision> {

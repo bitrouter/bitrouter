@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::router::{RouterConfigSource, RouterInventorySelection};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable, RoutingConfig};
-use bitrouter_sdk::language_model::RoutingTable;
-use bitrouter_sdk::language_model::routing::ModelInfo;
+use bitrouter_sdk::model_call::routing::ModelInfo;
+use bitrouter_sdk::model_call::routing::RoutingTable;
 
 use super::ToolError;
 

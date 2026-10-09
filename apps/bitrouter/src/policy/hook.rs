@@ -1,4 +1,4 @@
-//! `PolicyHook` — a `language_model::PreRequestHook` enforcing per-API-key
+//! `PolicyHook` — a `model_call::hooks::PreRequestHook` enforcing per-API-key
 //! policy: model allow/deny, spend ceiling, expiry, tool-access rules,
 //! request-rate limits.
 //!
@@ -13,7 +13,10 @@ use async_trait::async_trait;
 
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::Result;
-use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::DenyReason;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
 
 use crate::metering::{MeteringStore, TimeWindow};
 use crate::policy::store::PolicyStore;

@@ -6,7 +6,7 @@
 //! metrics over OTLP through `bitrouter-telemetry` and mounts a stub renderer
 //! that serves a migration banner. A deployment that still wants a pull-based
 //! endpoint registers its own
-//! [`ObserveHook`](crate::language_model::ObserveHook) and points this trait
+//! [`ObserveHook`](crate::model_call::hooks::ObserveHook) and points this trait
 //! at it.
 //!
 //! The trait and the accumulator are the same split the rest of the

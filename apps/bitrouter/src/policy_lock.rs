@@ -17,7 +17,10 @@ use bitrouter_sdk::config::{
     PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
 };
 use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::RouteHook;
+use bitrouter_sdk::model_call::routing::ModelSelector;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -2713,7 +2716,7 @@ pub async fn validate_routable_model(
     bitrouter_sdk::config::routing_table::resolve_route_chain(
         &resolved,
         route,
-        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+        &bitrouter_sdk::model_call::routing::RoutingPrefs::default(),
     )
     .with_context(|| format!("resolving policy tier route '{route}'"))?;
     Ok(())
@@ -2733,7 +2736,7 @@ pub async fn validate_routable_effort(
     let chain = bitrouter_sdk::config::routing_table::resolve_route_chain(
         &resolved,
         route,
-        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+        &bitrouter_sdk::model_call::routing::RoutingPrefs::default(),
     )
     .with_context(|| format!("resolving policy tier route '{route}'"))?;
     if !chain.iter().any(|target| {
@@ -4378,7 +4381,7 @@ certificates:
     async fn frozen_and_adaptive_modes_route_identically_from_the_lock() -> anyhow::Result<()> {
         use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
+        use bitrouter_sdk::model_call::types::PipelineRequest;
 
         fn context() -> PipelineContext {
             let prompt = Prompt {
@@ -4504,7 +4507,7 @@ presets:
     async fn policy_runtime_prefers_exact_variant_then_falls_back() -> anyhow::Result<()> {
         use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
+        use bitrouter_sdk::model_call::types::PipelineRequest;
 
         fn context() -> PipelineContext {
             PipelineContext::new(PipelineRequest::new(
@@ -4571,7 +4574,7 @@ presets:
     {
         use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
+        use bitrouter_sdk::model_call::types::PipelineRequest;
         use http::HeaderValue;
         use sea_orm::ConnectionTrait;
 
@@ -6211,7 +6214,7 @@ presets:
     async fn reload_swaps_valid_policy_and_keeps_last_known_good_on_error() {
         use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
+        use bitrouter_sdk::model_call::types::PipelineRequest;
 
         fn context(model: &str) -> PipelineContext {
             let prompt = Prompt {

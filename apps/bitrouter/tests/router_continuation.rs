@@ -84,13 +84,13 @@ impl Respond for NativeResponsesResponder {
 }
 
 fn server(assembled: &bitrouter::Assembled) -> anyhow::Result<TestServer> {
-    let language_model = assembled
+    let model_call = assembled
         .app
-        .language_model()
+        .model_call()
         .context("assembled app has no language-model pipeline")?
         .clone();
     Ok(TestServer::new(build_router(AppState {
-        language_model,
+        model_call,
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -198,7 +198,7 @@ policies:
 
     assembled
         .app
-        .language_model()
+        .model_call()
         .context("assembled app has no language-model pipeline")?
         .drain_required_pending_settlements()
         .await?;

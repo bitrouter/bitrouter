@@ -226,6 +226,7 @@ fn protocol_name(protocol: &ApiProtocol) -> &str {
         ApiProtocol::Messages => "messages",
         ApiProtocol::Responses => "responses",
         ApiProtocol::Decisions => "decisions",
+        ApiProtocol::SystemOne => "systemone",
         ApiProtocol::Custom(name) => name,
     }
 }

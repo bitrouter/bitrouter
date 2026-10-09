@@ -57,7 +57,7 @@ impl PromptTransform for ClaudeCodeRouter {
     fn apply(&self, _prompt: &mut Prompt) {
         // Detection needs the inbound `anthropic-beta` header, so all the work
         // is in `apply_with_headers` (which the HTTP server always calls). With
-        // no headers there is nothing to decide, so this is a no-op.
+        // no headers there is nothing to classify, so this is a no-op.
     }
 
     fn apply_with_headers(&self, prompt: &mut Prompt, headers: &HeaderMap) {

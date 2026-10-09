@@ -1,0 +1,15 @@
+- id: typesafe/jev-1.13.0
+  name: 'TypeSafe: Jev 1.13'
+  input_modalities: [text]
+  max_input_tokens: 64000
+  family: jev
+- id: typesafe/jev-latest
+  name: 'TypeSafe: Jev Latest'
+  input_modalities: [text]
+  max_input_tokens: 64000
+  family: jev
+- id: typesafe/jev-preview
+  name: 'TypeSafe: Jev Preview'
+  input_modalities: [text]
+  max_input_tokens: 64000
+  family: jev

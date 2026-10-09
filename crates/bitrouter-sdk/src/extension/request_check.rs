@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
-use crate::language_model::operations::OperationScope;
+use crate::model_call::operations::OperationScope;
 use bitrouter_ai::types::ModelOperation;
 
 /// Maximum fragments in the projected entry request.
@@ -47,22 +47,30 @@ pub enum ContentFragmentKind {
     ToolResult,
     /// A tool-approval decision.
     ToolApproval,
-    /// Shared evidence in a Decisions request.
-    DecisionEvidence,
-    /// Optional name attached to a decision question.
-    DecisionQuestionName,
-    /// Instructions for a decision question.
-    DecisionInstructions,
+    /// Shared evidence in a classifier request.
+    #[serde(alias = "decision_evidence")]
+    ClassifierEvidence,
+    /// Optional name attached to a classifier question.
+    #[serde(alias = "decision_question_name")]
+    ClassifierQuestionName,
+    /// Instructions for a classifier question.
+    #[serde(alias = "decision_instructions")]
+    ClassifierInstructions,
     /// A string choice value, distinct from a boolean spelling.
-    DecisionStringChoice,
+    #[serde(alias = "decision_string_choice")]
+    ClassifierStringChoice,
     /// A native boolean choice value.
-    DecisionBooleanChoice,
+    #[serde(alias = "decision_boolean_choice")]
+    ClassifierBooleanChoice,
     /// Description of a choice value.
-    DecisionChoiceDescription,
+    #[serde(alias = "decision_choice_description")]
+    ClassifierChoiceDescription,
     /// Label of an ordered score level.
-    DecisionLevelLabel,
+    #[serde(alias = "decision_level_label")]
+    ClassifierLevelLabel,
     /// Description of a score level.
-    DecisionLevelDescription,
+    #[serde(alias = "decision_level_description")]
+    ClassifierLevelDescription,
 }
 
 /// Coverage scope for the first request-check contract.

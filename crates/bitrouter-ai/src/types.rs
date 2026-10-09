@@ -97,6 +97,8 @@ pub enum ApiProtocol {
     Responses,
     /// Native typed Decisions (`POST /v1/decisions`).
     Decisions,
+    /// TypeSafe System One typed classifier (`POST /v1/systemone`).
+    SystemOne,
     /// An externally-registered protocol identified by its registration name
     /// (e.g. `"bedrock-claude"`). The SDK does not serve `Custom` protocols
     /// inbound; they are outbound-only by design.
@@ -107,7 +109,7 @@ impl ApiProtocol {
     /// Semantic operation required by this wire; custom adapters remain generative.
     pub fn operation(&self) -> ModelOperation {
         match self {
-            Self::Decisions => ModelOperation::Decisions,
+            Self::Decisions | Self::SystemOne => ModelOperation::Classification,
             Self::ChatCompletions | Self::Messages | Self::Responses | Self::Custom(_) => {
                 ModelOperation::Generation
             }
@@ -124,6 +126,7 @@ impl ApiProtocol {
             Self::Messages => "messages",
             Self::Responses => "responses",
             Self::Decisions => "decisions",
+            Self::SystemOne => "systemone",
             Self::Custom(name) => name.as_str(),
         }
     }
@@ -149,6 +152,7 @@ impl<'de> Deserialize<'de> for ApiProtocol {
             "messages" => Self::Messages,
             "responses" => Self::Responses,
             "decisions" => Self::Decisions,
+            "systemone" => Self::SystemOne,
             _ => Self::Custom(s),
         })
     }
@@ -163,8 +167,9 @@ pub enum ModelOperation {
     /// Generative text/tool/media invocation.
     #[default]
     Generation,
-    /// Native typed decision invocation.
-    Decisions,
+    /// Typed classifier invocation.
+    #[serde(alias = "decisions")]
+    Classification,
 }
 
 /// A wire protocol always (de)serializes as a string: one of the known
@@ -180,9 +185,9 @@ impl schemars::JsonSchema for ApiProtocol {
         schemars::json_schema!({
             "type": "string",
             "description": "Wire protocol. Known values: `chat_completions`, \
-                `messages`, `responses`, `decisions`; any other string \
+                `messages`, `responses`, `decisions`, `systemone`; any other string \
                 names an externally-registered (outbound-only) custom protocol.",
-            "examples": ["chat_completions", "messages", "responses", "decisions"],
+            "examples": ["chat_completions", "messages", "responses", "decisions", "systemone"],
         })
     }
 }
@@ -1648,6 +1653,8 @@ pub struct NormalizedUsage {
 /// A provider usage payload whose subset relationships cannot be normalized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageNormalizationError {
+    /// The provider did not report the breakdown needed for normalization.
+    BreakdownUnavailable,
     /// Cache-read and cache-write subsets exceed the prompt-token total.
     InputBucketsOverlap,
     /// The reasoning subset exceeds the completion-token total.
@@ -1655,7 +1662,9 @@ pub enum UsageNormalizationError {
 }
 
 /// Provenance of the canonical usage counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageOrigin {
     /// The upstream provider supplied this usage payload.
@@ -1737,6 +1746,23 @@ pub struct Usage {
     /// Original provider usage object, retained exactly for settlement audit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<Box<serde_json::Value>>,
+    /// Partial provider reports explicitly identify unavailable breakdowns.
+    /// Absent on legacy complete usage; numeric placeholders are not evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability: Option<UsageAvailability>,
+}
+
+/// Availability of the optional token breakdowns, independently of totals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UsageAvailability {
+    /// Provider-reported cache-read count is available.
+    pub cache_read: bool,
+    /// Provider-reported cache-write count is available.
+    pub cache_write: bool,
+    /// Provider-reported reasoning count is available.
+    pub reasoning: bool,
+    /// The native provider reported the total rather than only its components.
+    pub reported_total: bool,
 }
 
 fn is_zero_u64(v: &u64) -> bool {
@@ -1752,6 +1778,13 @@ impl Usage {
     /// Convert inclusive provider totals into non-overlapping settlement
     /// buckets, rejecting internally inconsistent provider reports.
     pub fn normalized_buckets(&self) -> Result<NormalizedUsage, UsageNormalizationError> {
+        if self
+            .availability
+            .as_ref()
+            .is_some_and(|fields| !fields.cache_read || !fields.cache_write || !fields.reasoning)
+        {
+            return Err(UsageNormalizationError::BreakdownUnavailable);
+        }
         let cached_input = self
             .cache_read_tokens
             .checked_add(self.cache_write_tokens)

@@ -117,7 +117,7 @@ Measured in this worktree at `f4da66f3`, not inferred from the issue.
 | Claim | Evidence |
 |---|---|
 | MCP `list_models` keeps one provider per model | [`local.rs:53`](../crates/bitrouter-mcp/src/backend/local.rs:53) — `m.providers.first()` |
-| …while the wire already carries all of them | [`server.rs:665`](../crates/bitrouter-sdk/src/server.rs:665) emits `providers`; [`routing.rs:63`](../crates/bitrouter-sdk/src/language_model/routing.rs:63) `ModelInfo { id, providers: Vec<String> }` |
+| …while the wire already carries all of them | [`server.rs:665`](../crates/bitrouter-sdk/src/server.rs:665) emits `providers`; [`routing.rs:63`](../crates/bitrouter-sdk/src/model_call/routing.rs:63) `ModelInfo { id, providers: Vec<String> }` |
 | The MCP crate re-declares that type, lossily | [`backend/mod.rs`](../crates/bitrouter-mcp/src/backend/mod.rs) `ModelInfo { id, provider: String }` |
 | CLI `models` needs no daemon and runs `/models` discovery | [`commands.rs:189`](../apps/bitrouter/src/commands.rs:189) — `discover_models`, then `ConfigRoutingTable::list_models` |
 | MCP `status` is a `GET /v1/models` in disguise | [`local.rs:131`](../crates/bitrouter-mcp/src/backend/local.rs:131) |

@@ -880,7 +880,7 @@ fn parse_role(role: &str) -> Result<Role> {
         // entries at non-first positions in `messages` (GA, no beta header), so
         // operator instructions can change mid-session without invalidating the
         // prompt cache. Map them to the canonical System role and let the
-        // upstream model decide whether it supports them.
+        // upstream model classify whether it supports them.
         // <https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages>
         "system" => Ok(Role::System),
         // Tool results ride inside a user-role message; any other role is a
@@ -2318,6 +2318,7 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         web_search_count,
         origin: UsageOrigin::ProviderReported,
         raw: Some(Box::new(value.clone())),
+        availability: None,
     })
 }
 

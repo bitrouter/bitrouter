@@ -91,6 +91,8 @@ pub struct MeteringUsageRecord {
     pub usage_origin: UsageOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_usage: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
     pub final_charge_micro_usd: Option<u64>,
     #[serde(default)]
     pub charge_status: ChargeStatus,
@@ -332,6 +334,10 @@ pub struct RequestRow {
     pub prompt_tokens: i64,
     /// Completion tokens produced.
     pub completion_tokens: i64,
+    /// Availability of provider breakdowns; absent for legacy complete reports.
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
+    /// Whether totals are reported, estimated, or unavailable.
+    pub usage_origin: UsageOrigin,
     /// Cache-read prompt tokens.
     pub cache_read_tokens: i64,
     /// Cache-write prompt tokens.
@@ -372,6 +378,13 @@ pub struct RequestPage {
 impl From<requests::Model> for RequestRow {
     fn from(m: requests::Model) -> Self {
         Self {
+            usage_origin: serde_json::from_value(serde_json::Value::String(m.usage_origin.clone()))
+                .unwrap_or_default(),
+            usage_availability: m
+                .charge_evidence_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<ChargeEvidence>(json).ok())
+                .and_then(|evidence| evidence.usage_availability),
             request_id: m.request_id,
             created_at: m.created_at,
             router_id: m.router_id,
@@ -1135,6 +1148,8 @@ impl MeteringStore {
                         )
                     })?;
                     ChargeEvidence {
+                        billable_input_tokens: None,
+                        usage_availability: usage.availability.clone(),
                         tariff_snapshot: None,
                         status: ChargeStatus::Computed,
                         charge_micro_usd: Some(charge),
@@ -1526,6 +1541,9 @@ impl From<requests::Model> for MeteringUsageRecord {
             raw_usage,
             final_charge_micro_usd,
             charge_status,
+            usage_availability: charge_evidence
+                .as_ref()
+                .and_then(|evidence| evidence.usage_availability.clone()),
             charge_evidence,
             reconciliation_status: ReconciliationStatus::from_persisted(&row.reconciliation_status),
             reconciliation_attempts: row.reconciliation_attempts.max(0) as u32,

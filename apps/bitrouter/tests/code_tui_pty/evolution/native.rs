@@ -244,9 +244,9 @@ models:
     let evolution = assembled.evolution.clone();
     let canonical = CanonicalStore::new(assembled.db.clone());
     let app = Arc::new(assembled.app);
-    let pipeline = app.language_model().cloned().context("pipeline missing")?;
+    let pipeline = app.model_call().cloned().context("pipeline missing")?;
     let router = build_router(AppState {
-        language_model: pipeline.clone(),
+        model_call: pipeline.clone(),
         mcp: app.mcp().cloned(),
         skip_auth: app.skip_auth(),
         metrics_renderer: app.metrics_renderer().cloned(),

@@ -15,7 +15,8 @@ use bitrouter::session_identity::{RequestOrigin, SessionIdentityObserved};
 use bitrouter_ai::types::UsageOrigin;
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementRecorder;
 
 /// A reloader that re-reads only the routing table. Used by the reload test —
 /// production callers use the AppReloader in main.rs which also reloads the
@@ -25,7 +26,7 @@ struct RoutingTableReloader(Arc<App>);
 #[async_trait::async_trait]
 impl daemon::DaemonReloader for RoutingTableReloader {
     async fn reload(&self) -> anyhow::Result<()> {
-        if let Some(pipeline) = self.0.language_model() {
+        if let Some(pipeline) = self.0.model_call() {
             pipeline.routing_table().reload().await?;
         }
         Ok(())
@@ -933,7 +934,7 @@ async fn client_fails_clearly_when_no_daemon_is_listening() {
 async fn settle_attributed_request(metering: MeteringStore, controller: &str, root: &str) {
     let mut pricing = PricingTable::new();
     pricing.insert("openai", "gpt-5", ModelPricing::new(2.0, 10.0));
-    let target = bitrouter_sdk::language_model::types::RoutingTarget {
+    let target = bitrouter_sdk::model_call::types::RoutingTarget {
         provider_name: "openai".into(),
         service_id: "gpt-5".into(),
         api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,
@@ -970,6 +971,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         cache_write_tokens: 0,
         usage_origin: UsageOrigin::ProviderReported,
         raw_usage: None,
+        usage_availability: None,
         web_search_count: 0,
         media_input_count: 0,
         media_output_count: 0,

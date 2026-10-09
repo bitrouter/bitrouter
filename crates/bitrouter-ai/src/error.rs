@@ -28,9 +28,9 @@ pub enum ModelError {
     },
     /// Completed Decisions response: fail delivery without retrying model work.
     #[error("invalid decision response: {failure}")]
-    DecisionResponse {
+    ClassifierResponse {
         /// Redacted diagnostics and independently validated accounting evidence.
-        failure: crate::decisions::DecisionResponseFailure,
+        failure: crate::classifier::ClassifierResponseFailure,
     },
     /// A provider reported a failure, including its native status.
     #[error("model provider error ({status}): {message}")]
@@ -96,16 +96,16 @@ pub enum ModelError {
 
 impl ModelError {
     /// Usage retained from a completed invalid Decisions response.
-    pub fn decision_usage(&self) -> Option<&crate::types::Usage> {
+    pub fn classifier_usage(&self) -> Option<&crate::types::Usage> {
         match self {
-            Self::DecisionResponse { failure } => failure.usage.as_deref(),
+            Self::ClassifierResponse { failure } => failure.usage.as_deref(),
             _ => None,
         }
     }
 
     /// Whether a complete decision response failed and must not be replayed.
-    pub fn is_completed_decision_failure(&self) -> bool {
-        matches!(self, Self::DecisionResponse { .. })
+    pub fn is_completed_classifier_failure(&self) -> bool {
+        matches!(self, Self::ClassifierResponse { .. })
     }
 
     /// Construct an authentication/transport configuration failure.

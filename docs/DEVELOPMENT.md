@@ -19,11 +19,11 @@ The `extensions/` directory expresses ownership and delivery boundaries; it does
 
 ### External interfaces
 
-Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from AI's three internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
+Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from AI's internal *wire-protocol adapters* (Chat Completions / Responses / Messages and Decisions / System One, described below): an interface is an entry point, an adapter is a dialect the `model_call` pipeline parses and speaks.
 
 | Interface                 | Where it lives                                                                                            | Entry point              |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
-| **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bro serve`        |
+| **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `model_call` pipeline | `bro serve`        |
 | **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
 | **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner, and Code session all consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve`; `bro run` |
 | **ACP (interactive)**     | `crates/bitrouter-tui/src/code.rs` owns conversation state and rendering; `apps/bitrouter/src/chat/code.rs` drives asynchronous effects and ACP turns, with injected services in `actions/code.rs` and the shared `SessionHost` in `acp_cli.rs`. | `bro code [<agent>]` |
@@ -109,18 +109,29 @@ presentation.
 Model semantic types, wire codecs, authentication contracts and credential values
 have one owner in **`bitrouter-ai`**. The SDK, provider integrations and application
 consumers depend directly on AI; AI has no SDK, application or agent-runtime
-dependency. AI owns three generation codecs, the native Decisions codec, SSE framing and selected-model HTTP
+dependency. AI owns three generation codecs, the classifier Decisions/System One codecs, generation SSE framing and selected-model HTTP
 invocation (`ModelClient` and `HttpTimeouts`); its errors carry domain facts rather
 than gateway status policy. Explicitly registered `AuthApplier`s can shape a body,
 authenticate and recover the same selected account once after a 401. `ModelClient`
 performs no implicit catalog loading, account selection, login or routing fallback.
 
-Native Decisions uses `DecisionRequest`/`DecisionResult` and
-`ModelClient::decide`. SDK envelopes distinguish `PipelineInput::Generation`
-from `PipelineInput::Decisions`, and the output variants likewise retain their
-semantic operation. The HTTP gateway serves `POST /v1/decisions` through the
-shared execution, delivery and settlement lifecycle. Streaming and generative
-continuation/tool defaults are rejected or scoped before native dispatch.
+Classifier uses `ClassifierRequest`/`ClassifierResult` and
+`ModelClient::classify`. Decisions and TypeSafe System One are wire protocols
+for this one representation, parallel to generation's `Prompt`/`GenerateResult`.
+SDK envelopes distinguish `PipelineInput::Generation` from `Classification`.
+The gateway serves `POST /v1/decisions` and `POST /v1/systemone` through the
+shared execution, delivery and settlement lifecycle under `model_call`.
+Streaming and generative continuation/tool defaults remain generation-scoped.
+
+Native semantics round-trip under their own protocol. System One callers can
+use an admitted OpenAI subset; destination confidence is derived from validated
+distributions. Decisions callers cannot use System One while the required
+OpenAI usage breakdown remains unavailable. Incompatible requests are excluded
+before dispatch; completed refusals or malformed output retain usage and settle
+once without replay. `UsageAvailability` distinguishes missing breakdowns from
+known zeros. System One's independent input-only tariff uses reported input
+units without inventing cache or reasoning counts. See the
+[classifier spec](CLASSIFIER_API_SPEC.md) for conversion and migration contracts.
 
 Routing selects a compatible operation before preferred-protocol matching.
 `ModelTarget.api_protocol` determines the AI client's outbound wire. Existing
@@ -275,7 +286,7 @@ Because the schema is the contract, it is written down rather than inferred from
 
 1. **`bitrouter-sdk`** — the pipeline and gateway foundation. Knows nothing about which providers exist or how the binary is wired. It consumes model semantics from `bitrouter-ai` and owns:
    - **Three independent pipelines**, one per wire family. They are deliberately *not* generic over a shared hook trait — each has its own hook set:
-     - `language_model` — the main pipeline: LLM completions with the full hook chain (pre-request → route → execute → settle), an interleaved stream stage, and read-only observation.
+     - `model_call` — the main pipeline: generation and classification with the full hook chain (pre-request → route → execute → settle), an interleaved stream stage, and read-only observation.
      - `mcp` — Model Context Protocol routing (pure routing, no settlement).
      - `acp` — Agent Client Protocol routing (pure routing, no settlement).
    - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — trusted host assembly interfaces used by builtins and legacy packages. New request-check extensions use the restricted author API rather than mutable pipeline hooks.
@@ -283,7 +294,7 @@ Because the schema is the contract, it is written down rather than inferred from
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-ai`** — owns catalog metadata, protocol codecs, selected-target invocation and authentication. It has no SDK or application dependency. Explicit login and ordinary file storage are opt-in features; external CLI/Keychain discovery, account selection, product activation and Cloud management remain in the application.
 3. **`bitrouter-guardrails`** provides the regex matcher and the SDK request-check callback; its explicit `sdk` feature enables legacy global/stream hooks. It depends on `bitrouter-sdk` with default features disabled. The default host still has no normal/build dependency on the matcher. **`bitrouter-telemetry`** implements SDK hooks; telemetry's whole OpenTelemetry stack sits behind `otel-*` and its ingress span behind `server`, so `cargo add bitrouter-telemetry` on its own pulls neither. The `feature-isolation` CI job enforces all of it, plus the invariant that gives the split its point: **no `opentelemetry*` crate is in `bitrouter-sdk`'s tree at any feature combination**, and the two OTLP transports stay isolated from each other.
-4. **`apps/bitrouter`** — owns `providers::{apply,builtin,entry,registry,import,claude_code,antigravity}` for configuration, activation and credential-source policy; `cloud::account::{credentials,transaction,manager,settings}` retains Cloud account files and shared AI session assembly. The only compiled-in provider entry is `apps/bitrouter/providers/bitrouter.toml`; other providers come from AI catalog metadata and the product registry bridge. The app assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound native request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
+4. **`apps/bitrouter`** — owns `providers::{apply,builtin,entry,registry,import,claude_code,antigravity}` for configuration, activation and credential-source policy; `cloud::account::{credentials,transaction,manager,settings}` retains Cloud account files and shared AI session assembly. The only compiled-in provider entry is `apps/bitrouter/providers/bitrouter.toml`; other providers come from AI catalog metadata and the product registry bridge. The app assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound native request checks onto the `model_call` pipeline; `main.rs` is a thin CLI shell over that library.
 
 ### Extension authors and host assembly
 
@@ -352,9 +363,9 @@ Without `mcp` / `acp`, the SDK still exposes those pipelines, hook traits, and t
 
 A streaming LLM request moves through the workspace like this:
 
-1. The `bitrouter` binary resolves the config source (see *Configuration*), loads or synthesises a `Config`, and `assemble.rs` builds an `App` — the `language_model` pipeline with the builtin hooks wired on.
+1. The `bitrouter` binary resolves the config source (see *Configuration*), loads or synthesises a `Config`, and `assemble.rs` builds an `App` — the `model_call` pipeline with the builtin hooks wired on.
 2. The SDK's axum server receives the inbound HTTP request on one of the protocol routes and the matching **inbound adapter** parses it into a canonical `PipelineRequest` (model name, messages, tools, params).
-3. The `language_model` pipeline runs its stages:
+3. The `model_call` pipeline runs its stages:
    - **Pre-request** — local policy hooks, followed by explicitly bound external request checks. Authentication and normalization occur before router admission.
    - **Route** — the `RoutingTable` resolves the model name to a fallback chain of `RoutingTarget`s (provider + upstream model id + protocol); `RouteHook`s may rewrite the chain.
    - **Execute** — the executor dials the first target; on failure the `FallbackPolicy` decides whether to try the next. The **outbound adapter** for the target's protocol renders the provider request and decodes the provider response (and its SSE stream).
@@ -449,7 +460,7 @@ Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionH
 
 ### Embed the SDK in your own service
 
-`apps/bitrouter/src/assemble.rs` is the worked example: it builds an `App` via `App::builder()`, registers the `language_model` pipeline with a routing table, an executor, and the hook chain, then serves it. A consumer that wants BitRouter's routing + protocol conversion without the stock CLI composes the same builder with its own hooks and routing table.
+`apps/bitrouter/src/assemble.rs` is the worked example: it builds an `App` via `App::builder()`, registers the `model_call` pipeline with a routing table, an executor, and the hook chain, then serves it. A consumer that wants BitRouter's routing + protocol conversion without the stock CLI composes the same builder with its own hooks and routing table.
 
 ## Validation
 
@@ -483,7 +494,7 @@ Append the output under the comment header in `public-api-deps.txt` — the head
 
 ### Named-router request checks
 
-Named-router entry checks use the SDK's typed `language_model::request_checks`
+Named-router entry checks use the SDK's typed `model_call::request_checks`
 contract. The app assembles startup-owned compiled registrations in
 `request_checks`; a custom host supplies callbacks through
 `extension::ExtensionApi`. The official `bro` binary has no custom

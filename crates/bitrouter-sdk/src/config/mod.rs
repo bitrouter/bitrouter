@@ -3,7 +3,7 @@
 //! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
 //! level keys: `server`, `database`, `providers`, `models`, `routers`,
 //! `checkers`, `presets`, `variants`; per-plugin config lives under `plugins`. Load a file with
-//! [`load`]; build a [`RoutingTable`](crate::language_model::RoutingTable) over
+//! [`load`]; build a [`RoutingTable`](crate::model_call::routing::RoutingTable) over
 //! it with [`ConfigRoutingTable`].
 //!
 //! The `providers` schema is **registry-style**: `api_protocol` and
@@ -25,8 +25,8 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{BitrouterError, Result};
-use crate::language_model::routing::SortOrder;
-use crate::language_model::types::OutboundHeaderRule;
+use crate::model_call::routing::SortOrder;
+use crate::model_call::types::OutboundHeaderRule;
 use bitrouter_ai::client::HttpTimeouts;
 use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
@@ -125,7 +125,7 @@ pub struct Config {
     /// Server-side tool loop: MCP server ids whose tools BitRouter injects into
     /// LLM requests and executes itself. Empty by default — the pipeline stays
     /// single-shot.
-    pub server_tools: crate::language_model::server_tools::config::ServerToolsConfig,
+    pub server_tools: crate::model_call::server_tools::config::ServerToolsConfig,
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bro agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::transport::AcpAgentConfig>,

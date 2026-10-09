@@ -6,10 +6,14 @@ use bitrouter_ai::types::{
     ApiProtocol, FinishReason, GenerationParams, Message, Prompt, Role, StreamPart, Usage,
 };
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    MockExecutor, MockResponse, PipelineBuilder, PipelineContext, PipelineRequest, PreRequestHook,
-    RoutingTarget, StaticRoutingTable,
-};
+use bitrouter_sdk::model_call::builder::PipelineBuilder;
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::executor::MockExecutor;
+use bitrouter_sdk::model_call::executor::MockResponse;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
+use bitrouter_sdk::model_call::routing::StaticRoutingTable;
+use bitrouter_sdk::model_call::types::PipelineRequest;
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use futures::StreamExt;
 
 use crate::hooks::{DepositRulesHook, GuardrailPreHook, GuardrailStreamHook};
@@ -57,7 +61,7 @@ async fn pre_hook_allows_clean_request() {
     let mut c = ctx_with_rules("a perfectly normal question");
     assert!(matches!(
         hook.check(&mut c).await.unwrap(),
-        bitrouter_sdk::language_model::HookDecision::Allow
+        bitrouter_sdk::model_call::hooks::HookDecision::Allow
     ));
 }
 
@@ -68,7 +72,7 @@ async fn pre_hook_allows_when_no_rules_deposited() {
     let mut c = ctx("please do the FORBIDDEN thing");
     assert!(matches!(
         hook.check(&mut c).await.unwrap(),
-        bitrouter_sdk::language_model::HookDecision::Allow
+        bitrouter_sdk::model_call::hooks::HookDecision::Allow
     ));
 }
 
@@ -77,11 +81,11 @@ async fn pre_hook_blocks_forbidden_request() {
     let hook = GuardrailPreHook::new();
     let mut c = ctx_with_rules("please do the FORBIDDEN thing");
     match hook.check(&mut c).await.unwrap() {
-        bitrouter_sdk::language_model::HookDecision::Deny(reason) => {
+        bitrouter_sdk::model_call::hooks::HookDecision::Deny(reason) => {
             let err: bitrouter_sdk::BitrouterError = reason.into();
             assert_eq!(err.status(), 400);
         }
-        bitrouter_sdk::language_model::HookDecision::Allow => {
+        bitrouter_sdk::model_call::hooks::HookDecision::Allow => {
             panic!("forbidden request must be blocked")
         }
     }

@@ -7,8 +7,9 @@ use anyhow::{Context, Result};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::routing::ModelInfo;
-use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
+use bitrouter_sdk::model_call::routing::ModelInfo;
+use bitrouter_sdk::model_call::routing::RoutingPrefs;
+use bitrouter_sdk::model_call::routing::RoutingTable;
 
 use crate::actions::skills::SkillsReport;
 use crate::auth::{NewApiKey, db as auth_db, generate};

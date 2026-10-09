@@ -106,7 +106,7 @@ pub enum SamplerKind {
 /// (tokens, model, latency, finish reason, cloud-forwarded attributes) is
 /// exported. `Full` serializes the prompt messages onto `gen_ai.input.messages`
 /// and the response content onto `gen_ai.output.messages`. Redaction is a
-/// caller policy, not done here; downstream pipelines decide whether to forward
+/// caller policy, not done here; downstream pipelines classify whether to forward
 /// the content (e.g. a collector that strips it from a third-party export).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]

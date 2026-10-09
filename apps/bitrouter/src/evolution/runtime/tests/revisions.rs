@@ -21,7 +21,7 @@ async fn assembled_revision_serves_pinned_routes_and_withdraws_inherited_adoptio
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&old, "old-request", "coding")?)

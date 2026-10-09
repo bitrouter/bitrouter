@@ -50,6 +50,8 @@ pub struct CloudUsageRecord {
     pub usage_origin: UsageOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_usage: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
     pub final_charge_micro_usd: Option<u64>,
     #[serde(default)]
     pub charge_status: ChargeStatus,
@@ -66,6 +68,8 @@ pub struct CloudUsageRecord {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CloudUsageSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
     pub request_count: usize,
     pub settled_request_count: usize,
     pub prompt_tokens: u64,
@@ -83,6 +87,8 @@ pub struct CloudUsageSummary {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CloudUsageModelSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
     pub request_count: usize,
     pub settled_request_count: usize,
     pub prompt_tokens: u64,
@@ -298,6 +304,10 @@ impl CloudUsageSummary {
             ..Self::default()
         };
         for record in records {
+            merge_usage_availability(
+                &mut summary.usage_availability,
+                record.usage_availability.as_ref(),
+            );
             summary.prompt_tokens += record.prompt_tokens;
             summary.completion_tokens += record.completion_tokens;
             summary.reasoning_tokens += record.reasoning_tokens;
@@ -314,6 +324,10 @@ impl CloudUsageSummary {
 
             let key = format!("{}/{}", record.provider_id, record.model_id);
             let model = summary.by_model_provider.entry(key).or_default();
+            merge_usage_availability(
+                &mut model.usage_availability,
+                record.usage_availability.as_ref(),
+            );
             model.request_count += 1;
             model.prompt_tokens += record.prompt_tokens;
             model.completion_tokens += record.completion_tokens;
@@ -334,6 +348,22 @@ impl CloudUsageSummary {
             model.final_charge_usd = micro_usd_to_usd(model.final_charge_micro_usd);
         }
         summary
+    }
+}
+
+fn merge_usage_availability(
+    aggregate: &mut Option<bitrouter_ai::types::UsageAvailability>,
+    report: Option<&bitrouter_ai::types::UsageAvailability>,
+) {
+    if let Some(report) = report {
+        if let Some(aggregate) = aggregate {
+            aggregate.cache_read &= report.cache_read;
+            aggregate.cache_write &= report.cache_write;
+            aggregate.reasoning &= report.reasoning;
+            aggregate.reported_total &= report.reported_total;
+        } else {
+            *aggregate = Some(report.clone());
+        }
     }
 }
 
@@ -850,6 +880,48 @@ fn validate_usage_evidence(record: &CloudUsageRecord, request_id: &str) -> Resul
             "benchmark integrity: usage {request_id} charge does not match effective rates"
         )));
     }
+    if let Some(input_tokens) = evidence.billable_input_tokens {
+        let raw = record
+            .raw_usage
+            .as_ref()
+            .ok_or_else(|| BitrouterError::bad_request("missing classifier usage"))?;
+        let valid = record
+            .usage_availability
+            .as_ref()
+            .is_some_and(|availability| {
+                !availability.cache_read
+                    && !availability.cache_write
+                    && !availability.reasoning
+                    && !availability.reported_total
+            })
+            && evidence.usage_availability == record.usage_availability
+            && input_tokens == record.prompt_tokens
+            && raw.get("input_tokens").and_then(serde_json::Value::as_u64)
+                == Some(record.prompt_tokens)
+            && raw.get("output_tokens").and_then(serde_json::Value::as_u64)
+                == Some(record.completion_tokens)
+            && evidence.normalized_usage == bitrouter_ai::types::NormalizedUsage::default()
+            && [
+                record.uncached_input_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                record.output_tokens,
+                record.reasoning_tokens,
+            ]
+            .into_iter()
+            .all(|tokens| tokens == 0)
+            && evidence.tariff_snapshot.as_ref().is_some_and(|tariff| {
+                tariff.protocol == bitrouter_ai::types::ApiProtocol::SystemOne
+                    && tariff.billing_basis == "systemone-total-input-v1"
+                    && tariff.unavailable_reason.is_none()
+            });
+        if !valid {
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: usage {request_id} has inconsistent total-input evidence"
+            )));
+        }
+        return Ok(());
+    }
     let normalized = &evidence.normalized_usage;
     if normalized.uncached_input_tokens != record.uncached_input_tokens
         || normalized.cache_read_tokens != record.cache_read_tokens
@@ -920,8 +992,15 @@ fn validate_authoritative_receipt(
 }
 
 fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
-    calculate_normalized_charge_micro_usd(&evidence.normalized_usage, &evidence.effective_rates)
-        .ok()
+    let normalized = if let Some(tokens) = evidence.billable_input_tokens {
+        bitrouter_ai::types::NormalizedUsage {
+            uncached_input_tokens: tokens,
+            ..Default::default()
+        }
+    } else {
+        evidence.normalized_usage
+    };
+    calculate_normalized_charge_micro_usd(&normalized, &evidence.effective_rates).ok()
 }
 
 fn valid_pricing_version(version: &str) -> bool {
@@ -1170,4 +1249,90 @@ fn target_transition_option(
 
 fn micro_usd_to_usd(value: u64) -> f64 {
     value as f64 / 1_000_000.0
+}
+
+#[cfg(test)]
+mod classifier_usage_tests {
+    use super::{CloudUsageRecord, CloudUsageSummary, validate_usage_evidence};
+    use crate::metering::ChargeStatus;
+    use crate::metering::pricing::{ModelPricing, PricingSource, pricing_version};
+    use crate::metering::tariff::FrozenTariff;
+    use bitrouter_ai::protocol::systemone::SystemOneCodec;
+    use bitrouter_ai::types::{ApiProtocol, UsageOrigin};
+    use serde_json::json;
+
+    #[test]
+    fn classifier_input_only_evidence_validates_without_inventing_buckets() -> anyhow::Result<()> {
+        let request = SystemOneCodec::parse_request(
+            json!({"model":"test","state":"evidence","questions":{"q":{"type":"noul","instructions":"Check?"}}}),
+        )?;
+        let result = SystemOneCodec::parse_response(
+            json!({"model":"test","answers":{"q":{"type":"noul","noul":0.8}},"usage":{"input_tokens":100,"output_tokens":12}}),
+            &request,
+        )?;
+        let pricing = ModelPricing::cache_aware(Some(0.042), Some(0.0), Some(0.0), Some(0.0));
+        let tariff = FrozenTariff {
+            protocol: ApiProtocol::SystemOne,
+            endpoint_profile: "fixture".into(),
+            tariff_profile: Some("fixture".into()),
+            pricing_version: pricing_version(&pricing),
+            pricing: Some(pricing),
+            billing_basis: "systemone-total-input-v1".into(),
+            unavailable_reason: None,
+        };
+        let evidence = tariff.charge_evidence(&result.usage, PricingSource::Configured);
+        let record: CloudUsageRecord = serde_json::from_value(
+            json!({"request_id":"classifier","provider_id":"fixture","model_id":"test",
+            "prompt_tokens":100,"completion_tokens":12,"raw_usage":result.usage.raw,"usage_availability":result.usage.availability,
+            "usage_origin":UsageOrigin::ProviderReported,"final_charge_micro_usd":4,"charge_status":ChargeStatus::Computed,
+            "charge_evidence":evidence}),
+        )?;
+        validate_usage_evidence(&record, "classifier")?;
+        let legacy = CloudUsageRecord {
+            model_id: "generation".into(),
+            usage_availability: None,
+            ..record.clone()
+        };
+        let summary = CloudUsageSummary::from_records(&[legacy, record.clone()]);
+        assert_eq!(summary.usage_availability, record.usage_availability);
+        assert_eq!(
+            summary
+                .by_model_provider
+                .get("fixture/test")
+                .and_then(|model| model.usage_availability.as_ref()),
+            record.usage_availability.as_ref()
+        );
+        assert!(
+            summary
+                .by_model_provider
+                .get("fixture/generation")
+                .is_some_and(|model| model.usage_availability.is_none())
+        );
+        let mut without_mask = record.clone();
+        without_mask.usage_availability = None;
+        let mut changed_total = record.clone();
+        changed_total.prompt_tokens = 101;
+        let mut changed_raw = record.clone();
+        changed_raw.raw_usage = Some(json!({"input_tokens":99,"output_tokens":12}));
+        let mut invented_bucket = record.clone();
+        invented_bucket.cache_read_tokens = 1;
+        let mut changed_wire = record.clone();
+        if let Some(tariff) = changed_wire
+            .charge_evidence
+            .as_mut()
+            .and_then(|evidence| evidence.tariff_snapshot.as_mut())
+        {
+            tariff.protocol = ApiProtocol::Decisions;
+        }
+        for invalid in [
+            without_mask,
+            changed_total,
+            changed_raw,
+            invented_bucket,
+            changed_wire,
+        ] {
+            assert!(validate_usage_evidence(&invalid, "classifier").is_err());
+        }
+        Ok(())
+    }
 }

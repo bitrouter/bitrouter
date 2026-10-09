@@ -7,7 +7,7 @@ use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 use bitrouter_sdk::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::Config;
-use bitrouter_sdk::language_model::PipelineRequest;
+use bitrouter_sdk::model_call::types::PipelineRequest;
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -291,7 +291,7 @@ async fn operator_restore_changes_actual_dispatch_for_existing_and_new_sessions_
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&identity, "adopted-request", "coding")?)
@@ -356,7 +356,7 @@ async fn assembled_requests_apply_sticky_arms_and_record_actual_execution_once()
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&identity, "request-1", "coding")?)
@@ -434,7 +434,7 @@ async fn named_candidate_keeps_preset_defaults_and_tool_safety_selection() -> Re
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     let plain = session(&fixture, "plain", "fixture").await?;
     pipeline
@@ -498,7 +498,7 @@ async fn fallback_cost_is_unknown_even_when_the_final_attempt_was_priced() -> Re
     fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?
         .execute(request(&identity, "fallback-request", "fallback")?)
         .await?;

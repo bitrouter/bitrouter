@@ -195,7 +195,7 @@ const CELL_PAD: f64 = 10.0;
 const COUNT_W: f64 = 34.0;
 const LABEL_PAD: f64 = 8.0;
 const FONT_SIZE: f64 = 11.0;
-/// Monospace advance width at `FONT_SIZE`, used only to decide truncation.
+/// Monospace advance width at `FONT_SIZE`, used only to classify truncation.
 const CHAR_W: f64 = 6.6;
 
 fn column_width() -> f64 {

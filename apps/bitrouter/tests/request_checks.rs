@@ -58,11 +58,7 @@ async fn assemble(config: &config::Config, capture: &Capture) -> Result<bitroute
 
 fn gateway(assembled: &bitrouter::Assembled) -> Result<TestServer> {
     Ok(TestServer::new(build_router(AppState {
-        language_model: assembled
-            .app
-            .language_model()
-            .context("no pipeline")?
-            .clone(),
+        model_call: assembled.app.model_call().context("no pipeline")?.clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
@@ -364,7 +360,7 @@ async fn streaming_success_runs_native_check_before_delivery() -> Result<()> {
     ensure!(response.text().contains("[DONE]"));
     assembled
         .app
-        .language_model()
+        .model_call()
         .context("no pipeline")?
         .drain_required_pending_settlements()
         .await?;

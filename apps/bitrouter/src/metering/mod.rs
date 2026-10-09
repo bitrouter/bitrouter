@@ -35,6 +35,9 @@ mod tests;
 #[cfg(test)]
 mod decisions_tests;
 
+#[cfg(test)]
+mod classifier_live_tests;
+
 pub use db::{ReconciliationStatus, RequestMetric};
 pub use pricing::{
     ChargeEvidence, ChargeStatus, ContextTier, EffectivePricingRates, ModelPricing, PricingSource,

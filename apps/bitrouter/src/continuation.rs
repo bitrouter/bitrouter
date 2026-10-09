@@ -17,16 +17,16 @@ use bitrouter_ai::protocol::responses::{
 };
 use bitrouter_ai::types::{ApiProtocol, Role};
 use bitrouter_sdk::error::{BitrouterError, Result as PipelineResult};
-use bitrouter_sdk::language_model::RoutingTarget;
-use bitrouter_sdk::language_model::context::{
+use bitrouter_sdk::model_call::context::{
     PipelineContext, ProviderContinuation, RequireContinuationAuthority,
     SuppressProviderContinuation,
 };
-use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook, RouteHook};
-use bitrouter_sdk::language_model::settlement::{
+use bitrouter_sdk::model_call::hooks::{HookDecision, PreRequestHook, RouteHook};
+use bitrouter_sdk::model_call::settlement::{
     RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizationReceipt,
     RequiredFinalizer,
 };
+use bitrouter_sdk::model_call::types::RoutingTarget;
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -2695,19 +2695,27 @@ mod tests {
         Role, StreamPart, Tool, ToolResultOutput, Usage,
     };
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::context::{PipelineContext, ProviderContinuation};
-    use bitrouter_sdk::language_model::hooks::{
-        ObserveHook, RequestOutcome, RouteHook, StreamHook,
-    };
-    use bitrouter_sdk::language_model::settlement::{
+    use bitrouter_sdk::model_call::builder::PipelineBuilder;
+    use bitrouter_sdk::model_call::context::StreamContext;
+    use bitrouter_sdk::model_call::context::{PipelineContext, ProviderContinuation};
+    use bitrouter_sdk::model_call::executor::Executor;
+    use bitrouter_sdk::model_call::executor::HttpExecutor;
+    use bitrouter_sdk::model_call::executor::MockExecutor;
+    use bitrouter_sdk::model_call::executor::MockResponse;
+    use bitrouter_sdk::model_call::executor::StreamPartStream;
+    use bitrouter_sdk::model_call::hooks::{ObserveHook, RequestOutcome, RouteHook, StreamHook};
+    use bitrouter_sdk::model_call::pipeline::Pipeline;
+    use bitrouter_sdk::model_call::routing::StaticRoutingTable;
+    use bitrouter_sdk::model_call::settlement::{
         DeliveryAcknowledgement, RequiredFinalizationContext, RequiredFinalizer, SettlementContext,
         SettlementRecorder,
     };
-    use bitrouter_sdk::language_model::{
-        ExecutionResult, Executor, HttpExecutor, MockExecutor, MockResponse, Pipeline,
-        PipelineBuilder, PipelineRequest, RoutingTarget, StaticRoutingTable, StreamAction,
-        StreamContext, StreamInterest, StreamOutcome, StreamPartStream,
-    };
+    use bitrouter_sdk::model_call::stream::StreamAction;
+    use bitrouter_sdk::model_call::stream::StreamInterest;
+    use bitrouter_sdk::model_call::stream::StreamOutcome;
+    use bitrouter_sdk::model_call::types::ExecutionResult;
+    use bitrouter_sdk::model_call::types::PipelineRequest;
+    use bitrouter_sdk::model_call::types::RoutingTarget;
     use bitrouter_sdk::server::{AppState, build_router};
     use chrono::{TimeDelta, TimeZone, Utc};
     use futures::StreamExt;
@@ -2834,7 +2842,7 @@ mod tests {
 
     fn app_state(pipeline: Arc<Pipeline>) -> AppState {
         AppState {
-            language_model: pipeline,
+            model_call: pipeline,
             mcp: None,
             skip_auth: true,
             metrics_renderer: None,
@@ -3787,19 +3795,17 @@ mod tests {
             model: "openai:gpt-5".into(),
             caller: CallerContext::new("key", owner),
             headers: Default::default(),
-            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
-                Prompt {
-                    model: "gpt-5".into(),
-                    system: None,
-                    system_provider_metadata: Default::default(),
-                    messages,
-                    tools: Vec::new(),
-                    params,
-                    response_format: None,
-                    tool_choice: None,
-                    stream: true,
-                },
-            )),
+            input: bitrouter_sdk::model_call::types::PipelineInput::Generation(Box::new(Prompt {
+                model: "gpt-5".into(),
+                system: None,
+                system_provider_metadata: Default::default(),
+                messages,
+                tools: Vec::new(),
+                params,
+                response_format: None,
+                tool_choice: None,
+                stream: true,
+            })),
             inbound_protocol: Some(ApiProtocol::Responses),
         })
     }
@@ -7001,10 +7007,10 @@ mod tests {
     struct SearchTool;
 
     #[async_trait]
-    impl bitrouter_sdk::language_model::server_tools::toolset::RouterToolset for SearchTool {
+    impl bitrouter_sdk::model_call::server_tools::toolset::RouterToolset for SearchTool {
         async fn list_tools(
             &self,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &bitrouter_sdk::model_call::server_tools::toolset::ToolContext,
         ) -> PipelineResult<Vec<Tool>> {
             Ok(vec![Tool::Function {
                 name: "search".into(),
@@ -7019,7 +7025,7 @@ mod tests {
             &self,
             _name: &str,
             _arguments: &str,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &bitrouter_sdk::model_call::server_tools::toolset::ToolContext,
         ) -> PipelineResult<ToolResultOutput> {
             Ok(ToolResultOutput::Text {
                 value: "search-result".into(),
@@ -7034,10 +7040,10 @@ mod tests {
     struct FailingSearchTool;
 
     #[async_trait]
-    impl bitrouter_sdk::language_model::server_tools::toolset::RouterToolset for FailingSearchTool {
+    impl bitrouter_sdk::model_call::server_tools::toolset::RouterToolset for FailingSearchTool {
         async fn list_tools(
             &self,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &bitrouter_sdk::model_call::server_tools::toolset::ToolContext,
         ) -> PipelineResult<Vec<Tool>> {
             Ok(vec![Tool::Function {
                 name: "search".into(),
@@ -7052,7 +7058,7 @@ mod tests {
             &self,
             _name: &str,
             _arguments: &str,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &bitrouter_sdk::model_call::server_tools::toolset::ToolContext,
         ) -> PipelineResult<ToolResultOutput> {
             Err(BitrouterError::internal("synthetic search failure"))
         }
@@ -7080,19 +7086,17 @@ mod tests {
             model: "gpt-5".into(),
             caller: CallerContext::new("key", "tool-owner"),
             headers: Default::default(),
-            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
-                Prompt {
-                    model: "gpt-5".into(),
-                    system: None,
-                    system_provider_metadata: Default::default(),
-                    messages: vec![Message::text(Role::User, "answer with search")],
-                    tools: Vec::new(),
-                    params,
-                    response_format: None,
-                    tool_choice: None,
-                    stream,
-                },
-            )),
+            input: bitrouter_sdk::model_call::types::PipelineInput::Generation(Box::new(Prompt {
+                model: "gpt-5".into(),
+                system: None,
+                system_provider_metadata: Default::default(),
+                messages: vec![Message::text(Role::User, "answer with search")],
+                tools: Vec::new(),
+                params,
+                response_format: None,
+                tool_choice: None,
+                stream,
+            })),
             inbound_protocol: Some(ApiProtocol::Responses),
         }
     }
@@ -7111,8 +7115,8 @@ mod tests {
     fn nonstream_server_tool_pipeline(
         registry: ContinuationRegistry,
         upstream: &MockServer,
-        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
-        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+        config: bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn bitrouter_sdk::model_call::server_tools::toolset::RouterToolset>,
     ) -> anyhow::Result<Arc<Pipeline>> {
         let runtime = ContinuationRuntime::new(registry);
         let mut upstream_target = target("credential");
@@ -7120,12 +7124,10 @@ mod tests {
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![upstream_target]);
         let server_loop = Arc::new(
-            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
-                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
-                    tool,
-                ]),
+            bitrouter_sdk::model_call::server_tools::loop_controller::ServerToolLoop::new(
+                bitrouter_sdk::model_call::server_tools::toolset::ToolsetRegistry::new(vec![tool]),
                 config,
-                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+                Arc::new(bitrouter_sdk::model_call::server_tools::approval::AllowAll),
             ),
         );
         let mut builder = PipelineBuilder::new();
@@ -7276,13 +7278,12 @@ mod tests {
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![upstream_target]);
         let server_loop = Arc::new(
-            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
-                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
+            bitrouter_sdk::model_call::server_tools::loop_controller::ServerToolLoop::new(
+                bitrouter_sdk::model_call::server_tools::toolset::ToolsetRegistry::new(vec![
                     Arc::new(SearchTool),
                 ]),
-                bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig::default(
-                ),
-                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+                bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig::default(),
+                Arc::new(bitrouter_sdk::model_call::server_tools::approval::AllowAll),
             ),
         );
         let mut builder = PipelineBuilder::new();
@@ -7397,8 +7398,8 @@ mod tests {
     async fn assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
         request_id: &str,
         expected_reason: &str,
-        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
-        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+        config: bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn bitrouter_sdk::model_call::server_tools::toolset::RouterToolset>,
     ) -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
         let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
@@ -7470,7 +7471,7 @@ mod tests {
         assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
             "nonstream-max-tool-request",
             "max_tool_iterations",
-            bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+            bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig {
                 max_iterations: 0,
                 ..Default::default()
             },
@@ -7485,7 +7486,7 @@ mod tests {
         assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
             "nonstream-tool-error-request",
             "tool_errors",
-            bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+            bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig {
                 max_consecutive_errors: 1,
                 ..Default::default()
             },
@@ -7497,8 +7498,8 @@ mod tests {
     async fn assert_synthetic_server_tool_terminal_is_not_resumable(
         request_id: &str,
         expected_reason: &str,
-        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
-        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+        config: bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn bitrouter_sdk::model_call::server_tools::toolset::RouterToolset>,
     ) -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
         let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
@@ -7515,12 +7516,10 @@ mod tests {
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![upstream_target]);
         let server_loop = Arc::new(
-            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
-                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
-                    tool,
-                ]),
+            bitrouter_sdk::model_call::server_tools::loop_controller::ServerToolLoop::new(
+                bitrouter_sdk::model_call::server_tools::toolset::ToolsetRegistry::new(vec![tool]),
                 config,
-                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+                Arc::new(bitrouter_sdk::model_call::server_tools::approval::AllowAll),
             ),
         );
         let mut builder = PipelineBuilder::new();
@@ -7574,7 +7573,7 @@ mod tests {
     #[tokio::test]
     async fn max_tool_iterations_does_not_publish_intermediate_continuation() -> anyhow::Result<()>
     {
-        let config = bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+        let config = bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig {
             max_iterations: 0,
             ..Default::default()
         };
@@ -7589,7 +7588,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_errors_do_not_publish_intermediate_continuation() -> anyhow::Result<()> {
-        let config = bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+        let config = bitrouter_sdk::model_call::server_tools::config::ServerToolLoopConfig {
             max_consecutive_errors: 1,
             ..Default::default()
         };
@@ -8574,7 +8573,7 @@ mod tests {
     impl ObserveHook for MaliciousTraceHeaderObserver {
         async fn after_phase(
             &self,
-            _phase: bitrouter_sdk::language_model::Phase,
+            _phase: bitrouter_sdk::model_call::hooks::Phase,
             _ctx: &PipelineContext,
         ) {
         }
@@ -8616,7 +8615,7 @@ mod tests {
     impl ObserveHook for OutcomeObserver {
         async fn after_phase(
             &self,
-            _phase: bitrouter_sdk::language_model::Phase,
+            _phase: bitrouter_sdk::model_call::hooks::Phase,
             _ctx: &PipelineContext,
         ) {
         }

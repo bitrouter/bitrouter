@@ -7,10 +7,11 @@ use crate::auth::entities::api_keys;
 
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
-};
 use bitrouter_sdk::mcp::{McpContext, McpRequest};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
+use bitrouter_sdk::model_call::types::PipelineRequest;
 
 use crate::auth::db::{self, NewApiKey};
 use crate::auth::events::{ApiPrincipalEstablished, Authenticated};

@@ -41,7 +41,7 @@ async fn priced_gateway_requests_complete_a_stopped_prefix_and_exclude_later_wor
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&identity, "first", "coding")?)
@@ -118,7 +118,7 @@ async fn post_stop_calls_extend_own_resources_without_changing_content() -> Resu
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&identity, "main", "coding")?)
@@ -231,7 +231,7 @@ async fn fork_resources_union_inherited_requests_and_exclude_later_parent_work()
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&parent, "parent-before-fork", "coding")?)
@@ -318,7 +318,7 @@ async fn unresolved_requests_are_retained_and_known_other_sessions_are_excluded(
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&other, "other-request", "coding")?)
@@ -391,7 +391,7 @@ async fn unresolved_post_stop_calls_stay_unknown_only_through_their_native_inter
     let pipeline = fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?;
     pipeline
         .execute(request(&identity, "known", "coding")?)
@@ -468,7 +468,7 @@ async fn missing_handshake_disables_new_trials_and_cannot_be_repaired_retroactiv
     fixture
         .assembled
         .app
-        .language_model()
+        .model_call()
         .context("pipeline missing")?
         .execute(request(&identity, "legacy-request", "coding")?)
         .await?;

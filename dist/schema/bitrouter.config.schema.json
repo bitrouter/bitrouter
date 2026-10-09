@@ -181,12 +181,13 @@
       "type": "object"
     },
     "ApiProtocol": {
-      "description": "Wire protocol. Known values: `chat_completions`, `messages`, `responses`, `decisions`; any other string names an externally-registered (outbound-only) custom protocol.",
+      "description": "Wire protocol. Known values: `chat_completions`, `messages`, `responses`, `decisions`, `systemone`; any other string names an externally-registered (outbound-only) custom protocol.",
       "examples": [
         "chat_completions",
         "messages",
         "responses",
-        "decisions"
+        "decisions",
+        "systemone"
       ],
       "type": "string"
     },

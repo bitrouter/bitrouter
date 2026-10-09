@@ -423,8 +423,8 @@ fn answer_with(prompt: &Prompt, outcome: RequestPermissionOutcome) -> Effect {
 /// id, run by the same driver — which is what makes a headless run answer the
 /// agent exactly as the terminal would have. The decision returned is the one
 /// the agent heard (see [`Prompt::answer`]).
-pub fn decide(policy: &Policy, prompt: &Prompt) -> (Decision, Effect) {
-    let (decision, outcome) = prompt.answer(policy.decide(prompt));
+pub fn classify(policy: &Policy, prompt: &Prompt) -> (Decision, Effect) {
+    let (decision, outcome) = prompt.answer(policy.classify(prompt));
     (decision, answer_with(prompt, outcome))
 }
 
@@ -1712,11 +1712,11 @@ mod tests {
             mode: Mode::ApproveAll,
             ..Policy::default()
         };
-        let (decision, effect) = decide(&approve, &prompt);
+        let (decision, effect) = classify(&approve, &prompt);
         assert_eq!(decision, Decision::Approve);
         assert_eq!(answered_with(&[effect], "r1").as_deref(), Some("allow"));
 
-        let (decision, effect) = decide(&Policy::default(), &prompt);
+        let (decision, effect) = classify(&Policy::default(), &prompt);
         assert_eq!(decision, Decision::Deny);
         assert_eq!(answered_with(&[effect], "r1").as_deref(), Some("no"));
     }
@@ -1739,12 +1739,12 @@ mod tests {
             None,
             vec![option("no", PermissionOptionKind::RejectOnce)],
         );
-        let (decision, effect) = decide(&approve, &reject_only);
+        let (decision, effect) = classify(&approve, &reject_only);
         assert_eq!(decision, Decision::Deny);
         assert_eq!(answered_with(&[effect], "r1").as_deref(), Some("no"));
 
         let nothing = Prompt::new("r2", None, "t2", None, Vec::new());
-        let (decision, effect) = decide(&approve, &nothing);
+        let (decision, effect) = classify(&approve, &nothing);
         assert_eq!(decision, Decision::Deny);
         assert!(matches!(
             effect,

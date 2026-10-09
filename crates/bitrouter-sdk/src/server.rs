@@ -1,10 +1,11 @@
 //! axum HTTP server — gated behind the `server` feature.
 //!
-//! Wires generation and Decisions inbound protocols to the `language_model` pipeline:
+//! Wires generation and classifier inbound protocols to the `model_call` pipeline:
 //! - `POST /v1/messages` — Messages
 //! - `POST /v1/chat/completions` — Chat Completions
 //! - `POST /v1/responses` — Responses
-//! - `POST /v1/decisions` — native Decisions
+//! - `POST /v1/decisions` — Decisions
+//! - `POST /v1/systemone` — System One
 //!
 //! Each handler parses the inbound body with that protocol's adapter, runs the
 //! pipeline, and renders the result back in the **same** inbound protocol —
@@ -16,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -27,12 +28,12 @@ use futures::StreamExt;
 use crate::app::App;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
-use crate::language_model::Pipeline;
-use crate::language_model::stream::SseKeepaliveStream;
-use crate::language_model::types::{PipelineInput, PipelineRequest};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
-use bitrouter_ai::protocol::decisions::DecisionsCodec;
+use crate::model_call::pipeline::Pipeline;
+use crate::model_call::stream::SseKeepaliveStream;
+use crate::model_call::types::{PipelineInput, PipelineRequest};
+use bitrouter_ai::protocol::classifier::{codec_for, parse_request_json};
 use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
 use bitrouter_ai::protocol::{inbound_adapter_for, sanitize_model_name};
 use bitrouter_ai::stream::SseFrame;
@@ -44,8 +45,8 @@ const REQUIRED_SHUTDOWN_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// Shared axum state.
 #[derive(Clone)]
 pub struct AppState {
-    /// The `language_model` pipeline.
-    pub language_model: Arc<Pipeline>,
+    /// The `model_call` pipeline.
+    pub model_call: Arc<Pipeline>,
     /// Optional `mcp` pipeline — `POST /mcp/{name}` is mounted only when set.
     pub mcp: Option<Arc<mcp::Pipeline>>,
     /// SDK-level `skip_auth`: when `true`, a credential-less request is given a
@@ -148,13 +149,13 @@ impl App {
         S: Future<Output = ()> + Send + 'static,
     {
         let pipeline = self
-            .language_model()
+            .model_call()
             .ok_or_else(|| {
-                BitrouterError::internal("App::serve: no language_model pipeline configured")
+                BitrouterError::internal("App::serve: no model_call pipeline configured")
             })?
             .clone();
         let state = AppState {
-            language_model: pipeline.clone(),
+            model_call: pipeline.clone(),
             mcp: self.mcp().cloned(),
             skip_auth: self.skip_auth(),
             metrics_renderer: self.metrics_renderer().cloned(),
@@ -303,7 +304,8 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/v1/messages", post(messages))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(responses))
-        .route("/v1/decisions", post(decisions));
+        .route("/v1/decisions", post(decisions))
+        .route("/v1/systemone", post(systemone));
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
     }
@@ -1256,10 +1258,21 @@ fn mcp_error_response_with_data(
 }
 
 async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let models = state.language_model.routing_table().list_models();
+    let models = state.model_call.routing_table().list_models();
     let data: Vec<_> = models
         .into_iter()
-        .map(|m| serde_json::json!({ "id": m.id, "object": "model", "providers": m.providers }))
+        .filter_map(|mut model| {
+            let declared = !model.operations.is_empty();
+            model.operations.retain(|operation| state.model_call.supports_operation(*operation));
+            model.api_protocols.retain(|protocol| state.model_call.supports_operation(protocol.operation()));
+            if declared && model.operations.is_empty() { return None; }
+            let mut value = serde_json::json!({ "id": model.id, "object": "model", "providers": model.providers });
+            if !model.operations.is_empty() {
+                value["operations"] = serde_json::json!(model.operations);
+                value["api_protocols"] = serde_json::json!(model.api_protocols);
+            }
+            Some(value)
+        })
         .collect();
     let mut body = serde_json::json!({ "object": "list", "data": data });
     if is_codex_user_agent(&headers)
@@ -1304,12 +1317,50 @@ async fn responses(
     handle(state, headers, ApiProtocol::Responses, body).await
 }
 
-async fn decisions(
-    State(state): State<AppState>,
+async fn decisions(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    classifier_handle(state, headers, ApiProtocol::Decisions, body).await
+}
+
+async fn systemone(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    classifier_handle(state, headers, ApiProtocol::SystemOne, body).await
+}
+
+async fn classifier_handle(
+    state: AppState,
     headers: HeaderMap,
-    Json(body): Json<serde_json::Value>,
+    inbound: ApiProtocol,
+    body: Bytes,
 ) -> Response {
-    handle(state, headers, ApiProtocol::Decisions, body).await
+    let json_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            let mime = value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            mime == "application/json"
+                || (mime.starts_with("application/") && mime.ends_with("+json"))
+        });
+    if !json_type {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    }
+    match parse_request_json(&inbound, &body) {
+        Ok(request) => {
+            // Preserve the native body for the shared handler, whose codec owns
+            // the canonical mapping. Parsing here also enforces unique members.
+            let native = codec_for(&inbound)
+                .ok_or_else(|| BitrouterError::bad_request("unsupported classifier protocol"))
+                .and_then(|codec| codec.render_request(&request).map_err(BitrouterError::from));
+            match native {
+                Ok(body) => handle(state, headers, inbound, body).await,
+                Err(error) => error.into_response(),
+            }
+        }
+        Err(error) => BitrouterError::from(error).into_response(),
+    }
 }
 
 /// Shared handler: parse with the inbound adapter, run the pipeline, render the
@@ -1330,7 +1381,7 @@ async fn handle(
     {
         return BitrouterError::from(error).into_response();
     }
-    let adapter = if inbound == ApiProtocol::Decisions {
+    let adapter = if inbound.operation() == bitrouter_ai::types::ModelOperation::Classification {
         None
     } else {
         match inbound_adapter_for(&inbound) {
@@ -1354,11 +1405,14 @@ async fn handle(
             Err(error) => return error.into_response(),
         }
     } else {
-        match DecisionsCodec::parse_request(body).map_err(BitrouterError::from) {
+        match codec_for(&inbound)
+            .ok_or_else(|| BitrouterError::bad_request("unsupported classifier protocol"))
+            .and_then(|codec| codec.parse_request(body).map_err(BitrouterError::from))
+        {
             Ok(mut request) => {
                 request.model = sanitize_model_name(&request.model);
                 let original_model = request.model.clone();
-                (PipelineInput::Decisions(request), original_model)
+                (PipelineInput::Classification(request), original_model)
             }
             Err(error) => return error.into_response(),
         }
@@ -1388,8 +1442,8 @@ async fn handle(
         PipelineInput::Generation(prompt) => {
             PipelineRequest::new(prompt.model.clone(), caller, prompt.as_ref().clone())
         }
-        PipelineInput::Decisions(request) => {
-            PipelineRequest::new_decisions(request.model.clone(), caller, request.clone())
+        PipelineInput::Classification(request) => {
+            PipelineRequest::new_classification(request.model.clone(), caller, request.clone())
         }
     };
     req.request_id = request_id.clone();
@@ -1404,14 +1458,14 @@ async fn handle(
         .generation_prompt()
         .is_some_and(|prompt| prompt.stream)
     {
-        stream_response(state.language_model.clone(), req, inbound.clone()).await
+        stream_response(state.model_call.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
         // completion and settle even if the client disconnects (axum drops this
         // handler future on disconnect). The upstream bills us for the accepted
         // request regardless, so the customer must be billed too.
         match state
-            .language_model
+            .model_call
             .clone()
             .execute_detached_prepared(req)
             .await
@@ -1441,15 +1495,19 @@ async fn handle(
                                     .map_err(BitrouterError::from)
                             })
                     }
-                    PipelineInput::Decisions(request) => prepared
+                    PipelineInput::Classification(request) => prepared
                         .response
                         .result
-                        .decisions()
+                        .classification()
                         .ok_or_else(|| {
                             BitrouterError::internal("Decisions endpoint result operation mismatch")
                         })
                         .and_then(|result| {
-                            DecisionsCodec::render_response(result, request)
+                            codec_for(&inbound)
+                                .ok_or_else(|| {
+                                    BitrouterError::bad_request("unsupported classifier protocol")
+                                })?
+                                .render_response(result, request)
                                 .map_err(BitrouterError::from)
                         }),
                 };
@@ -1540,7 +1598,7 @@ async fn stream_response(
         while let Some(item) = parts.next().await {
             match item {
                 Ok(prepared) => {
-                    let crate::language_model::pipeline::PreparedStreamPart {
+                    let crate::model_call::pipeline::PreparedStreamPart {
                         part,
                         mut delivery,
                     } = prepared;
@@ -1790,13 +1848,15 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
 mod tests {
     use super::*;
     use crate::PromptTransform;
-    use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
-    use crate::language_model::routing::StaticRoutingTable;
-    use crate::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
-    use crate::language_model::types::{ExecutionResult, RoutingTarget};
-    use crate::language_model::{
-        HookDecision, PipelineBuilder, PipelineContext, PreRequestHook, StreamPartStream,
-    };
+    use crate::model_call::builder::PipelineBuilder;
+    use crate::model_call::context::PipelineContext;
+    use crate::model_call::executor::StreamPartStream;
+    use crate::model_call::executor::{Executor, MockExecutor, MockResponse};
+    use crate::model_call::hooks::HookDecision;
+    use crate::model_call::hooks::PreRequestHook;
+    use crate::model_call::routing::StaticRoutingTable;
+    use crate::model_call::settlement::{RequiredFinalizationContext, RequiredFinalizer};
+    use crate::model_call::types::{ExecutionResult, RoutingTarget};
     use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::{Request, header};
@@ -2107,16 +2167,16 @@ mod tests {
         builder.routing_table(Arc::new(table)).executor(executor);
         if enable_server_tools {
             builder.server_tool_loop(Arc::new(
-                crate::language_model::server_tools::loop_controller::ServerToolLoop::new(
-                    crate::language_model::server_tools::toolset::ToolsetRegistry::new(Vec::new()),
-                    crate::language_model::server_tools::config::ServerToolLoopConfig::default(),
-                    Arc::new(crate::language_model::server_tools::approval::AllowAll),
+                crate::model_call::server_tools::loop_controller::ServerToolLoop::new(
+                    crate::model_call::server_tools::toolset::ToolsetRegistry::new(Vec::new()),
+                    crate::model_call::server_tools::config::ServerToolLoopConfig::default(),
+                    Arc::new(crate::model_call::server_tools::approval::AllowAll),
                 ),
             ));
         }
         let pipeline = builder.build().unwrap();
         AppState {
-            language_model: Arc::new(pipeline),
+            model_call: Arc::new(pipeline),
             mcp: None,
             skip_auth: true,
             metrics_renderer: None,
@@ -2154,7 +2214,7 @@ mod tests {
             .executor(Arc::new(MockExecutor::always_text("ok")))
             .pre_request_hook(RecordModelIntent(Arc::clone(&observed)));
         let state = AppState {
-            language_model: Arc::new(builder.build().unwrap()),
+            model_call: Arc::new(builder.build().unwrap()),
             mcp: None,
             skip_auth: true,
             metrics_renderer: None,
@@ -2735,7 +2795,7 @@ mod tests {
             recovered: recovered.clone(),
         };
         let app = App::builder()
-            .language_model(move |builder| {
+            .model_call(move |builder| {
                 builder
                     .routing_table(Arc::new(StaticRoutingTable::new()))
                     .executor(Arc::new(MockExecutor::always_text("unused")))

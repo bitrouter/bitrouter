@@ -1719,6 +1719,7 @@ pub(crate) fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         web_search_count: 0,
         origin: UsageOrigin::ProviderReported,
         raw: Some(Box::new(value.clone())),
+        availability: None,
     })
 }
 

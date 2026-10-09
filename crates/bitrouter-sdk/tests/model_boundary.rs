@@ -6,9 +6,9 @@ use bitrouter_ai::stream::SseFrame;
 use bitrouter_ai::target::CredentialPriority;
 use bitrouter_ai::types::{ApiProtocol, ChatTokenLimitField};
 use bitrouter_sdk::error::BitrouterError;
-use bitrouter_sdk::language_model::hooks::FallbackDecision;
-use bitrouter_sdk::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy};
-use bitrouter_sdk::language_model::types::{OutboundHeaderRule, RoutingTarget};
+use bitrouter_sdk::model_call::hooks::FallbackDecision;
+use bitrouter_sdk::model_call::routing::{DefaultFallbackPolicy, FallbackPolicy};
+use bitrouter_sdk::model_call::types::{OutboundHeaderRule, RoutingTarget};
 
 fn all_protocols() -> [ApiProtocol; 3] {
     [
@@ -102,7 +102,7 @@ fn rate_limit_presentation_survives_all_sse_codecs() -> bitrouter_sdk::Result<()
                 assert!(wire.contains("rate_limit_error"), "{wire}");
             }
             ApiProtocol::Responses => assert!(wire.contains("response.failed"), "{wire}"),
-            ApiProtocol::Decisions | ApiProtocol::Custom(_) => {}
+            ApiProtocol::Decisions | ApiProtocol::SystemOne | ApiProtocol::Custom(_) => {}
         }
     }
     Ok(())

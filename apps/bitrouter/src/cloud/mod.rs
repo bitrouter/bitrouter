@@ -260,7 +260,7 @@ mod tests {
     use bitrouter_ai::auth::AuthApplier;
     use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
     use bitrouter_ai::types::ApiProtocol;
-    use bitrouter_sdk::language_model::types::RoutingTarget;
+    use bitrouter_sdk::model_call::types::RoutingTarget;
     use chrono::{Duration, Utc};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path as wm_path};

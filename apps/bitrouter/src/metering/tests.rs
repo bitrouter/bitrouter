@@ -7,7 +7,8 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
 use bitrouter_sdk::Result;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementRecorder;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -34,7 +35,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: format!("r-{api_key}-{prompt}-{completion}"),
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
-        target: Some(bitrouter_sdk::language_model::types::RoutingTarget {
+        target: Some(bitrouter_sdk::model_call::types::RoutingTarget {
             provider_name: "openai".into(),
             service_id: "gpt-5".into(),
             api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,
@@ -62,6 +63,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         cache_write_tokens: 0,
         usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
         raw_usage: None,
+        usage_availability: None,
         web_search_count: 0,
         media_input_count: 0,
         media_output_count: 0,
@@ -243,13 +245,11 @@ async fn recorder_persists_router_identity_and_leaves_direct_requests_unknown() 
     let recorder = MeteringRecorder::new(store, pricing());
     let mut routed = ctx("router", 3, 2);
     routed.request_id = "routed-request".to_string();
-    routed.emit(
-        bitrouter_sdk::language_model::routing::RouterRequestIdentity {
-            router_id: "coding".to_string(),
-            original_selector: "bitrouter/coding".to_string(),
-            binding_digest: "router-v1:sha256:abc".to_string(),
-        },
-    );
+    routed.emit(bitrouter_sdk::model_call::routing::RouterRequestIdentity {
+        router_id: "coding".to_string(),
+        original_selector: "bitrouter/coding".to_string(),
+        binding_digest: "router-v1:sha256:abc".to_string(),
+    });
     recorder.record(&mut routed).await?;
 
     let mut direct = ctx("direct", 3, 2);

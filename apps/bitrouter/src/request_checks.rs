@@ -7,7 +7,7 @@ use bitrouter_sdk::config::router::MAX_CHECKER_TIMEOUT_MS;
 use bitrouter_sdk::extension::request_check::{
     Decision, Input, Registration, RequestCheckCoverageStatus, validate_revision,
 };
-use bitrouter_sdk::language_model::request_checks::{
+use bitrouter_sdk::model_call::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
 use std::collections::HashMap;

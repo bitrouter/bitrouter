@@ -239,7 +239,7 @@ plugins:
 
     // ── router + axum_test server ──
     let state = AppState {
-        language_model: assembled.app.language_model().unwrap().clone(),
+        model_call: assembled.app.model_call().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
         skip_auth: assembled.app.skip_auth(),
         metrics_renderer: assembled.app.metrics_renderer().cloned(),

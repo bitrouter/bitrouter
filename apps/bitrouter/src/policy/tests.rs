@@ -12,9 +12,10 @@ use crate::policy::store::PolicyStore;
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role, Tool};
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
-};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
+use bitrouter_sdk::model_call::types::PipelineRequest;
 
 #[tokio::test]
 async fn router_authorization_checks_the_requested_selector() -> anyhow::Result<()> {
@@ -43,6 +44,8 @@ async fn router_authorization_checks_the_requested_selector() -> anyhow::Result<
 
 fn test_charge_evidence(charge_micro_usd: i64) -> ChargeEvidence {
     ChargeEvidence {
+        billable_input_tokens: None,
+        usage_availability: None,
         tariff_snapshot: None,
         status: ChargeStatus::Computed,
         charge_micro_usd: Some(charge_micro_usd),
@@ -401,6 +404,8 @@ async fn spend_cap_fails_closed_when_prior_charge_is_unknown() {
             raw_usage: None,
             charge_status: ChargeStatus::Unknown,
             charge_evidence: ChargeEvidence {
+                billable_input_tokens: None,
+                usage_availability: None,
                 tariff_snapshot: None,
                 status: ChargeStatus::Unknown,
                 charge_micro_usd: None,

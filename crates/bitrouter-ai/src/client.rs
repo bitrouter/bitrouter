@@ -13,17 +13,17 @@ use futures_core::Stream;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::{AuthAppliers, AuthOperation, normalize_auth_extension_error};
-use crate::decisions::{DecisionRequest, DecisionResult};
+use crate::classifier::{ClassifierRequest, ClassifierResult};
 use crate::diagnostics::DiagnosticRedactor;
 use crate::error::{ModelError, Result};
-use crate::protocol::decisions::{DecisionsCodec, DecisionsTransport};
+use crate::protocol::classifier::{admission, codec_for, transport_for};
 use crate::protocol::{OutboundAdapter, OutboundDispatch, SseEvent, Transport};
 use crate::target::ModelTarget;
 use crate::types::{ApiProtocol, GenerateResult, ModelOperation, Prompt, StreamPart};
 
 enum SelectedInput<'a> {
     Generation { prompt: &'a Prompt, stream: bool },
-    Decisions(&'a DecisionRequest),
+    Classification(&'a ClassifierRequest),
 }
 
 /// An owned stream of canonical model parts and terminal failures.
@@ -192,11 +192,11 @@ impl ModelClient {
         Ok((body, report))
     }
 
-    /// Render one native decision projection without I/O or changing the source.
-    pub fn render_decision_request(
+    /// Render one selected classifier projection without I/O or changing the source.
+    pub fn render_classifier_request(
         &self,
         target: &ModelTarget,
-        request: &DecisionRequest,
+        request: &ClassifierRequest,
     ) -> Result<serde_json::Value> {
         if let Some(message) =
             crate::providers::retired::protocol_message(target.api_protocol.as_str())
@@ -204,26 +204,28 @@ impl ModelClient {
         {
             return Err(ModelError::configuration(message));
         }
-        if target.api_protocol != ApiProtocol::Decisions {
-            return Err(ModelError::invalid_request(
-                "Decisions requires a Decisions protocol",
-            ));
-        }
+        admission(&target.api_protocol, request).require_admitted()?;
         let mut projection = request.clone();
         projection.model.clone_from(&target.service_id);
-        DecisionsCodec::render_request(&projection)
+        codec_for(&target.api_protocol)
+            .ok_or_else(|| ModelError::invalid_request("target does not support Classification"))?
+            .render_request(&projection)
     }
 
-    /// Invoke one selected native Decisions target with shared authentication/I/O.
-    pub async fn decide(
+    /// Invoke one selected classifier target with shared authentication/I/O.
+    pub async fn classify(
         &self,
         target: &ModelTarget,
-        request: &DecisionRequest,
+        request: &ClassifierRequest,
         cancellation: &CancellationToken,
-    ) -> Result<DecisionResult> {
-        self.render_decision_request(target, request)?;
+    ) -> Result<ClassifierResult> {
+        self.render_classifier_request(target, request)?;
         let (response, redactor) = self
-            .send_selected(target, &SelectedInput::Decisions(request), cancellation)
+            .send_selected(
+                target,
+                &SelectedInput::Classification(request),
+                cancellation,
+            )
             .await?;
         let status = response.status();
         let retry_after = parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
@@ -237,21 +239,17 @@ impl ModelClient {
                 retry_after,
             }));
         }
-        Self::parse_decision_response(&text, request).map_err(|error| redactor.scrub_error(error))
+        Self::parse_classifier_response(&target.api_protocol, &text, request)
+            .map_err(|error| redactor.scrub_error(error))
     }
 
     /// Decode a completed native response, retaining usable usage on failure.
-    pub fn parse_decision_response(
+    pub fn parse_classifier_response(
+        protocol: &ApiProtocol,
         text: &str,
-        request: &DecisionRequest,
-    ) -> Result<DecisionResult> {
-        let body = serde_json::from_str(text).map_err(|_| ModelError::DecisionResponse {
-            failure: crate::decisions::DecisionResponseFailure {
-                message: "invalid Decisions response JSON".into(),
-                usage: None,
-            },
-        })?;
-        DecisionsCodec::parse_response(body, request)
+        request: &ClassifierRequest,
+    ) -> Result<ClassifierResult> {
+        crate::protocol::classifier::parse_response_json(protocol, text.as_bytes(), request)
     }
 
     /// Build one JSON POST with the selected overall request deadline.
@@ -560,9 +558,11 @@ impl ModelClient {
                     .ok_or_else(|| ModelError::configuration("selected protocol disappeared"))?;
                 (body, transport.as_ref(), *stream)
             }
-            SelectedInput::Decisions(request) => (
-                self.render_decision_request(target, request)?,
-                &DecisionsTransport,
+            SelectedInput::Classification(request) => (
+                self.render_classifier_request(target, request)?,
+                transport_for(&target.api_protocol).ok_or_else(|| {
+                    ModelError::invalid_request("target does not support Classification")
+                })?,
                 false,
             ),
         };
@@ -574,8 +574,12 @@ impl ModelClient {
                     normalize_auth_extension_error(error, AuthOperation::BodyPreparation)
                 })?;
         }
-        if matches!(input, SelectedInput::Decisions(_)) {
-            DecisionsCodec::parse_request(body.clone())?;
+        if matches!(input, SelectedInput::Classification(_)) {
+            codec_for(&target.api_protocol)
+                .ok_or_else(|| {
+                    ModelError::invalid_request("target does not support Classification")
+                })?
+                .parse_request(body.clone())?;
         }
         let request = self.build_request(&transport.endpoint_url(target, stream), &body)?;
         let request = if let Some(applier) = applier {

@@ -2,9 +2,9 @@ use super::*;
 use bitrouter_ai::types::ToolChoice;
 use bitrouter_sdk::app::App;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable, ProviderConfig};
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::executor::MockExecutor;
-use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::executor::MockExecutor;
+use bitrouter_sdk::model_call::hooks::{HookDecision, PreRequestHook};
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
 use crate::acp_trajectory::{RecordingScope, SessionIdentity};
@@ -63,7 +63,7 @@ fn pipeline_with_mode_switch(
         ..Config::default()
     };
     let app = App::builder()
-        .language_model(|lm| {
+        .model_call(|lm| {
             lm.routing_table(Arc::new(ConfigRoutingTable::from_config(config)))
                 .executor(Arc::new(MockExecutor::always_text(response)));
             lm.pre_request_hook(JudgeRequestContract);
@@ -72,7 +72,7 @@ fn pipeline_with_mode_switch(
             }
         })
         .build()?;
-    app.language_model()
+    app.model_call()
         .cloned()
         .context("missing fixture pipeline")
 }

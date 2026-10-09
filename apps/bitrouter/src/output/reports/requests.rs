@@ -112,6 +112,12 @@ pub struct RequestView {
     pub prompt_tokens: i64,
     /// Completion tokens produced.
     pub completion_tokens: i64,
+    /// Explicit breakdown availability; missing counts are numeric placeholders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_availability: Option<bitrouter_ai::types::UsageAvailability>,
+    /// Provenance of totals; unknown totals are placeholders, not measured zeros.
+    #[serde(default)]
+    pub usage_origin: bitrouter_ai::types::UsageOrigin,
     /// Cache-read prompt tokens.
     pub cache_read_tokens: i64,
     /// Cache-write prompt tokens.
@@ -147,6 +153,8 @@ impl From<RequestRow> for RequestView {
             provider: row.provider_id,
             prompt_tokens: row.prompt_tokens,
             completion_tokens: row.completion_tokens,
+            usage_availability: row.usage_availability,
+            usage_origin: row.usage_origin,
             cache_read_tokens: row.cache_read_tokens,
             cache_write_tokens: row.cache_write_tokens,
             charge_micro_usd: row.estimated_charge_micro_usd,
@@ -161,13 +169,19 @@ impl From<RequestRow> for RequestView {
 impl RequestView {
     /// The row as the human table's cells, in `HEADERS` order.
     pub fn display_cells(&self) -> [String; 9] {
+        let display_tokens = |count| match self.usage_origin {
+            bitrouter_ai::types::UsageOrigin::Unknown => "?".to_owned(),
+            bitrouter_ai::types::UsageOrigin::Estimated => format!("~{}", tokens(count)),
+            bitrouter_ai::types::UsageOrigin::ProviderReported
+            | bitrouter_ai::types::UsageOrigin::AuthoritativeReceipt => tokens(count),
+        };
         [
             clock(&self.created_at),
             self.router_id.clone().unwrap_or_else(|| "—".to_string()),
             self.model.clone(),
             self.provider.clone(),
-            tokens(self.prompt_tokens),
-            tokens(self.completion_tokens),
+            display_tokens(self.prompt_tokens),
+            display_tokens(self.completion_tokens),
             charge(self.charge_micro_usd, &self.charge_status),
             latency(self.latency_ms),
             status(self.error.as_deref()),
@@ -660,6 +674,8 @@ mod tests {
             provider_id: "openai".into(),
             prompt_tokens: 12_431,
             completion_tokens: 891,
+            usage_availability: None,
+            usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
             estimated_charge_micro_usd: 42_000,
@@ -678,6 +694,29 @@ mod tests {
             charge_status: ChargeStatus::LegacyUnknown,
             ..row()
         }
+    }
+
+    #[test]
+    fn unknown_usage_is_distinct_from_reported_zero_in_both_views() -> anyhow::Result<()> {
+        let mut unavailable = row();
+        unavailable.prompt_tokens = 0;
+        unavailable.completion_tokens = 0;
+        unavailable.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
+        let unavailable = RequestView::from(unavailable.clone());
+        assert_eq!(unavailable.display_cells()[4], "?");
+        assert_eq!(unavailable.display_cells()[5], "?");
+        assert_eq!(
+            serde_json::to_value(unavailable)?["usage_origin"],
+            "unknown"
+        );
+        let mut reported = row();
+        reported.prompt_tokens = 0;
+        reported.completion_tokens = 0;
+        assert_eq!(RequestView::from(reported).display_cells()[4], "0");
+        let mut estimate = row();
+        estimate.usage_origin = bitrouter_ai::types::UsageOrigin::Estimated;
+        assert!(RequestView::from(estimate).display_cells()[4].starts_with('~'));
+        Ok(())
     }
 
     fn daemon() -> DaemonView {

@@ -10,7 +10,7 @@
 //! refuses to mint into a namespace-baked CLI credential — that lifecycle
 //! is console-only in v1. The CLI uses this list to show which namespaces
 //! exist (and which one the current credential is bound to) so a user can
-//! decide whether to re-login against a different namespace.
+//! classify whether to re-login against a different namespace.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

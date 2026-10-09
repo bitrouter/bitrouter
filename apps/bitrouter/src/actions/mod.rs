@@ -20,7 +20,7 @@ pub(crate) mod supervised;
 /// A typed action failed.
 ///
 /// The action boundary deliberately carries only a presentation-neutral
-/// message. CLI, TUI, and HTTP adapters decide how to envelope and render it.
+/// message. CLI, TUI, and HTTP adapters classify how to envelope and render it.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ToolError(pub String);

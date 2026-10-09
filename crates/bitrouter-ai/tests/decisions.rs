@@ -1,7 +1,7 @@
 //! Native decision fidelity and selected-target invocation contracts.
 
+use bitrouter_ai::classifier::ClassifierAnswer;
 use bitrouter_ai::client::{HttpTimeouts, ModelClient};
-use bitrouter_ai::decisions::DecisionAnswer;
 use bitrouter_ai::error::ModelError;
 use bitrouter_ai::protocol::decisions::DecisionsCodec;
 use bitrouter_ai::target::ModelTarget;
@@ -131,7 +131,10 @@ fn refusals_and_invalid_answers_keep_independent_usage_evidence() -> TestResult 
     let mut refusal = response();
     refusal["answers"][1] = json!({"type":"refusal","name":null});
     let result = DecisionsCodec::parse_response(refusal, &request)?;
-    assert!(matches!(result.answers[1], DecisionAnswer::Refusal { .. }));
+    assert!(matches!(
+        result.answers[1],
+        ClassifierAnswer::Refusal { .. }
+    ));
     let mut malformed = response();
     malformed["answers"][1]["choice"] = json!("private-invalid-choice");
     malformed["usage"]["private-extension"] = json!("private-key");
@@ -139,10 +142,10 @@ fn refusals_and_invalid_answers_keep_independent_usage_evidence() -> TestResult 
         .err()
         .ok_or("answer admitted")?;
     assert_eq!(
-        error.decision_usage().map(|usage| usage.prompt_tokens),
+        error.classifier_usage().map(|usage| usage.prompt_tokens),
         Some(42)
     );
-    assert!(error.is_completed_decision_failure());
+    assert!(error.is_completed_classifier_failure());
     assert!(!format!("{error:?} {error}").contains("private-invalid-choice"));
     assert!(!format!("{error:?} {error}").contains("private-key"));
     Ok(())
@@ -166,7 +169,7 @@ fn native_usage_extensions_are_bounded_and_failures_use_provider_counters() -> T
         let error = DecisionsCodec::parse_response(oversized, &request)
             .err()
             .ok_or("oversized usage admitted")?;
-        let retained = error.decision_usage().ok_or("valid counters lost")?;
+        let retained = error.classifier_usage().ok_or("valid counters lost")?;
         assert_eq!(retained.prompt_tokens, 42);
         let raw = retained
             .raw
@@ -178,21 +181,22 @@ fn native_usage_extensions_are_bounded_and_failures_use_provider_counters() -> T
     }
     let mut inconsistent = decoded;
     inconsistent.usage.prompt_tokens = 1_000_000;
-    if let Some(DecisionAnswer::Predicate { probability, .. }) = inconsistent.answers.first_mut() {
+    if let Some(ClassifierAnswer::Predicate { probability, .. }) = inconsistent.answers.first_mut()
+    {
         *probability = 2.0;
     }
     let error = DecisionsCodec::render_response(&inconsistent, &request)
         .err()
         .ok_or("inconsistent typed result admitted")?;
     assert_eq!(
-        error.decision_usage().map(|usage| usage.prompt_tokens),
+        error.classifier_usage().map(|usage| usage.prompt_tokens),
         Some(42)
     );
     inconsistent.usage.raw = None;
     let missing = DecisionsCodec::render_response(&inconsistent, &request)
         .err()
         .ok_or("missing usage proof admitted")?;
-    assert!(missing.decision_usage().is_none());
+    assert!(missing.classifier_usage().is_none());
     Ok(())
 }
 
@@ -210,8 +214,8 @@ fn image_budget_and_inconsistent_usage_are_refused() -> TestResult {
     let error = DecisionsCodec::parse_response(body, &request)
         .err()
         .ok_or("usage admitted")?;
-    assert!(error.decision_usage().is_none());
-    assert!(error.is_completed_decision_failure());
+    assert!(error.classifier_usage().is_none());
+    assert!(error.is_completed_classifier_failure());
     let mut body = response();
     body["answers"] = json!([
         {"type":"refusal","name":"check"},
@@ -293,7 +297,7 @@ async fn authentication_refresh_rebuilds_once_for_the_same_selected_account() ->
     target.account_label = Some("selected".into());
     let request = DecisionsCodec::parse_request(request())?;
     client
-        .decide(&target, &request, &CancellationToken::new())
+        .classify(&target, &request, &CancellationToken::new())
         .await?;
     assert_eq!(auth.refreshes.load(Ordering::SeqCst), 1);
     assert_eq!(auth.preparations.load(Ordering::SeqCst), 2);
@@ -319,12 +323,12 @@ async fn malformed_answers_return_usage_without_replaying_or_exposing_credential
     let client = ModelClient::new(HttpTimeouts::default())?;
     let request = DecisionsCodec::parse_request(request())?;
     let error = client
-        .decide(&target(server.uri()), &request, &CancellationToken::new())
+        .classify(&target(server.uri()), &request, &CancellationToken::new())
         .await
         .err()
         .ok_or("malformed response succeeded")?;
-    assert!(error.is_completed_decision_failure());
-    let usage = error.decision_usage().ok_or("usage was lost")?;
+    assert!(error.is_completed_classifier_failure());
+    let usage = error.classifier_usage().ok_or("usage was lost")?;
     assert_eq!(usage.prompt_tokens, 42);
     assert!(!format!("{error:?} {error} {:?}", usage.raw).contains("private-key"));
     assert!(
@@ -352,7 +356,7 @@ async fn selected_call_projects_model_without_mutating_source() -> TestResult {
         .await;
     let client = ModelClient::new(HttpTimeouts::default())?;
     let result = client
-        .decide(&target(server.uri()), &request, &CancellationToken::new())
+        .classify(&target(server.uri()), &request, &CancellationToken::new())
         .await?;
     assert_eq!(result.model, "native-model");
     assert_eq!(request, before);
@@ -374,7 +378,7 @@ async fn operation_mismatch_and_cancellation_stop_before_dispatch() -> TestResul
     wrong.api_protocol = ApiProtocol::Responses;
     assert!(
         client
-            .decide(&wrong, &request, &CancellationToken::new())
+            .classify(&wrong, &request, &CancellationToken::new())
             .await
             .is_err()
     );
@@ -383,7 +387,7 @@ async fn operation_mismatch_and_cancellation_stop_before_dispatch() -> TestResul
         retired.provider_name = provider.into();
         assert!(matches!(
             client
-                .decide(&retired, &request, &CancellationToken::new())
+                .classify(&retired, &request, &CancellationToken::new())
                 .await,
             Err(ModelError::Configuration { .. })
         ));
@@ -392,7 +396,7 @@ async fn operation_mismatch_and_cancellation_stop_before_dispatch() -> TestResul
     cancellation.cancel();
     assert!(matches!(
         client
-            .decide(&target(server.uri()), &request, &cancellation)
+            .classify(&target(server.uri()), &request, &cancellation)
             .await,
         Err(ModelError::Cancelled)
     ));
@@ -433,7 +437,7 @@ async fn admitted_native_io_cancels_and_times_out_without_replay() -> TestResult
         let cancellation = CancellationToken::new();
         let call_cancel = cancellation.clone();
         let call =
-            tokio::spawn(async move { client.decide(&selected, &native, &call_cancel).await });
+            tokio::spawn(async move { client.classify(&selected, &native, &call_cancel).await });
         tokio::time::timeout(Duration::from_secs(2), admitted.recv())
             .await?
             .ok_or("upstream admission missing")?;

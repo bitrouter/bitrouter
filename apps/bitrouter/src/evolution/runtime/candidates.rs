@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_sdk::config::{AccountStrategy, ConfigRoutingTable};
-use bitrouter_sdk::language_model::RoutingTable;
+use bitrouter_sdk::model_call::routing::RoutingTable;
 use serde::{Deserialize, Serialize};
 
 use super::EvolutionRuntime;

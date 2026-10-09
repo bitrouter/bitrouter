@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_sdk::Result as BitrouterResult;
 use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+use bitrouter_sdk::model_call::settlement::SettlementContext;
+use bitrouter_sdk::model_call::settlement::SettlementRecorder;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use uuid::Uuid;
@@ -698,7 +699,8 @@ mod tests {
     use bitrouter_ai::types::UsageOrigin;
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+    use bitrouter_sdk::model_call::settlement::SettlementContext;
+    use bitrouter_sdk::model_call::settlement::SettlementRecorder;
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{
@@ -1074,6 +1076,7 @@ mod tests {
             cache_write_tokens: 0,
             usage_origin: UsageOrigin::ProviderReported,
             raw_usage: None,
+            usage_availability: None,
             web_search_count: 0,
             media_input_count: 0,
             media_output_count: 0,
@@ -1094,13 +1097,13 @@ mod tests {
     async fn native_subject_uses_the_same_admitted_tariff_as_metering() -> anyhow::Result<()> {
         use crate::metering::pricing::{ModelPricing, PricingTable};
         use bitrouter_ai::types::{ApiProtocol, ModelOperation};
-        use bitrouter_sdk::language_model::types::RoutingTarget;
+        use bitrouter_sdk::model_call::types::RoutingTarget;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let recorder =
             EvalSettlementRecorder::new(EvalStore::new(db), PendingEvalDecisionStore::default());
         let mut context = settlement_context();
-        context.operation = ModelOperation::Decisions;
+        context.operation = ModelOperation::Classification;
         context.completion_tokens = 0;
         context.target = Some(RoutingTarget {
             provider_name: context.provider_id.clone(),

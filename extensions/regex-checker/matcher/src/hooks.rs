@@ -1,10 +1,10 @@
 //! The guardrail hooks:
-//! - [`DepositRulesHook`] — a `language_model::PreRequestHook` that inserts a
+//! - [`DepositRulesHook`] — a `model_call::hooks::PreRequestHook` that inserts a
 //!   shared [`RuleSet`] into the request's typed extensions, so the guardrail
 //!   hooks downstream see a fixed, process-global rule set;
-//! - [`GuardrailPreHook`] — a `language_model::PreRequestHook` that scans the
+//! - [`GuardrailPreHook`] — a `model_call::hooks::PreRequestHook` that scans the
 //!   **request** content and denies on a `Block` rule (upstream /);
-//! - [`GuardrailStreamHook`] — a `language_model::StreamHook` that scans the
+//! - [`GuardrailStreamHook`] — a `model_call::hooks::StreamHook` that scans the
 //!   **response** stream, redacting `Redact` matches and aborting on `Block`
 //!   (downstream /).
 //!
@@ -23,10 +23,15 @@ use bitrouter_ai::types::{Content, StreamPart};
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::Result;
 use bitrouter_sdk::error::BitrouterError;
-use bitrouter_sdk::language_model::{
-    DenyReason, HookDecision, PipelineContext, PreRequestHook, StreamAction, StreamContext,
-    StreamHook, StreamInterest, StreamOutcome,
-};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::context::StreamContext;
+use bitrouter_sdk::model_call::hooks::DenyReason;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
+use bitrouter_sdk::model_call::hooks::StreamHook;
+use bitrouter_sdk::model_call::stream::StreamAction;
+use bitrouter_sdk::model_call::stream::StreamInterest;
+use bitrouter_sdk::model_call::stream::StreamOutcome;
 
 use crate::rules::{RuleSet, SlidingWindowMatcher, WindowResult};
 

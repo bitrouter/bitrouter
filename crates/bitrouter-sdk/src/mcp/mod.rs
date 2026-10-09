@@ -6,8 +6,8 @@
 //! JSON-RPC; the canonical request/response here are JSON.
 //!
 //! these hook traits are **independent** of
-//! `language_model`'s — an `mcp::RouteHook` cannot be registered on a
-//! `language_model::Pipeline` (compile-time protocol isolation). Reuse of
+//! `model_call`'s — an `mcp::RouteHook` cannot be registered on a
+//! `model_call::pipeline::Pipeline` (compile-time protocol isolation). Reuse of
 //! cross-cutting logic is via shared crate-root library code, not shared traits.
 //!
 //! Spec refs (modern stateless lifecycle: `2026-07-28`; stable
@@ -44,7 +44,7 @@ use futures::stream::{self, BoxStream, StreamExt};
 
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
-use crate::language_model::HookDecision;
+use crate::model_call::hooks::HookDecision;
 
 pub mod skills;
 pub mod transport;
@@ -337,7 +337,7 @@ pub trait Executor: Send + Sync {
 }
 
 /// Stage 1 — MCP pre-request checks (auth / policy). Independent of
-/// `language_model::PreRequestHook`.
+/// `model_call::hooks::PreRequestHook`.
 #[async_trait]
 pub trait PreRequestHook: Send + Sync {
     /// Inspect the request and allow or deny it.
@@ -547,7 +547,7 @@ impl PipelineBuilder {
     }
 
     /// Whether this builder has anything registered. The `App` reads this to
-    /// decide whether to build an `mcp::Pipeline` and mount `/mcp/{name}`.
+    /// classify whether to build an `mcp::Pipeline` and mount `/mcp/{name}`.
     pub fn is_configured(&self) -> bool {
         self.routing_table.is_some() || self.executor.is_some()
     }
@@ -613,7 +613,7 @@ mod tests {
     impl PreRequestHook for DenyHook {
         async fn check(&self, _ctx: &mut McpContext) -> Result<HookDecision> {
             Ok(HookDecision::Deny(
-                crate::language_model::DenyReason::Unauthorized("no".into()),
+                crate::model_call::hooks::DenyReason::Unauthorized("no".into()),
             ))
         }
     }
@@ -660,7 +660,7 @@ mod tests {
 
     /// A `PreRequestHook` that extracts an `x-test-auth: <user>` header and
     /// upgrades the anonymous caller to an authenticated one. Mirrors the
-    /// `language_model::PreRequestHook` auth pattern.
+    /// `model_call::hooks::PreRequestHook` auth pattern.
     struct HeaderAuthHook;
     #[async_trait]
     impl PreRequestHook for HeaderAuthHook {
@@ -676,7 +676,7 @@ mod tests {
                     Ok(HookDecision::Allow)
                 }
                 None => Ok(HookDecision::Deny(
-                    crate::language_model::DenyReason::Unauthorized(
+                    crate::model_call::hooks::DenyReason::Unauthorized(
                         "missing x-test-auth header".into(),
                     ),
                 )),

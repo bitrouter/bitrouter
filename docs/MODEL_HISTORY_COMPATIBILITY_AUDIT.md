@@ -84,7 +84,7 @@ coverage across the entire repository.
 | Responses stream closes a reasoning item | Emit `ReasoningEnd` with `signature: None`; encrypted reasoning replay data is not carried in that slot | Anthropic-style signature round-trip must not be assumed to cover Responses encrypted reasoning | `ResponsesStreamDecoder::decode`; implementation observation |
 
 These are protocol-local rules, not a generalized same-model replay policy.
-[`Message`](../crates/bitrouter-sdk/src/language_model/types.rs) currently
+[`Message`](../crates/bitrouter-sdk/src/model_call/types.rs) currently
 contains only `role` and `content`. It has no message-level source provider,
 model, account, or completion status. Content metadata retains some native
 fields, but does not establish authority to replay them to another target.

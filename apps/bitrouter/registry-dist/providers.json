@@ -8368,6 +8368,81 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://api.typesafe.ai/v1",
+      "auth": {
+        "env": "TYPESAFE_API_KEY",
+        "kind": "bearer"
+      },
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "TypeSafe",
+      "doc_url": "https://docs.typesafe.ai/api",
+      "id": "typesafe",
+      "kind": "first_party",
+      "models": [
+        {
+          "api_protocol": "systemone",
+          "id": "typesafe/jev-1.13.0",
+          "pricing_by_protocol": {
+            "systemone": {
+              "input_tokens": {
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+                "no_cache": 0.042
+              },
+              "output_tokens": {
+                "text": 0.0
+              }
+            }
+          },
+          "provider_model_id": "jev-1.13.0"
+        },
+        {
+          "api_protocol": "systemone",
+          "id": "typesafe/jev-latest",
+          "pricing_by_protocol": {
+            "systemone": {
+              "input_tokens": {
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+                "no_cache": 0.042
+              },
+              "output_tokens": {
+                "text": 0.0
+              }
+            }
+          },
+          "provider_model_id": "jev-latest"
+        },
+        {
+          "api_protocol": "systemone",
+          "id": "typesafe/jev-preview",
+          "pricing_by_protocol": {
+            "systemone": {
+              "input_tokens": {
+                "cache_read": 0.0,
+                "cache_write": 0.0,
+                "no_cache": 0.042
+              },
+              "output_tokens": {
+                "text": 0.0
+              }
+            }
+          },
+          "provider_model_id": "jev-preview"
+        }
+      ],
+      "name": "typesafe",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://api.x.ai/v1",
       "auth_scheme": "x-api-key",
       "billing": "usage_token",

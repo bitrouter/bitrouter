@@ -18,6 +18,9 @@ use crate::types::{
 pub enum ConversionProtocol {
     /// Native Decisions, which has no generative projection.
     Decisions,
+    /// TypeSafe System One classifier wire.
+    #[serde(rename = "systemone")]
+    SystemOne,
     /// OpenAI Chat Completions.
     ChatCompletions,
     /// OpenAI Responses.
@@ -36,6 +39,7 @@ impl From<&ApiProtocol> for ConversionProtocol {
             ApiProtocol::ChatCompletions => Self::ChatCompletions,
             ApiProtocol::Responses => Self::Responses,
             ApiProtocol::Decisions => Self::Decisions,
+            ApiProtocol::SystemOne => Self::SystemOne,
             ApiProtocol::Messages => Self::Messages,
 
             ApiProtocol::Custom(_) => Self::Custom,
@@ -61,6 +65,10 @@ pub enum ConversionStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionReason {
+    /// Required classifier usage breakdowns have no established projection.
+    ClassifierUsageUnrepresentable,
+    /// Destination confidence is derived using its documented distribution formula.
+    ClassifierConfidenceDerived,
     /// The selected wire implements a different model operation.
     OperationUnsupported,
     /// No canonical input mapping exists for this item.
@@ -358,7 +366,7 @@ impl ConversionReport {
 /// or a certification of remaining codec or schema/model behavior.
 pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionReport {
     let mut report = ConversionReport::default();
-    if *protocol == ApiProtocol::Decisions {
+    if protocol.operation() == crate::types::ModelOperation::Classification {
         report.push_projection(
             protocol,
             ConversionLocation::Operation,
@@ -385,7 +393,10 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
         let family = match protocol {
             ApiProtocol::Responses => Some("openai"),
             ApiProtocol::Messages => Some("anthropic"),
-            ApiProtocol::ChatCompletions | ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
+            ApiProtocol::ChatCompletions
+            | ApiProtocol::Custom(_)
+            | ApiProtocol::Decisions
+            | ApiProtocol::SystemOne => None,
         };
         let refusal = if *protocol == ApiProtocol::ChatCompletions {
             Some((
@@ -465,7 +476,8 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
                     ),
                     ApiProtocol::ChatCompletions
                     | ApiProtocol::Messages
-                    | ApiProtocol::Decisions => (
+                    | ApiProtocol::Decisions
+                    | ApiProtocol::SystemOne => (
                         ConversionReason::NativeReasoningUnrepresentable,
                         ConversionEffect::TaskSemantics,
                     ),
@@ -582,7 +594,7 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
             {
                 for (part, value) in value.iter().enumerate() {
                     let refused = match protocol {
-                        ApiProtocol::Decisions => true,
+                        ApiProtocol::Decisions | ApiProtocol::SystemOne => true,
                         ApiProtocol::Responses => false,
                         ApiProtocol::ChatCompletions => {
                             matches!(value, ToolResultContentPart::FileId { .. })
@@ -760,7 +772,7 @@ fn history_refusal(
                 });
             }
             let changes_shape = match protocol {
-                ApiProtocol::Decisions => true,
+                ApiProtocol::Decisions | ApiProtocol::SystemOne => true,
                 // These wire slots carry canonical JSON as its JSON encoding;
                 // serialization preserves the complete value. Status is checked
                 // independently above, not waived by that representation.

@@ -5,8 +5,10 @@ use bitrouter_ai::types::ToolChoice;
 use bitrouter_sdk::App;
 use bitrouter_sdk::acp::capture::{CaptureDirection, CapturePort};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::executor::MockExecutor;
-use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
+use bitrouter_sdk::model_call::context::PipelineContext;
+use bitrouter_sdk::model_call::executor::MockExecutor;
+use bitrouter_sdk::model_call::hooks::HookDecision;
+use bitrouter_sdk::model_call::hooks::PreRequestHook;
 use serde_json::json;
 
 use crate::acp_trajectory::checkpoint::types::AssessmentSource;
@@ -142,14 +144,14 @@ providers:
     let calls = Arc::new(AtomicUsize::new(0));
     let response = serde_json::to_string(&unknown)?;
     let app = App::builder()
-        .language_model(|lm| {
+        .model_call(|lm| {
             lm.routing_table(Arc::new(ConfigRoutingTable::from_config(config.clone())))
                 .executor(Arc::new(MockExecutor::always_text(response)));
             lm.pre_request_hook(CountRequests(calls.clone()));
         })
         .build()?;
     let pipeline = app
-        .language_model()
+        .model_call()
         .cloned()
         .context("judge pipeline missing")?;
     Ok(Fixture {
@@ -450,7 +452,7 @@ async fn shutdown_cancels_background_work_and_preserves_the_uncertain_attempt() 
     stop(&fixture, 2).await?;
     let entered = Arc::new(tokio::sync::Notify::new());
     let app = App::builder()
-        .language_model(|lm| {
+        .model_call(|lm| {
             lm.routing_table(Arc::new(ConfigRoutingTable::from_config(
                 fixture.config.clone(),
             )))
@@ -459,7 +461,7 @@ async fn shutdown_cancels_background_work_and_preserves_the_uncertain_attempt() 
             lm.pre_request_hook(ParkJudge(entered.clone()));
         })
         .build()?;
-    let pipeline = app.language_model().cloned().context("pipeline missing")?;
+    let pipeline = app.model_call().cloned().context("pipeline missing")?;
     let stop = CancellationToken::new();
     let worker = EvolutionScheduler::new(fixture.runtime.clone());
     let cancellation = stop.clone();
