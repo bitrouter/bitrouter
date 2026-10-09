@@ -3,7 +3,7 @@
 use super::*;
 use bitrouter_ai::types::ToolResultOutput;
 
-pub(super) fn consume(agent: &mut AgentState) -> Result<(), CoreError> {
+pub(super) fn consume(agent: &mut AgentState, native_values: bool) -> Result<(), CoreError> {
     let turn = agent
         .turn
         .as_mut()
@@ -33,7 +33,11 @@ pub(super) fn consume(agent: &mut AgentState) -> Result<(), CoreError> {
         if call.dispatch.verification {
             verified = Some(result.status == ToolOutcome::Succeeded);
         } else {
-            let output = if result.status == ToolOutcome::Succeeded {
+            let output = if native_values
+                && let Ok(output) = serde_json::from_str::<ToolResultOutput>(&result.output)
+            {
+                output
+            } else if result.status == ToolOutcome::Succeeded {
                 ToolResultOutput::Text {
                     value: result.output.clone(),
                 }
@@ -49,7 +53,10 @@ pub(super) fn consume(agent: &mut AgentState) -> Result<(), CoreError> {
                     tool_name: Some(call.dispatch.tool.clone()),
                     dynamic: false,
                     output,
-                    provider_metadata: Default::default(),
+                    provider_metadata: crate::context::tool_result_metadata(
+                        &agent.history,
+                        &call.provider_call_id,
+                    ),
                 }],
             });
         }

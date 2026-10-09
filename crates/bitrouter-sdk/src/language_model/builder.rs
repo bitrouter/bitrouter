@@ -30,6 +30,7 @@ pub struct PipelineBuilder {
     route_hooks: Vec<HookRegistration<dyn RouteHook>>,
     model_selectors: Vec<HookRegistration<dyn ModelSelector>>,
     execution_hooks: Vec<HookRegistration<dyn ExecutionHook>>,
+    pub(crate) decision_model: Option<crate::decision_model::DecisionRuntime>,
     stream_hooks: Vec<Arc<dyn StreamHook>>,
     settlement_recorders: Vec<HookRegistration<dyn SettlementRecorder>>,
     required_finalizers: Vec<HookRegistration<dyn RequiredFinalizer>>,
@@ -64,6 +65,7 @@ impl PipelineBuilder {
             pre_request_hooks: Vec::new(),
             route_hooks: Vec::new(),
             model_selectors: Vec::new(),
+            decision_model: None,
             execution_hooks: Vec::new(),
             stream_hooks: Vec::new(),
             settlement_recorders: Vec::new(),
@@ -390,6 +392,19 @@ impl PipelineBuilder {
     /// Finalise into a [`Pipeline`]. Fails if the routing table or executor is
     /// missing.
     pub fn build(self) -> Result<Pipeline> {
+        for operation in [ModelOperation::Generation, ModelOperation::Decisions] {
+            if self
+                .model_selectors
+                .iter()
+                .filter(|hook| hook.supports(operation))
+                .count()
+                > 1
+            {
+                return Err(BitrouterError::bad_request(
+                    "one policy selector must own the complete routing action",
+                ));
+            }
+        }
         for requirement in &self.requirements {
             for operation in [ModelOperation::Generation, ModelOperation::Decisions] {
                 if !self.served_operations.contains(operation)
@@ -455,6 +470,7 @@ impl PipelineBuilder {
             pre_request_hooks: self.pre_request_hooks,
             route_hooks: self.route_hooks,
             model_selectors: self.model_selectors,
+            decision_model: self.decision_model,
             execution_hooks: self.execution_hooks,
             stream_hooks: self.stream_hooks,
             settlement_recorders: self.settlement_recorders,

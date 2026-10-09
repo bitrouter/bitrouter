@@ -307,85 +307,90 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
 async fn changed_workspace_marker_blocks_an_approved_effect_and_independent_store()
 -> Result<(), Box<dyn std::error::Error>> {
     use super::support::{tool_call, turn};
-    let workspace = TempDir::new()?;
-    let first = ThreadService::new(
-        app(vec![
-            turn(vec![tool_call(
-                "write",
-                "write",
-                serde_json::json!({"path":"must-not-write.txt", "content":"one"}),
-            )]),
-            final_turn(),
-        ])?,
-        &[workspace.path().to_path_buf()],
-    )?;
-    let thread = first
-        .create_thread(
-            &first.inner.instance_id,
-            thread_request(&workspace, "first"),
-        )
-        .await?;
-    let caller = CallerContext::local();
-    let active = first
-        .start_turn(&target(&thread), &caller, input("write", "active"))
-        .await?;
-    let waiting = wait_for(&first, &active.turn_id, TurnStatus::WaitingForInput).await?;
-    let marker = first
-        .lock_state()
-        .workspace_fences
-        .get(&waiting.workspace)
-        .ok_or("fence missing")?
-        .marker
-        .clone();
-    std::fs::write(marker, "invalid marker")?;
-    first
-        .answer_input(
-            &active.turn_id,
-            waiting
-                .pending_input_id
-                .as_deref()
-                .ok_or("approval missing")?,
-            true,
-        )
-        .await?;
-    assert_eq!(
-        wait_for(&first, &active.turn_id, TurnStatus::RecoveryRequired)
-            .await?
-            .status,
-        TurnStatus::RecoveryRequired
-    );
-    assert!(!workspace.path().join("must-not-write.txt").exists());
-    first.shutdown().await;
-    drop(first);
-    let peer = ThreadService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
-    let peer_thread = peer
-        .create_thread(&peer.inner.instance_id, thread_request(&workspace, "peer"))
-        .await?;
-    assert_eq!(
-        peer.start_turn(&target(&peer_thread), &caller, input("new work", "new"))
-            .await
-            .err()
-            .ok_or("invalid marker authorized execution")?
-            .code,
-        ErrorCode::RecoveryRequired
-    );
-    let queued = peer
-        .enqueue_turn(&target(&peer_thread), &caller, input("new work", "queue"))
-        .await?;
-    assert_eq!(peer.read(&queued.turn_id)?.status, TurnStatus::Queued);
-    assert_eq!(
-        peer.read_thread(&target(&peer_thread), &caller)?.status,
-        ThreadStatus::RecoveryRequired
-    );
-    assert_eq!(
-        peer.resume_queue(&target(&peer_thread), &caller, "resume".into())
-            .await
-            .err()
-            .ok_or("unresolved workspace resumed")?
-            .code,
-        ErrorCode::RecoveryRequired
-    );
-    peer.shutdown().await;
+    for native in [false, true] {
+        let workspace = TempDir::new()?;
+        let first = ThreadService::new(
+            super::support::app_with_execution_mode(
+                Arc::new(bitrouter_sdk::language_model::MockExecutor::new(vec![
+                    super::support::mock_stream(turn(vec![tool_call(
+                        "write",
+                        "write",
+                        serde_json::json!({"path":"must-not-write.txt", "content":"one"}),
+                    )])),
+                    super::support::mock_stream(final_turn()),
+                ])),
+                native,
+            )?,
+            &[workspace.path().to_path_buf()],
+        )?;
+        let thread = first
+            .create_thread(
+                &first.inner.instance_id,
+                thread_request(&workspace, "first"),
+            )
+            .await?;
+        let caller = CallerContext::local();
+        let active = first
+            .start_turn(&target(&thread), &caller, input("write", "active"))
+            .await?;
+        let waiting = wait_for(&first, &active.turn_id, TurnStatus::WaitingForInput).await?;
+        let marker = first
+            .lock_state()
+            .workspace_fences
+            .get(&waiting.workspace)
+            .ok_or("fence missing")?
+            .marker
+            .clone();
+        std::fs::write(marker, "invalid marker")?;
+        first
+            .answer_input(
+                &active.turn_id,
+                waiting
+                    .pending_input_id
+                    .as_deref()
+                    .ok_or("approval missing")?,
+                true,
+            )
+            .await?;
+        assert_eq!(
+            wait_for(&first, &active.turn_id, TurnStatus::RecoveryRequired)
+                .await?
+                .status,
+            TurnStatus::RecoveryRequired
+        );
+        assert!(!workspace.path().join("must-not-write.txt").exists());
+        first.shutdown().await;
+        drop(first);
+        let peer = ThreadService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
+        let peer_thread = peer
+            .create_thread(&peer.inner.instance_id, thread_request(&workspace, "peer"))
+            .await?;
+        assert_eq!(
+            peer.start_turn(&target(&peer_thread), &caller, input("new work", "new"))
+                .await
+                .err()
+                .ok_or("invalid marker authorized execution")?
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        let queued = peer
+            .enqueue_turn(&target(&peer_thread), &caller, input("new work", "queue"))
+            .await?;
+        assert_eq!(peer.read(&queued.turn_id)?.status, TurnStatus::Queued);
+        assert_eq!(
+            peer.read_thread(&target(&peer_thread), &caller)?.status,
+            ThreadStatus::RecoveryRequired
+        );
+        assert_eq!(
+            peer.resume_queue(&target(&peer_thread), &caller, "resume".into())
+                .await
+                .err()
+                .ok_or("unresolved workspace resumed")?
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        peer.shutdown().await;
+    }
     Ok(())
 }
 

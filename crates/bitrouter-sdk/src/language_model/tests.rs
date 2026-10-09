@@ -12,6 +12,8 @@ mod provider_body;
 
 #[path = "tests_native_output.rs"]
 mod native_output;
+#[path = "tests_native_stream.rs"]
+mod native_stream;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -32,6 +34,9 @@ use bitrouter_ai::auth::{AuthApplier, AuthAppliers};
 use bitrouter_ai::error::ModelError;
 use bitrouter_ai::types::*;
 use bitrouter_ai::types::{AuthScheme, ReasoningEffort, ReasoningEffortSource};
+
+#[path = "tests_unified_routing.rs"]
+mod unified_routing;
 
 // ===== test fixtures =====
 

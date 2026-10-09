@@ -290,6 +290,7 @@ impl ThreadService {
         self.lock_state().threads.insert(
             thread_id,
             ThreadRecord {
+                native: None,
                 presentation,
                 snapshot: snapshot.clone(),
                 caller: request.caller,

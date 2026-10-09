@@ -161,9 +161,11 @@
 // ===== shared library code (crate root) =====
 pub mod app;
 pub mod caller;
+pub mod decision_model;
 pub mod error;
 pub mod event;
 pub mod extension;
+pub mod routing;
 // The CLI name a user-facing hint should tell the operator to type. Ungated:
 // every layer that renders a "run `… <subcommand>`" hint needs it.
 pub mod invocation;

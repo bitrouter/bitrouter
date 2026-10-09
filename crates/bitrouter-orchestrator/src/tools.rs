@@ -377,6 +377,7 @@ impl WorkspaceTools {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) async fn execute(
         &self,
         name: &str,

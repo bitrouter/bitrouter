@@ -2,12 +2,12 @@
 
 ## Native tasks through the managed core
 
-`bro task managed PROMPT --model PROVIDER/MODEL --workspace PATH --session NAME`
+`bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 connects native tools, AGENTS.md, skills and MCP resources to an in-process
 CoreSession. The core owns routing and sub-agent scheduling; the native harness
 owns workspace execution and durable checkpoint/ACK storage. It accepts
 `--config`, `--effort`, `--read-only`, `--check`, and `--max-output-tokens`
-(default 4096). Read-only mode conflicts with verification. Coding mode approves
+(omitted: selected model output capacity). Read-only mode conflicts with verification. Coding mode approves
 its own headless tools. Explicit remote contexts are rejected.
 
 Output is NDJSON (`managed_session`, then `terminal`), with nonzero exit for an
@@ -20,9 +20,9 @@ subscription output reservations and storage bounds.
 ## BRO native coding conversations
 
 ```console
-bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"
-bro task run "inspect this project" --model openai/gpt-5 --read-only
-bro code --model openai/gpt-5 --workspace /path/to/project
+bro task run "fix the failing test" --check "cargo test"
+bro task run "inspect this project" --read-only
+bro code --workspace /path/to/project
 bro code --thread-id THREAD_ID
 ```
 
@@ -44,7 +44,7 @@ without it verification is `not_requested`. `--read-only` forbids effectful
 tools and cannot be combined with `--check`. Explicit remote contexts fail
 without local fallback. `bro run <agent>` remains the separate ACP harness path.
 
-The local native protocol is **v15**, bound to the negotiated server instance.
+The local native protocol is **v17**, bound to the negotiated server instance.
 Older daemons fail the handshake before submission. `command_id` correlates
 transport replies; durable `idempotency_key` identifies accepted operations.
 Every Thread operation checks its authenticated caller, stored permission
@@ -60,6 +60,16 @@ clears only after acceptance. Same-instance reconnect uses the Thread cursor
 and preserves the in-process draft; instance loss never resubmits input.
 `--thread-id` reattaches stored configuration and permissions; `--task-id` has
 been removed. No draft persistence across process exit is provided.
+New native Threads default to `chat.model: bitrouter/auto` and the read-only
+policy bundled with the binary. No config file or `--model-policy` is needed.
+Named policy selectors automatically enable policy routing; an explicit physical
+`--model` pins generation. Existing `chat.model` and operator policy files win. See [decision-native.md](decision-native.md)
+for bounded model/context planning and its explicit price assumptions.
+Native `code` and `task run` accept an optional `--max-output-tokens` override.
+When omitted, each generation step reserves the selected model's declared output
+capacity. Both the omission and explicit overrides survive Thread continuation.
+Models without declared capacity use 4096; uncappable providers still require a
+known ceiling. See [decision-native.md](decision-native.md) for admission details.
 
 Conversation and Agents use the terminal's normal buffer and native scrollback.
 An empty composer permits plain Left to open the **BRO conversation directory**;
@@ -395,7 +405,7 @@ empty-composer `y`/`n` answers approval, and Ctrl-D detaches. Reattach with
 complete model/tool facts and Thread events are committed together.
 
 Coding declares `read`, `glob`, `grep`, `write`, `edit`, `shell` plus configured MCP tools;
-`--read-only` declares only the first three and rejects effectful calls before
+`--read-only` restricts workspace operations to the first three and rejects effectful calls before
 approval. `read` covers UTF-8 files and paginated directories (`path: "."` for
 root); offsets are one-based and complete output is capped at 50 KiB. Directories
 include hidden/ignored entries; searches respect project ignore rules and skip
@@ -406,7 +416,7 @@ result and verification identify the same selected interpreter. Missing shells
 fail coding before sampling; read-only needs none. Loss after selection returns
 an error without retry under another interpreter. Old tool names have no aliases.
 Bounded read workers, exclusive effects and recovery blocking remain in force.
-Local protocol is v15; opt-in HTTP uses `/agent/v2`. Old execution-root formats
+Local protocol is v17; opt-in HTTP uses `/agent/v2`. Old execution-root formats
 are rejected rather than rewritten or replayed.
 
 Explicit local `bro code <agent>` opens an ACP conversation.
@@ -494,9 +504,9 @@ selection; a physical-model-only allowlist does not authorize the alias.
 | `bro policy check [--config PATH]` | Cross-validate the local main config and lock. |
 | `bro policy status [--view active\|disk] [--config PATH] [--socket PATH]` | Report an explicit policy source, digest, mode, policies, and preset bindings. Local default is `disk`; named remote context default is `active`. |
 | `bro policy show <name> [--view active\|disk] [--config PATH] [--socket PATH]` | Print one named policy from the explicit source; the same local/remote defaults apply. |
-| `bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS] [--config PATH]` | Compile legacy migration evidence and an optional frozen generic-eval snapshot into a deterministic v3 candidate. Never changes the active lock. |
+| `bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS] [--config PATH]` | Compile a frozen generic-eval snapshot into a deterministic v4 candidate. Never changes the active lock. |
 | `bro policy diff <ACTIVE> <CANDIDATE>` | Compare explicit route selections. |
-| `bro policy publish <CANDIDATE> [--config PATH] [--socket PATH]` | Publish that exact compiled v3 candidate under adaptive mode using its parent digest as a compare-and-swap token. |
+| `bro policy publish <CANDIDATE> [--config PATH] [--socket PATH]` | Publish that exact compiled v4 candidate under adaptive mode using its parent digest as a compare-and-swap token. |
 | `bro policy verify --evidence [--config PATH]` | Reconstruct the active compiled lock's evidence root from the local ledger/snapshot. |
 | `bro policy evolve [--apply \| --output FILE] [--config PATH]` | Compatibility compile/publish command. `--apply` requires `policy.mode: adaptive`; request-time routing remains lock-only. |
 | `bro policy reload [--config PATH] [--socket PATH]` | Hot-reload main config and policy lock through the existing daemon control socket. Invalid locks preserve the last-known-good runtime snapshot. |
@@ -508,7 +518,7 @@ selection; a physical-model-only allowlist does not authorize the alias.
 
 Adaptive routing uses a source-independent predictor selected by
 `key_strategy: agent_trace`. Its static policy keys are exclusively canonical
-`agent_route/v1|<task-family>|<role>|<risk>` values. Native runtime adapters add
+`semantic_route/v1|<task-family>|<role>|<risk>` values. Native runtime adapters add
 diagnostics only, not policy keys, and private BitRouter headers are not needed.
 Observed `agent_trace/v2` values remain telemetry; retired route shapes and
 `key_strategy: legacy_fingerprint` are rejected during configuration
@@ -683,6 +693,8 @@ Active Turns discover workspace skills plus the daemon user's `.agents/skills`,
 snapshots expose metadata and hashed versions. Discovery does not inject skill
 bodies or MCP instructions into the prompt, install skills or execute scripts.
 
+`bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
+
 ### Native model history across protocol boundaries
 
 Native tool errors and execution denials remain typed in the durable journal.
@@ -690,9 +702,3 @@ Model prompts represent them as JSON containing an explicit `status` and the
 original typed `output`, so Chat Completions and Responses preserve the failure
 meaning without a protocol-native error flag. Prompt byte limits include this
 representation.
-
-The standalone native harness retains source-native Responses reasoning as
-journal evidence but rebuilds follow-up prompts from public assistant messages
-and tool results. It does not treat opaque reasoning as permission to replay a
-provider continuation. Signed Anthropic reasoning remains intact. Managed Core
-continuation adds its own authenticated origin and replay-authority checks.

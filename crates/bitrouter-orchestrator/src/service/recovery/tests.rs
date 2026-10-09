@@ -92,3 +92,67 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
     })));
     Ok(())
 }
+
+#[test]
+fn settlement_charges_native_fallback_attempts_and_legacy_requests()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (native, plans, attempts, reported, accepted) in [
+        (true, 2, 1, 1, true),
+        (true, 1, 0, 0, true),
+        (true, 1, 2, 2, true),
+        (true, 1, 2, 1, false),
+        (false, 2, 0, 1, false),
+        (false, 2, 0, 2, true),
+    ] {
+        let mut active = Active {
+            native,
+            native_runs: std::collections::BTreeMap::from([("run".into(), (attempts, 0))]),
+            native_unknown_usage: Default::default(),
+            native_unpriced_decisions: Default::default(),
+            resources: None,
+            turn_id: "turn".into(),
+            user_item_id: "user".into(),
+            messages: Vec::new(),
+            version: 0,
+            steps: (0..plans)
+                .map(|index| {
+                    (
+                        format!("step-{index}"),
+                        Step {
+                            item_id: format!("item-{index}"),
+                            context_version: 0,
+                            complete: true,
+                            interrupted: false,
+                            usage_known: true,
+                        },
+                    )
+                })
+                .collect(),
+            calls: Vec::new(),
+            group: Vec::new(),
+            steering: Vec::new(),
+            cancel_requested: false,
+            budget: Default::default(),
+            exact_budget: false,
+            settled: false,
+            checkpointed: false,
+            outcome: None,
+            confirmed_verification: None,
+        };
+        let result = active.consume(&ExecutionRecord::Settled {
+            outcome: None,
+            messages: Vec::new(),
+            context_version: 0,
+            model_steps: reported,
+            tool_calls: 0,
+            estimated_spend_microusd: 0,
+            active_duration_ms: 0,
+        });
+        assert_eq!(
+            result.is_ok(),
+            accepted,
+            "native={native}, plans={plans}, attempts={attempts}, reported={reported}: {result:?}"
+        );
+    }
+    Ok(())
+}

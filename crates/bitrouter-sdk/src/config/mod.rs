@@ -31,6 +31,7 @@ use bitrouter_ai::client::HttpTimeouts;
 use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
 pub mod checker;
+pub mod decision;
 pub mod pattern;
 pub mod presets;
 pub mod router;
@@ -80,7 +81,7 @@ pub struct PromptCommandConfig {
 
 /// The top-level configuration.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// HTTP server settings.
     pub server: ServerConfig,
@@ -88,6 +89,9 @@ pub struct Config {
     pub control: ControlConfig,
     /// Opt-in privileged BRO coding task API, separate from inference and control.
     pub agent_api: AgentApiConfig,
+    /// Typed decision backend for native context routing. Absent means the
+    /// conservative compiler runs without remote semantic judgments.
+    pub decision_model: Option<decision::DecisionModelConfig>,
     /// The interactive session's own configuration.
     pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
@@ -143,11 +147,6 @@ pub struct Config {
     /// this declaration -- loading and evolving policy locks belongs to the
     /// BitRouter app layer.
     pub policy: PolicyConfig,
-    /// Config-driven per-request model routing: a fingerprint → tier → model
-    /// policy table an ingress transform applies, with a hard tool-use
-    /// guardrail. Empty by default — when no tiers are defined the transform is
-    /// not registered and traffic routes exactly as it would without it.
-    pub policy_table: PolicyTableConfig,
 }
 
 impl Default for Config {
@@ -156,6 +155,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             control: ControlConfig::default(),
             agent_api: AgentApiConfig::default(),
+            decision_model: None,
             chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
@@ -177,7 +177,6 @@ impl Default for Config {
             inherit_defaults: true,
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
-            policy_table: PolicyTableConfig::default(),
         }
     }
 }
@@ -189,6 +188,9 @@ impl Config {
     /// before activation. Config-backed routing also runs it at first
     /// resolution so infallible table constructors cannot bypass validation.
     pub fn validate_router_config(&self) -> Result<()> {
+        if let Some(decision) = &self.decision_model {
+            decision.validate()?;
+        }
         for (name, provider) in &self.providers {
             if !provider.active {
                 continue;
@@ -542,83 +544,66 @@ impl Default for RegistryConfig {
     }
 }
 
-/// A policy-owned routing target.
-///
-/// The scalar form keeps the historical model-only syntax. The structured
-/// form makes reasoning effort part of the target identity, so two tiers may
-/// intentionally route to the same model at different supported effort levels.
+/// One policy action: generation model, optional effort and context treatment.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]
-#[serde(untagged, deny_unknown_fields)]
-pub enum PolicyModelTarget {
-    /// Backward-compatible model-only target.
-    Model(String),
-    /// Explicit compound model and reasoning-effort target.
-    ModelEffort {
-        /// Canonical or provider-qualified model id.
-        model: String,
-        /// Exact effort value owned by this policy target.
-        effort: bitrouter_ai::types::ReasoningEffort,
-    },
+#[serde(deny_unknown_fields)]
+pub struct PolicyModelTarget {
+    /// Normal generation route selector.
+    pub model: String,
+    /// Explicit policy effort; absence preserves a caller constraint.
+    pub effort: Option<bitrouter_ai::types::ReasoningEffort>,
+    /// Context strategy is part of the action identity, including Learn evidence.
+    pub context: crate::routing::ContextStrategy,
 }
 
 impl PolicyModelTarget {
-    /// Model id selected by this target.
-    pub fn model(&self) -> &str {
-        match self {
-            Self::Model(model) | Self::ModelEffort { model, .. } => model,
+    /// Construct a model action with evidence routing and inherited effort.
+    pub fn model_only(model: String) -> Self {
+        Self {
+            model,
+            effort: None,
+            context: Default::default(),
         }
     }
-
-    /// Policy-owned reasoning effort, when explicitly configured.
+    /// Model selected by this action.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    /// Optional policy effort.
     pub fn effort(&self) -> Option<bitrouter_ai::types::ReasoningEffort> {
-        match self {
-            Self::Model(_) => None,
-            Self::ModelEffort { effort, .. } => Some(*effort),
-        }
+        self.effort
     }
 }
-
 impl From<String> for PolicyModelTarget {
     fn from(model: String) -> Self {
-        Self::Model(model)
+        Self::model_only(model)
     }
 }
-
 impl From<&str> for PolicyModelTarget {
     fn from(model: &str) -> Self {
-        Self::Model(model.to_string())
+        Self::model_only(model.into())
     }
 }
-
 impl std::fmt::Display for PolicyModelTarget {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Model(model) => formatter.write_str(model),
-            Self::ModelEffort { model, effort } => write!(formatter, "{model}@{effort}"),
+        write!(formatter, "{}", self.model)?;
+        if let Some(effort) = self.effort {
+            write!(formatter, "@{effort}")?;
         }
+        write!(formatter, ":{:?}", self.context)
     }
 }
 
-/// Config-driven per-request model routing — the top-level `policy_table:` block
-/// in `bitrouter.yaml`.
-///
-/// An ingress transform predicts a source-independent task, workflow role, and
-/// risk tuple, then looks its canonical `agent_route/v1` key up in
-/// [`fingerprints`](Self::fingerprints) to
-/// choose a *tier*; [`tiers`](Self::tiers) then maps that tier to the model id
-/// the request is rewritten to. A hard tool-use guardrail keeps tool-carrying
-/// requests on a tier known to handle tools.
-///
-/// The section is active only when [`tiers`](Self::tiers) is non-empty — an
-/// absent or tier-less block leaves routing untouched. The whole spec is static
-/// and operator-owned: it is versionable in `bitrouter.yaml` and never mutated
-/// at runtime.
-#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
+/// Frozen named-policy inputs consumed by the shared semantic action selector.
+/// This is the internal table projection of a versioned lock, not a top-level
+/// configuration entry or an ingress transform.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
 pub struct PolicyTableConfig {
     /// The predictor strategy used for `fingerprints`. Active policy routing
-    /// uses only canonical source-independent `agent_route/v1` keys.
+    /// uses only canonical source-independent `semantic_route/v1` keys.
     pub key_strategy: PolicyKeyStrategy,
     /// Tier name → the model id every request on that tier is routed to. The
     /// value is fed straight into the routing table, so it may be a bare
@@ -626,7 +611,7 @@ pub struct PolicyTableConfig {
     /// `provider:model` id (a Strategy-1 direct route). The section is inert
     /// while this map is empty.
     pub tiers: HashMap<String, PolicyModelTarget>,
-    /// Canonical `agent_route/v1|<task-family>|<role>|<risk>` key → tier name.
+    /// Canonical `semantic_route/v1|<task-family>|<role>|<risk>` key → tier name.
     /// Lookup first tries the exact key, then the same role/risk under the
     /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
     pub fingerprints: HashMap<String, String>,
@@ -643,53 +628,9 @@ pub struct PolicyTableConfig {
     /// chosen tier is in this list is left as-is; one whose tier is absent is
     /// clamped to [`tool_use_tier`](Self::tool_use_tier).
     pub tool_safe_tiers: Vec<String>,
-    /// Online adequacy learning. When enabled, the daemon observes each
-    /// downgraded request's outcome and, after repeated failures, escalates the
-    /// offending fingerprint to a more capable tier — so an operator's downgrade
-    /// that proves inadequate is self-correcting. Off by default.
+    /// Offline compiler thresholds. Serving always disables request-time
+    /// adequacy mutation; publication replaces the complete signed policy.
     pub adequacy: AdequacyConfig,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct PolicyTableConfigInput {
-    key_strategy: PolicyKeyStrategy,
-    tiers: HashMap<String, PolicyModelTarget>,
-    fingerprints: HashMap<String, String>,
-    default_tier: Option<String>,
-    tool_use_tier: Option<String>,
-    tool_safe_tiers: Vec<String>,
-    adequacy: AdequacyConfig,
-    #[serde(deserialize_with = "reject_global_progress_guard")]
-    progress_guard: (),
-}
-
-impl<'de> Deserialize<'de> for PolicyTableConfig {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let input = PolicyTableConfigInput::deserialize(deserializer)?;
-        let () = input.progress_guard;
-        Ok(Self {
-            key_strategy: input.key_strategy,
-            tiers: input.tiers,
-            fingerprints: input.fingerprints,
-            default_tier: input.default_tier,
-            tool_use_tier: input.tool_use_tier,
-            tool_safe_tiers: input.tool_safe_tiers,
-            adequacy: input.adequacy,
-        })
-    }
-}
-
-fn reject_global_progress_guard<'de, D>(_: D) -> std::result::Result<(), D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Err(serde::de::Error::custom(
-        "policy_table.progress_guard is not supported; configure progress_guard on a signed named policy",
-    ))
 }
 
 /// Request-key family used by `policy_table.fingerprints`.
@@ -718,7 +659,7 @@ impl<'de> Deserialize<'de> for PolicyKeyStrategy {
         match value.as_str() {
             "agent_trace" => Ok(Self::AgentTrace),
             "workflow_state" | "legacy_fingerprint" => Err(serde::de::Error::custom(format!(
-                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with canonical agent_route/v1 routes"
+                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with canonical semantic_route/v1 routes"
             ))),
             _ => Err(serde::de::Error::unknown_variant(&value, &["agent_trace"])),
         }
@@ -733,7 +674,7 @@ impl schemars::JsonSchema for PolicyKeyStrategy {
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Active policy routing uses canonical source-independent agent_route/v1 predictive keys.",
+            "description": "Active policy routing uses canonical source-independent semantic_route/v1 predictive keys.",
             "enum": ["agent_trace"],
         })
     }
@@ -744,7 +685,7 @@ impl schemars::JsonSchema for PolicyKeyStrategy {
 /// The returned tuple is `(task_family, next_step_role, risk)`. Keeping this
 /// boundary in the SDK lets configuration validation and the runtime predictor
 /// share one public wire contract without making observed telemetry routable.
-pub fn parse_agent_route_key(value: &str) -> Option<(&str, &str, &str)> {
+pub fn parse_semantic_route_key(value: &str) -> Option<(&str, &str, &str)> {
     let mut segments = value.split('|');
     let (Some(namespace), Some(task_family), Some(role), Some(risk), None) = (
         segments.next(),
@@ -755,7 +696,7 @@ pub fn parse_agent_route_key(value: &str) -> Option<(&str, &str, &str)> {
     ) else {
         return None;
     };
-    if namespace != "agent_route/v1"
+    if namespace != "semantic_route/v1"
         || !matches!(
             task_family,
             "code:generation"
@@ -1916,7 +1857,6 @@ where
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
     config.validate_router_config()?;
-    validate_policy_table(&config)?;
     validate_trajectory_config(&config.trajectory)?;
     validate_continuation_config(&config.continuation)?;
     // SSRF defence (v0 audit S4): refuse a config that asks bitrouter to
@@ -2003,29 +1943,14 @@ fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
     Ok(())
 }
 
-/// Validate the `policy_table:` section: every tier a fingerprint maps to, the
-/// default tier, the tool-use guardrail tier, and each tool-safe tier must be
-/// defined in [`PolicyTableConfig::tiers`]. A reference to an undefined tier is
-/// a configuration error rather than a silent fall-through to the caller's
-/// model. A section with no tiers is inert and validates trivially.
-fn validate_policy_table(config: &Config) -> Result<()> {
-    // Legacy activation fields remain accepted as input during migration, so
-    // reject contradictory declarations before process mode overrides them.
-    // Then validate the configuration BitRouter will actually run.
-    validate_policy_table_config(&config.policy_table)?;
-    let mut effective = config.policy_table.clone();
-    effective.adequacy = config.policy.mode.apply_to_adequacy(&effective.adequacy);
-    validate_policy_table_config(&effective)
-}
-
 /// Validate one policy-table definition independently of the top-level config.
 /// Policy lock loading reuses this so inline legacy tables and named lock
 /// policies enforce identical tier/guardrail/adequacy invariants.
 pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     for fingerprint in policy.fingerprints.keys() {
-        if parse_agent_route_key(fingerprint).is_none() {
+        if parse_semantic_route_key(fingerprint).is_none() {
             return Err(BitrouterError::bad_request(format!(
-                "policy_table fingerprint '{fingerprint}' is not a canonical agent_route/v1|<task-family>|<role>|<risk> key"
+                "policy_table fingerprint '{fingerprint}' is not a canonical semantic_route/v1|<task-family>|<role>|<risk> key"
             )));
         }
     }

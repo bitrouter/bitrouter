@@ -16,6 +16,7 @@ use crate::thread::PermissionProfile;
 
 mod admission;
 mod approval;
+mod checkpoint_pages;
 mod commit;
 pub mod observation;
 mod ownership;

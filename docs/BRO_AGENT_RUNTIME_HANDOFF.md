@@ -28,7 +28,7 @@ and A01–A23 remain attributable to those sources, not PR #945.
 | `tools.rs`, `service/workspace.rs` | Grant checks, bounded reads, exclusive effects, tracked process cleanup and exclusion markers |
 | `service/recovery.rs`, `ownership.rs`, `startup.rs` | Exact source/cursor validation, stopped-owner proof, conservative unknown-effect/accounting handling and complete discovery |
 | `service/observation.rs`, `thread.rs` | Post-commit public projection, bounded history and observer detachment without cancellation |
-| App local/HTTP/native clients | Local v15, HTTP v2, shared Thread/Turn operations and continuous native context |
+| App local/HTTP/native clients | Local v17, HTTP v2, shared Thread/Turn operations and continuous native context |
 
 Core identity domains cannot be assumed to alias Thread/Turn/Item without an
 explicit mapping. Legacy standalone Task APIs/conversion are removed; migration

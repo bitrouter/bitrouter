@@ -3430,7 +3430,7 @@ fn native_reasoning_item(native: &NativeReasoning) -> Result<&serde_json::Value>
         }
     }
     for (field, kind) in [("summary", "summary_text"), ("content", "reasoning_text")] {
-        if let Some(value) = item.get(field) {
+        if let Some(value) = item.get(field).filter(|value| !value.is_null()) {
             let Some(parts) = value.as_array() else {
                 return Err(ModelError::InvalidResponse {
                     message: "native reasoning text parts must be arrays".into(),

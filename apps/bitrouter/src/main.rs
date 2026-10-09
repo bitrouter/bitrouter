@@ -164,18 +164,27 @@ struct CodeArgs {
     /// Workspace for new BRO native Threads.
     #[arg(long)]
     workspace: Option<PathBuf>,
+    /// Allow the decision policy to choose a generation model for native BRO.
+    #[arg(long, conflicts_with_all = ["agent", "thread_id"])]
+    model_policy: bool,
+    /// Override the native output reservation; omitted follows the selected model.
+    #[arg(long, conflicts_with_all = ["agent", "thread_id"], value_parser = clap::value_parser!(u32).range(1..))]
+    max_output_tokens: Option<u32>,
 }
 
 #[derive(Args)]
 struct TaskRunArgs {
     /// Coding task to submit to the local BRO server.
     prompt: String,
-    /// Fixed model or routed model selector for the native agent.
+    /// Model override; omitted uses chat.model or the bundled automatic router.
     #[arg(long)]
-    model: String,
+    model: Option<String>,
     /// Fixed reasoning effort for each model turn.
     #[arg(long)]
     effort: Option<bitrouter_ai::types::ReasoningEffort>,
+    /// Override the output reservation; omitted follows the selected model.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    max_output_tokens: Option<u32>,
     /// Bounded project verification command. Without one, verification is not_requested.
     #[arg(long)]
     check: Option<String>,
@@ -197,9 +206,6 @@ struct ManagedTaskArgs {
     /// Durable native managed session name; reuse it to continue released work.
     #[arg(long)]
     session: Option<String>,
-    /// Per-step output reservation. Uncapped subscription routes need the model ceiling.
-    #[arg(long, default_value_t = 4096)]
-    max_output_tokens: u32,
 }
 
 #[derive(Subcommand)]
@@ -893,6 +899,9 @@ enum WorkflowStateAction {
         /// Frozen BitRouter config that defines the reliability thresholds.
         #[arg(long)]
         config: PathBuf,
+        /// Named policy supplying reliability thresholds.
+        #[arg(long, default_value = "auto")]
+        policy: String,
         /// Output JSON report path.
         #[arg(long)]
         output: PathBuf,
@@ -2010,7 +2019,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     workspace: task.workspace,
                     config: task.config,
                     session: args.session,
-                    max_output_tokens: args.max_output_tokens,
+                    max_output_tokens: task.max_output_tokens,
                 })
                 .await
             }
@@ -2569,6 +2578,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     check: None,
                     read_only: false,
                     workspace: None,
+                    model_policy: false,
+                    max_output_tokens: None,
                 },
                 None,
                 None,
@@ -2692,15 +2703,21 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
         None => std::env::current_dir()?,
     };
     let client = bitrouter::agent_local::ThreadClient::connect(&task_socket).await?;
+    let model = args
+        .model
+        .or_else(|| bitrouter::policy_lock::native_default_model(&cfg).map(str::to_owned))
+        .context("no native model configured; pass --model or enable defaults")?;
+    let model_mode = bitrouter::policy_lock::native_model_mode(&cfg, &model)?;
+    let config = bitrouter_orchestrator::agent::AgentConfig::fixed(model, args.effort)
+        .with_model_mode(model_mode)
+        .with_output_reservation(args.max_output_tokens);
+    let config = if args.read_only {
+        config.read_only()
+    } else {
+        config
+    };
     let (thread, accepted) = client
-        .create_and_start(
-            workspace,
-            args.model,
-            args.effort,
-            args.read_only,
-            args.check,
-            args.prompt,
-        )
+        .create_and_start(workspace, config, args.check, args.prompt)
         .await?;
     emit_task_json(
         serde_json::json!({ "type": "accepted", "thread_id": thread.thread_id, "turn_id": accepted.turn_id, "host": "local", "server_instance_id": thread.server_instance_id, "workspace": thread.workspace, "permission_profile": thread.permission_profile, "cursor": thread.cursor }),
@@ -3023,6 +3040,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             Ok(())
         }
         WorkflowStateAction::ReliabilityReport {
+            policy,
             database_url,
             config,
             output,
@@ -3040,7 +3058,15 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .load_reliability_events()
                 .await
                 .with_context(|| format!("load reliability events from {database_url}"))?;
-            let report = ReliabilityReport::build(&config_document.policy_table.adequacy, &rows)
+            let lock = bitrouter::policy_lock::load_for_config(&config_document, Some(&config))
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("reliability report requires a named policy lock")
+                })?;
+            let policy = lock.document.policies.get(&policy).ok_or_else(|| {
+                anyhow::anyhow!("reliability report policy is absent from the lock")
+            })?;
+            let report = ReliabilityReport::build(&policy.adequacy, &rows)
                 .context("replay provider reliability events")?;
             report
                 .write(&output)
@@ -4547,16 +4573,16 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-            let history_dir = bitrouter::policy_lock::default_history_dir(&loaded.path);
+            let history_dir = bitrouter::policy_lock::default_history_dir(loaded.file_path()?);
             let record = bitrouter::policy_lock::rollback_to_digest(
-                &loaded.path,
+                loaded.file_path()?,
                 &loaded.digest,
                 &digest,
                 &history_dir,
             )?;
             if let Err(error) = reload_policy_if_reachable(&source, socket.as_deref()).await {
                 bitrouter::policy_lock::rollback_to_digest(
-                    &loaded.path,
+                    loaded.file_path()?,
                     &record.child_digest,
                     &record.parent_digest,
                     &history_dir,
@@ -5354,7 +5380,8 @@ async fn routing_policy_report(
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let cfg = config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let mut cfg = config::parse(&raw).context("parsing bitrouter.yaml")?;
+    bitrouter::policy_lock::apply_defaults(&mut cfg, Some(config_path));
     let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path)).await?;
     let policy = match show {
         Some(name) => {
@@ -5374,10 +5401,7 @@ async fn routing_policy_report(
         .router_policy_bindings()
         .map(|(name, policy, _)| (name.to_owned(), policy.to_owned()))
         .collect();
-    let path = loaded
-        .as_ref()
-        .map(|lock| lock.path.clone())
-        .or_else(|| bitrouter::policy_lock::resolve_path(&cfg, Some(config_path)));
+    let path = loaded.as_ref().and_then(|lock| lock.path.clone());
     let policies = loaded
         .as_ref()
         .map(|lock| lock.document.policies.keys().cloned().collect())
@@ -5387,7 +5411,14 @@ async fn routing_policy_report(
         path: path.map(|path| path.display().to_string()),
         candidate_path: None,
         digest: loaded.as_ref().map(|lock| lock.digest.clone()),
-        source: matches!(action, "status" | "show").then(|| "disk".to_string()),
+        source: matches!(action, "status" | "show").then(|| {
+            if loaded.as_ref().is_some_and(|lock| lock.path.is_none()) {
+                "bundled"
+            } else {
+                "disk"
+            }
+            .to_string()
+        }),
         mode: match cfg.policy.mode {
             config::PolicyRuntimeMode::Frozen => "frozen",
             config::PolicyRuntimeMode::Adaptive => "adaptive",
@@ -5933,6 +5964,8 @@ async fn run_code(
         check,
         read_only,
         workspace,
+        model_policy,
+        max_output_tokens,
     } = options;
     if agent.is_none() && remote_context.is_none() {
         if socket.is_some()
@@ -5941,6 +5974,8 @@ async fn run_code(
             && check.is_none()
             && !read_only
             && workspace.is_none()
+            && !model_policy
+            && max_output_tokens.is_none()
         {
             return bitrouter::dashboard::run(None, config.as_deref(), socket.as_deref(), None)
                 .await;
@@ -5958,14 +5993,23 @@ async fn run_code(
             routing.model,
             thread_id,
             check,
-            read_only,
+            bitrouter::native_code::Options {
+                read_only,
+                model_policy,
+                max_output_tokens,
+            },
             workspace,
         )
         .await;
     }
     anyhow::ensure!(
-        thread_id.is_none() && check.is_none() && !read_only && workspace.is_none(),
-        "--thread-id, --check, --read-only, and --workspace apply only to local bare `bro code`"
+        thread_id.is_none()
+            && check.is_none()
+            && !read_only
+            && workspace.is_none()
+            && !model_policy
+            && max_output_tokens.is_none(),
+        "--thread-id, --check, --read-only, --workspace, --model-policy, and --max-output-tokens apply only to local bare `bro code`"
     );
     let initial_session = if let Some(agent) = agent {
         if remote_context.is_some() {
@@ -7685,8 +7729,8 @@ mod tests {
     {
       "decision_id": "decision-1",
       "policy": "auto",
-      "route_projection": "agent_route/v1|code:generation|implement|normal",
-      "request_key": "agent_route/v1|unknown|implement|normal",
+      "route_projection": "semantic_route/v1|code:generation|implement|normal",
+      "request_key": "semantic_route/v1|unknown|implement|normal",
       "selected_tier": "economy",
       "baseline_tier": "strong",
       "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -8316,7 +8360,7 @@ mod tests {
                 observed_subject_digest: None,
                 active_experiment: Some(bitrouter::optimization::exploration::RouteExploration {
                     experiment_id: "experiment-1".into(),
-                    target_request_key: "agent_route/v1|unknown|implement|normal".into(),
+                    target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     champion_tier: "strong".into(),
                     challenger_tier: "economy".into(),
                     challenger_exposure_ppm: 100_000,
@@ -8395,8 +8439,8 @@ mod tests {
                 decisions: vec![EvalDecisionRef {
                     decision_id: format!("decision-{subject_id}"),
                     policy: "auto".into(),
-                    route_projection: "agent_route/v1|unknown|implement|normal".into(),
-                    request_key: "agent_route/v1|unknown|implement|normal".into(),
+                    route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+                    request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     selected_tier: "strong".into(),
                     selected_effort: None,
                     baseline_tier: None,
@@ -8598,8 +8642,8 @@ mod tests {
                 decisions: vec![EvalDecisionRef {
                     decision_id: format!("decision-{subject_id}"),
                     policy: "auto".into(),
-                    route_projection: "agent_route/v1|unknown|implement|normal".into(),
-                    request_key: "agent_route/v1|unknown|implement|normal".into(),
+                    route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+                    request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     selected_tier: "strong".into(),
                     selected_effort: None,
                     baseline_tier: None,
@@ -9134,11 +9178,13 @@ mod tests {
             Some(Command::WorkflowState {
                 action:
                     WorkflowStateAction::ReliabilityReport {
+                        policy,
                         database_url,
                         config,
                         output,
                     },
             }) => {
+                assert_eq!(policy, "auto");
                 assert_eq!(database_url, "sqlite:///tmp/bitrouter.db");
                 assert_eq!(config, PathBuf::from("/tmp/bitrouter.yaml"));
                 assert_eq!(output, PathBuf::from("/tmp/reliability.json"));
@@ -9189,6 +9235,6 @@ mod tests {
         let report = validate_config(&source).await.unwrap();
 
         assert!(!report.valid);
-        assert!(report.errors[0].contains("policy lock"));
+        assert!(report.errors[0].contains("missing policy"));
     }
 }

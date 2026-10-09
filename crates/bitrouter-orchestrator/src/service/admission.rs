@@ -440,6 +440,7 @@ impl ThreadService {
                 thread.snapshot.queued.push(receipt.clone());
             }
             let snapshot = TurnSnapshot {
+                context_routing: None,
                 resources: None,
                 steering: Vec::new(),
                 thread_id: target.thread_id.clone(),
@@ -463,6 +464,7 @@ impl ThreadService {
                 queued.turn_id.clone(),
                 TurnRecord {
                     fence: Arc::new(crate::control::LaunchFence::default()),
+                    native: Default::default(),
                     steering: Vec::new(),
                     verification_budget: None,
                     thread_id: target.thread_id.clone(),

@@ -40,6 +40,11 @@ mod stream_bridge;
 
 use stream_bridge::BridgeCapture;
 
+/// Request-local terminal capture for controlled streaming. The HTTP executor
+/// retains full Responses output privately until the collected attempt settles.
+#[derive(Default)]
+pub(super) struct NativeStreamCapture(Mutex<Option<Arc<BridgeCapture>>>);
+
 use super::native_continuation::{
     ContinuationFailure, NativeContinuationInput, NativeContinuationPlan,
 };
@@ -89,6 +94,18 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Complete a collected managed stream using protocol-native terminal
+    /// evidence. This callback is local: it must perform no I/O or retry.
+    /// The default preserves the canonical parts emitted by custom executors.
+    fn finish_native_stream(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+        collected: GenerateResult,
+    ) -> Result<GenerateResult> {
+        Ok(collected)
+    }
     /// Pure local assessment, distinct from actual generation dispatch evidence.
     fn native_continuation(
         &self,
@@ -1498,6 +1515,26 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    fn finish_native_stream(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        collected: GenerateResult,
+    ) -> Result<GenerateResult> {
+        let capture = ctx.extension::<NativeStreamCapture>().and_then(|runtime| {
+            runtime
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+        });
+        match capture {
+            Some(capture) => capture.complete_observed(self, target, prompt, ctx, collected),
+            None => Ok(collected),
+        }
+    }
+
     fn native_continuation(
         &self,
         target: &RoutingTarget,
@@ -1833,7 +1870,15 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
-        self.execute_http_stream(target, prompt, ctx, None).await
+        let capture = ctx.extension::<NativeStreamCapture>().map(|runtime| {
+            let capture = Arc::new(BridgeCapture::default());
+            *runtime
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(capture.clone());
+            capture
+        });
+        self.execute_http_stream(target, prompt, ctx, capture).await
     }
 }
 
@@ -1927,6 +1972,19 @@ impl DispatchExecutor {
 
 #[async_trait]
 impl Executor for DispatchExecutor {
+    fn finish_native_stream(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        collected: GenerateResult,
+    ) -> Result<GenerateResult> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .finish_native_stream(target, prompt, ctx, collected)
+    }
+
     fn preflight_managed(
         &self,
         target: &RoutingTarget,

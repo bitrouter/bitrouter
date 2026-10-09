@@ -20,9 +20,7 @@ unrecognised slug is a clean `400` rather than a provider lookup. Requesting
 `bitrouter/auto` before a policy is bound reports the missing binding and names
 `bro policy init`; it does not fall back to a provider default.
 
-The same policy is also reachable through the generic `@preset[:variant]` form
-(`@auto`, `@auto:cost`) that every preset uses; `bitrouter/auto` is the
-documented spelling. Explicit physical model ids remain passthrough. Copy the template, then start
+The template binds a named router; `bitrouter/auto` is its public spelling. Explicit physical model ids remain passthrough. Copy the template, then start
 the daemon with its config and validate it before serving traffic:
 
 ```bash
@@ -39,40 +37,31 @@ writing `policy.mode: adaptive`. The lock itself never selects runtime mode.
 
 ## Route inputs and safety
 
-The starter lock uses `key_strategy: agent_trace` and its predictive table keeps
-all fifteen `agent_route/v1|unknown|<role>|<risk>` baseline routes. A confident task
-classification also produces the more specific
-`agent_route/v1|<task-family>|<role>|<risk>` key. The twelve task-family values
-are `code:generation`, `code:debugging`, `code:review`, `code:sql_database`,
-`code:frontend_ui`, `code:devops_config`, `code:repository_analysis`,
-`agent:multi_step_planning`, `agent:workflow_execution`, `agent:web_research`,
-`agent:memory_operations`, and `agent:general`; roles are `orchestrate`,
-`implement`, `mechanical`, `verify`, and `finalize`; risk is `normal`,
-`context`, or `guarded`.
+The starter is a version 4 named policy with a strong default and no pretrained
+routes. Every tier is `{model, effort?, context}`; context must be `preserve` or
+`evidence`. A supplied effort is policy-owned; omission preserves caller effort.
 
-The official template intentionally has only three exact task-family overrides:
-`code:review|verify|normal` and `code:debugging|implement|guarded` route to
-`strong`, while `agent:web_research|mechanical|normal` routes to `balanced`.
-For every unlisted task cell, the router uses the matching v1 unknown-family
-role-and-risk baseline. Shell, file,
-and tool dispatch are bounded action/role evidence only: they do not create a
-task family or select a task-specific route. Task-specific cells remain
-compiler-owned experiments until settled evaluation evidence promotes them.
+Request history and Core task/evidence signals enter one bounded System One
+classifier. Rich API history can supply workflow state. Accepted task family and
+next-step role yield `semantic_route/v1|<task-family>|<role>|<risk>`; exact cells
+precede the unknown-family baseline and then the default. Truncated context and
+observed recovery affect risk. Missing or low-confidence labels abstain.
+Private headers and harness names do not select an algorithm or tier.
 
-Keep `tool_use_tier` and `tool_safe_tiers` in place when changing tier models,
-so capability guardrails still apply.
+Configure `decision_model.model` and its credential environment variable to
+activate the built-in TypeSafe protocol adapter. SDK hosts may inject another
+`DecisionExecutor` backend, including Jev with an adapter. A different base URL
+alone does not translate protocols. Backend configuration changes need restart.
 
-Runtime adapters may parse native request formats to enrich diagnostic
-evidence. They do not contribute policy keys, and no private BitRouter headers
-are required for routing. `key_strategy: agent_trace` selects the deterministic
-predictor; the resulting static policy keys are exclusively
-`agent_route/v1|<task-family>|<role>|<risk>`. Observed `agent_trace/v2` values
-remain telemetry and cannot be configured as routes. Retired route shapes and
-`key_strategy: legacy_fingerprint` are rejected during validation.
-`adequacy.explore_opening: true` opts
-source-neutral opening projections into exploration. Do not configure the
-removed `adequacy.max_downgraded_requests_per_session`; session identity is
-diagnostic-only and the parser rejects that setting.
+`context: evidence` allows the shared planner to select among a trusted owner's
+views. It does not grant omission, extract, summary or recall authority. Ordinary
+HTTP prompts retain their source history unless a trusted host supplies those
+capabilities and alternatives. Keep `tool_use_tier` and `tool_safe_tiers` aligned
+with your model actions.
+
+Old lock versions, scalar tiers, global `policy_table`, and the independent
+`decision_model.policy.generation_models` list are rejected. Write a current
+lock instead of carrying old scorecard evidence into System One routes.
 
 ## Generic evaluation and optimization
 

@@ -765,8 +765,8 @@ mod tests {
             subject.decisions = vec![EvalDecisionRef {
                 decision_id: "decision-1".into(),
                 policy: "auto".into(),
-                route_projection: "agent_route/v1|unknown|implement|normal".into(),
-                request_key: "agent_route/v1|unknown|implement|normal".into(),
+                route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+                request_key: "semantic_route/v1|unknown|implement|normal".into(),
                 selected_tier: selected_tier.into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),

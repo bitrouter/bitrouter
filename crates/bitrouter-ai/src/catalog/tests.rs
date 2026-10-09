@@ -28,6 +28,7 @@ fn old_snapshot() -> Result<CatalogSnapshot, Box<dyn std::error::Error>> {
             providers: provider.data,
             canonical: vec![types::CanonicalModel {
                 id: "old/model".into(),
+                ..Default::default()
             }],
         },
     })

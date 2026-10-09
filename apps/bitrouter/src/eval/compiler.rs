@@ -69,7 +69,30 @@ impl EvalEvidenceSnapshot {
 
     pub fn route_evidence(&self) -> Result<BTreeMap<(String, String), RouteEvalEvidence>> {
         let mut routes = BTreeMap::<(String, String), RouteEvalEvidence>::new();
-        for record in &self.records {
+        // Prefer task attribution over an overlapping episode, and the latest
+        // admitted evaluation from the same evaluator. A request outcome never
+        // supplies independent task quality or a second copy of task cost.
+        let mut records = self
+            .records
+            .iter()
+            .filter(|record| record.subject.scope != super::types::EvalScope::Request)
+            .map(|record| {
+                Ok((
+                    record,
+                    chrono::DateTime::parse_from_rfc3339(&record.result.submitted_at)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        records.sort_by(|(left, left_time), (right, right_time)| {
+            right
+                .subject
+                .scope
+                .cmp(&left.subject.scope)
+                .then_with(|| right_time.cmp(left_time))
+                .then_with(|| left.result_id.cmp(&right.result_id))
+        });
+        let mut attributed = BTreeSet::new();
+        for (record, _) in records {
             for decision in &record.subject.decisions {
                 let Some(credit) = credit_for_decision(
                     &record.result,
@@ -99,6 +122,13 @@ impl EvalEvidenceSnapshot {
                 {
                     continue;
                 }
+                if !attributed.insert((
+                    &decision.decision_id,
+                    &decision.policy_digest,
+                    &record.result.evaluator.config_digest,
+                )) {
+                    continue;
+                }
                 let route_projection = &decision.route_projection;
                 let route = routes
                     .entry((decision.policy.clone(), route_projection.clone()))
@@ -119,6 +149,9 @@ impl EvalEvidenceSnapshot {
                         _ => {}
                     }
                 }
+                route
+                    .classifier_cohorts
+                    .extend(super::types::classifier_cohorts(&record.subject));
                 route.sources.insert(record.result.evaluator.kind);
                 route
                     .evaluator_config_digests
@@ -180,6 +213,7 @@ impl EvalEvidenceSnapshot {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RouteEvalEvidence {
+    pub classifier_cohorts: BTreeSet<String>,
     pub baseline_tier: Option<String>,
     pub matched_request_keys: BTreeSet<String>,
     pub tiers: BTreeMap<String, TierEvalEvidence>,
@@ -318,11 +352,50 @@ mod tests {
         let routes = snapshot.route_evidence()?;
         let tier = &routes[&(
             "auto".into(),
-            "agent_route/v1|unknown|implement|normal".into(),
+            "semantic_route/v1|unknown|implement|normal".into(),
         )]
             .tiers["economy"];
         assert_eq!(tier.pass_rate_ppm(), 1_000_000);
         assert_eq!(tier.independent_tasks.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn overlapping_request_episode_and_task_credit_count_the_decision_once() -> anyhow::Result<()> {
+        let subject = subject()?;
+        let result = result(&subject);
+        let records = [
+            super::super::types::EvalScope::Request,
+            super::super::types::EvalScope::Episode,
+            super::super::types::EvalScope::Task,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, scope)| {
+            let mut subject = subject.clone();
+            subject.scope = scope;
+            subject.subject_id = format!("scope-{index}");
+            EvalEvidenceRecord {
+                result_id: format!("result-{index}"),
+                content_digest: "fixture".into(),
+                subject,
+                result: result.clone(),
+            }
+        })
+        .collect();
+        let snapshot = EvalEvidenceSnapshot {
+            evidence_root: "fixture".into(),
+            frozen_at: "2026-07-30T00:02:00Z".into(),
+            records,
+        };
+        let routes = snapshot.route_evidence()?;
+        let tier = routes
+            .values()
+            .next()
+            .and_then(|route| route.tiers.values().next())
+            .ok_or_else(|| anyhow::anyhow!("missing route evidence"))?;
+        assert_eq!(tier.eligible_episodes, 1);
+        assert_eq!(tier.independent_tasks, BTreeSet::from(["scope-2".into()]));
         Ok(())
     }
 
@@ -399,7 +472,7 @@ mod tests {
             .route_evidence()?;
         let tier = &routes[&(
             "auto".into(),
-            "agent_route/v1|unknown|implement|normal".into(),
+            "semantic_route/v1|unknown|implement|normal".into(),
         )]
             .tiers["economy"];
         assert_eq!(tier.eligible_episodes, 0);
@@ -421,12 +494,12 @@ mod tests {
         let service = EvalService::new(store.clone(), EvalConfig::default());
         let mut subject = subject()?;
         subject.decisions[0].route_projection =
-            "agent_route/v1|code:generation|implement|normal".into();
+            "semantic_route/v1|code:generation|implement|normal".into();
         subject.decisions.push(EvalDecisionRef {
             decision_id: "decision-b".into(),
             policy: "auto".into(),
-            route_projection: "agent_route/v1|unknown|verify|normal".into(),
-            request_key: "agent_route/v1|unknown|verify|normal".into(),
+            route_projection: "semantic_route/v1|unknown|verify|normal".into(),
+            request_key: "semantic_route/v1|unknown|verify|normal".into(),
             selected_tier: "strong".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
@@ -468,7 +541,7 @@ mod tests {
             .route_evidence()?;
         let quality = &routes[&(
             "auto".into(),
-            "agent_route/v1|code:generation|implement|normal".into(),
+            "semantic_route/v1|code:generation|implement|normal".into(),
         )]
             .tiers["economy"];
         assert_eq!(quality.pass_rate_ppm(), 1_000_000);
@@ -476,12 +549,16 @@ mod tests {
         assert_eq!(
             routes[&(
                 "auto".into(),
-                "agent_route/v1|code:generation|implement|normal".into(),
+                "semantic_route/v1|code:generation|implement|normal".into(),
             )]
                 .matched_request_keys,
-            BTreeSet::from(["agent_route/v1|unknown|implement|normal".into()])
+            BTreeSet::from(["semantic_route/v1|unknown|implement|normal".into()])
         );
-        let cost = &routes[&("auto".into(), "agent_route/v1|unknown|verify|normal".into())].tiers["strong"];
+        let cost = &routes[&(
+            "auto".into(),
+            "semantic_route/v1|unknown|verify|normal".into(),
+        )]
+            .tiers["strong"];
         assert_eq!(cost.pass_rate_ppm(), 0);
         assert_eq!(cost.eligible_episodes, 0);
         assert_eq!(cost.cost_micro_usd.mean(), Some(420));
@@ -503,8 +580,8 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-a".into(),
                 policy: "auto".into(),
-                route_projection: "agent_route/v1|unknown|implement|normal".into(),
-                request_key: "agent_route/v1|unknown|implement|normal".into(),
+                route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+                request_key: "semantic_route/v1|unknown|implement|normal".into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),

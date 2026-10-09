@@ -79,14 +79,13 @@ impl ThreadService {
             let (event_tx, mut event_rx) = mpsc::channel(64);
             let (approval_tx, mut approval_rx) = mpsc::channel(1);
             let (commit_tx, mut commit_rx) = mpsc::channel::<CommitRequest>(1);
-            let (model_tx, mut model_rx) = mpsc::channel::<crate::control::ModelBoundary>(1);
             let controls =
                 self.lock_state()
                     .turns
                     .get(&turn_id)
                     .map(|turn| crate::control::TurnControl {
                         fence: Arc::clone(&turn.fence),
-                        models: model_tx,
+                        native: Arc::clone(&turn.native),
                     });
             let run_cancel = cancel.clone();
             let profile = self
@@ -118,12 +117,16 @@ impl ThreadService {
                                     .cloned()
                             })
                             .unwrap_or_else(|| workspace.clone());
-                        agent.clone().with_instructions(
-                            thread.instructions.clone(),
-                            thread.instructions_epoch.as_deref()
-                                != Some(self.inner.instance_id.as_str()),
-                            root,
-                        )
+                        agent
+                            .clone()
+                            .with_native(thread.native.clone())
+                            .with_native_record_limit(self.inner.limits.recovery_page_bytes)
+                            .with_instructions(
+                                thread.instructions.clone(),
+                                thread.instructions_epoch.as_deref()
+                                    != Some(self.inner.instance_id.as_str()),
+                                root,
+                            )
                     }
                     None => agent.clone(),
                 }
@@ -148,10 +151,6 @@ impl ThreadService {
             });
             let report = loop {
                 tokio::select! {
-                    Some(mut request) = model_rx.recv() => {
-                        let result = self.prepare_model(&turn_id, &mut request).await;
-                        let _ = request.response.send(result);
-                    }
                     Some(request) = commit_rx.recv() => {
                         let result = self.commit_records(&turn_id, &request.records).await.map_err(|error| error.to_string());
                         let failed = result.is_err();
@@ -197,7 +196,6 @@ impl ThreadService {
                         Some(_) = event_rx.recv() => {},
                         Some(request) = approval_rx.recv() => { let _ = request.response.send(false); },
                         Some(request) = commit_rx.recv() => { let _ = request.response.send(Err("execution stopped after commit failure".into())); },
-                        Some(request) = model_rx.recv() => { let _ = request.response.send(Err("execution stopped after commit failure".into())); },
                     }
                 }
                 let _ = self
@@ -218,6 +216,17 @@ impl ThreadService {
                 return;
             }
             if let Some(mut report) = report {
+                {
+                    let mut state = self.lock_state();
+                    let thread_id = state.turns.get(&turn_id).map(|turn| turn.thread_id.clone());
+                    if let Some(thread) = thread_id.and_then(|id| state.threads.get_mut(&id)) {
+                        thread.native = if report.cleanup_unconfirmed || report.unknown_effect {
+                            None
+                        } else {
+                            report.native.clone()
+                        };
+                    }
+                }
                 if report.cleanup_unconfirmed {
                     self.inner
                         .cleanup_unconfirmed

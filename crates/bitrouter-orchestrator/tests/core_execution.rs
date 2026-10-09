@@ -12,6 +12,8 @@ mod budget;
 mod cancellation;
 #[path = "core_execution/capacity.rs"]
 mod capacity;
+#[path = "core_execution/context_decisions.rs"]
+mod context_decisions;
 #[path = "core_execution/input_count.rs"]
 mod input_count;
 #[path = "core_execution/material_work.rs"]
@@ -931,8 +933,10 @@ async fn all_infeasible_capacity_candidates_are_durably_rejected() -> TestResult
         vec![output(vec![text("must not run")])],
     )
     .await?;
+    let mut task = input();
+    task.max_output_tokens = Some(4096);
     session
-        .start("input", session.head().await.state_revision, input())
+        .start("input", session.head().await.state_revision, task)
         .await?;
     let state = session.drive().await?;
     assert_eq!(
@@ -1230,6 +1234,7 @@ fn input() -> TaskInput {
         model: "fixture-model".into(),
         effort: None,
         max_output_tokens: None,
+        context_limit_bytes: None,
         routing: RoutingSettings::default(),
         discardable_history: None,
         acceptance_criteria: vec!["Use the actual tool result".into()],
@@ -1370,6 +1375,15 @@ async fn bind_app_with_limits(
     harness: Arc<dyn HarnessPort>,
     limits: Limits,
 ) -> Result<CoreSession, Box<dyn std::error::Error>> {
+    bind_app_with_features(app, harness, limits, Vec::new()).await
+}
+
+async fn bind_app_with_features(
+    app: Arc<App>,
+    harness: Arc<dyn HarnessPort>,
+    limits: Limits,
+    features: Vec<String>,
+) -> Result<CoreSession, Box<dyn std::error::Error>> {
     let tools = vec![HarnessTool {
         name: "read".into(),
         description: "Read a file".into(),
@@ -1381,19 +1395,26 @@ async fn bind_app_with_limits(
         tool_manifest_digest: HarnessManifest::digest(&tools)?,
         tools,
         workspace_id: "workspace_1".into(),
-        workspace_revision: None,
+        workspace_revision: if features
+            .iter()
+            .any(|feature| feature == bitrouter_orchestrator::core::context_router::FEATURE)
+        {
+            Some("workspace-v2".into())
+        } else {
+            None
+        },
         permission_revision: 1,
         max_tool_output_bytes: 8192,
         // Concurrent-tool tests need room for their full frozen reply contracts
         // and prospective recovery archives, independently of checkpoint bytes.
         artifact_quota_bytes: 4 * 1024 * 1024,
         max_artifact_chunk_bytes: 8192,
-        required_features: Vec::new(),
+        required_features: features.clone(),
     };
     let caps = Capabilities {
         version: 1,
         core_instance_id: "core_1".into(),
-        operations: Vec::new(),
+        operations: features,
         transports: vec!["in_process".into()],
         unsupported_features: Vec::new(),
         limits: Limits::default(),

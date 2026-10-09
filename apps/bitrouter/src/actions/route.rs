@@ -264,8 +264,6 @@ pub trait RouteQuery: Send + Sync {
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
-use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
@@ -273,7 +271,7 @@ use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 use crate::daemon::{DaemonCommand, DaemonResponse, RouteHop};
 use crate::metering::PricingTable;
 use crate::paths::ConfigSource;
-use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
+use crate::policy_table_router::PolicyDecision;
 
 #[derive(Default)]
 struct RouteMetadata {
@@ -445,7 +443,6 @@ impl RouteAction {
     async fn via_config(&self, input: RouteInput) -> Result<RouteReport> {
         let resolved = crate::commands::resolve_discovered(self.resolved_config().await?).await;
         let pricing = crate::assemble::build_pricing_table(&resolved);
-        let policy = PolicyTableRouter::from_config(&resolved.policy_table);
         let table = ConfigRoutingTable::from_config(resolved.clone());
         let resolution = table
             .resolve_model(&input.model)
@@ -457,21 +454,8 @@ impl RouteAction {
             .and_then(|identity| router_source(&resolved, &identity.router_id));
         let bound_policy = resolution.policy.clone();
 
-        let prompt = probe_prompt(&input);
-        // Named adaptive policies need request/session state owned by the live
-        // runtime. A preview resolves their base route and lists candidates,
-        // but never fabricates a decision. The legacy global policy table is
-        // deterministic and remains replayable for routes without a binding.
-        let decision = if bound_policy.is_some() {
-            None
-        } else {
-            policy.map(|p| p.decision_for(&prompt, &HeaderMap::new()))
-        };
-        let effective_model = decision
-            .as_ref()
-            .and_then(|d| d.selected_model.clone())
-            .unwrap_or_else(|| resolution.clean_model.clone());
-        let effective_effort = decision.as_ref().and_then(|d| d.selected_effort);
+        let effective_model = resolution.clean_model.clone();
+        let effective_effort = None;
         let policy_report = if bound_policy.is_some() {
             crate::actions::administration::disk_policy(&self.source)
                 .await
@@ -501,10 +485,7 @@ impl RouteAction {
                 })
                 .collect()
         };
-        let policy_decision_executed = bound_policy
-            .as_ref()
-            .map(|_| false)
-            .or_else(|| decision.as_ref().map(|_| true));
+        let policy_decision_executed = bound_policy.as_ref().map(|_| false);
         Ok(assemble(
             &input.model,
             &effective_model,
@@ -515,7 +496,7 @@ impl RouteAction {
             } else {
                 ResolvedVia::Config
             },
-            decision.as_ref(),
+            None,
             RouteMetadata {
                 effective_effort,
                 router: resolution.router,
@@ -603,27 +584,6 @@ fn assemble(
     }
 }
 
-/// A probe prompt for the preview: the requested model plus, when given, the
-/// prompt text as a single user turn (so the policy fingerprint reflects an
-/// opening request for that model).
-fn probe_prompt(input: &RouteInput) -> Prompt {
-    let messages = match &input.prompt {
-        Some(text) => vec![Message::text(Role::User, text.clone())],
-        None => Vec::new(),
-    };
-    Prompt {
-        model: input.model.clone(),
-        system: None,
-        system_provider_metadata: ProviderMetadata::new(),
-        messages,
-        tools: Vec::new(),
-        params: GenerationParams::default(),
-        response_format: None,
-        tool_choice: None,
-        stream: false,
-    }
-}
-
 /// The top hop's rate card: the base per-token rates plus, for tiered models,
 /// the higher long-context brackets so the preview isn't misleading (PR-2
 /// review finding 3 — reporting only the base rates understates a long-context
@@ -695,11 +655,14 @@ providers:
     active: true
     models:
       - id: demo-model
+routers:
+  demo:
+    selection: { kind: model, model: demo-model }
 "#;
 
     /// Two models, with a policy table that routes every request to the
     /// *second* one. What the caller asks for and what would run differ.
-    const POLICY_REDIRECTS: &str = r#"
+    const ROUTER_REDIRECTS: &str = r#"
 providers:
   demo:
     api_base: https://api.example.test
@@ -708,12 +671,9 @@ providers:
     models:
       - id: demo-model
       - id: demo-model-big
-policy_table:
-  tiers:
-    big:
-      model: demo-model-big
-      effort: high
-  default_tier: big
+routers:
+  demo:
+    selection: { kind: model, model: demo-model-big }
 "#;
 
     /// The direct path and injected port answer with the same bytes.
@@ -784,44 +744,24 @@ policy_table:
         Ok(())
     }
 
-    /// The disagreement this phase resolves: `bro route` used to skip the
-    /// policy table, so it named the requested model while the daemon would
-    /// have run another one. Both surfaces now run it, and both say so.
     #[tokio::test]
-    async fn both_surfaces_apply_the_policy_table() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let action = RouteAction::new(config_source(dir.path(), POLICY_REDIRECTS), None);
+    async fn both_surfaces_resolve_the_named_router() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let action = RouteAction::new(config_source(dir.path(), ROUTER_REDIRECTS), None);
         let input = RouteInput {
-            model: "demo-model".to_string(),
-            prompt: Some("write me a function".to_string()),
+            model: "bitrouter/demo".into(),
+            prompt: Some("write a function".into()),
         };
-
-        let cli = action.report(input.clone()).await.expect("cli surface");
-        let port = RouteQuery::route(&action, input)
-            .await
-            .expect("port surface");
-
-        for (surface, report) in [("cli", &cli), ("port", &port)] {
-            assert_eq!(report.requested_model, "demo-model", "{surface}");
-            assert_eq!(
-                report.effective_model, "demo-model-big",
-                "{surface} surface ignored the policy table — it would name a model the \
-                 daemon would never pick"
-            );
-            // The chain is resolved for the *effective* model, not the asked-for
-            // one: a preview that priced the wrong model would be worse than
-            // none.
+        let cli = action.report(input.clone()).await?;
+        let port = RouteQuery::route(&action, input).await?;
+        for report in [&cli, &port] {
+            assert_eq!(report.requested_model, "bitrouter/demo");
+            assert_eq!(report.effective_model, "demo-model-big");
             assert_eq!(report.provider_chain[0].service_id, "demo-model-big");
-            let decision = report
-                .policy_decision
-                .as_ref()
-                .unwrap_or_else(|| panic!("{surface} surface reported no policy decision"));
-            assert_eq!(decision.selected_model.as_deref(), Some("demo-model-big"));
+            assert!(report.policy_decision.is_none());
         }
-        assert_eq!(
-            serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&port).expect("port json"),
-        );
+        assert_eq!(serde_json::to_value(&cli)?, serde_json::to_value(&port)?);
+        Ok(())
     }
 
     #[tokio::test]
@@ -849,12 +789,19 @@ routers:
         );
         std::fs::write(
             dir.path().join("policy-lock.yaml"),
-            r#"lockfileVersion: 1
+            r#"lockfileVersion: 4
+artifact:
+  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  source_snapshot_time_unix_ms: 0
+  compiler:
+    id: bitrouter-policy-compiler
+    version: 1
+    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 policies:
   coding:
     key_strategy: agent_trace
     tiers:
-      strong: demo-model-big
+      strong: { model: demo-model-big, context: evidence }
     routes: {}
     default_tier: strong
     tool_use_tier: strong
@@ -908,7 +855,7 @@ policies:
         let served: std::sync::Arc<dyn RouteQuery> =
             std::sync::Arc::new(RouteAction::new(source, None));
         let ask = || RouteInput {
-            model: "demo-model".to_string(),
+            model: "bitrouter/demo".to_string(),
             prompt: None,
         };
 
@@ -917,7 +864,7 @@ policies:
         assert!(before.policy_decision.is_none(), "no policy table yet");
 
         // The user edits the file the server was started against.
-        config_source(dir.path(), POLICY_REDIRECTS);
+        config_source(dir.path(), ROUTER_REDIRECTS);
 
         let after = served
             .route(ask())

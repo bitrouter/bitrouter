@@ -13,7 +13,8 @@ use http::{HeaderName, HeaderValue};
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind};
-use crate::workflow_state::predictive::{NextActionClass, NextStepRole, ProgressState, TaskFamily};
+use crate::workflow_state::predictive::NextActionClass;
+use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 
 #[derive(Debug, Clone)]
 pub struct WorkflowTraceFixture {

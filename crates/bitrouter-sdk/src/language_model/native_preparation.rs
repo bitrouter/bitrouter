@@ -58,7 +58,7 @@ pub struct NativePreparationWorkReport {
 }
 
 pub(crate) struct NativePreparationRuntime {
-    control: Arc<dyn NativeExecutionControl>,
+    pub(crate) control: Arc<dyn NativeExecutionControl>,
     next_work: AtomicU32,
     active: AtomicBool,
 }

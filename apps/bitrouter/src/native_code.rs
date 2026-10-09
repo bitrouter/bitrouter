@@ -29,6 +29,9 @@ enum SubmissionMode {
 }
 #[derive(Default)]
 struct Session {
+    model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
+    max_output_tokens: Option<u32>,
+    model_config: Option<bitrouter_sdk::config::Config>,
     thread_id: Option<String>,
     create_key: String,
     create_uncertain: bool,
@@ -138,15 +141,22 @@ fn show_directory(state: &mut NativeState, directory: &mut Directory, page: Thre
     );
 }
 
+pub struct Options {
+    pub read_only: bool,
+    pub model_policy: bool,
+    pub max_output_tokens: Option<u32>,
+}
+
 pub async fn run(
     config: Option<&Path>,
     control_override: Option<&Path>,
     model_override: Option<String>,
     reattach: Option<String>,
     check: Option<String>,
-    read_only: bool,
+    options: Options,
     workspace_override: Option<PathBuf>,
 ) -> Result<()> {
+    let read_only = options.read_only;
     let source = crate::paths::resolve_config(config)?;
     let cfg = crate::paths::load_config(&source).await?;
     let control_socket = control_override
@@ -164,13 +174,24 @@ pub async fn run(
     let client = ThreadClient::connect(&socket).await?;
     let workspace = workspace_override.unwrap_or(std::env::current_dir()?);
     let mut state = NativeState {
-        model: model_override.or(cfg.chat.model).unwrap_or_default(),
+        model: model_override
+            .or_else(|| crate::policy_lock::native_default_model(&cfg).map(str::to_owned))
+            .unwrap_or_default(),
         workspace: workspace.display().to_string(),
         status: "idle".into(),
         verification: "unavailable".into(),
         ..NativeState::default()
     };
     let mut session = Session {
+        max_output_tokens: options.max_output_tokens,
+        model_mode: if options.model_policy {
+            bitrouter_orchestrator::core::protocol::ModelMode::Policy
+        } else if state.model.is_empty() || reattach.is_some() {
+            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+        } else {
+            crate::policy_lock::native_model_mode(&cfg, &state.model)?
+        },
+        model_config: Some(cfg),
         thread_id: reattach,
         create_key: uuid::Uuid::new_v4().to_string(),
         pending: None,
@@ -422,7 +443,19 @@ async fn handle_event(
         if bitrouter_tui::native_agent::edit(editor, event) == Edit::Submitted
             && !editor.text().trim().is_empty()
         {
-            state.model = editor.text().trim().to_owned();
+            let model = editor.text().trim().to_owned();
+            if session.model_mode == bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+                && let Some(config) = &session.model_config
+            {
+                match crate::policy_lock::native_model_mode(config, &model) {
+                    Ok(mode) => session.model_mode = mode,
+                    Err(error) => {
+                        state.push(error.to_string());
+                        return Ok(false);
+                    }
+                }
+            }
+            state.model = model;
             state.model_editor = None;
             state.push(format!("Model selected: {}", state.model));
         }
@@ -483,7 +516,9 @@ async fn handle_event(
                     .request(Operation::CreateThread {
                         workspace: workspace.into(),
                         model: state.model.clone(),
+                        model_mode: session.model_mode,
                         effort: None,
+                        max_output_tokens: session.max_output_tokens,
                         read_only,
                         verification_command: check.clone(),
                         idempotency_key: session.create_key.clone(),
@@ -621,6 +656,14 @@ fn show_event(state: &mut NativeState, event: &ThreadEvent) {
     for change in &event.changes {
         let (id, text, kind) =
             match change {
+                ThreadChange::ContextRouting {
+                    turn_id,
+                    inspection,
+                } => (
+                    format!("context:{turn_id}"),
+                    context_status(inspection),
+                    NativeEntryKind::Detail,
+                ),
                 ThreadChange::TurnQueued {
                     user_item_id,
                     prompt,
@@ -789,7 +832,60 @@ async fn restore_history_at(
     Ok(())
 }
 
+fn context_status(
+    inspection: &bitrouter_orchestrator::core::context_router::inspection::Inspection,
+) -> String {
+    let decisions = &inspection.decisions;
+    let cost = decisions
+        .estimated_micro_usd
+        .map(|amount| format!("${:.6}", amount as f64 / 1_000_000.0))
+        .unwrap_or_else(|| "unknown".into());
+    let mut text = format!(
+        "Context: {} tasks · {} retained evidence groups ({} bytes)\nDecision calls: {} · pending {} · failed {} · input/output tokens {}/{} · estimated cost {}",
+        inspection.tasks.len(),
+        inspection.evidence_blocks,
+        inspection.retained_evidence_bytes,
+        decisions.attempts,
+        decisions.pending,
+        decisions.failures,
+        decisions
+            .input_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        decisions
+            .output_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        cost
+    );
+    for task in inspection.tasks.iter().take(16) {
+        text.push_str(&format!(
+            "\n{}: {:?} · model {} · view {} bytes · {} hidden · {} result references\n  {}",
+            task.task_id,
+            task.status,
+            task.selected_model.as_deref().unwrap_or("pending"),
+            task.prompt_bytes
+                .map(|bytes| bytes.to_string())
+                .unwrap_or_else(|| "pending".into()),
+            task.omitted_groups,
+            task.result_references,
+            task.text_preview
+        ));
+    }
+    if inspection.tasks_truncated || inspection.tasks.len() > 16 {
+        text.push_str("\nAdditional tasks are available in the Thread context-routing events.");
+    }
+    text
+}
+
 fn update_snapshot(state: &mut NativeState, snapshot: &TurnSnapshot) {
+    if let Some(inspection) = &snapshot.context_routing {
+        state.upsert(
+            format!("context:{}", snapshot.turn_id),
+            context_status(inspection),
+            NativeEntryKind::Detail,
+        );
+    }
     state.model = snapshot.model.clone();
     state.status = serde_json::to_value(snapshot.status)
         .ok()
