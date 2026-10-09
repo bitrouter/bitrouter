@@ -20,7 +20,7 @@ pub async fn replay_episode(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use bitrouter_sdk::language_model::{ApiProtocol, GenerationParams, Message, Prompt, Role};
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 
     use super::replay_episode;
     use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};

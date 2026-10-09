@@ -258,13 +258,13 @@ fn digest_hex(digest: &str) -> Result<&str> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use bitrouter_ai::types::{
+        ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role, UsageOrigin,
+    };
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::EvalConfig;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role,
-        SettlementContext, SettlementRecorder, UsageOrigin,
-    };
+    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{
@@ -401,12 +401,8 @@ mod tests {
         let pending = PendingEvalDecisionStore::default();
         let invocation = EvalInvocation::new("owner-a");
         pending.insert(&invocation, pending_decision("external-request"));
-        let recorder = EvalSettlementRecorder::new(
-            eval_store.clone(),
-            pending.clone(),
-            std::sync::Arc::new(crate::metering::PricingTable::new()),
-        )
-        .with_trajectory(trajectory);
+        let recorder = EvalSettlementRecorder::new(eval_store.clone(), pending.clone())
+            .with_trajectory(trajectory);
         let mut missing_metering = context("external-request");
         missing_metering.emit(invocation.clone());
 
@@ -1625,6 +1621,7 @@ mod tests {
 
     fn context(request_id: &str) -> SettlementContext {
         SettlementContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: request_id.into(),
             caller: CallerContext::new("key-a", "owner-a"),
             target: None,

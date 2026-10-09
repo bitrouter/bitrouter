@@ -149,14 +149,22 @@ async fn rich_request_and_managed_input_share_classification_policy_and_settleme
         })
         .build()?;
     let mut request = request_for_model("@adaptive:preferred");
-    request.prompt.messages = vec![
+    request
+        .input
+        .generation_prompt_mut()
+        .ok_or_else(|| BitrouterError::internal("expected generation input"))?
+        .messages = vec![
         Message::text(Role::User, "Repair the failing parser test"),
         Message::text(
             Role::Assistant,
             "The failing case is reproduced and the parser fix is applied. Run the tests to verify it.",
         ),
     ];
-    let prompt = request.prompt.clone();
+    let prompt = request
+        .input
+        .generation_prompt()
+        .ok_or_else(|| BitrouterError::internal("expected generation input"))?
+        .clone();
     let pipeline = app
         .language_model()
         .ok_or_else(|| BitrouterError::internal("missing pipeline"))?;
@@ -169,7 +177,18 @@ async fn rich_request_and_managed_input_share_classification_policy_and_settleme
     let managed = app
         .execute_native_controlled(prompt, CallerContext::local(), control.clone())
         .await?;
-    assert_eq!(ordinary.result.content, managed.result.content);
+    assert_eq!(
+        ordinary
+            .result
+            .generation()
+            .ok_or_else(|| BitrouterError::internal("expected generation result"))?
+            .content,
+        managed
+            .result
+            .generation()
+            .ok_or_else(|| BitrouterError::internal("expected generation result"))?
+            .content
+    );
     let inputs = semantic.0.lock().await;
     assert_eq!(
         inputs.len(),
@@ -226,19 +245,27 @@ async fn rejected_entry_never_calls_the_semantic_backend() -> Result<()> {
     Ok(())
 }
 
-struct RewriteCommittedPrompt(PromptOverrides);
+struct RewriteCommittedPrompt(PromptOverrides, bool);
 
 #[async_trait]
 impl RouteHook for RewriteCommittedPrompt {
     async fn resolve(&self, _: &mut Vec<RoutingTarget>, ctx: &mut PipelineContext) -> Result<()> {
-        ctx.apply_preset_overrides(&self.0);
+        if !self.1 {
+            ctx.apply_preset_overrides(&self.0)?;
+        }
+        Ok(())
+    }
+    async fn after_resolve(&self, _: &[RoutingTarget], ctx: &mut PipelineContext) -> Result<()> {
+        if self.1 {
+            ctx.apply_preset_overrides(&self.0)?;
+        }
         Ok(())
     }
 }
 
 #[tokio::test]
 async fn route_hooks_cannot_change_the_committed_prompt() -> Result<()> {
-    for overrides in [
+    for (overrides, after_resolve) in [
         PromptOverrides {
             system_prompt: Some("Changed after context admission".into()),
             ..Default::default()
@@ -247,12 +274,15 @@ async fn route_hooks_cannot_change_the_committed_prompt() -> Result<()> {
             params: serde_json::Map::from_iter([("store".into(), serde_json::json!(true))]),
             ..Default::default()
         },
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|overrides| [false, true].map(move |late| (overrides.clone(), late)))
+    {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(routing_table(&["p1"]))
-            .route_hook(RewriteCommittedPrompt(overrides))
+            .route_hook(RewriteCommittedPrompt(overrides, after_resolve))
             .executor(Arc::new(NeverCalledExecutor(calls.clone())));
         let result = builder.build()?.execute(request()).await;
         assert!(

@@ -4,7 +4,8 @@
 > [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) replaces origin-server
 > tasks with the app-owned action contract and retained CLI/TUI/HTTP consumers.
 
-Status: **ready to execute** · Date: 2026-09-06
+Status: **executed in #880; ledger complete at T9**
+· Date: 2026-09-06
 · Design of record: [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) (the *impl spec*)
 · Rationale of record: [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) (the *research spec*)
 

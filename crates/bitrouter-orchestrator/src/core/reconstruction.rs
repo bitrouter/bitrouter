@@ -4,8 +4,8 @@
 //! Completion alone never makes evidence optional. Removed history remains in
 //! the rejected step's immutable snapshot.
 
+use bitrouter_ai::types::{Message, Prompt, Role};
 use bitrouter_sdk::language_model::native::NativePlan;
-use bitrouter_sdk::language_model::types::{Message, Prompt, Role};
 use serde::{Deserialize, Serialize};
 
 use super::checkpoint::sha256;

@@ -9,6 +9,15 @@ mod private_context;
 #[path = "native_http/protocol_matrix.rs"]
 mod protocol_matrix;
 
+fn generation(
+    output: &bitrouter_sdk::language_model::types::PipelineOutput,
+) -> anyhow::Result<bitrouter_ai::types::GenerateResult> {
+    output
+        .generation()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("generation fixture returned another operation"))
+}
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -16,6 +25,10 @@ use async_trait::async_trait;
 use axum_test::TestServer;
 use bitrouter::metering::entities::requests;
 use bitrouter::metering::pricing::ChargeEvidence;
+use bitrouter_ai::types::{
+    GenerationParams, Message, Prompt, ReasoningEffort, ReasoningEffortSource, ResponseFormat,
+    Role, Tool, ToolChoice,
+};
 use bitrouter_orchestrator::core::checkpoint::DurableHead;
 use bitrouter_orchestrator::core::protocol::{
     Bind, Capabilities, HarnessManifest, Limits, OwnershipGrant,
@@ -28,10 +41,6 @@ use bitrouter_sdk::language_model::native::{
     NativeProtocolValidation,
 };
 use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
-use bitrouter_sdk::language_model::types::{
-    GenerationParams, Message, Prompt, ReasoningEffort, ReasoningEffortSource, ResponseFormat,
-    Role, Tool, ToolChoice,
-};
 use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::EntityTrait;
 use serde_json::{Value, json};
@@ -393,7 +402,7 @@ async fn native_and_http_preserve_constraints_fallback_and_accounting() -> Resul
         assert_eq!(served.request_id, native.request_id);
         assert_eq!(served.actual_provider.as_deref(), Some("healthy"));
         assert_eq!(served.actual_model.as_deref(), Some("served-model"));
-        assert_eq!(served.result.as_ref(), Some(&native.result));
+        assert_eq!(served.result.as_ref(), Some(&generation(&native.result)?));
 
         for (upstream, model) in [
             (&fixture.failing, "selected-model"),

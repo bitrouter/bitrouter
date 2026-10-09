@@ -1,9 +1,9 @@
 //! A committed model result must survive rejection of its new tool contracts.
 
 use super::*;
+use bitrouter_ai::types::ToolResultOutput;
 use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter_orchestrator::core::checkpoint::ToolStartFence;
-use bitrouter_sdk::language_model::types::ToolResultOutput;
 
 pub(super) fn failed_capacity(state: &SessionSnapshot) -> TestResult {
     let run = state.run.as_ref().ok_or("run")?;

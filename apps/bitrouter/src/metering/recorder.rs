@@ -15,19 +15,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use bitrouter_ai::types::{FinishReason, UsageOrigin};
 use bitrouter_sdk::Result;
 use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::{
-    FinishReason, SettlementContext, SettlementRecorder, Usage, UsageOrigin,
-};
+use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 use serde::Serialize;
 
 use crate::auth::events::ApiPrincipalEstablished;
 use crate::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
-use crate::metering::pricing::{
-    ChargeEvidence, PricingSource, PricingTable, calculate_charge_evidence,
-    unavailable_charge_evidence,
-};
+use crate::metering::pricing::PricingTable;
 use crate::metering::store::MeteringStore;
 use crate::session_identity::SessionIdentityObserved;
 
@@ -82,26 +78,9 @@ impl MeteringRecorder {
         self
     }
 
-    fn charge_evidence(&self, ctx: &SettlementContext) -> ChargeEvidence {
-        let usage = Usage {
-            prompt_tokens: ctx.prompt_tokens,
-            completion_tokens: ctx.completion_tokens,
-            reasoning_tokens: ctx.reasoning_tokens,
-            cache_read_tokens: ctx.cache_read_tokens,
-            cache_write_tokens: ctx.cache_write_tokens,
-            web_search_count: 0,
-            origin: ctx.usage_origin,
-            raw: ctx.raw_usage.clone().map(Box::new),
-        };
-        if ctx.usage_origin == UsageOrigin::Unknown {
-            return unavailable_charge_evidence(&usage, "usage_unavailable");
-        }
-        match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
-            Some(pricing) if !pricing.is_unconfigured() => {
-                calculate_charge_evidence(&usage, &pricing, PricingSource::Configured)
-            }
-            _ => unavailable_charge_evidence(&usage, "pricing_not_found"),
-        }
+    /// The same capture can be installed by custom hosts composing this recorder.
+    pub fn tariff_capture(&self, require_known: bool) -> crate::metering::tariff::CaptureTariffs {
+        crate::metering::tariff::CaptureTariffs::new(self.pricing.clone(), require_known)
     }
 
     fn normalize_zero_usage_rejection(ctx: &mut SettlementContext) {
@@ -168,7 +147,7 @@ impl SettlementRecorder for MeteringRecorder {
         let observed_usage_origin = ctx.usage_origin;
         let observed_usage_known = observed_usage_origin != UsageOrigin::Unknown;
         Self::normalize_zero_usage_rejection(ctx);
-        let charge_evidence = self.charge_evidence(ctx);
+        let charge_evidence = crate::metering::tariff::settlement_charge_evidence(ctx);
         let cost_micro_usd = charge_evidence
             .charge_micro_usd
             .map(|value| {

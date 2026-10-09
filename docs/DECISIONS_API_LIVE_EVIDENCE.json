@@ -1,0 +1,262 @@
+{
+  "tested_at_utc": "2026-10-07T17:33:53.426188+00:00",
+  "source_head": "aa378f7c81777fce3a75d80d926a4d1a57255765",
+  "model_selector": "openai/gpt-6-luna",
+  "upstream": "https://api.openai.com/v1/decisions",
+  "provider": "openai",
+  "protocol": "decisions",
+  "downstream_auth": "skip_auth=true on isolated loopback listener",
+  "calls": [
+    {
+      "request_id": "live-decisions-text-08390e643685",
+      "http_status": 200,
+      "latency_ms": 1657,
+      "correlation_header": "live-decisions-text-08390e643685",
+      "response": {
+        "model": "gpt-6-luna",
+        "answers": [
+          {
+            "type": "predicate",
+            "name": "damage",
+            "probability": 1.0
+          },
+          {
+            "type": "choice",
+            "name": "physical_damage",
+            "choice": true,
+            "probabilities": [
+              {
+                "value": true,
+                "probability": 0.99
+              },
+              {
+                "value": false,
+                "probability": 0.01
+              }
+            ],
+            "confidence": 0.98
+          },
+          {
+            "type": "score",
+            "name": "severity",
+            "score": 1.0,
+            "probabilities": [
+              {
+                "value": 0,
+                "label": "none",
+                "probability": 0.0
+              },
+              {
+                "value": 1,
+                "label": "minor",
+                "probability": 1.0
+              },
+              {
+                "value": 2,
+                "label": "blocked",
+                "probability": 0.0
+              }
+            ],
+            "confidence": 1.0
+          }
+        ],
+        "usage": {
+          "input_tokens": 426,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "output_tokens": 0,
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "total_tokens": 426
+        }
+      },
+      "case": "text_predicate_boolean_choice_score"
+    },
+    {
+      "request_id": "live-decisions-image-a7f3d2c82e96",
+      "http_status": 200,
+      "latency_ms": 210,
+      "correlation_header": "live-decisions-image-a7f3d2c82e96",
+      "response": {
+        "model": "gpt-6-luna",
+        "answers": [
+          {
+            "type": "predicate",
+            "name": "red_image",
+            "probability": 1.0
+          }
+        ],
+        "usage": {
+          "input_tokens": 165,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "output_tokens": 0,
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "total_tokens": 165
+        }
+      },
+      "case": "inline_image_predicate",
+      "image_fixture_sha256": "becf0cf30d6978325d9ccdea315923e2dbbf7e591c2857b92b5f82e41957bb98"
+    }
+  ],
+  "settlements": [
+    {
+      "request_id": "live-decisions-text-08390e643685",
+      "original_selector": null,
+      "model_id": "gpt-6-luna",
+      "provider_id": "openai",
+      "prompt_tokens": 426,
+      "completion_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "usage_origin": "provider_reported",
+      "charge_status": "computed",
+      "estimated_charge_micro_usd": 43,
+      "streamed": 0,
+      "error": null,
+      "raw_usage": {
+        "input_tokens": 426,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 426
+      },
+      "charge_evidence": {
+        "tariff_snapshot": {
+          "protocol": "decisions",
+          "endpoint_profile": "openai_global",
+          "tariff_profile": "openai_global",
+          "pricing": {
+            "endpoint_profile": "openai_global",
+            "input_micro_usd_per_token": 0.1,
+            "cache_read_micro_usd_per_token": 0.0,
+            "cache_write_micro_usd_per_token": 0.0,
+            "output_micro_usd_per_token": 0.0,
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_micro_usd_per_token": 0.2,
+                "cache_read_micro_usd_per_token": null,
+                "cache_write_micro_usd_per_token": null,
+                "output_micro_usd_per_token": null
+              }
+            ]
+          },
+          "pricing_version": "sha256:15d85594da945f8954b4b224bbff0a4c05ac0d8fe7f9cb01330e5de822f630f5",
+          "billing_basis": "decisions-zero-cache-only-v1",
+          "unavailable_reason": null
+        },
+        "status": "computed",
+        "charge_micro_usd": 43,
+        "normalized_usage": {
+          "uncached_input_tokens": 426,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "effective_rates": {
+          "uncached_input_micro_usd_per_token": 0.1,
+          "cache_read_micro_usd_per_token": 0.0,
+          "cache_write_micro_usd_per_token": 0.0,
+          "output_micro_usd_per_token": 0.0
+        },
+        "pricing_source": "configured",
+        "pricing_version": "sha256:15d85594da945f8954b4b224bbff0a4c05ac0d8fe7f9cb01330e5de822f630f5",
+        "unknown_reason": null
+      }
+    },
+    {
+      "request_id": "live-decisions-image-a7f3d2c82e96",
+      "original_selector": null,
+      "model_id": "gpt-6-luna",
+      "provider_id": "openai",
+      "prompt_tokens": 165,
+      "completion_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "usage_origin": "provider_reported",
+      "charge_status": "computed",
+      "estimated_charge_micro_usd": 17,
+      "streamed": 0,
+      "error": null,
+      "raw_usage": {
+        "input_tokens": 165,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 165
+      },
+      "charge_evidence": {
+        "tariff_snapshot": {
+          "protocol": "decisions",
+          "endpoint_profile": "openai_global",
+          "tariff_profile": "openai_global",
+          "pricing": {
+            "endpoint_profile": "openai_global",
+            "input_micro_usd_per_token": 0.1,
+            "cache_read_micro_usd_per_token": 0.0,
+            "cache_write_micro_usd_per_token": 0.0,
+            "output_micro_usd_per_token": 0.0,
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_micro_usd_per_token": 0.2,
+                "cache_read_micro_usd_per_token": null,
+                "cache_write_micro_usd_per_token": null,
+                "output_micro_usd_per_token": null
+              }
+            ]
+          },
+          "pricing_version": "sha256:15d85594da945f8954b4b224bbff0a4c05ac0d8fe7f9cb01330e5de822f630f5",
+          "billing_basis": "decisions-zero-cache-only-v1",
+          "unavailable_reason": null
+        },
+        "status": "computed",
+        "charge_micro_usd": 17,
+        "normalized_usage": {
+          "uncached_input_tokens": 165,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "effective_rates": {
+          "uncached_input_micro_usd_per_token": 0.1,
+          "cache_read_micro_usd_per_token": 0.0,
+          "cache_write_micro_usd_per_token": 0.0,
+          "output_micro_usd_per_token": 0.0
+        },
+        "pricing_source": "configured",
+        "pricing_version": "sha256:15d85594da945f8954b4b224bbff0a4c05ac0d8fe7f9cb01330e5de822f630f5",
+        "unknown_reason": null
+      }
+    }
+  ],
+  "success": true,
+  "registry_source": "https://raw.githubusercontent.com/bitrouter/bitrouter/aa378f7c81777fce3a75d80d926a4d1a57255765/dist/registry",
+  "gateway_exit_code": 0,
+  "catalog_qualification": "The default main registry lacked Decisions at test time. This gateway fetched the immutable PR catalog listed in registry_source; no public catalog or production deployment was changed.",
+  "billing_qualification": "Zero-cache usage only. Persisted charges are configured tariff estimates, not invoice evidence; nonzero-cache billing remains unverified.",
+  "request_fixtures": {
+    "text": "Synthetic damaged-laptop report; named predicate, boolean choice, and three-level severity rubric.",
+    "image": "Synthetic 32x32 solid-red RGB PNG supplied as an inline base64 data URL with detail=auto; named predicate."
+  }
+}

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use bitrouter_ai::types::{Content, Prompt, Role, ToolResultOutput};
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{Content, Prompt, Role, ToolResultOutput};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -83,7 +83,7 @@ async fn agents_md_is_durable_user_context_in_both_tool_modes()
                 .tools
                 .iter()
                 .filter_map(|tool| match tool {
-                    bitrouter_sdk::language_model::Tool::Function { name, .. }
+                    bitrouter_ai::types::Tool::Function { name, .. }
                         if crate::tools::WorkspaceTools::allowed(
                             crate::agent::ToolMode::Coding,
                             name,
@@ -602,7 +602,7 @@ async fn corrupt_or_unsettled_instruction_context_blocks_recovery()
                 match case {
                     "source" => snapshot.cwd = workspace.path().join("different"),
                     "message" => {
-                        *message = Some(bitrouter_sdk::language_model::Message::text(
+                        *message = Some(bitrouter_ai::types::Message::text(
                             Role::User,
                             "forged instructions",
                         ))
@@ -708,8 +708,8 @@ async fn local_registration_reads_ancestors_without_expanding_tool_permissions()
             .iter()
             .flat_map(|message| &message.content)
             .any(|content| matches!(content,
-                Content::ToolResult { call_id, output: ToolResultOutput::ErrorJson { value }, .. }
-                    if call_id == "escape" && value.get("error").is_some_and(|error|
+                Content::ToolResult { call_id, output: ToolResultOutput::Json { value }, .. }
+                    if call_id == "escape" && value["status"] == "error" && value["output"]["type"] == "error_json" && value["output"]["value"].get("error").is_some_and(|error|
                         error.as_str().is_some_and(|text| !text.is_empty()))
             ))
     );

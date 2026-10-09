@@ -3,21 +3,20 @@
 //! fetched metadata takes precedence when it is available.
 
 use anyhow::Result;
-use bitrouter_providers::registry::types::RegistryData;
+use bitrouter_ai::catalog::types::RegistryData;
 use bitrouter_sdk::config::RegistryConfig;
 
 /// OAuth providers have no credential env var, so the generic registry merge
 /// cannot auto-add them. A saved CLI login supplies the activation signal.
 pub(crate) fn enable_logged_in(config: &mut bitrouter_sdk::config::Config) {
-    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-    {
+    if let Ok(store) = crate::provider_credentials::load_default() {
         enable_with_store(config, &store);
     }
 }
 
 fn enable_with_store(
     config: &mut bitrouter_sdk::config::Config,
-    store: &bitrouter_providers::oauth::credential_store::CredentialStore,
+    store: &bitrouter_ai::auth::file::snapshot::CredentialStore,
 ) {
     if !config.inherit_defaults
         || !config.registry.enabled
@@ -39,7 +38,7 @@ fn bundled() -> Result<RegistryData> {
     )))?)
 }
 
-pub(crate) fn provider(id: &str) -> Result<Option<bitrouter_providers::ProviderEntry>> {
+pub(crate) fn provider(id: &str) -> Result<Option<crate::providers::entry::ProviderEntry>> {
     if !matches!(id, "openai-codex" | "claude-code") {
         return Ok(None);
     }
@@ -47,13 +46,13 @@ pub(crate) fn provider(id: &str) -> Result<Option<bitrouter_providers::ProviderE
         .providers
         .iter()
         .find(|provider| provider.name == id)
-        .map(bitrouter_providers::builtin::entry_from_registry)
+        .map(crate::providers::builtin::entry_from_registry)
         .transpose()
         .map_err(Into::into)
 }
 
 pub(crate) async fn load(registry: &RegistryConfig) -> Option<RegistryData> {
-    let remote = bitrouter_providers::registry::apply::load_or_cached(registry).await;
+    let remote = crate::catalog::load(registry).await;
     match supplement(registry, remote.clone()) {
         Ok(data) => data,
         Err(error) => {
@@ -63,7 +62,7 @@ pub(crate) async fn load(registry: &RegistryConfig) -> Option<RegistryData> {
     }
 }
 
-fn supplement(
+pub(crate) fn supplement(
     registry: &RegistryConfig,
     remote: Option<RegistryData>,
 ) -> Result<Option<RegistryData>> {
@@ -125,9 +124,9 @@ mod tests {
         for provider in data
             .providers
             .iter()
-            .filter(|provider| provider.is_active() && provider.is_mergeable())
+            .filter(|provider| provider.is_active() && provider.is_public())
         {
-            bitrouter_providers::builtin::entry_from_registry(provider)?;
+            crate::providers::builtin::entry_from_registry(provider)?;
         }
         Ok(())
     }
@@ -150,7 +149,8 @@ mod tests {
 
     #[test]
     fn stored_login_activates_subscription_without_a_provider_config_entry() -> Result<()> {
-        use bitrouter_providers::oauth::credential_store::{Credential, CredentialStore};
+        use bitrouter_ai::auth::credentials::Credential;
+        use bitrouter_ai::auth::file::snapshot::CredentialStore;
         let dir = tempfile::tempdir()?;
         let mut store = CredentialStore::load(dir.path().join("credentials.json"))?;
         let mut config = bitrouter_sdk::config::Config::default();
@@ -158,7 +158,7 @@ mod tests {
         assert!(!config.providers.contains_key("openai-codex"));
         store.set("openai-codex", "default", Credential::api_key("test-only"))?;
         enable_with_store(&mut config, &store);
-        bitrouter_providers::registry::apply::apply_registry(&mut config, &bundled()?);
+        crate::providers::registry::apply::apply_registry(&mut config, &bundled()?);
         let provider = config
             .providers
             .get("openai-codex")

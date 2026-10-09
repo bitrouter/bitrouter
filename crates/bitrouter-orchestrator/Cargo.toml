@@ -17,6 +17,7 @@ thiserror.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bitrouter-sdk.workspace = true
+bitrouter-ai.workspace = true
 futures.workspace = true
 globset.workspace = true
 hex.workspace = true

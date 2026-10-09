@@ -568,9 +568,10 @@ Today the job asserts, positively, that `axum` and `opentelemetry` resolve in
 `bitrouter-sdk --all-features` — and exits with *"misspelled in this list?"* if
 they do not. After the move, `opentelemetry` is absent from that tree by
 design, so the positive assertion must move to the new crate rather than be
-deleted. The negative loop (`bitrouter-guardrails`, `bitrouter-providers`,
-`dist-helper` must not reach `axum` or `opentelemetry` when resolved alone)
-gains the new crate as a subject for `axum` only.
+deleted. The negative loop originally included `bitrouter-providers`; that
+package is now retired. The active subjects (`bitrouter-ai`, `bitrouter-guardrails`,
+`dist-helper` and SDK) retain their isolated dependency checks, with telemetry
+a subject for `axum` only.
 
 The `__otel-core` transport-less `compile_error!` step and the per-transport
 `cargo check` steps move with the features they guard. None of them is

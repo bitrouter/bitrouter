@@ -58,7 +58,7 @@ you admit and proposes a new policy you can review, publish, or revert.
 
 Keep the clients and workflows you already use:
 
-- **Model APIs** — OpenAI Chat Completions and Responses, Anthropic Messages, and Google Gemini `generateContent`, with cross-protocol routing.
+- **Model APIs** — OpenAI Chat Completions and Responses, and Anthropic Messages, with cross-protocol routing. Metered Gemini uses Google’s OpenAI-compatible Chat endpoint.
 - **Coding agents** — built-in Codex and Claude support through `bro code`, native launchers, and ACP adapters.
 - **Tools & skills** — aggregate configured MCP servers behind one endpoint, with tools and [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) skills available through the same gateway.
 

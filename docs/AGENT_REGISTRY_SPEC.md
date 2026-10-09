@@ -392,12 +392,18 @@ data that get written to disk, so:
 Identical to models and providers, deliberately.
 
 `registry/{agents,runtimes}/*.yaml` → `dist-helper registry build` →
-`dist/registry/{agents,runtimes}.json` (committed, `{"data": [...]}` envelope,
-key-sorted by `serialize_data`) → fetched at runtime from
-`DEFAULT_REGISTRY_URL` by
-[`bitrouter-providers/src/registry/fetch.rs`](../crates/bitrouter-providers/src/registry/fetch.rs),
-cached under `$XDG_CACHE_HOME/bitrouter/` with the same 24h freshness window and
-stale-fallback read, merged in `apply`.
+`dist/registry/{agents,runtimes}.json` and the package-local copies under
+`apps/bitrouter/registry-dist/` (committed, `{"data": [...]}` envelope,
+key-sorted by `serialize_data`). The current application builds its ACP catalog
+from the package-local artifacts in [`apps/bitrouter/build.rs`](../apps/bitrouter/build.rs).
+
+The model/provider runtime uses the selected source through
+[`bitrouter-ai/src/catalog/fetch.rs`](../crates/bitrouter-ai/src/catalog/fetch.rs).
+That fetcher reads only `providers.json` and `models.json`; it does not load ACP
+metadata. The official ACP registry client in
+[`agent_registry.rs`](../apps/bitrouter/src/agent_registry.rs) is a separate
+discovery path. ACP source/artifact relocation remains pending in the
+[AI refactor progress](BITROUTER_AI_REFACTOR_PROGRESS.md).
 
 **What is different about these bytes, and what to do about it.**
 `providers.json` names an `api_base` — a URL to send HTTPS to, with a key the

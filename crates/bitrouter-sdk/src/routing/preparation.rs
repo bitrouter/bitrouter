@@ -11,7 +11,8 @@ use crate::decision_model::{
     policy::DecisionPolicy,
     types::{DecisionError, DecisionFailure, DecisionUsage},
 };
-use crate::language_model::{Prompt, native::NativePlan};
+use crate::language_model::native::NativePlan;
+use bitrouter_ai::types::Prompt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 

@@ -10,11 +10,12 @@ use crate::error::{BitrouterError, Result};
 use super::executor::StreamPartStream;
 use super::native::NativeExecutionControl;
 use super::stream::{StreamOutcome, StreamProcessor};
-use super::types::{Content, FinishReason, GenerateResult, StreamPart};
+use bitrouter_ai::types::{Content, FinishReason, GenerateResult, ReasoningTextKind, StreamPart};
 
 fn invalid(message: &str) -> BitrouterError {
     BitrouterError::UpstreamInvalidResponse {
         message: message.into(),
+        usage: None,
     }
 }
 
@@ -97,6 +98,8 @@ struct Collector {
     result: GenerateResult,
     tools: BTreeMap<String, usize>,
     reasoning: BTreeMap<String, usize>,
+    active_reasoning: Option<usize>,
+    reasoning_summaries: BTreeMap<usize, String>,
     remaining: u64,
     terminal: bool,
 }
@@ -107,6 +110,8 @@ impl Collector {
             result: super::native_output::empty_result(),
             tools: BTreeMap::new(),
             reasoning: BTreeMap::new(),
+            active_reasoning: None,
+            reasoning_summaries: BTreeMap::new(),
             remaining: limit,
             terminal: false,
         }
@@ -144,7 +149,7 @@ impl Collector {
                 }),
             },
             StreamPart::TextEnd { .. } => {}
-            StreamPart::ReasoningStart { id } => {
+            StreamPart::ReasoningStart { id, .. } => {
                 if self
                     .reasoning
                     .insert(id.clone(), self.result.content.len())
@@ -152,19 +157,77 @@ impl Collector {
                 {
                     return Err(invalid("duplicate reasoning block identity"));
                 }
+                self.active_reasoning = Some(self.result.content.len());
                 self.result.content.push(Content::Reasoning {
+                    native: None,
                     text: String::new(),
                     provider_metadata: Default::default(),
                 });
             }
-            StreamPart::ReasoningDelta { text } => match self.result.content.last_mut() {
-                Some(Content::Reasoning { text: current, .. }) => current.push_str(text),
-                _ => self.result.content.push(Content::Reasoning {
-                    text: text.clone(),
-                    provider_metadata: Default::default(),
-                }),
-            },
-            StreamPart::ReasoningEnd { id, signature } => {
+            StreamPart::ReasoningDelta { text, source_kind } => {
+                let index = match self.active_reasoning {
+                    Some(index) => index,
+                    None => {
+                        let index = self.result.content.len();
+                        self.result.content.push(Content::Reasoning {
+                            native: None,
+                            text: String::new(),
+                            provider_metadata: Default::default(),
+                        });
+                        self.active_reasoning = Some(index);
+                        index
+                    }
+                };
+                if *source_kind == Some(ReasoningTextKind::Summary) {
+                    // Responses summary and reasoning text can arrive interleaved.
+                    // https://developers.openai.com/api/docs/guides/streaming-responses
+                    self.reasoning_summaries
+                        .entry(index)
+                        .or_default()
+                        .push_str(text);
+                } else if let Some(Content::Reasoning { text: current, .. }) =
+                    self.result.content.get_mut(index)
+                {
+                    current.push_str(text);
+                }
+            }
+            StreamPart::ReasoningEnd {
+                id,
+                signature,
+                native,
+            } => {
+                if let Some(index) = self.reasoning.get(id).copied() {
+                    if self.active_reasoning != Some(index) {
+                        return Err(invalid("reasoning end does not match its active block"));
+                    }
+                    if let Some(summary) = self.reasoning_summaries.remove(&index)
+                        && let Some(Content::Reasoning { text, .. }) =
+                            self.result.content.get_mut(index)
+                    {
+                        text.insert_str(0, &summary);
+                    }
+                    self.active_reasoning = None;
+                }
+                if let Some(native) = native {
+                    let index =
+                        self.reasoning.get(id).copied().ok_or_else(|| {
+                            invalid("native reasoning block has no opening identity")
+                        })?;
+                    let part = self
+                        .result
+                        .content
+                        .get_mut(index)
+                        .ok_or_else(|| invalid("native reasoning block disappeared"))?;
+                    let Content::Reasoning {
+                        native: retained, ..
+                    } = part
+                    else {
+                        return Err(invalid("native reasoning does not match a reasoning block"));
+                    };
+                    *retained = Some(native.clone());
+                    bitrouter_ai::protocol::responses::validate_reasoning_projection(part)
+                        .map_err(invalid)?;
+                }
                 if let Some(signature) = signature {
                     let index =
                         self.reasoning.get(id).copied().ok_or_else(|| {
@@ -256,7 +319,7 @@ impl Collector {
                 dynamic,
                 server_name,
             } => {
-                let mut provider_metadata = super::types::ProviderMetadata::new();
+                let mut provider_metadata = bitrouter_ai::types::ProviderMetadata::new();
                 if let Some(server_name) = server_name {
                     provider_metadata.insert(
                         "anthropic".into(),

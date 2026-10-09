@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, Write};
 
-use crate::language_model::{Content, Prompt, Role, ToolResultOutput};
+use bitrouter_ai::types::{Content, Prompt, Role, ToolResultOutput};
 
 /// A visible observation. These values are classifier input, never authority.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

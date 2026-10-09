@@ -31,49 +31,6 @@ models:
         cache_read: 0.003
       output_tokens:
         text: 0.28
-  - id: deepseek/deepseek-v3.2
-    provider_model_id: deepseek-ai/DeepSeek-V3.2
-    pricing:
-      input_tokens:
-        no_cache: 0.27
-      output_tokens:
-        text: 0.42
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: Pro/moonshotai/Kimi-K2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-        cache_read: 0.16
-      output_tokens:
-        text: 4
-  - id: qwen/qwen3.5-122b-a10b
-    provider_model_id: Qwen/Qwen3.5-122B-A10B
-    pricing:
-      input_tokens:
-        no_cache: 0.29
-      output_tokens:
-        text: 2.32
-  - id: qwen/qwen3.5-27b
-    provider_model_id: Qwen/Qwen3.5-27B
-    pricing:
-      input_tokens:
-        no_cache: 0.26
-      output_tokens:
-        text: 2.09
-  - id: qwen/qwen3.6-35b-a3b
-    provider_model_id: Qwen/Qwen3.6-35B-A3B
-    pricing:
-      input_tokens:
-        no_cache: 0.23
-      output_tokens:
-        text: 1.86
-  - id: z-ai/glm-5.1
-    provider_model_id: Pro/zai-org/GLM-5.1
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-      output_tokens:
-        text: 4.4
   - id: z-ai/glm-5.2
     provider_model_id: zai-org/GLM-5.2
     pricing:

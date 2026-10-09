@@ -250,10 +250,8 @@ mod tests {
         db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db), Default::default());
         let mut effort_candidate = candidate(1.0);
-        effort_candidate.static_effort =
-            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High);
-        effort_candidate.selected_effort =
-            Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low);
+        effort_candidate.static_effort = Some(bitrouter_ai::types::ReasoningEffort::High);
+        effort_candidate.selected_effort = Some(bitrouter_ai::types::ReasoningEffort::Low);
 
         import_semantic_reward_feedback(&service, &[effort_candidate]).await?;
 
@@ -264,11 +262,11 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("imported effort decision is missing"))?;
         assert_eq!(
             decision.baseline_effort,
-            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+            Some(bitrouter_ai::types::ReasoningEffort::High)
         );
         assert_eq!(
             decision.selected_effort,
-            Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+            Some(bitrouter_ai::types::ReasoningEffort::Low)
         );
         Ok(())
     }

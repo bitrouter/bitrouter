@@ -24,6 +24,10 @@ Choice, Score and Noul protocol; an OpenAI-compatible chat endpoint cannot
 replace it. Configuration errors or a missing credential fail server assembly.
 Credentials are excluded from execution checkpoints.
 
+This semantic backend is separate from the provider-facing `/v1/decisions` API.
+Native decision requests keep their typed input/output and operation-scoped hooks;
+only generation requests enter the model/context planner.
+
 Native `bro code` and `bro task run` use the Core execution adapter. Without a
 decision backend, the same compiler retains complete conservative context.
 Their selected generation model still writes responses,

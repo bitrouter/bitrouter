@@ -41,7 +41,7 @@ async fn native_cold_recovery_reuses_core_evidence_and_views()
         "persistent native evidence",
     )?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let make_app = |turns: Vec<bitrouter_sdk::language_model::GenerateResult>| {
+    let make_app = |turns: Vec<bitrouter_ai::types::GenerateResult>| {
         super::support::app_with_execution_mode(
             Arc::new(bitrouter_sdk::language_model::MockExecutor::new(
                 turns.into_iter().map(super::support::mock_stream).collect(),
@@ -1110,7 +1110,7 @@ impl bitrouter_sdk::language_model::Executor for PartialModel {
     async fn execute(
         &self,
         _target: &bitrouter_sdk::language_model::RoutingTarget,
-        _prompt: &bitrouter_sdk::language_model::Prompt,
+        _prompt: &bitrouter_ai::types::Prompt,
         _ctx: &bitrouter_sdk::language_model::PipelineContext,
     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
         Err(bitrouter_sdk::error::BitrouterError::Internal(
@@ -1120,18 +1120,18 @@ impl bitrouter_sdk::language_model::Executor for PartialModel {
     async fn execute_stream(
         &self,
         _target: &bitrouter_sdk::language_model::RoutingTarget,
-        _prompt: &bitrouter_sdk::language_model::Prompt,
+        _prompt: &bitrouter_ai::types::Prompt,
         _ctx: &bitrouter_sdk::language_model::PipelineContext,
     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
         use futures::StreamExt;
         Ok(Box::pin(
             futures::stream::once(async {
-                Ok(bitrouter_sdk::language_model::StreamPart::TextDelta {
+                Ok(bitrouter_ai::types::StreamPart::TextDelta {
                     text: "partial evidence only".into(),
                 })
             })
             .chain(futures::stream::pending::<
-                bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPart>,
+                bitrouter_sdk::Result<bitrouter_ai::types::StreamPart>,
             >()),
         ))
     }

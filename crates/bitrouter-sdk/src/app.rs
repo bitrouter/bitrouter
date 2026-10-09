@@ -48,8 +48,11 @@ use futures_core::Stream;
 
 use crate::caller::CallerContext;
 use crate::error::Result;
-use crate::language_model::protocol::sanitize_model_name;
-use crate::language_model::types::{PipelineRequest, PipelineResponse, Prompt, StreamPart};
+use bitrouter_ai::protocol::sanitize_model_name;
+use bitrouter_ai::types::{Prompt, StreamPart};
+
+use crate::language_model::types::{PipelineRequest, PipelineResponse};
+
 use crate::language_model::{self, PipelineBuilder};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
@@ -89,7 +92,7 @@ pub trait Plugin {
 pub trait PromptTransform: Send + Sync {
     /// Rewrite the prompt in place. A transform that does not apply to this
     /// request leaves it untouched.
-    fn apply(&self, prompt: &mut language_model::types::Prompt);
+    fn apply(&self, prompt: &mut bitrouter_ai::types::Prompt);
 
     /// Like [`apply`](Self::apply), but with the inbound request headers
     /// available. The default delegates to [`apply`](Self::apply), ignoring the
@@ -99,7 +102,7 @@ pub trait PromptTransform: Send + Sync {
     /// server always calls this method.
     fn apply_with_headers(
         &self,
-        prompt: &mut language_model::types::Prompt,
+        prompt: &mut bitrouter_ai::types::Prompt,
         _headers: &http::HeaderMap,
     ) {
         self.apply(prompt);
@@ -207,7 +210,7 @@ impl App {
         })?;
         let requested_model = sanitize_model_name(&prompt.model);
         let requested_effort = (prompt.params.reasoning_effort_source
-            == crate::language_model::types::ReasoningEffortSource::Caller)
+            == bitrouter_ai::types::ReasoningEffortSource::Caller)
             .then_some(prompt.params.reasoning_effort)
             .flatten();
         let mut prompt = prompt;
@@ -229,13 +232,22 @@ impl App {
                     work_index,
                 },
                 async {
-                    transform.apply_with_headers(&mut request.prompt, &headers);
+                    transform.apply_with_headers(
+                        request.input.generation_prompt_mut().ok_or_else(|| {
+                            crate::error::BitrouterError::bad_request(
+                                "managed request requires generation",
+                            )
+                        })?,
+                        &headers,
+                    );
                     Ok(())
                 },
             )
             .await?;
         }
-        let prompt = &mut request.prompt;
+        let prompt = request.input.generation_prompt_mut().ok_or_else(|| {
+            crate::error::BitrouterError::bad_request("managed request requires generation")
+        })?;
         if (control.model_selection() == crate::language_model::native::NativeModelSelection::Fixed
             && prompt.model != requested_model)
             || requested_effort.is_some_and(|effort| prompt.params.reasoning_effort != Some(effort))
@@ -246,7 +258,7 @@ impl App {
         }
         if requested_effort.is_some() {
             prompt.params.reasoning_effort_source =
-                crate::language_model::types::ReasoningEffortSource::Caller;
+                bitrouter_ai::types::ReasoningEffortSource::Caller;
         }
         request.model = prompt.model.clone();
         let control = Arc::new(TransformCheckedControl {
@@ -378,7 +390,7 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
         self.inner.observe_stream()
     }
 
-    async fn on_stream_part(&self, request_id: &str, part: &crate::language_model::StreamPart) {
+    async fn on_stream_part(&self, request_id: &str, part: &bitrouter_ai::types::StreamPart) {
         self.inner.on_stream_part(request_id, part).await;
     }
 
@@ -443,7 +455,7 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
     async fn rebuild_context(
         &self,
         rejected: &crate::language_model::native::NativePlan,
-    ) -> Result<Option<Vec<language_model::types::Message>>> {
+    ) -> Result<Option<Vec<bitrouter_ai::types::Message>>> {
         self.inner.rebuild_context(rejected).await
     }
     async fn validate_context_rebuild(
@@ -694,7 +706,7 @@ impl Default for AppBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::{GenerationParams, Prompt, ProviderMetadata};
+    use bitrouter_ai::types::{GenerationParams, Prompt, ProviderMetadata};
 
     struct SetModel(&'static str);
     impl PromptTransform for SetModel {

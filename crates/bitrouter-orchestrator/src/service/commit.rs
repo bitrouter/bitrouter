@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use bitrouter_sdk::language_model::{Message, Role};
+use bitrouter_ai::types::{Message, Role};
 
 use super::state::State;
 use super::threads::unknown_thread;

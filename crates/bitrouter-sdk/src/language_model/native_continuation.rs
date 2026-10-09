@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::native_context::{ORIGIN_NAMESPACE, metadata, metadata_mut};
-use super::types::{Content, Message, Prompt};
 use crate::error::BitrouterError;
+use bitrouter_ai::types::{Content, Message, Prompt};
 
 /// Successful source authenticated by the built-in executor, not by a caller's
 /// metadata or a count operation. The host seals only the supplied output.
@@ -16,7 +16,7 @@ pub struct NativeContinuationSource<'a> {
     /// Actual successful serving target.
     pub target: &'a super::types::RoutingTarget,
     /// Principal bound to the final request's actual credentials and scopes.
-    pub authority: &'a super::auth::ContinuationAuthority,
+    pub authority: &'a bitrouter_ai::auth::ContinuationAuthority,
     /// Private provider response identifier.
     pub response_id: &'a str,
     /// Every retained provider item can be replayed from canonical history.

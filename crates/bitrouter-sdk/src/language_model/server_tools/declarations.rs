@@ -21,8 +21,8 @@ use super::toolset::ToolContext;
 use crate::error::Result;
 use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::{HookDecision, PreRequestHook};
-use crate::language_model::types::{Prompt, ProviderMetadata, Tool};
 use crate::plugin::PluginId;
+use bitrouter_ai::types::{Prompt, ProviderMetadata, Tool};
 
 /// Router-tool name the model calls to consult a stronger model.
 pub const ADVISOR_TOOL: &str = "advisor";
@@ -254,7 +254,7 @@ impl PreRequestHook for ServerToolDeclarationsHook {
     }
 
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        let decls = ServerToolDeclarations::from_prompt(ctx.prompt());
+        let decls = ServerToolDeclarations::from_prompt(ctx.require_generation_prompt()?);
         if !decls.is_empty()
             && let Ok(value) = serde_json::to_value(&decls)
         {
@@ -301,7 +301,8 @@ fn spec_to_tool(spec: &serde_json::Value) -> Option<Tool> {
 mod tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::types::{GenerationParams, PipelineRequest};
+    use crate::language_model::types::PipelineRequest;
+    use bitrouter_ai::types::GenerationParams;
 
     fn prompt_with(tools: Vec<Tool>) -> Prompt {
         Prompt {

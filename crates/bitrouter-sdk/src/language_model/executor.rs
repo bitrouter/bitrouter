@@ -4,7 +4,9 @@
 
 use std::pin::Pin;
 use std::sync::{Mutex, RwLock};
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -13,20 +15,24 @@ use futures_core::Stream;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::native_auth::{is_continuation_scope_header, request_scope_headers};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::auth::{
-    AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
-    is_continuation_scope_header, normalize_auth_extension_error, request_scope_headers,
-};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::context::ProviderContinuation;
 use crate::language_model::context::RequireContinuationAuthority;
 use crate::language_model::context::SuppressProviderContinuation;
-use crate::language_model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
-use crate::language_model::types::{
-    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, Prompt, RoutingTarget,
-    StreamPart,
+use crate::language_model::types::{ExecutionResult, RoutingTarget};
+use bitrouter_ai::auth::{
+    AppliedAuth, AuthAppliers, AuthOperation, ContinuationAuthority, CredentialAuthority,
+    normalize_auth_extension_error,
 };
+use bitrouter_ai::client::{HttpTimeouts, ModelClient, parse_retry_after};
+use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
+use bitrouter_ai::protocol::SseEvent;
+use bitrouter_ai::protocol::decisions::{DecisionsCodec, DecisionsTransport};
+use bitrouter_ai::protocol::{OutboundAdapter, OutboundDispatch};
+use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
+use tokio_util::sync::CancellationToken;
 
 mod input_count;
 mod response_body;
@@ -140,6 +146,58 @@ pub trait Executor: Send + Sync {
     }
 
     /// Execute a non-streaming request against `target`.
+    /// Validate conversion before an observable provider attempt.
+    /// Custom executors add their own representation rules here. No I/O or
+    /// credential resolution belongs in preflight; execution checks again.
+    /// Return the categorical assessment so eligible effects can be observed.
+    /// The pipeline rechecks refusals even if a custom executor returns Ok.
+    fn preflight(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        _stream: bool,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        let report = bitrouter_ai::conversion::request_admission(prompt, &target.api_protocol);
+        report.require_admitted()?;
+        Ok(report)
+    }
+
+    /// Preflight a host-managed request after local origin and route validation.
+    /// Custom executors retain ordinary admission unless they opt in explicitly.
+    fn preflight_managed(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+        _ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        self.preflight(target, prompt, stream)
+    }
+
+    /// Validate native Decisions support without authentication or I/O.
+    fn preflight_decisions(
+        &self,
+        _target: &RoutingTarget,
+        _request: &DecisionRequest,
+    ) -> Result<()> {
+        Err(BitrouterError::bad_request(
+            "executor does not support Decisions",
+        ))
+    }
+
+    /// Execute a native Decisions request. Custom executors opt in explicitly.
+    async fn execute_decisions(
+        &self,
+        _target: &RoutingTarget,
+        _request: &DecisionRequest,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        Err(BitrouterError::bad_request(
+            "executor does not support Decisions",
+        ))
+    }
+
+    /// Execute a non-streaming generation request against `target`.
     async fn execute(
         &self,
         target: &RoutingTarget,
@@ -160,6 +218,8 @@ pub trait Executor: Send + Sync {
 pub enum MockResponse {
     /// A successful non-streaming result.
     Generate(GenerateResult),
+    /// A successful native Decisions result.
+    Decisions(DecisionResult),
     /// A successful streaming result (the part list, each emitted in order).
     Stream(Vec<StreamPart>),
     /// An error (drives fallback testing).
@@ -183,7 +243,7 @@ impl MockExecutor {
 
     /// Build an executor that always returns one successful text result.
     pub fn always_text(text: impl Into<String>) -> Self {
-        use crate::language_model::types::{Content, FinishReason, Usage};
+        use bitrouter_ai::types::{Content, FinishReason, Usage};
         let result = GenerateResult {
             content: vec![Content::Text {
                 text: text.into(),
@@ -205,7 +265,7 @@ impl MockExecutor {
     fn next(&self) -> Result<MockResponse> {
         self.queue
             .lock()
-            .expect("mock executor lock poisoned")
+            .map_err(|_| BitrouterError::internal("mock executor lock poisoned"))?
             .pop()
             .ok_or_else(|| BitrouterError::internal("MockExecutor: no scripted response left"))
     }
@@ -224,12 +284,12 @@ impl Executor for MockExecutor {
                 provider_id: target.provider_name.clone(),
                 model_id: target.service_id.clone(),
                 account_label: target.account_label.clone(),
-                result,
+                result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
                 server_tool_calls: Vec::new(),
             }),
-            MockResponse::Stream(_) => Err(BitrouterError::internal(
+            MockResponse::Stream(_) | MockResponse::Decisions(_) => Err(BitrouterError::internal(
                 "MockExecutor: scripted a stream response for a non-streaming call",
             )),
             MockResponse::Error(e) => Err(e),
@@ -247,55 +307,51 @@ impl Executor for MockExecutor {
                 let stream = futures::stream::iter(parts.into_iter().map(Ok));
                 Ok(Box::pin(stream))
             }
-            MockResponse::Generate(_) => Err(BitrouterError::internal(
-                "MockExecutor: scripted a non-streaming response for a streaming call",
-            )),
+            MockResponse::Generate(_) | MockResponse::Decisions(_) => {
+                Err(BitrouterError::internal(
+                    "MockExecutor: scripted a non-streaming response for a streaming call",
+                ))
+            }
             MockResponse::Error(e) => Err(e),
+        }
+    }
+
+    fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
+        if target.api_protocol != ApiProtocol::Decisions {
+            return Err(BitrouterError::bad_request(
+                "Decisions requires a Decisions target",
+            ));
+        }
+        DecisionsCodec::render_request(request)?;
+        Ok(())
+    }
+
+    async fn execute_decisions(
+        &self,
+        target: &RoutingTarget,
+        request: &DecisionRequest,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.preflight_decisions(target, request)?;
+        match self.next()? {
+            MockResponse::Decisions(result) => Ok(ExecutionResult {
+                provider_id: target.provider_name.clone(),
+                model_id: target.service_id.clone(),
+                account_label: target.account_label.clone(),
+                result: result.into(),
+                request_duration_ms: 1,
+                upstream_duration_ms: Some(1),
+                server_tool_calls: Vec::new(),
+            }),
+            MockResponse::Error(error) => Err(error),
+            MockResponse::Generate(_) | MockResponse::Stream(_) => Err(BitrouterError::internal(
+                "mock response operation does not match Decisions",
+            )),
         }
     }
 }
 
 // ===== real HTTP executor =====
-
-/// Upstream HTTP client timeout configuration. v0 #394: the upstream client had
-/// no timeouts, so a slow provider could hang a request forever.
-///
-/// `connect` / `read` / `pool_idle` / `tcp_keepalive` are set on the reqwest
-/// client at build time. `read` is a **per-read** (idle) timeout — it resets
-/// after every chunk, so it fires when an upstream sends no bytes for that long
-/// *including mid-stream*, which is the effective stream-idle guard.
-///
-/// `total` is the optional overall wall-clock cap for the whole request/stream,
-/// applied per-request via [`reqwest::RequestBuilder::timeout`]. It is `None` by
-/// default: an overall cap would kill legitimately long agentic/reasoning
-/// streams, so it is opt-in per deployment or per provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HttpTimeouts {
-    /// TCP connect timeout.
-    pub connect: Duration,
-    /// Per-read (idle) timeout — resets after each chunk; fires mid-stream when
-    /// the upstream goes silent for this long.
-    pub read: Duration,
-    /// How long an idle pooled connection is kept.
-    pub pool_idle: Duration,
-    /// TCP keepalive probe interval.
-    pub tcp_keepalive: Duration,
-    /// Optional overall wall-clock cap for the entire request/stream. `None` ⇒
-    /// no cap (default). Opt-in; keep it generous for reasoning providers.
-    pub total: Option<Duration>,
-}
-
-impl Default for HttpTimeouts {
-    fn default() -> Self {
-        Self {
-            connect: Duration::from_secs(10),
-            read: Duration::from_secs(120),
-            pool_idle: Duration::from_secs(90),
-            tcp_keepalive: Duration::from_secs(60),
-            total: None,
-        }
-    }
-}
 
 /// The real protocol-aware HTTP executor. For each routing target it picks the
 /// target's [`ProtocolAdapter`], renders the canonical prompt into that wire
@@ -345,7 +401,11 @@ fn normalize_upstream_error_payload(body: &str) -> serde_json::Value {
 /// Most non-2xx maps to [`BitrouterError::Upstream`] carrying the status.
 /// Request rejection, rate limiting, and credit exhaustion use distinct
 /// variants so callers can apply explicit fallback and response policies.
-fn classify_upstream_error(status: u16, body: &str, retry_after: Option<u64>) -> BitrouterError {
+pub(crate) fn classify_upstream_error(
+    status: u16,
+    body: &str,
+    retry_after: Option<u64>,
+) -> BitrouterError {
     if status == 429 {
         return BitrouterError::UpstreamRateLimited {
             retry_after,
@@ -371,58 +431,6 @@ fn classify_upstream_error(status: u16, body: &str, retry_after: Option<u64>) ->
     }
 }
 
-/// Parse the standard `Retry-After` response field into a delay in seconds.
-/// Both delay-seconds and HTTP-date are defined by RFC 9110 section 10.2.3:
-/// <https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3>.
-fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
-    let value = value?.to_str().ok()?.trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Some(seconds);
-    }
-    let deadline = httpdate::parse_http_date(value).ok()?;
-    match deadline.duration_since(std::time::SystemTime::now()) {
-        Ok(delay) => Some(delay.as_secs() + u64::from(delay.subsec_nanos() > 0)),
-        Err(_) => Some(0),
-    }
-}
-
-fn parse_upstream_success(
-    adapter: &dyn OutboundAdapter,
-    json: serde_json::Value,
-) -> Result<GenerateResult> {
-    adapter
-        .parse_response(json)
-        .map_err(|error| BitrouterError::UpstreamInvalidResponse {
-            message: error.to_string(),
-        })
-}
-
-/// A successful HTTP status is not itself a successful Responses lifecycle.
-/// Continuation requires the provider's typed terminal status plus a non-empty
-/// opaque id. Whitespace is intentionally preserved: provider ids are opaque,
-/// and the wire contract excludes only the empty string.
-fn validate_nonstream_responses_terminal(json: &serde_json::Value) -> Result<()> {
-    let status = json.get("status").and_then(serde_json::Value::as_str);
-    if !matches!(status, Some("completed" | "incomplete")) {
-        return Err(BitrouterError::UpstreamInvalidResponse {
-            message: format!(
-                "Responses response has non-success terminal status '{}'",
-                status.unwrap_or("<missing>")
-            ),
-        });
-    }
-    if json
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .is_none_or(str::is_empty)
-    {
-        return Err(BitrouterError::UpstreamInvalidResponse {
-            message: "Responses response missing non-empty 'id'".to_string(),
-        });
-    }
-    Ok(())
-}
-
 struct ProviderContinuationSubstitution {
     native: String,
     public_or_redacted: String,
@@ -430,149 +438,42 @@ struct ProviderContinuationSubstitution {
 
 #[derive(Clone)]
 struct UpstreamErrorScrubber {
-    replacements: Vec<(String, String)>,
-}
-
-fn is_sensitive_credential_name(name: &str) -> bool {
-    let normalized = name.to_ascii_lowercase().replace('-', "_");
-    matches!(
-        normalized.as_str(),
-        "authorization" | "proxy_authorization" | "cookie" | "set_cookie"
-    ) || normalized.split('_').any(|segment| {
-        matches!(
-            segment,
-            "auth" | "key" | "token" | "credential" | "secret" | "signature" | "sig"
-        )
-    })
+    redactor: bitrouter_ai::diagnostics::DiagnosticRedactor,
 }
 
 impl UpstreamErrorScrubber {
     fn new(continuation: Option<ProviderContinuationSubstitution>) -> Self {
         let mut scrubber = Self {
-            replacements: Vec::new(),
+            redactor: bitrouter_ai::diagnostics::DiagnosticRedactor::default(),
         };
         if let Some(continuation) = continuation {
-            scrubber.add_replacement(continuation.native, continuation.public_or_redacted);
+            scrubber
+                .redactor
+                .add_replacement(continuation.native, continuation.public_or_redacted);
         }
         scrubber
     }
 
     fn capture_request_credentials(&mut self, request: &reqwest::Request, target: &RoutingTarget) {
-        let effective_target_key = target
-            .api_key_override
-            .as_deref()
-            .unwrap_or(target.api_key.as_str());
-        for name in request.headers().keys() {
-            for value in request.headers().get_all(name) {
-                let Ok(value) = value.to_str() else {
-                    continue;
-                };
-                if !is_sensitive_credential_name(name.as_str())
-                    && (effective_target_key.is_empty() || value != effective_target_key)
-                {
-                    continue;
-                }
-                self.add_replacement(value.to_owned(), "[redacted credential]".to_owned());
-                if let Some((_, credential)) = value.split_once(' ')
-                    && !credential.is_empty()
-                {
-                    self.add_replacement(credential.to_owned(), "[redacted credential]".to_owned());
-                }
-                if name.as_str().eq_ignore_ascii_case("cookie") {
-                    for pair in value.split(';') {
-                        if let Some((_, credential)) = pair.trim().split_once('=')
-                            && !credential.is_empty()
-                        {
-                            self.add_replacement(
-                                credential.to_owned(),
-                                "[redacted credential]".to_owned(),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        for (name, value) in request.url().query_pairs() {
-            if is_sensitive_credential_name(&name)
-                || (!effective_target_key.is_empty() && value == effective_target_key)
-            {
-                self.add_replacement(value.into_owned(), "[redacted credential]".to_owned());
-            }
-        }
-        if let Some(raw_query) = request.url().query() {
-            for raw_pair in raw_query.split('&') {
-                let (_, raw_value) = raw_pair.split_once('=').unwrap_or((raw_pair, ""));
-                let Some((decoded_name, decoded_value)) =
-                    url::form_urlencoded::parse(raw_pair.as_bytes()).next()
-                else {
-                    continue;
-                };
-                if is_sensitive_credential_name(&decoded_name)
-                    || (!effective_target_key.is_empty()
-                        && decoded_value.as_ref() == effective_target_key)
-                {
-                    self.add_replacement(raw_value.to_owned(), "[redacted credential]".to_owned());
-                }
-            }
-        }
+        self.redactor
+            .capture_request_credentials(request, target.effective_api_key());
     }
 
     fn capture_effective_target_key(&mut self, target: &RoutingTarget) {
-        let credential = target
-            .api_key_override
-            .as_deref()
-            .unwrap_or(target.api_key.as_str());
-        self.add_replacement(credential.to_owned(), "[redacted credential]".to_owned());
-    }
-
-    fn add_replacement(&mut self, sensitive: String, replacement: String) {
-        if sensitive.is_empty()
-            || self
-                .replacements
-                .iter()
-                .any(|(existing, _)| existing == &sensitive)
-        {
-            return;
-        }
-        self.replacements.push((sensitive, replacement));
-        self.replacements
-            .sort_by_key(|(sensitive, _)| std::cmp::Reverse(sensitive.len()));
+        self.redactor.add_replacement(
+            target.effective_api_key().to_owned(),
+            "[redacted credential]".to_owned(),
+        );
     }
 
     fn scrub_text(&self, text: &str) -> String {
-        self.replacements
-            .iter()
-            .fold(text.to_owned(), |scrubbed, (sensitive, replacement)| {
-                scrubbed.replace(sensitive, replacement)
-            })
+        self.redactor.scrub_text(text)
     }
-
     fn scrub_value(&self, value: &mut serde_json::Value) {
-        match value {
-            serde_json::Value::String(text) => *text = self.scrub_text(text),
-            serde_json::Value::Array(values) => {
-                for value in values {
-                    self.scrub_value(value);
-                }
-            }
-            serde_json::Value::Object(object) => {
-                let entries = std::mem::take(object);
-                for (key, mut value) in entries {
-                    self.scrub_value(&mut value);
-                    object.insert(self.scrub_text(&key), value);
-                }
-            }
-            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
-            }
-        }
+        self.redactor.scrub_value(value);
     }
-
     fn scrub_body(&self, body: &str) -> String {
-        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(body) else {
-            return self.scrub_text(body);
-        };
-        self.scrub_value(&mut value);
-        value.to_string()
+        self.redactor.scrub_body(body)
     }
 
     fn scrub_error(&self, error: BitrouterError) -> BitrouterError {
@@ -618,9 +519,15 @@ impl UpstreamErrorScrubber {
                 status,
                 message: self.scrub_text(&message),
             },
-            BitrouterError::UpstreamInvalidResponse { message } => {
+            BitrouterError::UpstreamInvalidResponse { message, mut usage } => {
                 BitrouterError::UpstreamInvalidResponse {
                     message: self.scrub_text(&message),
+                    usage: {
+                        if let Some(raw) = usage.as_mut().and_then(|usage| usage.raw.as_mut()) {
+                            self.scrub_value(raw);
+                        }
+                        usage
+                    },
                 }
             }
             BitrouterError::UpstreamAuth {
@@ -635,9 +542,10 @@ impl UpstreamErrorScrubber {
             BitrouterError::Internal(message) => {
                 BitrouterError::Internal(self.scrub_text(&message))
             }
-            error @ (BitrouterError::UpstreamTimeout | BitrouterError::UpstreamUnavailable) => {
-                error
-            }
+            error @ (BitrouterError::Incompatible { .. }
+            | BitrouterError::UpstreamTimeout
+            | BitrouterError::UpstreamUnavailable
+            | BitrouterError::Cancelled) => error,
         }
     }
 }
@@ -647,7 +555,7 @@ fn apply_provider_continuation(
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<Option<ProviderContinuationSubstitution>> {
-    if let Some(plan) = native_continuation_plan(target, ctx.prompt(), ctx)? {
+    if let Some(plan) = native_continuation_plan(target, ctx.require_generation_prompt()?, ctx)? {
         if ctx.extension::<ProviderContinuation>().is_some()
             || ctx.extension::<SuppressProviderContinuation>().is_some()
         {
@@ -665,8 +573,10 @@ fn apply_provider_continuation(
                         .and_then(|reasoning| reasoning.get("effort"))
                         .cloned()
                         .unwrap_or(serde_json::Value::Null)
-                        != serde_json::to_value(ctx.prompt().params.reasoning_effort)
-                            .map_err(|_| ContinuationFailure::BindingChanged.error())?
+                        != serde_json::to_value(
+                            ctx.require_generation_prompt()?.params.reasoning_effort,
+                        )
+                        .map_err(|_| ContinuationFailure::BindingChanged.error())?
                 {
                     return Err(ContinuationFailure::BindingChanged.error());
                 }
@@ -762,47 +672,6 @@ fn validate_continuation_authority(
     Ok(())
 }
 
-/// Classify a transport error that surfaces from the SSE decode loop *after*
-/// the stream is open. A read-timeout firing mid-stream must map to
-/// [`BitrouterError::UpstreamTimeout`] (504) — the same as a pre-stream
-/// timeout — rather than a generic 502, so status codes and metrics stay
-/// truthful once streaming has started. Non-timeout errors (parse / decode /
-/// other transport) keep the 502 mapping and carry the message.
-fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> BitrouterError {
-    if is_timeout {
-        BitrouterError::UpstreamTimeout
-    } else {
-        BitrouterError::Upstream {
-            status: 502,
-            message: format!("upstream stream error: {display}"),
-        }
-    }
-}
-
-/// Preserve stable, actionable errors deliberately emitted by a protocol
-/// decoder. Other decoder failures describe malformed provider wire data and
-/// remain a sanitized 502 at the BitRouter boundary.
-fn classify_stream_decoder_error(error: BitrouterError) -> BitrouterError {
-    match error {
-        error @ (BitrouterError::UpstreamPolicyViolation { .. }
-        | BitrouterError::Upstream { .. }) => error,
-        error => BitrouterError::UpstreamInvalidResponse {
-            message: error.to_string(),
-        },
-    }
-}
-
-fn upstream_body_error(context: &'static str, error: reqwest::Error) -> BitrouterError {
-    if error.is_timeout() {
-        BitrouterError::UpstreamTimeout
-    } else {
-        BitrouterError::Upstream {
-            status: 502,
-            message: format!("{context}: {error}"),
-        }
-    }
-}
-
 /// Heuristic: does this upstream error body describe a depleted
 /// credit / balance? Matches the stable phrase family rather than any
 /// one provider's exact wording — string matching is unavoidable here
@@ -827,7 +696,7 @@ fn looks_like_credit_exhaustion(body: &str) -> bool {
 /// per-provider overrides.
 pub struct HttpExecutor {
     clients: RwLock<HttpClientSet>,
-    dispatch: OutboundDispatch,
+    dispatch: Arc<OutboundDispatch>,
     auth_appliers: AuthAppliers,
 }
 
@@ -835,14 +704,14 @@ struct HttpClientSet {
     /// Client used for any provider without a per-provider override, plus its
     /// timeouts (for the per-request `total` cap, which is not a client
     /// setting).
-    default_client: reqwest::Client,
-    managed_default_client: reqwest::Client,
-    managed_provider_clients: HashMap<String, reqwest::Client>,
+    default_client: ModelClient,
+    managed_default_client: ModelClient,
+    managed_provider_clients: HashMap<String, ModelClient>,
     default_timeouts: HttpTimeouts,
     /// Per-provider clients keyed by `provider_name`, each paired with the
     /// resolved timeouts it was built from. Built once at construction; empty
     /// in the common single-timeout deployment.
-    provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
+    provider_clients: HashMap<String, (HttpTimeouts, ModelClient)>,
 }
 
 /// A fully constructed upstream-client replacement that has not yet become
@@ -857,13 +726,12 @@ pub struct PreparedProviderTimeouts(HttpClientSet);
 /// Immutable inputs reused each time an authenticated upstream request is
 /// rebuilt, including after a provider refreshes an expired credential.
 struct RequestBuildInput<'a> {
-    client: &'a reqwest::Client,
-    timeouts: &'a HttpTimeouts,
+    client: &'a ModelClient,
     url: &'a str,
     body: &'a serde_json::Value,
     managed_expected: Option<&'a serde_json::Value>,
     target: &'a RoutingTarget,
-    transport: &'a Arc<dyn crate::language_model::protocol::Transport>,
+    transport: &'a Arc<dyn bitrouter_ai::protocol::Transport>,
     ctx: &'a PipelineContext,
     trace_headers: Option<&'a http::HeaderMap>,
 }
@@ -871,7 +739,11 @@ struct RequestBuildInput<'a> {
 /// Build a reqwest client from the connection-level timeout knobs. `total` is
 /// deliberately not applied here — it is a per-request deadline set via
 /// [`reqwest::RequestBuilder::timeout`], not a client-builder setting.
-fn build_http_client(timeouts: &HttpTimeouts, managed: bool) -> Result<reqwest::Client> {
+fn build_http_client(
+    timeouts: &HttpTimeouts,
+    managed: bool,
+    dispatch: Arc<OutboundDispatch>,
+) -> Result<ModelClient> {
     // A redirect would disclose private history before the next origin could be
     // authenticated. Managed calls therefore require an explicit final endpoint.
     // https://docs.rs/reqwest/latest/reqwest/redirect/struct.Policy.html
@@ -885,29 +757,38 @@ fn build_http_client(timeouts: &HttpTimeouts, managed: bool) -> Result<reqwest::
     } else {
         builder
     };
-    builder
+    let client = builder
         .connect_timeout(timeouts.connect)
         .read_timeout(timeouts.read)
         .pool_idle_timeout(timeouts.pool_idle)
         .tcp_keepalive(timeouts.tcp_keepalive)
         .build()
-        .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))
+        .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))?;
+    Ok(ModelClient::with_http_client(
+        timeouts.clone(),
+        dispatch,
+        client,
+    ))
 }
 
 fn build_http_client_set(
     default_timeouts: HttpTimeouts,
     per_provider: HashMap<String, HttpTimeouts>,
+    dispatch: Arc<OutboundDispatch>,
 ) -> Result<HttpClientSet> {
-    let default_client = build_http_client(&default_timeouts, false)?;
-    let managed_default_client = build_http_client(&default_timeouts, true)?;
+    let default_client = build_http_client(&default_timeouts, false, Arc::clone(&dispatch))?;
+    let managed_default_client = build_http_client(&default_timeouts, true, Arc::clone(&dispatch))?;
     let mut managed_provider_clients = HashMap::new();
     let mut provider_clients = HashMap::new();
     for (name, timeouts) in per_provider {
         if timeouts == default_timeouts {
             continue;
         }
-        let client = build_http_client(&timeouts, false)?;
-        managed_provider_clients.insert(name.clone(), build_http_client(&timeouts, true)?);
+        let client = build_http_client(&timeouts, false, Arc::clone(&dispatch))?;
+        managed_provider_clients.insert(
+            name.clone(),
+            build_http_client(&timeouts, true, Arc::clone(&dispatch))?,
+        );
         provider_clients.insert(name, (timeouts, client));
     }
     Ok(HttpClientSet {
@@ -938,7 +819,7 @@ impl HttpExecutor {
     }
 
     /// Build an executor with custom timeouts, dispatch, **and** a registry
-    /// of per-provider [`AuthApplier`](crate::language_model::AuthApplier)s.
+    /// of per-provider [`AuthApplier`](bitrouter_ai::auth::AuthApplier)s.
     /// When a target's `provider_name` matches a registered applier, that
     /// applier replaces `Transport::authorise` for the request (OAuth, SigV4,
     /// any custom credential flow).
@@ -963,7 +844,8 @@ impl HttpExecutor {
         dispatch: OutboundDispatch,
         auth_appliers: AuthAppliers,
     ) -> Result<Self> {
-        let clients = build_http_client_set(default_timeouts, per_provider)?;
+        let dispatch = Arc::new(dispatch);
+        let clients = build_http_client_set(default_timeouts, per_provider, Arc::clone(&dispatch))?;
         Ok(Self {
             clients: RwLock::new(clients),
             dispatch,
@@ -990,7 +872,8 @@ impl HttpExecutor {
         default_timeouts: HttpTimeouts,
         per_provider: HashMap<String, HttpTimeouts>,
     ) -> Result<PreparedProviderTimeouts> {
-        let clients = build_http_client_set(default_timeouts, per_provider)?;
+        let clients =
+            build_http_client_set(default_timeouts, per_provider, Arc::clone(&self.dispatch))?;
         Ok(PreparedProviderTimeouts(clients))
     }
 
@@ -1006,7 +889,7 @@ impl HttpExecutor {
 
     /// Pick the client + timeouts for `target`: a per-provider override when one
     /// is registered for its `provider_name`, else the default pair.
-    fn client_for(&self, target: &RoutingTarget, managed: bool) -> (reqwest::Client, HttpTimeouts) {
+    fn client_for(&self, target: &RoutingTarget, managed: bool) -> (ModelClient, HttpTimeouts) {
         let guard = match self.clients.read() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -1036,27 +919,25 @@ impl HttpExecutor {
         Self::new(HttpTimeouts::default())
     }
 
-    /// Apply the per-provider [`AuthApplier`](crate::language_model::AuthApplier)
+    /// Apply the per-provider [`AuthApplier`](bitrouter_ai::auth::AuthApplier)
     /// if one is registered for `target.provider_name`, else fall through to
     /// `Transport::authorise`. Shared by both `execute` and `execute_stream`.
     async fn apply_auth(
         &self,
         request: reqwest::Request,
         target: &RoutingTarget,
-        transport: &Arc<dyn crate::language_model::protocol::Transport>,
+        transport: &Arc<dyn bitrouter_ai::protocol::Transport>,
     ) -> Result<AppliedAuth> {
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
             applier
-                .apply_with_authority(request, target)
+                .apply_with_authority(request, &target.model_target())
                 .await
                 .map_err(|error| {
-                    normalize_auth_extension_error(
-                        error,
-                        AuthExtensionOperation::RequestAuthentication,
-                    )
+                    normalize_auth_extension_error(error, AuthOperation::RequestAuthentication)
+                        .into()
                 })
         } else {
-            let request = transport.authorise(request, target).await?;
+            let request = transport.authorise(request, &target.model_target()).await?;
             let credential = target
                 .api_key_override
                 .as_deref()
@@ -1078,9 +959,15 @@ impl HttpExecutor {
         target: &RoutingTarget,
     ) -> Result<()> {
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
-            applier.prepare_body(body, target).await.map_err(|error| {
-                normalize_auth_extension_error(error, AuthExtensionOperation::BodyPreparation)
-            })?;
+            applier
+                .prepare_body(body, &target.model_target())
+                .await
+                .map_err(|error| {
+                    BitrouterError::from(normalize_auth_extension_error(
+                        error,
+                        AuthOperation::BodyPreparation,
+                    ))
+                })?;
         }
         Ok(())
     }
@@ -1093,6 +980,21 @@ impl HttpExecutor {
         ctx: &PipelineContext,
         stream: bool,
     ) -> Result<serde_json::Value> {
+        self.render_execution_with_report(adapter, target, prompt, ctx, stream)
+            .map(|(body, _)| body)
+    }
+
+    fn render_execution_with_report(
+        &self,
+        adapter: &dyn OutboundAdapter,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        stream: bool,
+    ) -> Result<(
+        serde_json::Value,
+        bitrouter_ai::conversion::ConversionReport,
+    )> {
         let plan = native_continuation_plan(target, prompt, ctx)?;
         let mut upstream = match plan.as_ref() {
             Some(plan) => plan
@@ -1102,7 +1004,24 @@ impl HttpExecutor {
         };
         upstream.model = target.service_id.clone();
         upstream.stream = stream;
-        let mut body = adapter.render_request_for_target(&upstream, target)?;
+        let (mut body, report) = if let Some(runtime) =
+            ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+        {
+            runtime
+                .validate_history(ctx)
+                .map_err(super::native_context::PrivateContextFailure::error)?;
+            runtime
+                .validate_target(prompt, ctx, target)
+                .map_err(super::native_context::PrivateContextFailure::error)?;
+            adapter.render_managed_request_for_target(&upstream, &target.model_target())?
+        } else {
+            let report = adapter.admission(&upstream);
+            report.require_admitted()?;
+            (
+                adapter.render_request_for_target(&upstream, &target.model_target())?,
+                report,
+            )
+        };
         if let Some(NativeContinuationPlan::Resume(binding)) = plan {
             if body
                 .get("previous_response_id")
@@ -1114,7 +1033,7 @@ impl HttpExecutor {
                 .ok_or_else(|| ContinuationFailure::BindingChanged.error())?
                 .insert("previous_response_id".into(), binding.response_id().into());
         }
-        Ok(body)
+        Ok((body, report))
     }
 
     fn managed_expected_body(
@@ -1145,7 +1064,7 @@ impl HttpExecutor {
         let mut expected = rendered.clone();
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
             applier
-                .normalize_managed_body(&mut expected, target)
+                .normalize_managed_body(&mut expected, &target.model_target())
                 .map_err(|_| "provider_body_normalization_failed")?;
         }
         if expected
@@ -1154,7 +1073,12 @@ impl HttpExecutor {
             && ctx.extension::<ProviderContinuation>().is_none()
             && ctx.extension::<SuppressProviderContinuation>().is_none()
             && !matches!(
-                native_continuation_plan(target, ctx.prompt(), ctx),
+                native_continuation_plan(
+                    target,
+                    ctx.generation_prompt()
+                        .ok_or("managed_generation_required")?,
+                    ctx
+                ),
                 Ok(Some(NativeContinuationPlan::Resume(_)))
             )
         {
@@ -1166,14 +1090,14 @@ impl HttpExecutor {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or("outbound_adapter_unavailable")?;
-        adapter.validate_managed_body(&expected, &expected, target)?;
+        adapter.validate_managed_body(&expected, &expected, &target.model_target())?;
         Ok(expected)
     }
 
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<crate::language_model::auth::AppliedAuth> {
+    ) -> Result<bitrouter_ai::auth::AppliedAuth> {
         native_work::observe(
             input.ctx,
             NativeProviderWorkKind::Authentication,
@@ -1188,13 +1112,7 @@ impl HttpExecutor {
         input: &RequestBuildInput<'_>,
     ) -> Result<AppliedAuth> {
         input.ctx.record_credential_authority(None);
-        let mut builder = input.client.post(input.url).json(input.body);
-        if let Some(total) = input.timeouts.total {
-            builder = builder.timeout(total);
-        }
-        let mut request = builder
-            .build()
-            .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
+        let mut request = input.client.build_request(input.url, input.body)?;
         forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
         apply_provider_headers(&mut request, input.target, input.ctx, true);
         let scope = request_scope_headers(input.target, Some(input.ctx.headers()))
@@ -1220,6 +1138,10 @@ impl HttpExecutor {
         let credential_authority =
             credential_authority.map(|authority| authority.with_request_scope(&scope));
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
+        bitrouter_ai::providers::google_chat::validate_authenticated_request(
+            &request,
+            &input.target.model_target(),
+        )?;
         if input
             .ctx
             .extension::<crate::language_model::native::NativeManagedRequest>()
@@ -1254,7 +1176,7 @@ impl HttpExecutor {
             let actual = serde_json::from_slice(bytes)
                 .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
             adapter
-                .validate_managed_body(expected, &actual, input.target)
+                .validate_managed_body(expected, &actual, &input.target.model_target())
                 .map_err(|reason| {
                     BitrouterError::bad_request(format!(
                         "managed protocol validation failed: {reason}"
@@ -1318,12 +1240,12 @@ impl HttpExecutor {
             .ctx
             .record_credential_authority(credential_authority.clone());
         Ok(match credential_authority {
-            Some(authority) => crate::language_model::auth::AppliedAuth::proven_with_scheme(
+            Some(authority) => bitrouter_ai::auth::AppliedAuth::proven_with_scheme(
                 request,
                 authority.credential().clone(),
                 authority.effective_scheme(),
             ),
-            None => crate::language_model::auth::AppliedAuth::unproven(request),
+            None => bitrouter_ai::auth::AppliedAuth::unproven(request),
         })
     }
 
@@ -1341,15 +1263,32 @@ impl HttpExecutor {
             NativeProviderWorkKind::AuthenticationRefresh,
             async {
                 applier
-                    .refresh_after_unauthorized(target, rejected_authorization)
+                    .refresh_after_unauthorized(&target.model_target(), rejected_authorization)
                     .await
                     .map_err(|error| {
-                        normalize_auth_extension_error(error, AuthExtensionOperation::Refresh)
+                        BitrouterError::from(normalize_auth_extension_error(
+                            error,
+                            AuthOperation::Refresh,
+                        ))
                     })
             },
             |_| None,
         )
         .await
+    }
+
+    fn check_response_format(
+        prompt: &Prompt,
+        adapter: &Arc<dyn bitrouter_ai::protocol::OutboundAdapter>,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        if prompt.response_format.is_some() && !adapter.supports_response_format() {
+            return adapter
+                .admission(prompt)
+                .require_admitted()
+                .map_err(Into::into);
+        }
+        Ok(())
     }
 
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
@@ -1360,30 +1299,85 @@ impl HttpExecutor {
         ))
     }
 
-    /// Refuse to silently drop a caller-supplied `response_format` when the
-    /// resolved outbound protocol cannot honour it. Built-in adapters all
-    /// support it; only out-of-tree [`ApiProtocol::Custom`] targets that
-    /// haven't implemented translation hit this 400.
-    fn check_response_format(
-        prompt: &Prompt,
-        adapter: &Arc<dyn crate::language_model::protocol::OutboundAdapter>,
+    /// Send either native JSON operation through the same selected-target policy.
+    /// Every authentication recovery renders and shapes a fresh body.
+    async fn execute_json(
+        &self,
         target: &RoutingTarget,
-    ) -> Result<()> {
-        if prompt.response_format.is_some() && !adapter.supports_response_format() {
-            return Err(BitrouterError::bad_request(format!(
-                "response_format requested but outbound protocol '{}' \
-                 (target provider '{}') does not support structured outputs",
-                target.api_protocol, target.provider_name,
-            )));
+        request: &DecisionRequest,
+        transport: &Arc<dyn bitrouter_ai::protocol::Transport>,
+        ctx: &PipelineContext,
+    ) -> Result<(String, UpstreamErrorScrubber, u64)> {
+        let (client, _) = self.client_for(target, false);
+        let cancellation = CancellationToken::new();
+        let url = transport.endpoint_url(&target.model_target(), false);
+        let trace_headers = ctx.take_outbound_trace_headers();
+        let mut scrubber = UpstreamErrorScrubber::new(None);
+        scrubber.capture_effective_target_key(target);
+        let started = Instant::now();
+        let mut refreshed = false;
+        loop {
+            let mut body = client.render_decision_request(&target.model_target(), request)?;
+            self.shape_request_body(&mut body, target)
+                .await
+                .map_err(|error| scrubber.scrub_error(error))?;
+            DecisionsCodec::parse_request(body.clone())?;
+            let request = self
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+
+                    managed_expected: None,
+                    url: &url,
+                    body: &body,
+                    target,
+                    transport,
+                    ctx,
+                    trace_headers: trace_headers.as_ref(),
+                })
+                .await
+                .map_err(|error| scrubber.scrub_error(error))?;
+            let (request, _) = request.into_parts();
+            scrubber.capture_request_credentials(&request, target);
+            let rejected_authorization = request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .cloned();
+            let response = client
+                .send(request, &cancellation)
+                .await
+                .map_err(|error| scrubber.scrub_error(error.into()))?;
+            let status = response.status();
+            let retry_after =
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+            let text = ModelClient::read_body(response, &cancellation)
+                .await
+                .map_err(|error| scrubber.scrub_error(error.into()))?;
+            if status.is_success() {
+                return Ok((text, scrubber, started.elapsed().as_millis() as u64));
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                && !refreshed
+                && self
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref(), ctx)
+                    .await
+                    .map_err(|error| scrubber.scrub_error(error))?
+            {
+                refreshed = true;
+                continue;
+            }
+            return Err(classify_upstream_error(
+                status.as_u16(),
+                &scrubber.scrub_body(&text),
+                retry_after,
+            ));
         }
-        Ok(())
     }
 
     /// The ChatGPT/Codex backend accepts only streaming Responses requests,
     /// while compatibility callers may require one non-streaming result.
-    /// Execute the upstream request as SSE and fold its canonical parts back into
-    /// the same [`GenerateResult`] that the ordinary non-streaming path returns.
-    async fn execute_codex_stream_bridge(
+    /// AI selects the SSE requirement and owns canonical result collection.
+    /// The SDK retains request policy and the pipeline execution envelope.
+    async fn execute_streaming_generation(
         &self,
         target: &RoutingTarget,
         prompt: &Prompt,
@@ -1392,171 +1386,18 @@ impl HttpExecutor {
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let capture = Arc::new(BridgeCapture::default());
-        let mut stream = self
-            .execute_http_stream(target, prompt, ctx, Some(capture.clone()))
-            .await?;
-        let mut content = Vec::new();
-        let mut tool_indices = HashMap::<String, usize>::new();
-        let mut usage = None;
-        let mut finish_reason = None;
-        let mut response_id = None;
-
-        while let Some(part) = stream.next().await {
-            match part? {
-                StreamPart::TextStart { .. } => content.push(Content::Text {
-                    text: String::new(),
-                    provider_metadata: Default::default(),
-                }),
-                StreamPart::TextDelta { text } => {
-                    if let Some(Content::Text { text: current, .. }) = content.last_mut() {
-                        current.push_str(&text);
-                    } else {
-                        content.push(Content::Text {
-                            text,
-                            provider_metadata: Default::default(),
-                        });
-                    }
-                }
-                StreamPart::TextEnd { .. } => {}
-                StreamPart::ReasoningStart { .. } => content.push(Content::Reasoning {
-                    text: String::new(),
-                    provider_metadata: Default::default(),
-                }),
-                StreamPart::ReasoningDelta { text } => {
-                    if let Some(Content::Reasoning { text: current, .. }) = content.last_mut() {
-                        current.push_str(&text);
-                    } else {
-                        content.push(Content::Reasoning {
-                            text,
-                            provider_metadata: Default::default(),
-                        });
-                    }
-                }
-                StreamPart::ReasoningEnd { .. } => {}
-                StreamPart::ToolCallDelta {
-                    id,
-                    name,
-                    arguments,
-                    provider_metadata,
-                } => {
-                    let index = match tool_indices.get(&id).copied() {
-                        Some(index) => index,
-                        None => {
-                            let index = content.len();
-                            content.push(Content::ToolCall {
-                                id: id.clone(),
-                                name: name.clone().unwrap_or_default(),
-                                arguments: String::new(),
-                                provider_executed: false,
-                                dynamic: false,
-                                provider_metadata: provider_metadata.clone(),
-                            });
-                            tool_indices.insert(id, index);
-                            index
-                        }
-                    };
-                    if let Content::ToolCall {
-                        name: current_name,
-                        arguments: current_arguments,
-                        ..
-                    } = &mut content[index]
-                    {
-                        if let Some(name) = name
-                            && current_name.is_empty()
-                        {
-                            *current_name = name;
-                        }
-                        current_arguments.push_str(&arguments);
-                    }
-                }
-                StreamPart::ServerToolCall {
-                    id,
-                    name,
-                    arguments,
-                    dynamic,
-                    ..
-                } => content.push(Content::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                    provider_executed: true,
-                    dynamic,
-                    provider_metadata: Default::default(),
-                }),
-                StreamPart::ServerToolResult {
-                    call_id,
-                    tool_name,
-                    output,
-                    dynamic,
-                } => content.push(Content::ToolResult {
-                    call_id,
-                    tool_name,
-                    output,
-                    dynamic,
-                    provider_metadata: Default::default(),
-                }),
-                StreamPart::File { media_type, data } => content.push(Content::File {
-                    media_type,
-                    data,
-                    filename: None,
-                    provider_metadata: Default::default(),
-                }),
-                StreamPart::Source { source } => content.push(Content::Source {
-                    source,
-                    provider_metadata: Default::default(),
-                }),
-                StreamPart::Usage { usage: reported } => usage = Some(reported),
-                StreamPart::ResponseStarted { id, .. } => response_id = Some(id),
-                StreamPart::Finish { reason } => finish_reason = Some(reason),
-                StreamPart::ResponseCompleted {
-                    id,
-                    status,
-                    usage: reported,
-                    ..
-                } => {
-                    response_id = Some(id);
-                    if reported.is_some() {
-                        usage = reported;
-                    }
-                    if finish_reason.is_none() {
-                        finish_reason = Some(match status.as_str() {
-                            "completed" => FinishReason::Stop,
-                            "incomplete" => FinishReason::Length,
-                            other => FinishReason::Error(format!(
-                                "openai-codex stream ended with status {other}"
-                            )),
-                        });
-                    }
-                }
-            }
-        }
-
-        content.retain(|part| {
-            !matches!(
-                part,
-                Content::Text { text, .. } | Content::Reasoning { text, .. } if text.is_empty()
-            )
-        });
-        let result = capture.complete(
-            self,
-            target,
-            prompt,
-            ctx,
-            GenerateResult {
-                content,
-                usage,
-                finish_reason,
-                response_id,
-                stop_details: None,
-                provider_metadata: Default::default(),
-            },
-        )?;
+        let collected = bitrouter_ai::stream::collect::collect_generate(
+            self.execute_http_stream(target, prompt, ctx, Some(capture.clone()))
+                .await?,
+        )
+        .await?;
+        let result = capture.complete(self, target, prompt, ctx, collected)?;
         let elapsed = started.elapsed().as_millis() as u64;
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result,
+            result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(native_work::elapsed_work_millis(
                 ctx,
@@ -1778,9 +1619,37 @@ impl Executor for HttpExecutor {
             return Some(false);
         }
         match self.auth_appliers.lookup(&target.provider_name) {
-            Some(applier) => applier.output_token_limit_support(target),
+            Some(applier) => applier.output_token_limit_support(&target.model_target()),
             None => Some(true),
         }
+    }
+
+    fn preflight_managed(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+        ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        let (adapter, _) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| Self::no_dispatch_error(target))?;
+        self.render_execution_with_report(adapter.as_ref(), target, prompt, ctx, stream)
+            .map(|(_, report)| report)
+    }
+
+    fn preflight(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        let (client, _) = self.client_for(target, false);
+        client
+            .render_request_with_report(&target.model_target(), prompt, stream)
+            .map(|(_, report)| report)
+            .map_err(Into::into)
     }
 
     async fn execute(
@@ -1789,8 +1658,8 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
-        if target.provider_name == "openai-codex" {
-            return self.execute_codex_stream_bridge(target, prompt, ctx).await;
+        if bitrouter_ai::providers::codex::requires_streaming(&target.model_target()) {
+            return self.execute_streaming_generation(target, prompt, ctx).await;
         }
         let (adapter, transport) = self
             .dispatch
@@ -1799,51 +1668,60 @@ impl Executor for HttpExecutor {
 
         Self::check_response_format(prompt, adapter, target)?;
 
-        let mut body = self.render_execution_request(
-            adapter.as_ref(),
-            target,
-            prompt,
-            ctx,
-            target.provider_name == "openai-codex",
-        )?;
-        let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-        if self.auth_appliers.lookup(&target.provider_name).is_some() {
-            native_work::observe(
-                ctx,
-                NativeProviderWorkKind::AuthenticationPreparation,
-                self.shape_request_body(&mut body, target),
-                |_| None,
-            )
-            .await?;
-        }
-        let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
-        let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
+        let mut error_scrubber = UpstreamErrorScrubber::new(None);
         error_scrubber.capture_effective_target_key(target);
-        let url = transport.endpoint_url(target, false);
+        error_scrubber.redactor.capture_prompt_continuity(prompt);
+        let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
 
-        let (client, timeouts) = self.client_for(
+        let (client, _) = self.client_for(
             target,
             ctx.extension::<super::native::NativeManagedRequest>()
                 .is_some(),
         );
-        let request_input = RequestBuildInput {
-            client: &client,
-            timeouts: &timeouts,
-            url: &url,
-            body: &body,
-            managed_expected: managed_expected.as_ref(),
-            target,
-            transport,
-            ctx,
-            trace_headers: trace_headers.as_ref(),
-        };
+
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let mut attempted_auth_refresh = false;
         let requested_effort = serde_json::to_value(prompt.params.reasoning_effort)
             .map_err(|_| ContinuationFailure::BindingChanged.error())?;
         let (text, successful_authority, storage_allowed, effort_bound) = loop {
+            let mut body = self.render_execution_request(
+                adapter.as_ref(),
+                target,
+                prompt,
+                ctx,
+                target.provider_name == "openai-codex",
+            )?;
+            let managed_expected = self.managed_expected_body(&body, target, ctx)?;
+            if self.auth_appliers.lookup(&target.provider_name).is_some() {
+                native_work::observe(
+                    ctx,
+                    NativeProviderWorkKind::AuthenticationPreparation,
+                    self.shape_request_body(&mut body, target),
+                    |_| None,
+                )
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+            }
+            let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
+            if let Some(continuation) = continuation_substitution {
+                error_scrubber
+                    .redactor
+                    .add_replacement(continuation.native, continuation.public_or_redacted);
+            }
+            let request_input = RequestBuildInput {
+                client: &client,
+
+                url: &url,
+                body: &body,
+                managed_expected: managed_expected.as_ref(),
+                target,
+                transport,
+                ctx,
+                trace_headers: trace_headers.as_ref(),
+            };
+
             let applied = self
                 .build_authenticated_request(&request_input)
                 .await
@@ -1872,20 +1750,10 @@ impl Executor for HttpExecutor {
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
-                    client.execute(request).await.map_err(|error| {
-                        let error = if error.is_timeout() {
-                            BitrouterError::UpstreamTimeout
-                        } else {
-                            BitrouterError::Upstream {
-                                status: 502,
-                                message: format!(
-                                    "request to {} failed: {error}",
-                                    target.provider_name
-                                ),
-                            }
-                        };
-                        error_scrubber.scrub_error(error)
-                    })
+                    client
+                        .send(request, &CancellationToken::new())
+                        .await
+                        .map_err(|error| error_scrubber.scrub_error(error.into()))
                 },
                 |response| Some(response.status().as_u16()),
             )
@@ -1932,9 +1800,12 @@ impl Executor for HttpExecutor {
         let stored_response = target.api_protocol == ApiProtocol::Responses
             && storage_allowed
             && json.get("store") == Some(&serde_json::Value::Bool(true));
-        let replayable = super::protocol::responses::output_replayable(&json);
-        let mut result = parse_upstream_success(adapter.as_ref(), json)
-            .map_err(|error| error_scrubber.scrub_error(error))?;
+        let replayable = bitrouter_ai::protocol::responses::output_replayable(&json);
+        let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
+            .map_err(|error| error_scrubber.scrub_error(error.into()))?;
+        let mut result =
+            bitrouter_ai::providers::google_chat::bind_result(result, &target.model_target())
+                .map_err(|error| error_scrubber.scrub_error(error.into()))?;
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
         {
@@ -1949,13 +1820,46 @@ impl Executor for HttpExecutor {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result,
+            result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(native_work::elapsed_work_millis(
                 ctx,
                 started,
                 initial_gate,
             )),
+            server_tool_calls: Vec::new(),
+        })
+    }
+
+    fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
+        let (client, _) = self.client_for(target, false);
+        client.render_decision_request(&target.model_target(), request)?;
+        Ok(())
+    }
+
+    async fn execute_decisions(
+        &self,
+        target: &RoutingTarget,
+        request: &DecisionRequest,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.preflight_decisions(target, request)?;
+        let transport: Arc<dyn bitrouter_ai::protocol::Transport> = Arc::new(DecisionsTransport);
+        let (text, scrubber, elapsed) = self.execute_json(target, request, &transport, ctx).await?;
+        let result = ModelClient::parse_decision_response(&text, request).map_err(|error| {
+            let error = scrubber.redactor.scrub_error(error);
+            if error.is_completed_decision_failure() {
+                ctx.record_decision_failure_usage(error.decision_usage().cloned());
+            }
+            BitrouterError::from(error)
+        })?;
+        Ok(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: result.into(),
+            request_duration_ms: elapsed,
+            upstream_duration_ms: Some(elapsed),
             server_tool_calls: Vec::new(),
         })
     }
@@ -1991,15 +1895,16 @@ impl Executor for HttpExecutor {
 /// the default `HttpExecutor` instead.
 ///
 /// The `default` executor handles every protocol that is **not** explicitly
-/// registered. The four built-in protocols (`openai` / `responses` /
-/// `anthropic` / `google`) should remain on the default `HttpExecutor`; only
+/// registered. The three built-in protocols (`chat_completions` / `responses` /
+/// `messages`) should remain on the default `HttpExecutor`; only
 /// route `ApiProtocol::Custom(_)` protocols away from it.
 ///
 /// ```no_run
 /// use std::sync::Arc;
+/// use bitrouter_ai::types::ApiProtocol;
 /// use bitrouter_sdk::App;
 /// use bitrouter_sdk::language_model::{
-///     ApiProtocol, DispatchExecutor, Executor, HttpExecutor, StaticRoutingTable,
+///     DispatchExecutor, Executor, HttpExecutor, StaticRoutingTable,
 /// };
 ///
 /// # async fn run() -> bitrouter_sdk::Result<()> {
@@ -2009,7 +1914,7 @@ impl Executor for HttpExecutor {
 /// #     async fn execute(
 /// #         &self,
 /// #         _: &bitrouter_sdk::language_model::RoutingTarget,
-/// #         _: &bitrouter_sdk::language_model::Prompt,
+/// #         _: &bitrouter_ai::types::Prompt,
 /// #         _: &bitrouter_sdk::language_model::PipelineContext,
 /// #     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
 /// #         unimplemented!()
@@ -2017,7 +1922,7 @@ impl Executor for HttpExecutor {
 /// #     async fn execute_stream(
 /// #         &self,
 /// #         _: &bitrouter_sdk::language_model::RoutingTarget,
-/// #         _: &bitrouter_sdk::language_model::Prompt,
+/// #         _: &bitrouter_ai::types::Prompt,
 /// #         _: &bitrouter_sdk::language_model::PipelineContext,
 /// #     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
 /// #         unimplemented!()
@@ -2080,6 +1985,52 @@ impl Executor for DispatchExecutor {
             .finish_native_stream(target, prompt, ctx, collected)
     }
 
+    fn preflight_managed(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+        ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .preflight_managed(target, prompt, stream, ctx)
+    }
+
+    fn preflight(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        let executor = self
+            .by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default);
+        executor.preflight(target, prompt, stream)
+    }
+
+    fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .preflight_decisions(target, request)
+    }
+
+    async fn execute_decisions(
+        &self,
+        target: &RoutingTarget,
+        request: &DecisionRequest,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .execute_decisions(target, request, ctx)
+            .await
+    }
+
     async fn execute(
         &self,
         target: &RoutingTarget,
@@ -2112,10 +2063,11 @@ impl Executor for DispatchExecutor {
 #[cfg(test)]
 mod error_classification_tests {
     use super::*;
-    use crate::language_model::protocol::{
-        chat_completions::ChatCompletionsAdapter, generate_content::GenerateContentAdapter,
-        messages::MessagesAdapter, responses::ResponsesAdapter,
-    };
+    use bitrouter_ai::protocol::OutboundAdapter;
+    use bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter;
+
+    use bitrouter_ai::protocol::messages::MessagesAdapter;
+    use bitrouter_ai::protocol::responses::ResponsesAdapter;
 
     #[test]
     fn credit_exhaustion_401_maps_to_payment_required() {
@@ -2224,14 +2176,11 @@ mod error_classification_tests {
 
     #[test]
     fn malformed_success_is_upstream_502_for_every_builtin_protocol() {
-        let adapters: [&dyn OutboundAdapter; 4] = [
-            &ChatCompletionsAdapter,
-            &MessagesAdapter,
-            &ResponsesAdapter,
-            &GenerateContentAdapter,
-        ];
+        let adapters: [&dyn OutboundAdapter; 3] =
+            [&ChatCompletionsAdapter, &MessagesAdapter, &ResponsesAdapter];
         for adapter in adapters {
-            let error = parse_upstream_success(adapter, serde_json::json!({}))
+            let error = ModelClient::parse_response(adapter, &adapter.protocol(), "{}")
+                .map_err(BitrouterError::from)
                 .expect_err("empty success body must not parse");
             assert!(
                 matches!(error, BitrouterError::UpstreamInvalidResponse { .. }),
@@ -2244,7 +2193,7 @@ mod error_classification_tests {
 
     #[test]
     fn stream_decoder_preserves_typed_upstream_policy_violation() {
-        let error = classify_stream_decoder_error(BitrouterError::UpstreamPolicyViolation {
+        let error = BitrouterError::from(bitrouter_ai::error::ModelError::PolicyViolation {
             message: "provider detail must stay internal".to_string(),
         });
 
@@ -2259,7 +2208,7 @@ mod error_classification_tests {
 
     #[test]
     fn stream_decoder_preserves_explicit_upstream_status() {
-        let error = classify_stream_decoder_error(BitrouterError::Upstream {
+        let error = BitrouterError::from(bitrouter_ai::error::ModelError::Provider {
             status: 401,
             message: "chat completions stream error".to_string(),
         });
@@ -2272,30 +2221,16 @@ mod error_classification_tests {
 
     #[test]
     fn stream_decoder_still_wraps_generic_parse_errors_as_upstream_502() {
-        let error =
-            classify_stream_decoder_error(BitrouterError::bad_request("malformed provider event"));
+        let error = BitrouterError::from(bitrouter_ai::error::ModelError::InvalidResponse {
+            message: "malformed provider event".into(),
+            usage: None,
+        });
 
         assert!(matches!(
             error,
             BitrouterError::UpstreamInvalidResponse { .. }
         ));
         assert_eq!(error.status(), 502);
-    }
-
-    #[test]
-    fn retry_after_accepts_seconds_http_date_and_rejects_invalid_values() {
-        let seconds = reqwest::header::HeaderValue::from_static("42");
-        assert_eq!(parse_retry_after(Some(&seconds)), Some(42));
-
-        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
-        let date =
-            reqwest::header::HeaderValue::from_str(&httpdate::fmt_http_date(future)).unwrap();
-        let parsed = parse_retry_after(Some(&date)).unwrap();
-        assert!((119..=120).contains(&parsed), "parsed delay was {parsed}");
-
-        let invalid = reqwest::header::HeaderValue::from_static("soon-ish");
-        assert_eq!(parse_retry_after(Some(&invalid)), None);
-        assert_eq!(parse_retry_after(None), None);
     }
 
     #[test]
@@ -2317,7 +2252,7 @@ mod error_classification_tests {
         // a transport error inside the decode loop. It must be classified as
         // UpstreamTimeout (504), not a generic 502 — otherwise the coarse
         // stream-idle guard is mislabelled once streaming starts.
-        match stream_transport_error(true, "connection timed out") {
+        match BitrouterError::from(bitrouter_ai::error::ModelError::Timeout) {
             BitrouterError::UpstreamTimeout => {}
             other => panic!("expected UpstreamTimeout, got {other:?}"),
         }
@@ -2327,7 +2262,9 @@ mod error_classification_tests {
     fn mid_stream_non_timeout_stays_a_502() {
         // A parse / non-timeout transport error keeps the existing 502 mapping
         // and preserves the underlying message.
-        match stream_transport_error(false, "malformed SSE frame") {
+        match BitrouterError::from(bitrouter_ai::error::ModelError::Decode {
+            message: "upstream stream error: malformed SSE frame".into(),
+        }) {
             BitrouterError::Upstream { status, message } => {
                 assert_eq!(status, 502);
                 assert!(message.contains("malformed SSE frame"), "got {message:?}");
@@ -2341,8 +2278,10 @@ mod error_classification_tests {
 mod beta_forward_tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::types::{OutboundHeaderRule, Prompt};
-    use crate::language_model::{Message, PipelineRequest, Role};
+    use crate::language_model::PipelineRequest;
+    use crate::language_model::types::OutboundHeaderRule;
+    use bitrouter_ai::types::Prompt;
+    use bitrouter_ai::types::{Message, Role};
 
     fn ctx_with_headers(headers: http::HeaderMap) -> PipelineContext {
         let prompt = Prompt {
@@ -2365,7 +2304,7 @@ mod beta_forward_tests {
             model: "claude".into(),
             caller: CallerContext::local(),
             headers,
-            prompt,
+            input: crate::language_model::types::PipelineInput::Generation(Box::new(prompt)),
             inbound_protocol: None,
         })
     }
@@ -2390,6 +2329,7 @@ mod beta_forward_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: None,
@@ -2546,12 +2486,12 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("chat transport was not registered"))?;
-        let (client, timeouts) = executor.client_for(&target, false);
+        let (client, _) = executor.client_for(&target, false);
         let body = serde_json::json!({"model": "claude-haiku"});
         let request = executor
             .build_authenticated_request(&RequestBuildInput {
                 client: &client,
-                timeouts: &timeouts,
+
                 url: "https://api.example/v1/chat/completions",
                 body: &body,
                 managed_expected: None,
@@ -2586,12 +2526,12 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("missing Responses transport"))?;
-        let (client, timeouts) = executor.client_for(&target, false);
+        let (client, _) = executor.client_for(&target, false);
         let body = serde_json::json!({"model":"fixture","input":"required text","tools":[]});
         let initial = executor
             .build_authenticated_request(&RequestBuildInput {
                 client: &client,
-                timeouts: &timeouts,
+
                 url: "https://example.invalid/v1/responses",
                 body: &body,
                 managed_expected: None,
@@ -2611,7 +2551,7 @@ mod beta_forward_tests {
         ctx.insert_extension(counted.clone());
         let build = |body, target, ctx| RequestBuildInput {
             client: &client,
-            timeouts: &timeouts,
+
             url: "https://example.invalid/v1/responses",
             body,
             managed_expected: None,
@@ -2667,22 +2607,27 @@ mod beta_forward_tests {
     struct RewriteOutputLimit;
 
     #[async_trait]
-    impl crate::language_model::auth::AuthApplier for RewriteOutputLimit {
+    impl bitrouter_ai::auth::AuthApplier for RewriteOutputLimit {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &RoutingTarget,
-        ) -> Result<reqwest::Request> {
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
             let bytes = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| BitrouterError::internal("fixture body missing"))?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes)
-                .map_err(|error| BitrouterError::internal(error.to_string()))?;
+                .ok_or_else(|| {
+                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                })?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+                bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+            })?;
             body["max_tokens"] = 4096.into();
             *request.body_mut() = Some(
                 serde_json::to_vec(&body)
-                    .map_err(|error| BitrouterError::internal(error.to_string()))?
+                    .map_err(|error| {
+                        bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                    })?
                     .into(),
             );
             Ok(request)
@@ -2701,7 +2646,7 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
-        let (client, timeouts) = executor.client_for(&target, false);
+        let (client, _) = executor.client_for(&target, false);
         let body = serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}],"max_tokens":128});
         for managed in [false, true] {
             let mut ctx = ctx_with_beta(None);
@@ -2713,7 +2658,7 @@ mod beta_forward_tests {
             let result = executor
                 .build_authenticated_request(&RequestBuildInput {
                     client: &client,
-                    timeouts: &timeouts,
+
                     url: "https://example.invalid/v1/chat/completions",
                     body: &body,
                     managed_expected: None,
@@ -2738,28 +2683,36 @@ mod beta_forward_tests {
     struct RemoveOutputLimit(Option<bool>);
 
     #[async_trait]
-    impl crate::language_model::auth::AuthApplier for RemoveOutputLimit {
-        fn output_token_limit_support(&self, _: &RoutingTarget) -> Option<bool> {
+    impl bitrouter_ai::auth::AuthApplier for RemoveOutputLimit {
+        fn output_token_limit_support(
+            &self,
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> Option<bool> {
             self.0
         }
 
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &RoutingTarget,
-        ) -> Result<reqwest::Request> {
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
             let bytes = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| BitrouterError::internal("fixture body missing"))?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes)
-                .map_err(|error| BitrouterError::internal(error.to_string()))?;
+                .ok_or_else(|| {
+                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                })?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+                bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+            })?;
             if let Some(object) = body.as_object_mut() {
                 object.remove("max_output_tokens");
             }
             *request.body_mut() = Some(
                 serde_json::to_vec(&body)
-                    .map_err(|error| BitrouterError::internal(error.to_string()))?
+                    .map_err(|error| {
+                        bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                    })?
                     .into(),
             );
             Ok(request)
@@ -2783,7 +2736,7 @@ mod beta_forward_tests {
                     .dispatch
                     .lookup(&target.api_protocol)
                     .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
-                let (client, timeouts) = executor.client_for(&target, false);
+                let (client, _) = executor.client_for(&target, false);
                 let mut ctx = ctx_with_beta(None);
                 ctx.insert_extension(Arc::new(
                     crate::language_model::native::NativeOutputReservation(128),
@@ -2792,7 +2745,6 @@ mod beta_forward_tests {
                 let result = executor
                     .build_authenticated_request(&RequestBuildInput {
                         client: &client,
-                        timeouts: &timeouts,
                         url: "https://example.invalid/v1/responses",
                         body: &body,
                         managed_expected: None,
@@ -2819,26 +2771,25 @@ mod beta_forward_tests {
             ApiProtocol::ChatCompletions,
             ApiProtocol::Responses,
             ApiProtocol::Messages,
-            ApiProtocol::GenerateContent,
         ] {
             let target = target(protocol);
             let mut ctx = ctx_with_beta(None);
             ctx.insert_extension(Arc::new(
                 crate::language_model::native::NativeOutputReservation(128),
             ));
-            let mut prompt = ctx.prompt().clone();
+            let mut prompt = ctx.require_generation_prompt()?.clone();
             prompt.messages = vec![Message::text(Role::User, "hello")];
             prompt.params.max_tokens = Some(128);
             let (adapter, transport) = executor
                 .dispatch
                 .lookup(&target.api_protocol)
                 .ok_or_else(|| BitrouterError::internal("missing fixture adapter"))?;
-            let body = adapter.render_request_for_target(&prompt, &target)?;
-            let (client, timeouts) = executor.client_for(&target, false);
+            let body = adapter.render_request_for_target(&prompt, &target.model_target())?;
+            let (client, _) = executor.client_for(&target, false);
             executor
                 .build_authenticated_request(&RequestBuildInput {
                     client: &client,
-                    timeouts: &timeouts,
+
                     url: "https://example.invalid/fixture",
                     body: &body,
                     managed_expected: None,
@@ -2854,14 +2805,14 @@ mod beta_forward_tests {
 
     struct RewriteEndpoint;
     #[async_trait]
-    impl crate::language_model::auth::AuthApplier for RewriteEndpoint {
+    impl bitrouter_ai::auth::AuthApplier for RewriteEndpoint {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &RoutingTarget,
-        ) -> Result<reqwest::Request> {
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
             *request.url_mut() = reqwest::Url::parse("https://other.invalid/messages")
-                .map_err(|e| BitrouterError::internal(e.to_string()))?;
+                .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?;
             request
                 .headers_mut()
                 .insert("x-api-key", http::HeaderValue::from_static("fixture-key"));
@@ -2870,8 +2821,8 @@ mod beta_forward_tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &RoutingTarget,
-        ) -> Result<AppliedAuth> {
+            target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("fixture", "principal"),
@@ -2895,12 +2846,13 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("fixture dispatch"))?;
-        let body = adapter.render_request_for_target(ctx.prompt(), &target)?;
-        let (client, timeouts) = executor.client_for(&target, true);
+        let body = adapter
+            .render_request_for_target(ctx.require_generation_prompt()?, &target.model_target())?;
+        let (client, _) = executor.client_for(&target, true);
         let error = executor
             .build_authenticated_request(&RequestBuildInput {
                 client: &client,
-                timeouts: &timeouts,
+
                 url: "https://example.invalid/messages",
                 body: &body,
                 managed_expected: Some(&body),
@@ -2922,22 +2874,24 @@ mod beta_forward_tests {
 
     struct RewriteManagedField(&'static str, serde_json::Value);
     #[async_trait]
-    impl crate::language_model::auth::AuthApplier for RewriteManagedField {
+    impl bitrouter_ai::auth::AuthApplier for RewriteManagedField {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &RoutingTarget,
-        ) -> Result<reqwest::Request> {
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
             let bytes = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| BitrouterError::internal("fixture body missing"))?;
+                .ok_or_else(|| {
+                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                })?;
             let mut body: serde_json::Value = serde_json::from_slice(bytes)
-                .map_err(|e| BitrouterError::internal(e.to_string()))?;
+                .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?;
             body[self.0] = self.1.clone();
             *request.body_mut() = Some(
                 serde_json::to_vec(&body)
-                    .map_err(|e| BitrouterError::internal(e.to_string()))?
+                    .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?
                     .into(),
             );
             Ok(request)
@@ -2972,7 +2926,7 @@ mod beta_forward_tests {
                 .dispatch
                 .lookup(&target.api_protocol)
                 .ok_or_else(|| BitrouterError::internal("fixture transport"))?;
-            let (client, timeouts) = executor.client_for(&target, false);
+            let (client, _) = executor.client_for(&target, false);
             for managed in [false, true] {
                 let mut ctx = ctx_with_beta(None);
                 if managed {
@@ -2987,7 +2941,7 @@ mod beta_forward_tests {
                     let result = executor
                         .build_authenticated_request(&RequestBuildInput {
                             client: &client,
-                            timeouts: &timeouts,
+
                             url: "https://example.invalid/responses",
                             body: &body,
                             managed_expected: baseline.as_ref(),
@@ -3029,22 +2983,23 @@ mod beta_forward_tests {
 mod provider_continuation_tests {
     use super::*;
     use crate::caller::CallerContext;
+    use crate::language_model::PipelineRequest;
     use crate::language_model::context::{
         ProviderContinuation, RequireContinuationAuthority, SuppressProviderContinuation,
     };
-    use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+    use bitrouter_ai::types::{GenerationParams, Message, Role};
 
     struct RewriteAfterProof;
 
     struct UnprovenScopeRewrite;
 
     #[async_trait]
-    impl crate::language_model::auth::AuthApplier for UnprovenScopeRewrite {
+    impl bitrouter_ai::auth::AuthApplier for UnprovenScopeRewrite {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &RoutingTarget,
-        ) -> Result<reqwest::Request> {
+            _target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 "authorization",
                 reqwest::header::HeaderValue::from_static("Bearer fixture-key"),
@@ -3084,7 +3039,7 @@ mod provider_continuation_tests {
             AuthAppliers::new().with("scope-rewrite", Arc::new(UnprovenScopeRewrite)),
         )?;
         let error = tokio::select! {
-            outcome = executor.execute(&target, ctx.prompt(), &ctx) => outcome.err()
+            outcome = executor.execute(&target, ctx.require_generation_prompt()?, &ctx) => outcome.err()
                 .ok_or_else(|| BitrouterError::internal("changed scope was dispatched"))?,
             _ = listener.accept() => return Err(BitrouterError::internal("unexpected upstream connection")),
             _ = tokio::time::sleep(Duration::from_secs(2)) => return Err(BitrouterError::internal("fixture timed out")),
@@ -3099,12 +3054,12 @@ mod provider_continuation_tests {
     }
 
     #[async_trait]
-    impl crate::language_model::auth::AuthApplier for RewriteAfterProof {
+    impl bitrouter_ai::auth::AuthApplier for RewriteAfterProof {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &RoutingTarget,
-        ) -> Result<reqwest::Request> {
+            _target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 "authorization",
                 reqwest::header::HeaderValue::from_static("Bearer original-private-key"),
@@ -3115,8 +3070,8 @@ mod provider_continuation_tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &RoutingTarget,
-        ) -> Result<AppliedAuth> {
+            target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<AppliedAuth> {
             let request = self.apply(request, target).await?;
             let mut applied = AppliedAuth::proven(
                 request,
@@ -3146,7 +3101,7 @@ mod provider_continuation_tests {
         ctx.insert_extension(Arc::new(RequireContinuationAuthority));
         ctx.record_credential_authority(Some(ContinuationAuthority::new(
             CredentialAuthority::derive("test", "stale-count-principal"),
-            crate::language_model::types::AuthScheme::Bearer,
+            bitrouter_ai::types::AuthScheme::Bearer,
         )));
         let executor = HttpExecutor::with_dispatch_and_auth(
             Default::default(),
@@ -3154,7 +3109,7 @@ mod provider_continuation_tests {
             AuthAppliers::new().with("mutating-auth", Arc::new(RewriteAfterProof)),
         )?;
         let error = tokio::select! {
-            outcome = executor.execute(&target, ctx.prompt(), &ctx) => outcome.err()
+            outcome = executor.execute(&target, ctx.require_generation_prompt()?, &ctx) => outcome.err()
                 .ok_or_else(|| BitrouterError::internal("changed credentials were dispatched"))?,
             _ = listener.accept() => return Err(BitrouterError::internal("unexpected upstream connection")),
             _ = tokio::time::sleep(Duration::from_secs(2)) => return Err(BitrouterError::internal("fixture timed out")),
@@ -3179,6 +3134,7 @@ mod provider_continuation_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: Some("primary".into()),
@@ -3215,7 +3171,7 @@ mod provider_continuation_tests {
             target,
             ContinuationAuthority::new(
                 CredentialAuthority::derive("test/static", "secret-key"),
-                crate::language_model::types::AuthScheme::Bearer,
+                bitrouter_ai::types::AuthScheme::Bearer,
             ),
         )));
         ctx
@@ -3232,27 +3188,6 @@ mod provider_continuation_tests {
         let mut chat = responses;
         chat.api_protocol = ApiProtocol::ChatCompletions;
         validate_continuation_authority(&chat, &ctx, None).unwrap();
-    }
-
-    #[test]
-    fn credential_name_detection_covers_custom_auth_without_redacting_ordinary_fields() {
-        for name in [
-            "Authorization",
-            "api-key",
-            "X-Custom-Token",
-            "X-Provider-Auth",
-            "x-refresh-secret",
-            "X-Amz-Signature",
-            "cookie",
-        ] {
-            assert!(is_sensitive_credential_name(name), "missed {name}");
-        }
-        for name in ["content-type", "api-version", "model", "x-request-id"] {
-            assert!(
-                !is_sensitive_credential_name(name),
-                "ordinary field was classified as a credential: {name}"
-            );
-        }
     }
 
     #[test]
@@ -3341,7 +3276,9 @@ mod provider_continuation_tests {
             native: native.to_owned(),
             public_or_redacted: "brc_public".to_owned(),
         }));
-        scrubber.add_replacement(credential.to_owned(), "[redacted credential]".to_owned());
+        scrubber
+            .redactor
+            .add_replacement(credential.to_owned(), "[redacted credential]".to_owned());
         let body = format!(
             "{native} {credential} {} {native} {credential}",
             "x".repeat(1_500)
@@ -3421,8 +3358,9 @@ mod provider_continuation_tests {
 mod client_selection_tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::types::ApiProtocol;
-    use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+    use crate::language_model::PipelineRequest;
+    use bitrouter_ai::types::ApiProtocol;
+    use bitrouter_ai::types::{GenerationParams, Message, Role};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn target(provider: &str) -> RoutingTarget {
@@ -3435,6 +3373,7 @@ mod client_selection_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: None,
@@ -3559,6 +3498,7 @@ mod client_selection_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: None,
@@ -3602,8 +3542,9 @@ mod client_selection_tests {
 mod openai_codex_stream_bridge_tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::types::{Content, FinishReason, UsageOrigin};
-    use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+    use crate::language_model::PipelineRequest;
+    use bitrouter_ai::types::{Content, FinishReason, UsageOrigin};
+    use bitrouter_ai::types::{GenerationParams, Message, Role};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn read_request_body(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
@@ -3635,7 +3576,8 @@ mod openai_codex_stream_bridge_tests {
     }
 
     #[tokio::test]
-    async fn non_streaming_codex_request_uses_streaming_upstream_and_aggregates() {
+    async fn non_streaming_codex_request_uses_streaming_upstream_and_aggregates()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test server");
@@ -3685,6 +3627,7 @@ mod openai_codex_stream_bridge_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: None,
@@ -3717,20 +3660,120 @@ mod openai_codex_stream_bridge_tests {
         server.await.expect("test server");
 
         assert_eq!(
-            result.result.content,
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .content,
             vec![Content::Text {
                 text: "bridge ok".into(),
                 provider_metadata: Default::default(),
             }]
         );
-        assert_eq!(result.result.finish_reason, Some(FinishReason::Stop));
-        assert_eq!(result.result.response_id.as_deref(), Some("resp_bridge"));
-        let usage = result.result.usage.expect("provider usage");
+        assert_eq!(
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .finish_reason,
+            Some(FinishReason::Stop)
+        );
+        assert_eq!(
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .response_id
+                .as_deref(),
+            Some("resp_bridge")
+        );
+        let usage = result
+            .result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .usage
+            .as_ref()
+            .ok_or_else(|| {
+                crate::error::BitrouterError::internal("provider usage fixture missing")
+            })?;
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.cache_read_tokens, 5);
         assert_eq!(usage.cache_write_tokens, 0);
         assert_eq!(usage.completion_tokens, 4);
         assert_eq!(usage.reasoning_tokens, 1);
         assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+
+        Ok(())
+    }
+}
+
+fn parse_upstream_success(
+    adapter: &dyn OutboundAdapter,
+    json: serde_json::Value,
+) -> Result<GenerateResult> {
+    ModelClient::parse_response(adapter, &adapter.protocol(), &json.to_string()).map_err(Into::into)
+}
+
+fn validate_nonstream_responses_terminal(json: &serde_json::Value) -> Result<()> {
+    let status = json.get("status").and_then(serde_json::Value::as_str);
+    if !matches!(status, Some("completed" | "incomplete")) {
+        return Err(BitrouterError::UpstreamInvalidResponse {
+            usage: None,
+            message: format!(
+                "Responses response has non-success terminal status '{}'",
+                status.unwrap_or("<missing>")
+            ),
+        });
+    }
+    if json
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(BitrouterError::UpstreamInvalidResponse {
+            usage: None,
+            message: "Responses response missing non-empty 'id'".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> BitrouterError {
+    if is_timeout {
+        BitrouterError::UpstreamTimeout
+    } else {
+        BitrouterError::Upstream {
+            status: 502,
+            message: format!("upstream stream error: {display}"),
+        }
+    }
+}
+
+fn classify_stream_decoder_error(error: bitrouter_ai::error::ModelError) -> BitrouterError {
+    match BitrouterError::from(error) {
+        error @ (BitrouterError::UpstreamPolicyViolation { .. }
+        | BitrouterError::Upstream { .. }
+        | BitrouterError::UpstreamInvalidResponse { .. }) => error,
+        error => BitrouterError::UpstreamInvalidResponse {
+            message: error.to_string(),
+            usage: None,
+        },
+    }
+}
+
+fn upstream_body_error(context: &'static str, error: reqwest::Error) -> BitrouterError {
+    if error.is_timeout() {
+        BitrouterError::UpstreamTimeout
+    } else {
+        BitrouterError::Upstream {
+            status: 502,
+            message: format!("{context}: {error}"),
+        }
     }
 }

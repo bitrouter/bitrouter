@@ -807,7 +807,7 @@ mod tests {
     #[test]
     fn route_json_round_trips_through_the_shared_type() {
         use crate::actions::route::{ContextTierRates, EstimatedCost, ProviderHop};
-        use bitrouter_sdk::language_model::types::ReasoningEffort;
+        use bitrouter_ai::types::ReasoningEffort;
         for (via, wire) in [
             (ResolvedVia::Live, "live"),
             (ResolvedVia::Config, "config"),

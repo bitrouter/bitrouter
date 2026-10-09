@@ -15,10 +15,8 @@ use async_trait::async_trait;
 
 use super::toolset::{RouterToolset, ToolContext};
 use crate::error::Result;
-use crate::language_model::types::{
-    ProviderMetadata, Tool, ToolResultContentPart, ToolResultOutput,
-};
 use crate::mcp::{Executor as McpExecutor, McpRequest, RoutingTable as McpRoutingTable};
+use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultContentPart, ToolResultOutput};
 
 /// Convert an MCP `tools/list` result into canonical IR function tools. Each
 /// MCP tool `{name, description?, inputSchema}` becomes a [`Tool::Function`];

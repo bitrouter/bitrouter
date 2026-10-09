@@ -263,7 +263,7 @@ impl ObserveHook for HeldChildAdmission {
     async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
     async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
     async fn on_hop_start(&self, ctx: &PipelineContext, _: &RoutingTarget) {
-        if child_prompt(ctx.prompt()) {
+        if ctx.generation_prompt().is_some_and(child_prompt) {
             self.0.hold().await;
         }
     }

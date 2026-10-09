@@ -2,6 +2,7 @@ use super::*;
 use crate::language_model::native::{
     NativeAttemptReport, NativeExecutionControl, NativePlan, NativePlanAdmission,
 };
+use crate::language_model::stream::{UsagePricing, UsagePricingBracket};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -64,7 +65,7 @@ fn usage() -> StreamPart {
         usage: Usage {
             prompt_tokens: 40,
             completion_tokens: 7,
-            origin: crate::language_model::types::UsageOrigin::ProviderReported,
+            origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
             ..Default::default()
         },
     }
@@ -97,12 +98,15 @@ async fn controlled_stream_preserves_blocks_signatures_tools_and_accounting()
     let result = pipeline(
         vec![
             StreamPart::ReasoningStart {
+                source_protocol: None,
                 id: "reason".into(),
             },
             StreamPart::ReasoningDelta {
+                source_kind: None,
                 text: "consider".into(),
             },
             StreamPart::ReasoningEnd {
+                native: None,
                 id: "reason".into(),
                 signature: Some("signed".into()),
             },
@@ -137,14 +141,22 @@ async fn controlled_stream_preserves_blocks_signatures_tools_and_accounting()
     )?
     .execute_native_controlled(request(), control.clone())
     .await?;
-    assert_eq!(result.result.content.len(), 4);
+    assert_eq!(
+        result
+            .result
+            .generation()
+            .ok_or("expected generation result")?
+            .content
+            .len(),
+        4
+    );
     assert!(
-        matches!(&result.result.content[0], Content::Reasoning { provider_metadata, .. }
+        matches!(&result.result.generation().ok_or("expected generation result")?.content[0], Content::Reasoning { provider_metadata, .. }
         if provider_metadata.get("anthropic").and_then(|value| value.get("signature"))
             == Some(&serde_json::json!("signed")))
     );
     assert!(
-        matches!(&result.result.content[3], Content::ToolCall { arguments, .. }
+        matches!(&result.result.generation().ok_or("expected generation result")?.content[3], Content::ToolCall { arguments, .. }
         if arguments == "{\"path\":\"src\"}")
     );
     assert_eq!(control.reports.lock().await.len(), 1);
@@ -225,7 +237,7 @@ async fn oversized_stream_frame_and_duplicate_tool_identity_are_rejected()
 async fn controlled_http_stream_retains_complete_responses_private_output()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
-    for terminal_text in ["visible", "different"] {
+    for (terminal_text, rewrite) in [("visible", false), ("different", false), ("visible", true)] {
         let server = MockServer::start().await;
         let terminal = serde_json::json!({
             "type":"response.completed", "response": {
@@ -261,13 +273,29 @@ async fn controlled_http_stream_retains_complete_responses_private_output()
             .routing_table(Arc::new(table))
             .executor(Arc::new(HttpExecutor::with_defaults()?))
             .settlement_recorder(records.clone());
+        if rewrite {
+            builder.stream_hook(ScriptedStreamHook {
+                interest: StreamInterest::all(),
+                mode: StreamMode::UppercaseText,
+                ended_with: Default::default(),
+            });
+        }
         let pipeline = Arc::new(builder.build()?);
         let result = pipeline
             .execute_native_controlled(request(), control.clone())
             .await;
-        if terminal_text == "visible" {
+        if terminal_text == "visible" && !rewrite {
             let result = result?;
-            assert!(serde_json::to_string(&result.result.content)?.contains("opaque-native-state"));
+            assert!(
+                serde_json::to_string(
+                    &result
+                        .result
+                        .generation()
+                        .ok_or("expected generation result")?
+                        .content
+                )?
+                .contains("opaque-native-state")
+            );
             assert_eq!(records.0.lock().await.as_slice(), &[(true, 40, false)]);
         } else {
             assert!(result.is_err());
@@ -275,5 +303,230 @@ async fn controlled_http_stream_retains_complete_responses_private_output()
             assert_eq!(records.0.lock().await.as_slice(), &[(true, 40, true)]);
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_reasoning_preserves_interleaved_lanes_and_rejects_changed_text()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for retained in ["AC", "rewritten"] {
+        let native = NativeReasoning::Responses(serde_json::json!({
+            "type":"reasoning", "id":"r", "summary":[{"type":"summary_text", "text":retained}],
+            "content":[{"type":"reasoning_text", "text":"B"}]
+        }));
+        let result = pipeline(
+            vec![
+                StreamPart::ReasoningStart {
+                    id: "r".into(),
+                    source_protocol: Some(ApiProtocol::Responses),
+                },
+                StreamPart::ReasoningDelta {
+                    text: "A".into(),
+                    source_kind: Some(ReasoningTextKind::Summary),
+                },
+                StreamPart::ReasoningDelta {
+                    text: "B".into(),
+                    source_kind: Some(ReasoningTextKind::Text),
+                },
+                StreamPart::ReasoningDelta {
+                    text: "C".into(),
+                    source_kind: Some(ReasoningTextKind::Summary),
+                },
+                StreamPart::ReasoningEnd {
+                    id: "r".into(),
+                    signature: None,
+                    native: Some(native.clone()),
+                },
+                usage(),
+                StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ],
+            Records::default(),
+        )?
+        .execute_native_controlled(request(), Arc::new(Control::default()))
+        .await;
+        if retained == "AC" {
+            let result = result?;
+            assert!(
+                matches!(&result.result.generation().ok_or("generation")?.content[0],
+                Content::Reasoning { text, native: Some(saved), .. } if text == "ACB" && saved == &native)
+            );
+        } else {
+            assert!(result.is_err());
+        }
+    }
+    Ok(())
+}
+
+struct LivePricing;
+#[async_trait]
+impl RoutingTable for LivePricing {
+    async fn route_chain(
+        &self,
+        _: &str,
+        _: &RoutingPrefs,
+        _: &CallerContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        Ok(vec![target("priced")])
+    }
+    fn usage_pricing(&self, _: &str, _: &RoutingTarget) -> Option<UsagePricing> {
+        Some(UsagePricing {
+            base: UsagePricingBracket {
+                input_micro_usd_per_token: Some(100.0),
+                output_micro_usd_per_token: Some(1.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+    fn list_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+    fn model_info(&self, _: &str) -> Option<ModelInfo> {
+        None
+    }
+    async fn reload(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct FreezePricing(Option<UsagePricing>);
+#[async_trait]
+impl RouteHook for FreezePricing {
+    async fn resolve(&self, _: &mut Vec<RoutingTarget>, _: &mut PipelineContext) -> Result<()> {
+        Ok(())
+    }
+    async fn after_resolve(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        for target in chain {
+            ctx.emit(crate::language_model::stream::UsagePricingSnapshot {
+                target: crate::language_model::stream::PricingTargetKey::from_target(target),
+                pricing: self.0.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn native_stream_uses_frozen_rates_including_unknown()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for frozen in [
+        None,
+        Some(UsagePricing {
+            base: UsagePricingBracket {
+                input_micro_usd_per_token: Some(1.0),
+                output_micro_usd_per_token: Some(100.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+    ] {
+        let records = Records::default();
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(LivePricing))
+            .route_hook(FreezePricing(frozen))
+            .settlement_recorder(records.clone())
+            .executor(Arc::new(MockExecutor::new(vec![MockResponse::Stream(
+                vec![
+                    StreamPart::Usage {
+                        usage: Usage {
+                            prompt_tokens: 100,
+                            completion_tokens: 1,
+                            origin: UsageOrigin::ProviderReported,
+                            ..Default::default()
+                        },
+                    },
+                    StreamPart::Usage {
+                        usage: Usage {
+                            prompt_tokens: 1,
+                            completion_tokens: 100,
+                            origin: UsageOrigin::ProviderReported,
+                            ..Default::default()
+                        },
+                    },
+                    StreamPart::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ],
+            )])));
+        Arc::new(builder.build()?)
+            .execute_native_controlled(request(), Arc::new(Control::default()))
+            .await?;
+        assert_eq!(records.0.lock().await.as_slice(), &[(true, 1, false)]);
+    }
+    Ok(())
+}
+
+struct DropReasoning;
+#[async_trait]
+impl StreamHook for DropReasoning {
+    async fn on_stream_end(&self, _: &mut StreamContext, _: &StreamOutcome) -> Result<()> {
+        Ok(())
+    }
+    fn interest(&self) -> StreamInterest {
+        StreamInterest::all()
+    }
+    async fn on_part(&self, _: &mut StreamContext, part: StreamPart) -> Result<StreamAction> {
+        Ok(
+            if matches!(
+                part,
+                StreamPart::ReasoningStart { .. }
+                    | StreamPart::ReasoningDelta { .. }
+                    | StreamPart::ReasoningEnd { .. }
+            ) {
+                StreamAction::Replace(Vec::new())
+            } else {
+                StreamAction::Pass
+            },
+        )
+    }
+}
+
+#[tokio::test]
+async fn native_terminal_cannot_restore_reasoning_removed_by_stream_policy()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let server = MockServer::start().await;
+    let item = serde_json::json!({"id":"r", "type":"reasoning", "summary":[{"type":"summary_text","text":"private"}], "encrypted_content":"opaque"});
+    let body = [
+        serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"r","summary":[]}}),
+        serde_json::json!({"type":"response.reasoning_summary_text.delta","item_id":"r","delta":"private"}),
+        serde_json::json!({"type":"response.output_item.done","output_index":0,"item":{"id":"r","type":"reasoning"}}),
+        serde_json::json!({"type":"response.completed","response":{"id":"response","status":"completed","output":[item],"usage":{"input_tokens":40,"output_tokens":7}}}),
+    ].iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut route = target("responses");
+    route.api_protocol = ApiProtocol::Responses;
+    route.api_base = server.uri();
+    let table = StaticRoutingTable::new();
+    table.insert("test-model", vec![route]);
+    let records = Records::default();
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(table))
+        .executor(Arc::new(HttpExecutor::with_defaults()?))
+        .stream_hook(DropReasoning)
+        .settlement_recorder(records.clone());
+    assert!(
+        Arc::new(builder.build()?)
+            .execute_native_controlled(request(), Arc::new(Control::default()))
+            .await
+            .is_err()
+    );
+    assert_eq!(records.0.lock().await.as_slice(), &[(true, 40, true)]);
     Ok(())
 }

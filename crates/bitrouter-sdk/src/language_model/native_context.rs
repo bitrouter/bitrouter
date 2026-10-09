@@ -5,16 +5,17 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::auth::ContinuationAuthority;
 use super::context::PipelineContext;
 use super::native_continuation::{
     ContinuationFailure, FullHistoryReason, NativeContinuationBinding,
     NativeContinuationObservation, NativeContinuationOutput, NativeContinuationPlan,
     NativeContinuationSource, clear_continuations, has_continuation, requires_stored_state,
 };
-use super::types::{Content, GenerateResult, Prompt, ProviderMetadata, RoutingTarget};
+use super::types::RoutingTarget;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
+use bitrouter_ai::auth::ContinuationAuthority;
+use bitrouter_ai::types::{Content, GenerateResult, Prompt, ProviderMetadata};
 
 /// The only reserved SDK-owned field used for private-history provenance.
 pub const ORIGIN_NAMESPACE: &str = "bitrouter";
@@ -254,7 +255,13 @@ pub fn metadata_mut(content: &mut Content) -> &mut ProviderMetadata {
 /// <https://developers.openai.com/api/docs/guides/reasoning>
 pub fn is_private(content: &Content) -> bool {
     let meta = metadata(content);
-    meta.get("anthropic").is_some_and(|value| {
+    matches!(
+        content,
+        Content::Reasoning {
+            native: Some(_),
+            ..
+        }
+    ) || meta.get("anthropic").is_some_and(|value| {
         value.get("signature").is_some()
             || value.get("redactedThinking").is_some()
             || value.get("redactedData").is_some()
@@ -287,7 +294,8 @@ pub fn is_opaque_reasoning(content: &Content) -> bool {
 /// Opaque payloads excluded from checker text, including metadata attached to
 /// readable summaries. A readable summary still needs to be checked.
 pub(crate) fn has_opaque_payload(content: &Content) -> bool {
-    is_opaque_reasoning(content)
+    matches!(content, Content::Reasoning { native: Some(bitrouter_ai::types::NativeReasoning::Responses(item)), .. } if item.get("encrypted_content").is_some_and(|value| !value.is_null()))
+        || is_opaque_reasoning(content)
         || metadata(content)
             .get("openai")
             .and_then(|fields| fields.get("reasoningItem"))
@@ -399,9 +407,12 @@ impl NativePrivateContextRuntime {
         target: &RoutingTarget,
         actual: Option<&ContinuationAuthority>,
     ) -> std::result::Result<(), ContinuationFailure> {
-        if let NativeContinuationPlan::Resume(binding) =
-            self.continuation_plan(ctx.prompt(), ctx.caller(), target)?
-        {
+        if let NativeContinuationPlan::Resume(binding) = self.continuation_plan(
+            ctx.generation_prompt()
+                .ok_or(ContinuationFailure::BindingChanged)?,
+            ctx.caller(),
+            target,
+        )? {
             self.policy
                 .as_deref()
                 .ok_or(ContinuationFailure::PolicyUnavailable)?
@@ -451,8 +462,15 @@ impl NativePrivateContextRuntime {
         &self,
         ctx: &PipelineContext,
     ) -> std::result::Result<(), PrivateContextFailure> {
-        match self.policy_for(ctx.prompt())? {
-            Some(policy) => policy.validate_history(ctx.prompt(), ctx.caller()),
+        match self.policy_for(
+            ctx.generation_prompt()
+                .ok_or(PrivateContextFailure::PolicyUnavailable)?,
+        )? {
+            Some(policy) => policy.validate_history(
+                ctx.generation_prompt()
+                    .ok_or(PrivateContextFailure::PolicyUnavailable)?,
+                ctx.caller(),
+            ),
             None => Ok(()),
         }
     }
@@ -475,9 +493,13 @@ impl NativePrivateContextRuntime {
         target: &RoutingTarget,
         authority: Option<&ContinuationAuthority>,
     ) -> std::result::Result<(), PrivateContextFailure> {
-        match self.policy_for(ctx.prompt())? {
+        match self.policy_for(
+            ctx.generation_prompt()
+                .ok_or(PrivateContextFailure::PolicyUnavailable)?,
+        )? {
             Some(policy) => policy.validate_authority(
-                ctx.prompt(),
+                ctx.generation_prompt()
+                    .ok_or(PrivateContextFailure::PolicyUnavailable)?,
                 ctx.caller(),
                 target,
                 authority.ok_or(PrivateContextFailure::AuthorityUnavailable)?,
@@ -583,7 +605,9 @@ impl NativePrivateContextRuntime {
             }
         };
         self.state().continuation.output = match source.as_ref() {
-            Some(source) if source.target.api_protocol != super::types::ApiProtocol::Responses => {
+            Some(source)
+                if source.target.api_protocol != bitrouter_ai::types::ApiProtocol::Responses =>
+            {
                 NativeContinuationOutput::NotSupported
             }
             Some(source) if !source.stored_response => NativeContinuationOutput::NotStored,
@@ -592,7 +616,12 @@ impl NativePrivateContextRuntime {
                     if !authentic {
                         return Err(ContinuationFailure::AttemptUnverified);
                     }
-                    if !source.effort_bound || source.prompt != *ctx.prompt() {
+                    if !source.effort_bound
+                        || source.prompt
+                            != *ctx
+                                .generation_prompt()
+                                .ok_or(ContinuationFailure::BindingChanged)?
+                    {
                         return Err(ContinuationFailure::BindingChanged);
                     }
                     let authority = source
@@ -603,11 +632,17 @@ impl NativePrivateContextRuntime {
                         .policy
                         .as_deref()
                         .ok_or(ContinuationFailure::PolicyUnavailable)?;
-                    let plan =
-                        self.continuation_plan(ctx.prompt(), ctx.caller(), &source.target)?;
+                    let plan = self.continuation_plan(
+                        ctx.generation_prompt()
+                            .ok_or(ContinuationFailure::BindingChanged)?,
+                        ctx.caller(),
+                        &source.target,
+                    )?;
                     policy.seal_continuation(
                         NativeContinuationSource {
-                            prompt: ctx.prompt(),
+                            prompt: ctx
+                                .generation_prompt()
+                                .ok_or(ContinuationFailure::BindingChanged)?,
                             caller: ctx.caller(),
                             target: &source.target,
                             authority,
@@ -635,14 +670,17 @@ impl NativePrivateContextRuntime {
         };
         // Managed callers receive only the encrypted artifact. Even unverified
         // custom or stream-bridge output must not expose raw handles in receipts.
-        if target.api_protocol == super::types::ApiProtocol::Responses {
+        if target.api_protocol == bitrouter_ai::types::ApiProtocol::Responses {
             self.state().response_terminal_valid = result
                 .response_id
                 .as_deref()
                 .is_some_and(|id| !id.is_empty())
                 && matches!(
                     result.finish_reason,
-                    Some(super::types::FinishReason::Stop | super::types::FinishReason::Length)
+                    Some(
+                        bitrouter_ai::types::FinishReason::Stop
+                            | bitrouter_ai::types::FinishReason::Length
+                    )
                 );
             result.response_id = None;
         }
@@ -663,9 +701,9 @@ pub fn validate_managed_history(ctx: &PipelineContext) -> Result<()> {
                 .map_err(PrivateContextFailure::error)?;
             match runtime.policy.as_deref() {
                 Some(policy) => policy
-                    .validate_continuation_history(ctx.prompt(), ctx.caller())
+                    .validate_continuation_history(ctx.require_generation_prompt()?, ctx.caller())
                     .map_err(ContinuationFailure::error),
-                None if has_continuation(ctx.prompt()) => {
+                None if has_continuation(ctx.require_generation_prompt()?) => {
                     Err(ContinuationFailure::PolicyUnavailable.error())
                 }
                 None => Ok(()),

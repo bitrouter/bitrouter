@@ -1,7 +1,7 @@
 //! Translate provenance-preserving Core views into shared routing candidates.
 
 use super::planner::{ContextRepresentation, ContextView};
-use bitrouter_sdk::language_model::Prompt;
+use bitrouter_ai::types::Prompt;
 use bitrouter_sdk::routing::{ContextCapability, plan};
 
 pub(crate) fn view(id: &str, view: &ContextView, prompt: &Prompt) -> plan::View {

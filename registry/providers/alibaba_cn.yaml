@@ -101,20 +101,6 @@ models:
             no_cache: 1.101
           output_tokens:
             text: 6.602
-  - id: qwen/qwen3.6-flash
-    provider_model_id: qwen3.6-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.1875
-        cache_write: 0.234375
-      output_tokens:
-        text: 1.125
-      context_tiers:
-        - above_input_tokens: 256000
-          input_tokens:
-            no_cache: 0.66
-          output_tokens:
-            text: 3.961
   - id: minimax/minimax-m2.7
     provider_model_id: MiniMax/MiniMax-M2.7
     pricing:
@@ -150,14 +136,6 @@ models:
         cache_read: 0.003625
       output_tokens:
         text: 0.87
-  - id: z-ai/glm-5.1
-    provider_model_id: glm-5.1
-    pricing:
-      input_tokens:
-        no_cache: 0.87
-        cache_read: 0.17
-      output_tokens:
-        text: 3.48
   - id: z-ai/glm-5.2
     provider_model_id: glm-5.2
     pricing:
@@ -167,13 +145,6 @@ models:
         cache_write: 0
       output_tokens:
         text: 3.851
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: kimi-k2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.929
-      output_tokens:
-        text: 3.858
   - id: qwen/qwen3.7-flash
     provider_model_id: qwen3.7-flash
     pricing:

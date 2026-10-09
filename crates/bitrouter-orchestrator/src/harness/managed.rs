@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-use bitrouter_sdk::language_model::{Tool, ToolResultOutput};
+use bitrouter_ai::types::{Tool, ToolResultOutput};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 

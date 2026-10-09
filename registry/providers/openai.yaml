@@ -91,52 +91,6 @@ models:
       - reasoning
       - structured_outputs
       - tools
-  - id: openai/gpt-5.5
-    provider_model_id: gpt-5.5
-    reasoning_effort: &gpt_55_effort
-      levels: [none, low, medium, high, xhigh]
-      default: medium
-    compatibility: *modern_openai_chat
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-      output_tokens:
-        text: 30
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: openai/gpt-5.4
-    provider_model_id: gpt-5.4
-    reasoning_effort: &gpt_54_effort
-      levels: [none, low, medium, high, xhigh]
-      default: none
-    compatibility: *modern_openai_chat
-    pricing:
-      input_tokens:
-        no_cache: 2.5
-        cache_read: 0.25
-      output_tokens:
-        text: 15
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: openai/gpt-5.4-mini
-    provider_model_id: gpt-5.4-mini
-    reasoning_effort: *gpt_54_effort
-    compatibility: *modern_openai_chat
-    pricing:
-      input_tokens:
-        no_cache: 0.75
-        cache_read: 0.075
-      output_tokens:
-        text: 4.5
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
   - id: openai/gpt-6-astra
     provider_model_id: gpt-6-astra
     pricing:
@@ -148,6 +102,25 @@ models:
         text: 50
   - id: openai/gpt-6-luna
     provider_model_id: gpt-6-luna
+    # Native endpoint support and input-only tariff: Decisions guide, verified
+    # 2026-10-06. The >272K whole-input multiplier comes from the model page.
+    # Cached subsets remain unavailable in metering until their basis is verified.
+    # https://developers.openai.com/api/docs/guides/decisions
+    # https://developers.openai.com/api/docs/models/gpt-6-luna
+    api_protocol: [openai, responses, decisions]
+    pricing_by_protocol:
+      decisions:
+        endpoint_profile: openai_global
+        input_tokens:
+          no_cache: 0.10
+          cache_read: 0
+          cache_write: 0
+        output_tokens:
+          text: 0
+        context_tiers:
+          - above_input_tokens: 272000
+            input_tokens:
+              no_cache: 0.20
     pricing:
       input_tokens:
         no_cache: 0.1

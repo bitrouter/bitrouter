@@ -62,10 +62,8 @@ impl WorkflowStateExtractor for OpenClawExtractor {
 mod tests {
     use super::*;
 
+    use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
     use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::language_model::types::{
-        GenerationParams, Message, Prompt, ProviderMetadata, Role,
-    };
 
     use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
     use crate::workflow_state::ir::{EvidenceLevel, HarnessId, ProtocolKind};

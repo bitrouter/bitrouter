@@ -4,9 +4,10 @@ mod continuation;
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use bitrouter_ai::auth::ContinuationAuthority;
+use bitrouter_ai::types::{AuthScheme, Content, Prompt, Role};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::error::Result;
-use bitrouter_sdk::language_model::auth::ContinuationAuthority;
 use bitrouter_sdk::language_model::context::PipelineContext;
 use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook};
 use bitrouter_sdk::language_model::native_context::{
@@ -14,7 +15,7 @@ use bitrouter_sdk::language_model::native_context::{
     message_commitment, metadata, metadata_mut, requires_origin_validation,
     validate_managed_history,
 };
-use bitrouter_sdk::language_model::types::{AuthScheme, Content, Prompt, Role, RoutingTarget};
+use bitrouter_sdk::language_model::types::RoutingTarget;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -12,6 +12,7 @@ name = "bitrouter"
 changelog_path = "CHANGELOG.md" # Single changelog at the repository root
 changelog_update = true
 changelog_include = [           # Include SDK and extension changes in the bitrouter changelog
+    "bitrouter-ai",
     "bitrouter-sdk",
     "bitrouter-guardrails",
     "bitrouter-telemetry",

@@ -1195,7 +1195,7 @@ async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow:
     assert_eq!(usage[0].status.as_deref(), Some("failed"));
     assert_eq!(
         usage[0].usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::Unknown
+        bitrouter_ai::types::UsageOrigin::Unknown
     );
     assert_eq!(usage[0].raw_usage, None);
     assert_eq!(usage[0].final_charge_micro_usd, None);

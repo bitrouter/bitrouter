@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::language_model::routing::RouterRequestIdentity;
-use crate::language_model::types::{
-    ApiProtocol, Capability, GenerateResult, Message, Prompt, ReasoningEffortSource, RoutingTarget,
+use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::types::{
+    ApiProtocol, Capability, GenerateResult, Message, Prompt, ReasoningEffortSource,
 };
 
 /// Independently declared token limits. An input limit is not a combined
@@ -450,7 +451,7 @@ pub struct NativeOutputUsage {
     /// Provider-reported search calls, independent of token cost.
     pub web_search_count: u64,
     /// Original canonical usage provenance.
-    pub origin: super::types::UsageOrigin,
+    pub origin: bitrouter_ai::types::UsageOrigin,
 }
 
 /// Per-request durable controls supplied by a native embedding runtime.
@@ -479,7 +480,7 @@ pub trait NativeExecutionControl: Send + Sync {
 
     /// Bounded display-only observation after stream policy. Implementations
     /// must not use partial tool arguments as execution authority.
-    async fn on_stream_part(&self, _request_id: &str, _part: &super::types::StreamPart) {}
+    async fn on_stream_part(&self, _request_id: &str, _part: &bitrouter_ai::types::StreamPart) {}
 
     /// Bound the HTTP executor's complete decoded response body, including SSE
     /// framing and terminal events. This also bounds unsuccessful response bodies.

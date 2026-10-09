@@ -10,7 +10,7 @@
 //! The app owns the types, port, and implementation beside the policy table,
 //! routing table, and pricing registry.
 
-use bitrouter_sdk::language_model::types::ReasoningEffort;
+use bitrouter_ai::types::ReasoningEffort;
 
 use super::ToolError;
 
@@ -275,7 +275,7 @@ use crate::policy_table_router::PolicyDecision;
 
 #[derive(Default)]
 struct RouteMetadata {
-    effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    effective_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
     router_source: Option<crate::actions::models::RouterSource>,
     bound_policy: Option<String>,
@@ -552,7 +552,13 @@ fn assemble(
 ) -> RouteReport {
     let estimated_cost = chain
         .first()
-        .and_then(|h| pricing.resolve(&h.provider, &h.service_id))
+        .and_then(|hop| {
+            serde_json::from_value::<bitrouter_ai::types::ApiProtocol>(serde_json::Value::String(
+                hop.api_protocol.clone(),
+            ))
+            .ok()
+            .and_then(|protocol| pricing.resolve(&hop.provider, &hop.service_id, &protocol))
+        })
         .filter(|p| !p.is_unconfigured())
         .map(|p| estimated_cost(&p));
     RouteReport {
@@ -922,6 +928,7 @@ policies:
         assert!(!flat.note.contains("context_tiers"), "note: {}", flat.note);
 
         let tiered = estimated_cost(&ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.0),
             output_micro_usd_per_token: Some(2.0),
             cache_read_micro_usd_per_token: None,

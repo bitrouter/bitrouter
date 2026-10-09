@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::language_model::types::StreamPart;
+use bitrouter_ai::types::StreamPart;
 
 /// Convert a duration to integer milliseconds without losing a positive
 /// sub-millisecond measurement to truncation.
@@ -44,7 +44,7 @@ impl FirstTokenKind {
 
     pub(crate) fn from_part(part: &StreamPart) -> Option<Self> {
         match part {
-            StreamPart::ReasoningDelta { text } if !text.is_empty() => Some(Self::Reasoning),
+            StreamPart::ReasoningDelta { text, .. } if !text.is_empty() => Some(Self::Reasoning),
             StreamPart::TextDelta { text } if !text.is_empty() => Some(Self::Text),
             StreamPart::ToolCallDelta {
                 name, arguments, ..
@@ -71,7 +71,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{FirstTokenKind, duration_millis};
-    use crate::language_model::types::StreamPart;
+    use bitrouter_ai::types::StreamPart;
 
     #[test]
     fn positive_sub_millisecond_duration_rounds_to_one() {
@@ -93,6 +93,7 @@ mod tests {
         let empty_parts = [
             StreamPart::ReasoningDelta {
                 text: String::new(),
+                source_kind: None,
             },
             StreamPart::TextDelta {
                 text: String::new(),

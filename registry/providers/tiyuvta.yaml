@@ -21,30 +21,8 @@ api_protocol:
 auth:
   kind: bearer
   env: TIYUVTA_API_KEY
-models:
-  - id: qwen/qwen3.6-27b
-    provider_model_id: qwen/qwen3.6-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.28
-        cache_read: 0.07
-      output_tokens:
-        text: 2.69
-    capabilities:
-      - tools
-      - structured_outputs
-  - id: qwen/qwen3.6-35b-a3b
-    provider_model_id: qwen/qwen3.6-35b-a3b
-    pricing:
-      input_tokens:
-        no_cache: 0.12
-        cache_read: 0.03
-      output_tokens:
-        text: 1.03
-    capabilities:
-      - tools
-      - structured_outputs
-status: active
+models: []
+status: suspended
 weight: 1
 submitted_at: 2026-08-12
 community: true

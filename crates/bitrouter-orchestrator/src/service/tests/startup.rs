@@ -557,7 +557,7 @@ impl bitrouter_sdk::language_model::Executor for RejectAfterFirstAttempt {
     fn native_protocol_validation(
         &self,
         _: &bitrouter_sdk::language_model::RoutingTarget,
-        _: &bitrouter_sdk::language_model::Prompt,
+        _: &bitrouter_ai::types::Prompt,
         _: &bitrouter_sdk::language_model::PipelineContext,
     ) -> bitrouter_sdk::language_model::native::NativeProtocolValidation {
         if self.calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
@@ -571,7 +571,7 @@ impl bitrouter_sdk::language_model::Executor for RejectAfterFirstAttempt {
     async fn execute(
         &self,
         target: &bitrouter_sdk::language_model::RoutingTarget,
-        prompt: &bitrouter_sdk::language_model::Prompt,
+        prompt: &bitrouter_ai::types::Prompt,
         ctx: &bitrouter_sdk::language_model::PipelineContext,
     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -580,7 +580,7 @@ impl bitrouter_sdk::language_model::Executor for RejectAfterFirstAttempt {
     async fn execute_stream(
         &self,
         target: &bitrouter_sdk::language_model::RoutingTarget,
-        prompt: &bitrouter_sdk::language_model::Prompt,
+        prompt: &bitrouter_ai::types::Prompt,
         ctx: &bitrouter_sdk::language_model::PipelineContext,
     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

@@ -7,8 +7,8 @@ use bitrouter::workflow_state::online::OnlineWorkflowState;
 use bitrouter::workflow_state::session::{
     WorkflowIdentityTracker, resolve_session_signal, resolve_workflow_identity,
 };
+use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::language_model::types::{GenerationParams, Message, Prompt, Role};
 
 const TERMINUS_OPENING: &str = "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with analysis, plan, commands, and task_complete.";
 

@@ -878,12 +878,7 @@ pub(super) fn artifacts(
 
 pub(super) fn resume_model_steps(
     state: &mut SessionSnapshot,
-) -> Vec<(
-    String,
-    String,
-    String,
-    bitrouter_sdk::language_model::types::GenerateResult,
-)> {
+) -> Vec<(String, String, String, bitrouter_ai::types::GenerateResult)> {
     let mut outputs = Vec::new();
     let cancelled = state
         .run

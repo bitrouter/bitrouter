@@ -530,8 +530,8 @@ mod tests {
     #[tokio::test]
     async fn unsupported_retained_output_ends_with_a_typed_sse_error()
     -> Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_ai::types::{Content, DataContent, Message, Role};
         use bitrouter_orchestrator::core::session::responses::{ResponseExchange, ResponseOutput};
-        use bitrouter_sdk::language_model::types::{Content, DataContent, Message, Role};
         let mut exchange: ResponseExchange = serde_json::from_value(serde_json::json!({
             "response_id":"response", "operation_id":"operation", "run_id":"run", "created_at":1,
             "previous_response_id":null, "created_state_revision":1, "completed_state_revision":2,

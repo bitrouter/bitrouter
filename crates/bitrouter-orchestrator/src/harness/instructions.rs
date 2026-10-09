@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use bitrouter_sdk::language_model::{Message, Role};
+use bitrouter_ai::types::{Message, Role};
 use serde::{Deserialize, Serialize};
 
 use super::{MaterialRef, sha256};

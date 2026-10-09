@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
+use bitrouter_ai::types::Prompt;
 use bitrouter_sdk::config::ConfigRoutingTable;
-use bitrouter_sdk::language_model::types::Prompt;
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 const PROVIDER: &str = "openai-codex";

@@ -70,7 +70,7 @@ pub struct CostWork {
     pub token_estimate: Option<NativeTokenCost>,
     /// Canonical counters survive worker retirement even without registry prices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generation_usage: Option<bitrouter_sdk::language_model::Usage>,
+    pub generation_usage: Option<bitrouter_ai::types::Usage>,
     /// Typed decision tokens do not provide language-model cache buckets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_usage: Option<bitrouter_sdk::decision_model::types::DecisionUsage>,

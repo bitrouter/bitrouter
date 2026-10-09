@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bitrouter_sdk::language_model::types::{Content, Message, Role, ToolResultOutput};
+use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput};
 use serde::{Deserialize, Serialize};
 
 use super::{ContextStore, digest, invalid};

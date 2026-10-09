@@ -16,7 +16,7 @@ use super::backend::{SearchOptions, WebSearchBackend};
 use crate::error::Result;
 use crate::language_model::server_tools::declarations::{ServerToolDeclarations, WEB_SEARCH_TOOL};
 use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
-use crate::language_model::types::{ProviderMetadata, Tool, ToolResultOutput};
+use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// A [`RouterToolset`] exposing the `web_search` server tool over one or more
 /// search backends.

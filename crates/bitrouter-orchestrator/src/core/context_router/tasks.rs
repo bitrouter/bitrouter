@@ -1,6 +1,6 @@
 //! Shared task evidence does not copy another worker's provider conversation.
 
-use bitrouter_sdk::language_model::{Content, Message, Role};
+use bitrouter_ai::types::{Content, Message, Role};
 
 use super::evidence::{EvidenceBlock, EvidenceSource};
 use super::{FEATURE, invalid};

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use bitrouter_sdk::language_model::{Message, Prompt, Role};
+use bitrouter_ai::types::{Message, Prompt, Role};
 use bitrouter_sdk::routing::ContextCapability;
 use bitrouter_sdk::routing::plan::Model;
 use bitrouter_sdk::routing::plan::{self, AdmittedModel, CostPolicy, Options, View};

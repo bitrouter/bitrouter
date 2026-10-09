@@ -56,7 +56,7 @@ pub struct Harness {
     /// the YAML key carries no semantics). Usually the adapter package name.
     pub package_marker: &'static str,
     /// The interactive native-TUI binary for `bro launch`, when the
-    /// harness has one. `None` for adapter-only harnesses (gemini).
+    /// harness has one. `None` for adapter-only harnesses.
     pub interactive_binary: Option<&'static str>,
     /// How this harness's LLM traffic is pointed at the daemon.
     pub routing: Routing,
@@ -71,7 +71,7 @@ pub enum Routing {
     /// `Authorization: Bearer`; never a provider `x-api-key` var). Optional
     /// `model_env` pins the model; `extra` carries fixed vars the redirect
     /// needs. Used by claude-code-acp (and interactive Claude Code) and,
-    /// best-effort, gemini-cli.
+    /// external clients with non-bearer authentication.
     Env {
         /// Var the harness reads its gateway base URL from.
         base_url_env: &'static str,
@@ -102,9 +102,8 @@ pub enum Routing {
     /// synthesizes via [`Harness::launch_overlay`].
     ConfigFile(&'static crate::config_synthesis::ConfigSynthesis),
     /// No gateway redirection, by design: the harness IS a subscription
-    /// client whose session the daemon itself borrows as a provider (grok →
-    /// `supergrok`, agy → `google-ai`) — routing it through the daemon would
-    /// loop back to the same backend on the same credential. It launches
+    /// client with its own authentication. Grok can also supply the daemon
+    /// through `supergrok`; the Antigravity CLI is an independent client. It launches
     /// with its own auth; `--model` forwards as the harness's native flag.
     OwnAuth,
 }
@@ -1093,10 +1092,6 @@ mod tests {
             match_invocation("claude-agent-acp", &[]).unwrap().id,
             "claude-acp"
         );
-        assert_eq!(
-            match_invocation("gemini-cli", &[]).unwrap().id,
-            "gemini-cli"
-        );
         assert_eq!(match_invocation("codex-acp", &[]).unwrap().id, "codex-acp");
     }
 
@@ -1118,17 +1113,15 @@ mod tests {
     }
 
     #[test]
-    fn auth_is_bearer_flags_gemini_as_non_bearer() {
+    fn routed_catalog_clients_accept_bearer_auth() {
         assert!(by_id("claude-acp").unwrap().auth_is_bearer());
         assert!(by_id("codex-acp").unwrap().auth_is_bearer());
-        assert!(!by_id("gemini-cli").unwrap().auth_is_bearer());
     }
 
     #[test]
     fn supports_model_pin_reflects_catalog() {
         assert!(by_id("claude-acp").unwrap().supports_model_pin());
         assert!(by_id("codex-acp").unwrap().supports_model_pin());
-        assert!(by_id("gemini-cli").unwrap().supports_model_pin());
         assert!(!by_id("pi-acp").unwrap().supports_model_pin());
     }
 

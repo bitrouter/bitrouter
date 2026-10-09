@@ -1,13 +1,13 @@
 //! Interactive Thread client; the server owns execution and durable context.
 use crate::agent_local::{self, Operation, ReplyResult, ThreadClient};
 use anyhow::Result;
+use bitrouter_ai::types::Content;
 use bitrouter_orchestrator::service::{ErrorCode, ServiceError};
 use bitrouter_orchestrator::thread::{
     ThreadChange, ThreadDirectoryPage, ThreadEvent, ThreadObservation, ThreadStatus, ThreadView,
 };
 use bitrouter_orchestrator::turn::TurnLifecycle;
 use bitrouter_orchestrator::turn::TurnSnapshot;
-use bitrouter_sdk::language_model::Content;
 use bitrouter_tui::agents_menu::MenuEntry;
 use bitrouter_tui::editor::{Edit, Editor, press};
 use bitrouter_tui::native_agent::{NativeEntryKind, NativeState, NativeView};
@@ -640,7 +640,7 @@ fn update_view(state: &mut NativeState, view: &ThreadView) {
         .into();
     }
 }
-fn message_text(message: &bitrouter_sdk::language_model::Message) -> String {
+fn message_text(message: &bitrouter_ai::types::Message) -> String {
     message
         .content
         .iter()

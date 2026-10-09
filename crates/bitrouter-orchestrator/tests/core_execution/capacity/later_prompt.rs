@@ -1,10 +1,10 @@
 //! Accepted tool history must survive rejection of a later model attempt.
 
 use super::*;
+use bitrouter_ai::types::ToolResultOutput;
 use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter_orchestrator::core::checkpoint::ToolStartFence;
 use bitrouter_orchestrator::core::protocol::OperationReceipt;
-use bitrouter_sdk::language_model::types::ToolResultOutput;
 
 #[path = "later_prompt/expanded.rs"]
 mod expanded;

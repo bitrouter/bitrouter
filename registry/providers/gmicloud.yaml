@@ -56,14 +56,6 @@ models:
         cache_read: 0.014
       output_tokens:
         text: 1.32
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: moonshotai/Kimi-K2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.855
-        cache_read: 0.144
-      output_tokens:
-        text: 3.6
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: moonshotai/kimi-k2.7-code-highspeed
     pricing:
@@ -72,14 +64,6 @@ models:
         cache_read: 0.38
       output_tokens:
         text: 8
-  - id: z-ai/glm-5.1
-    provider_model_id: zai-org/GLM-5.1-FP8
-    pricing:
-      input_tokens:
-        no_cache: 0.98
-        cache_read: 0.182
-      output_tokens:
-        text: 3.08
   - id: z-ai/glm-5.2
     provider_model_id: zai-org/GLM-5.2-FP8
     pricing:
@@ -88,35 +72,8 @@ models:
         cache_read: 0.182
       output_tokens:
         text: 3.08
-  - id: openai/gpt-5.5
-    provider_model_id: openai/gpt-5.5
-    compatibility:
-      chat_completions:
-        token_limit_field: max_completion_tokens
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-      output_tokens:
-        text: 30
   - id: anthropic/claude-opus-4.8
     provider_model_id: anthropic/claude-opus-4.8
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-      output_tokens:
-        text: 25
-  - id: anthropic/claude-opus-4.7
-    provider_model_id: anthropic/claude-opus-4.7
-    pricing:
-      input_tokens:
-        no_cache: 4.5
-        cache_read: 0.45
-      output_tokens:
-        text: 22.5
-  - id: anthropic/claude-opus-4.6
-    provider_model_id: anthropic/claude-opus-4.6
     pricing:
       input_tokens:
         no_cache: 5
