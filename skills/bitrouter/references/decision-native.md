@@ -116,6 +116,10 @@ most 32 MiB of bodies. Large checkpoints are split atomically across the host's
 recovery pages, independently of the online Core capacity. Incomplete parts,
 changed hashes or missing Item projections block recovery. These bounds remain
 explicit capacity limits; context omission never deletes historical evidence.
+A native capacity failure reports the resource cause after cleanup. Prepared
+plans rejected before provider dispatch consume no model attempt; cold recovery
+uses Core attempt counters, including fallback attempts. A stopped, fully
+settled terminal journal permits fresh workspace work without replaying tools.
 
 Remote managed-core harnesses explicitly negotiate `context_views_v1` and set
 task context routing to `auto`. Preserve exact checkpoints before ACK; decision

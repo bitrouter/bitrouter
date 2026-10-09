@@ -589,3 +589,39 @@ async fn native_core_tool_effect_still_requires_native_approval()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn native_checkpoint_capacity_failure_reports_the_resource_cause()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        workspace.path().join("large.txt"),
+        "retained evidence ".repeat(250),
+    )?;
+    let mut responses = (0..32)
+        .map(|index| {
+            turn(vec![call(
+                &format!("read-{index}"),
+                "read",
+                serde_json::json!({"path":"large.txt"}),
+            )])
+        })
+        .collect::<Vec<_>>();
+    responses.push(turn(vec![text("done")]));
+    let agent = super::agent(&workspace, responses, |_| {})?;
+    let report = agent
+        .run("Read the evidence", CancellationToken::new(), None)
+        .await;
+    assert_eq!(report.status, RunStatus::BoundExceeded, "{}", report.detail);
+    assert!(
+        report.steps < 32,
+        "fixture reached the attempt limit instead of checkpoint capacity"
+    );
+    assert!(!report.unknown_effect);
+    assert!(
+        report.detail.contains("checkpoint capacity exhausted"),
+        "{}",
+        report.detail
+    );
+    Ok(())
+}

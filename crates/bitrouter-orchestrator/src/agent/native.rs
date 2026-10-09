@@ -641,7 +641,10 @@ impl Agent {
                 CoreStatus::Cancelled => RunStatus::Cancelled,
                 _ => RunStatus::Failed,
             },
-            root_reason
+            run.resource_error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .or(root_reason)
                 .or(run.terminal_reason)
                 .unwrap_or_else(|| format!("native Core run {:?}", run.status)),
         ))

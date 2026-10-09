@@ -1719,7 +1719,9 @@ async fn committed_windows_rebuild_calls_context_and_budgets_without_replaying_c
             );
         }
         if window == "request" {
-            assert_eq!(rebuilt.budget.model_steps, 1);
+            // Native preparation has committed a plan, but has not dispatched
+            // a provider attempt at this journal boundary.
+            assert_eq!(rebuilt.budget.model_steps, 0);
             assert_eq!(rebuilt.budget.usage_unknown_steps.len(), 1);
             assert!(!rebuilt.budget.estimated_spend_available);
         }

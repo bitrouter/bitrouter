@@ -546,3 +546,149 @@ async fn startup_record_and_metadata_limits_fail_closed_before_admission()
     }
     Ok(())
 }
+
+struct RejectAfterFirstAttempt {
+    mock: bitrouter_sdk::language_model::MockExecutor,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl bitrouter_sdk::language_model::Executor for RejectAfterFirstAttempt {
+    fn native_protocol_validation(
+        &self,
+        _: &bitrouter_sdk::language_model::RoutingTarget,
+        _: &bitrouter_sdk::language_model::Prompt,
+        _: &bitrouter_sdk::language_model::PipelineContext,
+    ) -> bitrouter_sdk::language_model::native::NativeProtocolValidation {
+        if self.calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            bitrouter_sdk::language_model::native::NativeProtocolValidation::Compatible
+        } else {
+            bitrouter_sdk::language_model::native::NativeProtocolValidation::Rejected {
+                reason: "fixture rejects the next prepared request".into(),
+            }
+        }
+    }
+    async fn execute(
+        &self,
+        target: &bitrouter_sdk::language_model::RoutingTarget,
+        prompt: &bitrouter_sdk::language_model::Prompt,
+        ctx: &bitrouter_sdk::language_model::PipelineContext,
+    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.mock.execute(target, prompt, ctx).await
+    }
+    async fn execute_stream(
+        &self,
+        target: &bitrouter_sdk::language_model::RoutingTarget,
+        prompt: &bitrouter_sdk::language_model::Prompt,
+        ctx: &bitrouter_sdk::language_model::PipelineContext,
+    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.mock.execute_stream(target, prompt, ctx).await
+    }
+}
+
+#[tokio::test]
+async fn terminal_native_plan_without_attempt_does_not_block_fresh_workspace_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    std::fs::write(workspace.path().join("seed.txt"), "source")?;
+    let executor = Arc::new(RejectAfterFirstAttempt {
+        mock: bitrouter_sdk::language_model::MockExecutor::new(vec![super::support::mock_stream(
+            turn(vec![tool_call(
+                "read",
+                "read",
+                serde_json::json!({"path":"seed.txt"}),
+            )]),
+        )]),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let store = Arc::new(MemoryExecutionStore::default());
+    let source = ThreadService::with_store(
+        super::support::app_with_executor(executor.clone())?,
+        &[workspace.path().into()],
+        store.clone(),
+    )?;
+    let mut request = thread_request(&workspace, "source");
+    request.config = request.config.read_only();
+    request.permission_profile = crate::thread::PermissionProfile::ReadOnly;
+    let thread = source
+        .create_thread(&source.inner.instance_id, request)
+        .await?;
+    let accepted = source
+        .start_turn(
+            &target(&thread),
+            &CallerContext::local(),
+            input("read seed.txt", "first"),
+        )
+        .await?;
+    let failed = wait_for(&source, &accepted.turn_id, TurnStatus::Failed).await?;
+    assert!(!failed.unknown_effect);
+    assert_eq!(executor.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    source.shutdown().await;
+    let reader = ThreadService::with_store(
+        app(vec![final_turn()])?,
+        &[workspace.path().into()],
+        store.clone(),
+    )?;
+    reader.initialize_execution().await?;
+    assert_eq!(
+        reader
+            .capabilities()
+            .startup_discovery
+            .ok_or("startup report missing")?
+            .blocked_workspaces,
+        0
+    );
+    let old_target = crate::thread::ThreadTarget {
+        thread_id: thread.thread_id,
+        server_instance_id: reader.inner.instance_id.clone(),
+    };
+    let recovered = reader
+        .load_thread(&old_target, &CallerContext::local())
+        .await?;
+    let report = recovered.recovery.as_ref().ok_or("recovery missing")?;
+    assert!(
+        report.context_valid && report.terminal_checkpoint,
+        "{:?}",
+        report.blockers
+    );
+    let budget = &report.turn.as_ref().ok_or("Turn missing")?.budget;
+    assert_eq!(budget.model_steps, 1);
+    assert!(budget.usage_unknown_steps.is_empty());
+    assert!(!budget.active_duration_unknown && !budget.tool_calls_unknown);
+    assert!(report.blockers.iter().all(|blocker| matches!(
+        blocker,
+        crate::thread::RecoveryBlocker::OwnershipUnconfirmed
+    )));
+    reader
+        .recover_thread(
+            &old_target,
+            &CallerContext::local(),
+            crate::thread::ThreadRecoveryRequest {
+                source_server_instance_id: report.source_server_instance_id.clone(),
+                source_cursor: report.source_cursor,
+                idempotency_key: "recover-terminal".into(),
+            },
+        )
+        .await?;
+    reader
+        .unload_thread(&old_target, &CallerContext::local())
+        .await?;
+    let fresh = reader
+        .create_thread(
+            &reader.inner.instance_id,
+            thread_request(&workspace, "fresh"),
+        )
+        .await?;
+    let accepted = reader
+        .start_turn(
+            &target(&fresh),
+            &CallerContext::local(),
+            input("fresh work", "fresh"),
+        )
+        .await?;
+    wait_for(&reader, &accepted.turn_id, TurnStatus::Completed).await?;
+    reader.shutdown().await;
+    Ok(())
+}

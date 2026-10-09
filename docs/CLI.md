@@ -437,6 +437,12 @@ daemon-dependent invocation checks compatibility. `bro update --check` and
 version mismatch without performing the handoff. The former `--restart` flag
 is accepted for compatibility; safe handoff is now the default.
 
+A native `checkpoint capacity exhausted` outcome is a storage-capacity boundary.
+Its cleanup settles outstanding work before termination. After a stopped owner
+and complete terminal journal are confirmed, fresh workspace work is allowed;
+a prepared request rejected before dispatch does not count as a model attempt.
+Unconfirmed tool effects and incomplete records still require recovery.
+
 ### `bro reload`
 
 ```

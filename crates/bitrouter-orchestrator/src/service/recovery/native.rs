@@ -116,7 +116,9 @@ pub(super) fn observe(
                     context_version: step.context_revision,
                     complete: step.settled,
                     interrupted: step.interrupted,
-                    usage_known: !step.attempts.is_empty()
+                    // A settled plan with no attempt was rejected locally;
+                    // only an actual attempt requires a provider usage receipt.
+                    usage_known: step.settled
                         && step.attempts.iter().all(|attempt| {
                             attempt.receipt.as_ref().is_some_and(|receipt| {
                                 receipt

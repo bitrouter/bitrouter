@@ -1327,7 +1327,7 @@ impl Rebuild {
             active.budget.model_steps = active
                 .budget
                 .model_steps
-                .max(u32::try_from(active.steps.len()).map_err(|error| error.to_string())?);
+                .max(active.consumed_model_steps()?);
             active.budget.usage_unknown_steps = active
                 .steps
                 .iter()
@@ -1558,6 +1558,22 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
 }
 
 impl Active {
+    fn consumed_model_steps(&self) -> Result<u32, String> {
+        if self.native {
+            // Core charges provider attempts, including fallbacks. A prepared
+            // plan rejected before dispatch has consumed no model attempt.
+            self.native_runs
+                .values()
+                .try_fold(0_u32, |total, (attempts, _)| {
+                    total
+                        .checked_add(*attempts)
+                        .ok_or_else(|| "native model attempt count exhausted".into())
+                })
+        } else {
+            u32::try_from(self.steps.len()).map_err(|error| error.to_string())
+        }
+    }
+
     fn consume(&mut self, fact: &ExecutionRecord) -> Result<(), String> {
         // Native model/tool Items are display projections of the preceding
         // Core checkpoint. Only that checkpoint owns raw context and effects.
@@ -1842,9 +1858,7 @@ impl Active {
                     })
                     || serde_json::to_value(messages).map_err(|error| error.to_string())?
                         != serde_json::to_value(expected).map_err(|error| error.to_string())?
-                    || (!self.native
-                        && usize::try_from(*model_steps).map_err(|error| error.to_string())?
-                            != self.steps.len())
+                    || *model_steps != self.consumed_model_steps()?
                     || usize::try_from(*tool_calls).map_err(|error| error.to_string())?
                         != self.calls.len()
                     || *context_version < self.version
@@ -1877,10 +1891,7 @@ impl Active {
             } => {
                 self.budget.model_steps = self.budget.model_steps.max(*model_steps);
                 crate::context::validate_history(messages)?;
-                if !self.group.is_empty()
-                    || usize::try_from(*model_steps).map_err(|error| error.to_string())?
-                        < self.steps.len()
-                {
+                if !self.group.is_empty() || *model_steps < self.consumed_model_steps()? {
                     return Err("settlement omits calls or consumed model requests".into());
                 }
                 self.messages = messages.clone();
