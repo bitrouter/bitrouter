@@ -80,7 +80,7 @@ pub trait Plugin {
     fn install(&self, app: &mut AppBuilder);
 }
 
-/// An ingress-time rewrite of a parsed request [`Prompt`](bitrouter_ai::types::Prompt),
+/// An ingress-time rewrite of a parsed request [`Prompt`],
 /// applied by the HTTP server after protocol parsing and before the request
 /// enters the pipeline.
 ///
