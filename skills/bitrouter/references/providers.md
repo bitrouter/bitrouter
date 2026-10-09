@@ -2,39 +2,45 @@
 
 How to configure `providers:`, `models:`, `mcp_servers:`, and `agents:` in `bitrouter.yaml`. Reflects the v1 schema in `crates/bitrouter-sdk/src/config/mod.rs` — fields and strategies not listed here do not exist.
 
+Credential priority for a selected account is: an explicit per-call key override,
+then the selected stored credential, then an application-permitted environment
+fallback when that slot is absent. A wrong-kind or failed stored credential does
+not switch to an environment key or another account. `CLAUDE_CODE_OAUTH_TOKEN`
+is a non-refreshable fallback for headless Claude Code use; an adopted live CLI
+session or stored OAuth credential takes priority. Model calls never open login.
+
 ## Known providers
 
 BitRouter already knows how to talk to these providers — their `api_base`,
-`api_protocol`, and credential env var come from the **fetched provider
-registry** (below), so listing one with an empty body in `bitrouter.yaml`
-enables it and the registry fills the rest. The definitions are **not** vendored
-into the binary; they are fetched at startup and disk-cached (see the registry
-section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
+`api_protocol`, and credential env var come from the public provider catalog
+(below), so listing one with an empty body in `bitrouter.yaml` enables it and the
+catalog fills the rest. The application ships a committed offline baseline and
+refreshes it at startup/reload; fetched metadata takes precedence. The hosted
+`bitrouter` gateway also has compiled-in auth/transport defaults.
 
 | Provider id | Env var | Auth | Notes |
 |---|---|---|---|
 | `openai` | `OPENAI_API_KEY` | Bearer | Chat Completions default; Responses API also live |
 | `anthropic` | `ANTHROPIC_API_KEY` | Header `x-api-key` | Messages API |
-| `google` | `GEMINI_API_KEY` | Header `x-goog-api-key` | Generative Language API (Gemini API key) — **not** `GOOGLE_API_KEY` |
+| `google` | `GEMINI_API_KEY` | Bearer | Gemini OpenAI-compatible Chat endpoint; `GEMINI_API_KEY` remains the env var |
 | `aws-bedrock` | `AWS_BEARER_TOKEN_BEDROCK` | Bearer | Bedrock `bedrock-mantle` OpenAI-compatible endpoints; region via `AWS_REGION` (default `us-east-1`). Native Converse features (cross-region profiles, Guardrails) not served |
 | `azure` | `AZURE_OPENAI_API_KEY` | Bearer | Azure OpenAI `/openai/v1` surface; set `AZURE_OPENAI_RESOURCE` to your resource name (unset ⇒ provider inactive). Entra ID tokens also work as the bearer |
-| `vertex` | `VERTEX_EXPRESS_API_KEY` | Header `x-goog-api-key` | Vertex AI, currently **Express Mode only** → **Gemini models only** (no Claude/Llama/Mistral), global endpoint (region ignored). Partner models are commented out in the registry entry pending service-account OAuth support |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
 | `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` or local OAuth | Claude Code subscription | `bro providers login claude-code`, or a long-lived `claude setup-token` value for headless use; distinct from `anthropic` API-key billing |
 | `github-copilot` | — (local OAuth) | Device flow | `bro providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
 | `openai-codex` | — (local PKCE) | ChatGPT subscription | `bro providers login openai-codex` |
 | `supergrok` | — (local OAuth) | SuperGrok subscription | `bro providers login supergrok`; imports the Grok CLI session (`~/.grok/auth.json`), distinct from `xai` API-key billing |
-| `google-ai` | — (local OAuth) | Google AI (Antigravity) subscription | `bro providers login google-ai`; imports the `agy` CLI keyring session, custom cloudcode-pa protocol, distinct from `google` API-key billing. Unofficial — uses your own Google account |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
 Zero-config mode auto-enables every API-key provider whose env var is present;
 an API-key provider without its credential gets `active: false` and falls out of
 the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
-`openai-codex`, `supergrok`, `google-ai`) are enabled by `bro providers login`, not an env var. **First run with no network
-and no cache**: the registry is empty, so only fully-specified local providers
-and the in-binary `bitrouter` cloud gateway are available — the known-provider
-shorthand needs one prior successful fetch. Startup still succeeds.
+`openai-codex`, `supergrok`) are enabled by `bro providers login`, not an env var. **First run with no network
+and no cache**: the default public registry uses its bundled baseline, so
+known-provider shorthand, login metadata and credential-variable hints remain
+available. Custom or disabled registries do not receive that baseline. Credentials
+and configured activation still decide which routes can actually run.
 
 `CLAUDE_CODE_OAUTH_TOKEN` is the local-OAuth exception: a non-empty value
 auto-enables `claude-code` and is captured as a process-local, non-refreshable
@@ -56,9 +62,12 @@ reload: a deterministic catalog of public providers (their transport + auth),
 the models, and which providers serve them. It is fetched from the generated
 `dist/registry/` artifacts, disk-cached under
 `$XDG_CACHE_HOME/bitrouter/registry.json` (24h TTL, stale-fallback on a
-network outage), and merged into the routing table. If a fetch fails the cache
-is reused; with no cache (first run, offline) the registry is empty and only
-locally-configured providers route. The merge routes a model id
+network outage), and merged into the routing table. The cache is bound to its
+registry URL; another source's snapshot is never reused. Old cache files without
+source metadata are preserved but require refresh before reuse. Failed refresh
+or persistence keeps the prior complete snapshot. With no usable public cache,
+the application supplies its bundled baseline. Reload credential-variable
+snapshots also use that baseline without network discovery. The merge routes a model id
 (e.g. `anthropic/claude-sonnet-4.6`) to a provider that serves it, translating
 to that provider's own upstream id. Providers may serve models beyond the
 curated `registry/models` catalog (BYOK / BYO-subscription extras); those route
@@ -79,12 +88,9 @@ Rules:
   explicitly with `api_key: ${MY_VAR}` to override the env-var name. A
   `local_oauth` / `local_pkce` provider is not env-gated — it activates after
   `bro providers login <provider>`.
-- **Full catalog via the sync channel.** A provider may declare an `auto_sync`
-  feed (the channel the registry itself syncs from). BitRouter reads the same
-  channel to pull the provider's **full** catalog beyond the registry seed
-  subset: a `v1_models` feed (the gateways) is probed at `GET {api_base}/models`
-  on startup; a `models_dev` feed pulls the provider's models from models.dev.
-  The registry seed models keep the highest route priority.
+- **Editorial sync stays in build tooling.** Registry sync feeds update the
+  published catalog through `dist-helper`; model calls do not interpret an
+  `auto_sync` field or implicitly refresh the provider registry.
 - **BitRouter Cloud is a normal public provider.** The public registry entry is
   still named `bitrouter`, but OSS treats it as BitRouter Cloud and discovers
   its cloud-owned model list from `/models`.
@@ -132,7 +138,7 @@ Anything that speaks OpenAI Chat Completions on a known base URL fits here. No r
 providers:
   ollama:
     api_base: "http://localhost:11434/v1"
-    api_protocol: { "*": openai }     # default; can be omitted
+    api_protocol: [{ "*": chat_completions }]     # default; can be omitted
     models:
       - { id: "llama3.1:70b" }
       - { id: "codellama:34b" }
@@ -151,12 +157,9 @@ providers:
 
 > Azure OpenAI and Amazon Bedrock are registry providers now (see
 > *Known providers*) — you do not hand-write them here. Set their env vars (and
-> `AZURE_OPENAI_RESOURCE` / `AWS_REGION`) and they self-enable. Google `vertex`
-> is registry-backed **in Express Mode only** (Gemini-only, static `VERTEX_EXPRESS_API_KEY`);
-> the full Vertex catalog (Claude/Llama on regional endpoints) is commented out in
-> the registry entry, pending service-account OAuth support.
+> `AZURE_OPENAI_RESOURCE` / `AWS_REGION`) and they self-enable.
 
-`api_protocol` accepts a glob-prefix pattern map: `{ "claude-*": anthropic, "gpt-5.5-codex": responses, "*": openai }` is valid and matches most-specific-first.
+`api_protocol` accepts an ordered glob-prefix pattern map: `[{ "claude-*": messages }, { "gpt-5.5-codex": responses }, { "*": chat_completions }]` is valid and matches most-specific-first.
 
 ## Multi-account (failover or balance)
 
@@ -384,7 +387,7 @@ agents:
       args: ["-y", "pi-acp@latest"]   # spawns `pi --mode rpc`; needs `pi` on PATH
 ```
 
-The bundled catalog ids are `claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp` (Nous Hermes Agent — native `hermes acp`), and `openclaw` (OpenClaw's gateway ACP bridge `openclaw acp`; auto-starts the profile's gateway). Native-only clients are not supported agents.
+The bundled catalog ids are `claude-acp`, `codex-acp`, `opencode`, `pi-acp`, `hermes-acp` (Nous Hermes Agent — native `hermes acp`), and `openclaw` (OpenClaw's gateway ACP bridge `openclaw acp`; auto-starts the profile's gateway). Native-only clients are not supported agents.
 `pi-acp` wraps the [`pi`](https://github.com/earendil-works/pi) coding agent — install
 it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with the
 `@bitrouter/pi` provider so pi's own model calls route back through the daemon.
@@ -433,3 +436,6 @@ Older versions of this skill mentioned features that **do not exist** in the v1 
 - `safety_settings`, `features.computer_use`, `features.json_mode` provider blocks — not parsed.
 - `bro providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers login`, and `providers logout`.
 - `bro config reload/show` — `config validate` exists for CI-safe validation; use `bro reload` for the daemon.
+
+
+Native Gemini Generate Content, `google-ai` subscription inference, and Vertex Express are retired. Active configs must explicitly select a supported protocol and endpoint; saved credentials and history remain preserved. `gemini-cli` is no longer a bundled routed client. Antigravity SDK clients may use `LocalOpenAIAgentConfig` against `/v1/chat/completions`; see the retirement progress for validation status.

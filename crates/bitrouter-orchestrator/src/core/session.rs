@@ -6,15 +6,15 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use bitrouter_ai::types::{
+    Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
+    ToolChoice,
+};
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::native::{
     NativeAttemptReport, NativeContextValidationReport, NativeExecutionControl,
     NativeInputCountReport, NativeModelSelection, NativePlan, NativePlanAdmission,
-};
-use bitrouter_sdk::language_model::types::{
-    Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
-    ToolChoice,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -2610,7 +2610,17 @@ impl CoreSession {
                     return Ok(());
                 }
                 if let Err(error) = self
-                    .apply_output(agent_id, &step_id, &response.request_id, &response.result)
+                    .apply_output(
+                        agent_id,
+                        &step_id,
+                        &response.request_id,
+                        response.result.generation().ok_or_else(|| {
+                            reject(
+                                ErrorCode::NoFeasibleRoute,
+                                "managed executor returned a non-generation result",
+                            )
+                        })?,
+                    )
                     .await
                 {
                     if self.can_progress().await {
@@ -2712,7 +2722,7 @@ impl CoreSession {
         agent_id: &str,
         step_id: &str,
         request_id: &str,
-        output: &bitrouter_sdk::language_model::types::GenerateResult,
+        output: &bitrouter_ai::types::GenerateResult,
     ) -> Result<(), CoreError> {
         self.transition_for(Some(agent_id), "model.output.applied", |state, head| {
             let manifest = current_step(state,agent_id,step_id)?.manifest.clone();
@@ -4699,6 +4709,7 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
         messages.push(material_message(&material)?);
     }
     messages.extend(agent.history.clone());
+    crate::context::prepare_tool_results(&mut messages);
     Ok(Prompt {
         model: turn.input.model.clone(),
         system: Some(format!(

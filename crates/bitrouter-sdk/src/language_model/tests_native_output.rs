@@ -5,7 +5,7 @@ use crate::language_model::native::{
 use crate::language_model::native_accounting::{
     NativeCostEstimator, NativeTokenCost, NativeTokenRates,
 };
-use crate::language_model::types::UsageOrigin;
+use bitrouter_ai::types::UsageOrigin;
 use tokio::sync::Mutex;
 
 struct Control {

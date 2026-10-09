@@ -24,15 +24,6 @@ models:
       - reasoning
       - structured_outputs
       - tools
-  - id: z-ai/glm-4.7
-    provider_model_id: zai-glm-4.7
-    pricing:
-      input_tokens:
-        no_cache: 2.25
-        cache_read: 2.25
-        cache_write: 0
-      output_tokens:
-        text: 2.75
   - id: qwen/qwen3.8-27b
     provider_model_id: qwen-3.8-27b
     pricing:

@@ -13,7 +13,7 @@ async fn request_capability_guard_records_the_original_intent_and_actual_fallbac
         .iter_mut()
         .find(|model| model.id == "cheap")
         .context("model missing")?;
-    cheap.capabilities = vec![bitrouter_sdk::language_model::Capability::ImageInput];
+    cheap.capabilities = vec![bitrouter_ai::types::Capability::ImageInput];
     fixture
         .assembled
         .routing_table
@@ -26,7 +26,13 @@ async fn request_capability_guard_records_the_original_intent_and_actual_fallbac
     adopt_fixture(runtime).await?;
     let identity = session(&fixture, "capability", "fixture").await?;
     let mut request = request(&identity, "capability-request", "coding")?;
-    request.prompt.tools = serde_json::from_value(json!([{
+    request
+        .input
+        .generation_prompt_mut()
+        .ok_or_else(|| {
+            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+        })?
+        .tools = serde_json::from_value(json!([{
         "type":"function", "name":"read_file", "parameters":{"type":"object"}
     }]))?;
     fixture
@@ -138,7 +144,13 @@ async fn streaming_completion_and_disconnect_both_leave_execution_evidence() -> 
         .clone();
     let complete = session(&fixture, "stream-complete", "fixture").await?;
     let mut complete_request = request(&complete, "stream-request", "coding")?;
-    complete_request.prompt.stream = true;
+    complete_request
+        .input
+        .generation_prompt_mut()
+        .ok_or_else(|| {
+            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+        })?
+        .stream = true;
     let mut stream = pipeline.clone().execute_stream(complete_request).await?;
     while let Some(part) = stream.next().await {
         part?;
@@ -157,7 +169,13 @@ async fn streaming_completion_and_disconnect_both_leave_execution_evidence() -> 
     assert!(completed.total_cost_micro_usd.is_some());
     let cancelled = session(&fixture, "stream-cancelled", "fixture").await?;
     let mut cancel_request = request(&cancelled, "cancel-request", "coding")?;
-    cancel_request.prompt.stream = true;
+    cancel_request
+        .input
+        .generation_prompt_mut()
+        .ok_or_else(|| {
+            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+        })?
+        .stream = true;
     let mut stream = pipeline.clone().execute_stream(cancel_request).await?;
     stream.next().await.context("stream never started")??;
     drop(stream);

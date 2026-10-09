@@ -15,6 +15,7 @@ pub(super) fn limit(ctx: &PipelineContext) -> Option<u64> {
 
 fn exceeded() -> BitrouterError {
     BitrouterError::UpstreamInvalidResponse {
+        usage: None,
         message: "managed upstream response exceeds byte limit".into(),
     }
 }
@@ -87,6 +88,7 @@ async fn read_bounded(response: reqwest::Response, limit: u64) -> Result<String>
     // after admission. Ordinary inference retains reqwest's text decoding path.
     // <https://www.rfc-editor.org/rfc/rfc8259#section-8.1>
     String::from_utf8(bytes).map_err(|_| BitrouterError::UpstreamInvalidResponse {
+        usage: None,
         message: "managed upstream response is not UTF-8".into(),
     })
 }

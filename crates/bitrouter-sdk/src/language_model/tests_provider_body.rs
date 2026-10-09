@@ -1,6 +1,7 @@
 //! Body admission preserves HTTP status, refresh and fallback semantics.
 
 use super::*;
+use bitrouter_ai::protocol;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 struct BoundedControl;
@@ -134,15 +135,15 @@ impl AuthApplier for Refresh {
     async fn apply(
         &self,
         request: reqwest::Request,
-        _: &RoutingTarget,
-    ) -> Result<reqwest::Request> {
+        _: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         Ok(request)
     }
     async fn refresh_after_unauthorized(
         &self,
-        _: &RoutingTarget,
+        _: &bitrouter_ai::target::ModelTarget,
         _: Option<&reqwest::header::HeaderValue>,
-    ) -> Result<bool> {
+    ) -> bitrouter_ai::error::Result<bool> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(true)
     }
@@ -201,7 +202,7 @@ async fn oversized_successful_sse_body_is_not_accepted_as_partial_output() -> Re
         .err()
         .ok_or_else(|| BitrouterError::internal("oversized stream unexpectedly succeeded"))?;
     assert!(
-        matches!(error, BitrouterError::UpstreamInvalidResponse { ref message } if message.contains("exceeds byte limit")),
+        matches!(error, BitrouterError::UpstreamInvalidResponse { ref message, .. } if message.contains("exceeds byte limit")),
         "{error:?}"
     );
     Ok(())

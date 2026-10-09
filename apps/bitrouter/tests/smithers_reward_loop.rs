@@ -14,7 +14,7 @@ use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::real_trace::{CapturedIngressTrace, RealTraceOutcome};
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::reward_feedback::import_semantic_reward_feedback;
-use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
+use bitrouter_ai::types::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
 
 fn provider_usage(request_id: &str) -> CloudUsageRecord {
@@ -42,6 +42,7 @@ fn provider_usage(request_id: &str) -> CloudUsageRecord {
         final_charge_micro_usd: Some(120),
         charge_status: ChargeStatus::Computed,
         charge_evidence: Some(ChargeEvidence {
+            tariff_snapshot: None,
             status: ChargeStatus::Computed,
             charge_micro_usd: Some(120),
             normalized_usage: normalized,

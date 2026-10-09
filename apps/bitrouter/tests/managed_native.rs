@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitrouter::managed_store::DatabaseNativeStore;
+use bitrouter_ai::types::AuthScheme;
+use bitrouter_ai::types::{ApiProtocol, Content, FinishReason, GenerateResult, Usage};
 use bitrouter_orchestrator::agent::ToolMode;
 use bitrouter_orchestrator::core::protocol::{CoreError, TaskInput, ToolExecute, ToolOutcome};
 use bitrouter_orchestrator::core::session::RunStatus;
@@ -13,10 +15,8 @@ use bitrouter_orchestrator::harness::{
         store::NativeStore,
     },
 };
-use bitrouter_sdk::language_model::types::AuthScheme;
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, FinishReason, GenerateResult, MockExecutor, MockResponse, RoutingTarget,
-    StaticRoutingTable, Usage,
+    MockExecutor, MockResponse, RoutingTarget, StaticRoutingTable,
 };
 use bitrouter_sdk::{App, caller::CallerContext};
 use serde_json::json;
@@ -80,6 +80,7 @@ fn app(content: Vec<Content>) -> Result<Arc<App>, Box<dyn std::error::Error>> {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: None,

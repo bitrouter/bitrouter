@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bitrouter_sdk::language_model::{Tool, ToolResultOutput};
+use bitrouter_ai::types::{Tool, ToolResultOutput};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -571,7 +571,7 @@ async fn dropped_shell_future_stops_unix_descendants() -> Result<(), Box<dyn std
 
 #[test]
 fn openai_requests_preserve_optional_tool_arguments() -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_sdk::language_model::protocol::{
+    use bitrouter_ai::protocol::{
         OutboundAdapter, chat_completions::ChatCompletionsAdapter, responses::ResponsesAdapter,
     };
 

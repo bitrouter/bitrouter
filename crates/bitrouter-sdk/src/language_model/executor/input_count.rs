@@ -7,7 +7,9 @@ use super::{HttpExecutor, RequestBuildInput, apply_provider_continuation};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::native::{InputTokenCounting, NativeInputCount};
-use crate::language_model::types::{ApiProtocol, Prompt, RoutingTarget};
+use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::types::{ApiProtocol, Prompt};
+use tokio_util::sync::CancellationToken;
 
 fn invalid(message: &str) -> BitrouterError {
     BitrouterError::bad_request(message)
@@ -147,7 +149,7 @@ impl HttpExecutor {
             .lookup(&target.api_protocol)
             .ok_or_else(|| Self::no_dispatch_error(target))?;
         let count_url = transport
-            .input_token_count_endpoint(target)
+            .input_token_count_endpoint(&target.model_target())
             .ok_or_else(|| invalid("transport does not support input counting"))?;
         Self::check_response_format(prompt, adapter, target)?;
         let mut body = self.render_execution_request(
@@ -159,7 +161,10 @@ impl HttpExecutor {
         )?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         apply_provider_continuation(&mut body, target, ctx)?;
-        let url = transport.endpoint_url(target, target.provider_name == "openai-codex");
+        let url = transport.endpoint_url(
+            &target.model_target(),
+            target.provider_name == "openai-codex",
+        );
         let (client, timeouts) = self.client_for(
             target,
             ctx.extension::<crate::language_model::native::NativeManagedRequest>()
@@ -168,7 +173,7 @@ impl HttpExecutor {
         let generation = self
             .build_authenticated_request(&RequestBuildInput {
                 client: &client,
-                timeouts: &timeouts,
+
                 url: &url,
                 body: &body,
                 managed_expected: managed_expected.as_ref(),
@@ -188,18 +193,16 @@ impl HttpExecutor {
         .map_err(|_| invalid("input count body is not JSON"))?;
         let payload = count_payload(&finalized)?;
         let mut request = client
-            .post(&count_url)
-            .json(&payload)
-            .timeout(
-                timeouts
-                    .total
-                    .unwrap_or(std::time::Duration::from_secs(30))
-                    .min(std::time::Duration::from_secs(30)),
-            )
-            .build()
+            .build_request(&count_url, &payload)
             .map_err(|_| invalid("cannot construct input counting request"))?;
+        *request.timeout_mut() = Some(
+            timeouts
+                .total
+                .unwrap_or(std::time::Duration::from_secs(30))
+                .min(std::time::Duration::from_secs(30)),
+        );
         super::apply_provider_headers(&mut request, target, ctx, true);
-        let mut request = transport.authorise(request, target).await?;
+        let mut request = transport.authorise(request, &target.model_target()).await?;
         super::apply_provider_headers(&mut request, target, ctx, false);
         super::inject_outbound_request_id(&mut request, ctx)?;
         let expected_count_url = reqwest::Url::parse(&count_url)
@@ -224,7 +227,7 @@ impl HttpExecutor {
             return Err(invalid("input counting authentication changed body"));
         }
         let mut response = client
-            .execute(request)
+            .send(request, &CancellationToken::new())
             .await
             .map_err(|_| invalid("provider input counting request failed"))?;
         if !response.status().is_success() {

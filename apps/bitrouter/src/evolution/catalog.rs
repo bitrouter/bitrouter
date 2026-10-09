@@ -3,10 +3,11 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
+use bitrouter_ai::types::ApiProtocol;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{AccountStrategy, Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::{
-    ApiProtocol, PipelineContext, PipelineRequest, RoutingTable, RoutingTarget,
+    PipelineContext, PipelineRequest, RoutingTable, RoutingTarget,
 };
 use serde_json::{Value, json};
 
@@ -27,9 +28,9 @@ pub(super) async fn request_compatible(
     let mut preview = PipelineContext::new(PipelineRequest::new(
         route,
         ctx.caller().clone(),
-        ctx.prompt().clone(),
+        ctx.require_generation_prompt()?.clone(),
     ));
-    preview.apply_preset_overrides(&resolution.overrides);
+    preview.apply_preset_overrides(&resolution.overrides)?;
     let mut models = vec![resolution.clean_model.clone()];
     if let Some(policy) = &resolution.policy {
         let document = policies
@@ -56,7 +57,7 @@ pub(super) async fn request_compatible(
     }
     let table = ConfigRoutingTable::from_config(stable);
     let mut prefs = resolution.prefs;
-    prefs.require_capabilities = preview.prompt().required_capabilities();
+    prefs.require_capabilities = preview.require_generation_prompt()?.required_capabilities();
     prefs.inbound_protocol = ctx.inbound_protocol();
     for model in models {
         match table.route_resolved(&model, &prefs, ctx.caller()).await {
@@ -160,7 +161,6 @@ pub(super) async fn route_contract(
             None,
             Some(ApiProtocol::ChatCompletions),
             Some(ApiProtocol::Messages),
-            Some(ApiProtocol::GenerateContent),
             Some(ApiProtocol::Responses),
         ] {
             let mut prefs = resolution.prefs.clone();
@@ -216,6 +216,7 @@ fn target_contract(config: &Config, target: &RoutingTarget) -> Result<Value> {
         "chat_token_limit_field": target.chat_token_limit_field,
         "chat_supports_store": target.chat_supports_store,
         "chat_supports_stream_options": target.chat_supports_stream_options,
+        "chat_google_extensions": target.chat_google_extensions,
         "reasoning_effort": target.reasoning_effort,
         "capabilities": metadata.map(|model| &model.capabilities),
         "pricing": metadata.map(|model| format!("{:?}", model.pricing)),

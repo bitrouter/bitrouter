@@ -1,0 +1,935 @@
+//! Merge public registry data into a parsed [`Config`].
+//!
+//! [`apply_registry`] is the bridge from "what the registry says exists" to
+//! "what this bitrouter instance will route to". Its job is the subsystem's
+//! whole purpose: make a canonical model id routable to a provider that serves
+//! it. The rules (from the feature's principles):
+//!
+//! 1. Route a *canonical* model id to a provider that provides it.
+//! 2. Merge every **public** registry provider — never `private` ones. Public
+//!    `local_oauth` / `local_pkce` providers ARE merged (the OSS authenticates
+//!    them with a local login); only the activation credential differs.
+//! 3. The public `bitrouter` provider is the hosted BitRouter Cloud gateway.
+//!    OSS routes only the model entries declared in the fetched dist; it does
+//!    not infer that cloud serves every registry canonical model.
+//! 4. Providers carry a [`ProviderClass`]; the auto-cascade orders by it.
+//! 5. A provider is activated **only if its credentials are present**, except
+//!    BitRouter Cloud which may authenticate through the local OAuth flow.
+//!
+//! Precedence is conservative: the merge never overwrites a field the user set
+//! in `bitrouter.yaml`. The providers it configures are no longer compiled-in
+//! built-ins (only the `bitrouter` cloud gateway is — see [`crate::providers::builtin`]);
+//! the merge applies their full transport (base URL, protocol map,
+//! per-protocol endpoints), class, and env-resolved credential directly from
+//! the fetched-or-cached registry data.
+
+use bitrouter_ai::types::ProtocolList;
+use bitrouter_sdk::config::{
+    Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
+    ProviderModel, RateLimit, env_lookup, substitute_with,
+};
+
+use bitrouter_ai::catalog::types::{
+    Billing, RegistryData, RegistryKind, RegistryPricing, RegistryProvider, RegistryRateLimits,
+};
+
+/// The provider id of the hosted BitRouter Cloud gateway.
+const BITROUTER_CLOUD_ID: &str = "bitrouter";
+
+/// Merge `data` into `config`. No-op when `inherit_defaults` or
+/// `registry.enabled` is false. Idempotent: re-running over an already-merged
+/// config changes nothing (every write is guarded by an "is it empty / unset"
+/// check).
+pub fn apply_registry(config: &mut Config, data: &RegistryData) {
+    if !config.inherit_defaults || !config.registry.enabled {
+        return;
+    }
+    for provider in &data.providers {
+        // Principle #2: merge every public, active registry provider.
+        if !provider.is_active() || !provider.is_public() {
+            continue;
+        }
+        merge_provider(config, provider);
+    }
+}
+
+/// Resolve `${VAR}` / `${VAR:-default}` references in a registry `api_base`
+/// against the environment (via [`env_lookup`], so the env overrides a
+/// `bro reload` installs on the daemon apply). Returns `None` when a referenced variable is unset and
+/// carries no default — the provider then can't form a valid base URL. Used
+/// for the parameterised big-cloud bases (Bedrock `${AWS_REGION}`, Azure
+/// `${AZURE_OPENAI_RESOURCE}`); a fixed base has no `${...}` and passes through
+/// unchanged.
+fn resolve_api_base(raw: &str) -> Option<String> {
+    substitute_with(raw, env_lookup).ok()
+}
+
+/// Merge one public (non-private) registry provider into the config. Fully
+/// configures it from the registry data — these providers are no longer
+/// compiled-in built-ins (only the `bitrouter` cloud gateway is), so the merge
+/// is the single place their transport, protocol map, and credential are
+/// applied.
+fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
+    let id = provider.name.as_str();
+    let class = classify(provider);
+    let protocol_map = provider_protocol_map(provider);
+
+    if let Some(existing) = config.providers.get_mut(id) {
+        // Already in the config (user-written, zero-config, or a prior pass):
+        // only fill what is unset; never overwrite a user's field.
+        //
+        // A subscription class also gates Strategy-3 auto-cascade entry in the
+        // routing table (a plain canonical request never silently bills a
+        // personal subscription). Implanting it into a provider the operator
+        // *fully hand-declared* (its own models AND its own credential) silently
+        // demotes it from routable to explicit-route-only, so the daemon 404s a
+        // canonical id that the local `bro models` resolver — which does
+        // not run this merge — reports as routable. A full manual declaration is
+        // the operator's opt-in, so leave its class unset: it ranks last and
+        // joins the cascade like any user-declared provider. Stub declarations
+        // (empty models — e.g. the auto-enabled `claude-code` entry) still get
+        // classified, preserving the never-silently-bill guarantee. `models` is
+        // still the operator's here — it is filled from the registry just below.
+        let subscription = matches!(
+            class,
+            ProviderClass::FirstPartySubscription | ProviderClass::GatewaySubscription
+        );
+        let hand_declared = !existing.models.is_empty()
+            && (!existing.api_key.is_empty() || !existing.accounts.is_empty());
+        if existing.class.is_none() && !(subscription && hand_declared) {
+            existing.class = Some(class);
+        }
+        if existing.models.is_empty() {
+            existing.models = build_models(provider);
+        }
+        if existing.api_base.is_empty()
+            && let Some(api_base) = &provider.api_base
+        {
+            match resolve_api_base(api_base) {
+                Some(base) => existing.api_base = base,
+                // A parameterised `api_base` (e.g. `${AZURE_OPENAI_RESOURCE}`)
+                // whose variable is unset and has no default can't form a real
+                // URL — drop the provider from routing rather than dial a
+                // literal `${VAR}` host.
+                None => existing.active = false,
+            }
+        }
+        // Provider-level protocol globs (the gateways) — used by discovered
+        // models, which carry no per-model protocol. Providers with explicit model entries have no
+        // provider-level globs (resolved per-model), so this is skipped for them.
+        if existing.api_protocol.is_empty()
+            && let Some(map) = &protocol_map
+        {
+            existing.api_protocol = map.clone();
+        }
+        if existing.protocol_endpoints.is_empty() {
+            existing.protocol_endpoints = protocol_endpoints(provider);
+        }
+        // Credential: an env-keyed provider resolves its key from the env var,
+        // and drops out of routing if the key is absent (so it doesn't emit
+        // broken upstream requests). OAuth / native providers authenticate via a
+        // local login + a request-time `AuthApplier` (no env var), so they are
+        // exempt — a listed-but-not-logged-in entry stays active and surfaces
+        // its own error.
+        if existing.accounts.is_empty()
+            && existing.api_key.is_empty()
+            && let Some(var) = provider.env_credential_var()
+        {
+            match env_lookup(&var).filter(|v| !v.is_empty()) {
+                Some(key) => existing.api_key = key,
+                None if id != BITROUTER_CLOUD_ID => existing.active = false,
+                None => {}
+            }
+        }
+        return;
+    }
+
+    // Not in the config. OAuth / native providers are never auto-added (they
+    // need a local `bro providers login`); an env-keyed provider is
+    // auto-added only when its credential is present (principle #5).
+    let Some(var) = provider.env_credential_var() else {
+        return;
+    };
+    let Some(api_key) = env_lookup(&var).filter(|v| !v.is_empty()) else {
+        return;
+    };
+    // Resolve `${VAR}` in the base URL; a parameterised base whose variable is
+    // unset (and undefaulted) means we can't route to this provider yet.
+    let Some(api_base) = provider.api_base.as_deref().and_then(resolve_api_base) else {
+        return;
+    };
+    let models = build_models(provider);
+    let entry = ProviderConfig {
+        api_key,
+        api_base,
+        api_protocol: protocol_map.unwrap_or_default(),
+        protocol_endpoints: protocol_endpoints(provider),
+        models,
+        class: Some(class),
+        active: true,
+        ..ProviderConfig::default()
+    };
+    config.providers.insert(id.to_string(), entry);
+}
+
+/// Classify a registry provider into a routing-preference [`ProviderClass`].
+/// Community resellers are third-party; first-party providers split by billing.
+fn classify(provider: &RegistryProvider) -> ProviderClass {
+    match provider.kind.unwrap_or(if provider.community {
+        RegistryKind::ThirdParty
+    } else {
+        RegistryKind::FirstParty
+    }) {
+        RegistryKind::Cloud => ProviderClass::BitrouterCloud,
+        RegistryKind::Gateway => ProviderClass::GatewaySubscription,
+        RegistryKind::ThirdParty => ProviderClass::ThirdPartyApi,
+        RegistryKind::FirstParty => {
+            if provider.billing == Billing::Subscription {
+                ProviderClass::FirstPartySubscription
+            } else {
+                ProviderClass::FirstPartyApi
+            }
+        }
+    }
+}
+
+/// The provider-level wire-protocol globs as the SDK's [`PatternMap`], or `None`
+/// when the provider declares none (a provider with explicit model entries, whose protocol is
+/// resolved onto each model instead). Longest-match precedence is the SDK's.
+fn provider_protocol_map(provider: &RegistryProvider) -> Option<PatternMap<ProtocolList>> {
+    if provider.api_protocol.is_empty() {
+        return None;
+    }
+    let mut map = PatternMap::new();
+    for entry in &provider.api_protocol {
+        for (pattern, set) in entry {
+            map.push(Pattern::parse(pattern), set.to_protocol_list());
+        }
+    }
+    Some(map)
+}
+
+/// The provider's per-protocol base-URL overrides as the SDK config map.
+fn protocol_endpoints(provider: &RegistryProvider) -> std::collections::HashMap<String, String> {
+    provider
+        .protocol_endpoints
+        .as_ref()
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
+}
+
+/// Translate the registry's per-model entries into `ProviderModel`s — the
+/// canonical id is the match key, `provider_model_id` the upstream dispatch id,
+/// and the dist-resolved protocol set rides on each model.
+fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
+    provider
+        .models
+        .iter()
+        .map(|m| ProviderModel {
+            id: m.id.clone(),
+            provider_model_id: Some(m.provider_model_id.clone()),
+            api_protocol: Some(m.api_protocol.to_protocol_list()),
+            rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
+            pricing: m.pricing.as_ref().and_then(map_pricing),
+            pricing_by_protocol: m
+                .pricing_by_protocol
+                .iter()
+                .map(|(protocol, pricing)| {
+                    (protocol.clone(), map_pricing(pricing).unwrap_or_default())
+                })
+                .collect(),
+            capabilities: m.capabilities.clone(),
+            token_limits: Default::default(),
+            input_token_counting: None,
+            reasoning_effort: m.reasoning_effort.clone(),
+            compatibility: m.compatibility.clone(),
+        })
+        .collect()
+}
+
+fn map_rate_limits(rl: &RegistryRateLimits) -> RateLimit {
+    RateLimit {
+        requests_per_minute: rl.requests_per_minute,
+        tokens_per_minute: rl.tokens_per_minute,
+    }
+}
+
+/// Map registry pricing onto cache-aware config pricing (USD per 1M tokens ==
+/// µUSD per token). Missing rates remain `None`; explicit zero remains free.
+fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
+    let input = p.input_tokens.as_ref().and_then(|i| i.no_cache);
+    let cache_read = p.input_tokens.as_ref().and_then(|i| i.cache_read);
+    let cache_write = p.input_tokens.as_ref().and_then(|i| i.cache_write);
+    let output = p.output_tokens.as_ref().and_then(|o| o.text);
+    let context_tiers: Vec<PricingTierConfig> = p
+        .context_tiers
+        .iter()
+        .map(|t| PricingTierConfig {
+            above_input_tokens: t.above_input_tokens,
+            input_micro_usd_per_token: t.input_tokens.as_ref().and_then(|i| i.no_cache),
+            cache_read_micro_usd_per_token: t.input_tokens.as_ref().and_then(|i| i.cache_read),
+            cache_write_micro_usd_per_token: t.input_tokens.as_ref().and_then(|i| i.cache_write),
+            output_micro_usd_per_token: t.output_tokens.as_ref().and_then(|o| o.text),
+        })
+        .collect();
+    if input.is_none()
+        && cache_read.is_none()
+        && cache_write.is_none()
+        && output.is_none()
+        && context_tiers.is_empty()
+        && p.endpoint_profile.is_none()
+    {
+        return None;
+    }
+    Some(PricingConfig {
+        endpoint_profile: p.endpoint_profile,
+        input_micro_usd_per_token: input,
+        cache_read_micro_usd_per_token: cache_read,
+        cache_write_micro_usd_per_token: cache_write,
+        output_micro_usd_per_token: output,
+        context_tiers,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use bitrouter_ai::catalog::types::{
+        CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet, RegistryAccess,
+        RegistryAuth, RegistryAuthKind, RegistryModel, RegistryProtocol, RequiredConfig,
+    };
+    use bitrouter_ai::types::{ApiProtocol, ChatTokenLimitField, ProtocolList};
+
+    fn provider(name: &str) -> RegistryProvider {
+        RegistryProvider {
+            name: name.to_string(),
+            display_name: None,
+            api_base: Some(format!("https://{name}.example/v1")),
+            api_protocol: Vec::new(),
+            protocol_endpoints: None,
+            models: vec![RegistryModel {
+                id: "deepseek/deepseek-v3.2".to_string(),
+                provider_model_id: "deepseek-v3.2".to_string(),
+                api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
+                pricing_by_protocol: std::collections::HashMap::new(),
+                pricing: Some(RegistryPricing {
+                    endpoint_profile: None,
+                    input_tokens: Some(InputTokenPricing {
+                        no_cache: Some(0.27),
+                        cache_read: None,
+                        cache_write: None,
+                    }),
+                    output_tokens: Some(OutputTokenPricing { text: Some(0.41) }),
+                    context_tiers: Vec::new(),
+                }),
+                rate_limits: None,
+                capabilities: Vec::new(),
+                reasoning_effort: None,
+                compatibility: Default::default(),
+            }],
+            status: "active".to_string(),
+            kind: None,
+            auth: None,
+            required_config: Vec::new(),
+            doc_url: None,
+            community: false,
+            access: Some(RegistryAccess::ApiKey),
+            byok: Some(true),
+            billing: Billing::UsageToken,
+        }
+    }
+
+    #[test]
+    fn model_capabilities_and_compatibility_reach_provider_model() -> anyhow::Result<()> {
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.models[0].capabilities = vec![
+            bitrouter_ai::types::Capability::Reasoning,
+            bitrouter_ai::types::Capability::Tools,
+        ];
+        registry_provider.models[0].reasoning_effort =
+            Some(bitrouter_ai::types::ReasoningEffortConfig {
+                levels: vec![
+                    bitrouter_ai::types::ReasoningEffort::Low,
+                    bitrouter_ai::types::ReasoningEffort::High,
+                ],
+                default: Some(bitrouter_ai::types::ReasoningEffort::High),
+            });
+        registry_provider.models[0]
+            .compatibility
+            .chat_completions
+            .token_limit_field = Some(ChatTokenLimitField::MaxCompletionTokens);
+
+        let models = build_models(&registry_provider);
+        assert_eq!(
+            models[0].compatibility.chat_completions.token_limit_field,
+            Some(ChatTokenLimitField::MaxCompletionTokens)
+        );
+        assert_eq!(
+            models[0].capabilities,
+            [
+                bitrouter_ai::types::Capability::Reasoning,
+                bitrouter_ai::types::Capability::Tools,
+            ]
+        );
+        assert_eq!(
+            models[0]
+                .reasoning_effort
+                .as_ref()
+                .and_then(|config| config.default),
+            Some(bitrouter_ai::types::ReasoningEffort::High)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registry_cache_rates_map_without_fabricating_missing_values() -> anyhow::Result<()> {
+        let pricing = RegistryPricing {
+            endpoint_profile: None,
+            input_tokens: Some(InputTokenPricing {
+                no_cache: Some(3.0),
+                cache_read: Some(0.3),
+                cache_write: Some(3.75),
+            }),
+            output_tokens: Some(OutputTokenPricing { text: None }),
+            context_tiers: Vec::new(),
+        };
+
+        let mapped = map_pricing(&pricing).context("partial pricing retained")?;
+        assert_eq!(mapped.input_micro_usd_per_token, Some(3.0));
+        assert_eq!(mapped.cache_read_micro_usd_per_token, Some(0.3));
+        assert_eq!(mapped.cache_write_micro_usd_per_token, Some(3.75));
+        assert_eq!(mapped.output_micro_usd_per_token, None);
+        Ok(())
+    }
+
+    fn data_with(providers: Vec<RegistryProvider>, canonical: Vec<&str>) -> RegistryData {
+        RegistryData {
+            providers,
+            canonical: canonical
+                .into_iter()
+                .map(|id| CanonicalModel { id: id.to_string() })
+                .collect(),
+        }
+    }
+
+    use crate::providers::test_env::with_env;
+
+    #[test]
+    fn classifies_by_community_and_billing() -> anyhow::Result<()> {
+        let mut first_party = provider("zai");
+        first_party.community = false;
+        first_party.billing = Billing::UsageToken;
+        assert_eq!(classify(&first_party), ProviderClass::FirstPartyApi);
+
+        let mut sub = provider("zai_coding_plan");
+        sub.billing = Billing::Subscription;
+        assert_eq!(classify(&sub), ProviderClass::FirstPartySubscription);
+
+        let mut reseller = provider("chutes");
+        reseller.community = true;
+        // community wins even if (oddly) flagged subscription.
+        reseller.billing = Billing::Subscription;
+        assert_eq!(classify(&reseller), ProviderClass::ThirdPartyApi);
+        Ok(())
+    }
+
+    #[test]
+    fn hand_declared_subscription_keeps_class_unset() -> anyhow::Result<()> {
+        // A subscription provider the operator FULLY hand-declared (own models +
+        // own credential) must keep `class: None`, so it joins the canonical
+        // auto-cascade instead of being demoted to explicit-route-only. Without
+        // this, the daemon (which runs the merge) 404s a canonical id that the
+        // local `bro models` resolver (which does not) reports routable.
+        let mut sub = provider("mysub");
+        sub.billing = Billing::Subscription;
+        let hand_models = build_models(&sub);
+        assert!(!hand_models.is_empty());
+
+        let mut config = Config::default();
+        config.providers.insert(
+            "mysub".to_string(),
+            ProviderConfig {
+                api_key: "sub-oauth-placeholder".to_string(),
+                active: true,
+                models: hand_models,
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut config, &data_with(vec![sub], vec![]));
+
+        let merged = &config.providers["mysub"];
+        assert_eq!(
+            merged.class, None,
+            "a fully hand-declared subscription provider opts into the cascade"
+        );
+        assert!(!merged.models.is_empty(), "its own models are preserved");
+        Ok(())
+    }
+
+    #[test]
+    fn stub_subscription_still_classified() -> anyhow::Result<()> {
+        // A stub subscription entry (empty models — e.g. the auto-enabled
+        // `claude-code`) is still classified, preserving the guarantee that a
+        // plain canonical request never silently bills a personal subscription.
+        let mut sub = provider("mysub2");
+        sub.billing = Billing::Subscription;
+
+        let mut config = Config::default();
+        config.providers.insert(
+            "mysub2".to_string(),
+            ProviderConfig {
+                active: true,
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut config, &data_with(vec![sub], vec![]));
+
+        assert_eq!(
+            config.providers["mysub2"].class,
+            Some(ProviderClass::FirstPartySubscription),
+            "a stub subscription provider is still classified"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn credential_present_inserts_active_provider_with_models() -> anyhow::Result<()> {
+        // Unique env var name avoids racing other modules' env tests.
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let p = provider("regtestprov");
+            apply_registry(
+                &mut config,
+                &data_with(vec![p], vec!["deepseek/deepseek-v3.2"]),
+            );
+            let merged = config
+                .providers
+                .get("regtestprov")
+                .context("credentialed provider must be inserted")?;
+            assert!(merged.active);
+            assert_eq!(merged.api_key, "sk-test");
+            assert_eq!(merged.api_base, "https://regtestprov.example/v1");
+            assert_eq!(merged.class, Some(ProviderClass::FirstPartyApi));
+            assert_eq!(merged.models.len(), 1);
+            let model = &merged.models[0];
+            assert_eq!(model.id, "deepseek/deepseek-v3.2");
+            assert_eq!(model.provider_model_id.as_deref(), Some("deepseek-v3.2"));
+            // Registry-only provider (no built-in): the dist-resolved protocol
+            // is the model's only source, set as the per-model override.
+            assert_eq!(
+                model.api_protocol,
+                Some(ProtocolList(vec![ApiProtocol::ChatCompletions]))
+            );
+            let pricing = model.pricing.as_ref().context("pricing mapped")?;
+            assert_eq!(pricing.input_micro_usd_per_token, Some(0.27));
+            assert_eq!(pricing.output_micro_usd_per_token, Some(0.41));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn merged_provider_carries_per_model_protocol() -> anyhow::Result<()> {
+        // The providers are no longer compiled-in built-ins, so the merge is the
+        // sole source of their protocol: each model carries its dist-resolved
+        // protocol set (an ordered set like [chat, responses] is preserved).
+        let mut config = Config::default();
+        config.providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                active: true,
+                ..ProviderConfig::default()
+            },
+        );
+        // `provider("openai")`'s model resolves to `openai` (chat) in the dist.
+        apply_registry(&mut config, &data_with(vec![provider("openai")], vec![]));
+        let openai = &config.providers["openai"];
+        assert!(!openai.models.is_empty(), "registry catalog is merged in");
+        assert_eq!(
+            openai.models[0].api_protocol,
+            Some(ProtocolList(vec![ApiProtocol::ChatCompletions])),
+            "the merge pins each model's dist-resolved protocol"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn credential_absent_skips_provider() -> anyhow::Result<()> {
+        with_env("REGABSENTPROV_API_KEY", None, || {
+            let mut config = Config::default();
+            let p = provider("regabsentprov");
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            assert!(
+                !config.providers.contains_key("regabsentprov"),
+                "no credential ⇒ provider must not be activated"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn provider_requiring_base_url_is_not_auto_inserted_from_env_key_only() -> anyhow::Result<()> {
+        with_env("WORKSPACEPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("workspaceprov");
+            p.api_base = None;
+            p.required_config = vec![RequiredConfig::ApiKey, RequiredConfig::BaseUrl];
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            assert!(
+                !config.providers.contains_key("workspaceprov"),
+                "a provider that requires base_url must not be auto-added from the API key alone"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn listed_env_provider_without_key_is_marked_inactive() -> anyhow::Result<()> {
+        // A user lists an env-keyed provider bare (active by default) but has no
+        // key: the merge must drop it out of routing (the behaviour that moved
+        // here from `apply_builtin_defaults`), not leave a keyless active entry.
+        with_env("LISTEDENVPROV_API_KEY", None, || {
+            let mut config = Config::default();
+            config.providers.insert(
+                "listedenvprov".to_string(),
+                ProviderConfig {
+                    active: true,
+                    ..ProviderConfig::default()
+                },
+            );
+            apply_registry(
+                &mut config,
+                &data_with(vec![provider("listedenvprov")], vec![]),
+            );
+            assert!(
+                !config.providers["listedenvprov"].active,
+                "an env-keyed provider with no key must be marked inactive"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn listed_oauth_provider_without_key_stays_active() -> anyhow::Result<()> {
+        // An OAuth provider listed bare has no env key — it authenticates via a
+        // local login + request-time applier, so the merge must NOT mark it
+        // inactive (exempt from the keyless-inactive rule).
+        with_env("OAUTHPROV_API_KEY", None, || {
+            let mut config = Config::default();
+            config.providers.insert(
+                "oauthprov".to_string(),
+                ProviderConfig {
+                    active: true,
+                    ..ProviderConfig::default()
+                },
+            );
+            let mut p = provider("oauthprov");
+            p.auth = Some(RegistryAuth {
+                kind: RegistryAuthKind::Oauth,
+                env: None,
+                header: None,
+                extra_headers: None,
+                handler: Some("oauthprov".to_string()),
+                params: None,
+            });
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            assert!(
+                config.providers["oauthprov"].active,
+                "an OAuth provider authenticates via login, so it stays active"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn private_provider_is_never_merged() -> anyhow::Result<()> {
+        with_env("PRIVATEPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("privateprov");
+            p.access = Some(RegistryAccess::Private);
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            assert!(
+                !config.providers.contains_key("privateprov"),
+                "access=private ⇒ never merged, even with a credential set"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_byok_false_still_resolves_to_private() -> anyhow::Result<()> {
+        // An older dist / cache carries the derived `byok` alias with no
+        // explicit `access`. `byok: false` must still be read as `private`.
+        let mut p = provider("legacyprivate");
+        p.access = None;
+        p.byok = Some(false);
+        assert_eq!(p.access(), RegistryAccess::Private);
+        assert!(!p.is_public());
+        Ok(())
+    }
+
+    #[test]
+    fn empty_model_provider_does_not_auto_discover_from_registry() -> anyhow::Result<()> {
+        with_env("GATEWAYPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("gatewayprov");
+            p.models = Vec::new();
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            let merged = config
+                .providers
+                .get("gatewayprov")
+                .context("empty-model provider with a credential is merged")?;
+            assert!(
+                !merged.auto_discover,
+                "registry dist is complete, so empty model lists are not runtime discovery feeds"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn registry_dist_catalog_hints_are_ignored_at_runtime() -> anyhow::Result<()> {
+        with_env("LEGACYGW_API_KEY", Some("sk-test"), || {
+            let data: RegistryData = serde_json::from_str(
+                r#"{
+                  "providers": [{
+                    "name": "legacygw",
+                    "status": "active",
+                    "api_base": "https://legacygw.example/v1",
+                    "access": "api_key",
+                    "byok": true,
+                    "api_protocol": [{ "*": "openai" }],
+                    "auto_sync": { "feed": "v1_models" },
+                    "models": []
+                  }],
+                  "canonical": []
+                }"#,
+            )
+            .context("legacy dist shape parses")?;
+            let mut config = Config::default();
+
+            apply_registry(&mut config, &data);
+
+            let merged = config
+                .providers
+                .get("legacygw")
+                .context("legacy gateway with a credential is merged")?;
+            assert!(
+                !merged.auto_discover,
+                "registry dist catalog hints are maintainer metadata, not runtime discovery"
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn inactive_status_provider_is_skipped() -> anyhow::Result<()> {
+        with_env("STAGINGPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("stagingprov");
+            p.status = "staging".to_string();
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            assert!(!config.providers.contains_key("stagingprov"));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn user_declared_fields_are_not_overwritten() -> anyhow::Result<()> {
+        for active in [false, true] {
+            // A user listed the provider with an explicit api_base + one model. The
+            // merge must keep both and only fill the missing class.
+            let mut config = Config::default();
+            let mut user = ProviderConfig {
+                api_base: "https://gateway.internal/v1".to_string(),
+                api_key: "sk-user".to_string(),
+                active,
+                ..ProviderConfig::default()
+            };
+            user.models = vec![ProviderModel {
+                id: "custom/model".to_string(),
+                provider_model_id: None,
+                api_protocol: None,
+                rate_limits: None,
+                pricing: None,
+                pricing_by_protocol: std::collections::HashMap::new(),
+                token_limits: Default::default(),
+                input_token_counting: None,
+                capabilities: Vec::new(),
+                reasoning_effort: None,
+                compatibility: Default::default(),
+            }];
+            config.providers.insert("regtestprov".to_string(), user);
+
+            apply_registry(
+                &mut config,
+                &data_with(vec![provider("regtestprov")], vec![]),
+            );
+            // A later catalog revision changes defaults but cannot re-enable the
+            // user's provider or replace its explicitly configured model/endpoint.
+            let mut refreshed = provider("regtestprov");
+            refreshed.api_base = Some("https://new-catalog.invalid/v1".into());
+            apply_registry(&mut config, &data_with(vec![refreshed], vec![]));
+            let merged = &config.providers["regtestprov"];
+            assert_eq!(merged.active, active);
+            assert_eq!(merged.api_base, "https://gateway.internal/v1");
+            assert_eq!(merged.models.len(), 1, "user's model list is preserved");
+            assert_eq!(merged.models[0].id, "custom/model");
+            assert_eq!(merged.class, Some(ProviderClass::FirstPartyApi));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bitrouter_cloud_merge_keeps_oauth_transport_without_catalog_discovery() -> anyhow::Result<()>
+    {
+        let mut config = Config::default();
+        // The hosted gateway is present (as the env/sign-in path would add it).
+        config
+            .providers
+            .insert(BITROUTER_CLOUD_ID.to_string(), ProviderConfig::default());
+        let mut bitrouter = provider(BITROUTER_CLOUD_ID);
+        bitrouter.display_name = Some("BitRouter Cloud".to_string());
+        bitrouter.kind = Some(bitrouter_ai::catalog::types::RegistryKind::Cloud);
+        bitrouter.api_base = Some("https://api.bitrouter.ai/v1".to_string());
+        bitrouter.models = Vec::new();
+        bitrouter.auth = Some(RegistryAuth {
+            kind: RegistryAuthKind::Bearer,
+            env: Some("BITROUTER_API_KEY".to_string()),
+            header: None,
+            extra_headers: None,
+            handler: None,
+            params: None,
+        });
+        let data = data_with(
+            vec![bitrouter],
+            vec!["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2"],
+        );
+        apply_registry(&mut config, &data);
+        let cloud = &config.providers[BITROUTER_CLOUD_ID];
+        assert_eq!(cloud.class, Some(ProviderClass::BitrouterCloud));
+        assert_eq!(cloud.api_base, "https://api.bitrouter.ai/v1");
+        assert!(
+            !cloud.auto_discover,
+            "registry dist does not ask OSS to discover provider catalogs at runtime"
+        );
+        assert!(
+            cloud.models.is_empty(),
+            "OSS must not infer BitRouter Cloud serves every canonical registry model"
+        );
+        assert!(
+            cloud.active,
+            "a configured BitRouter Cloud provider may authenticate via OAuth, not only BITROUTER_API_KEY"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_registry_is_a_noop() -> anyhow::Result<()> {
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            config.registry.enabled = false;
+            apply_registry(
+                &mut config,
+                &data_with(vec![provider("regtestprov")], vec![]),
+            );
+            assert!(config.providers.is_empty());
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn inherit_defaults_false_is_a_noop() -> anyhow::Result<()> {
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config {
+                inherit_defaults: false,
+                ..Config::default()
+            };
+            apply_registry(
+                &mut config,
+                &data_with(vec![provider("regtestprov")], vec![]),
+            );
+            assert!(config.providers.is_empty());
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn apply_registry_is_idempotent() -> anyhow::Result<()> {
+        // The merge re-runs on every reload, so a second pass over the same
+        // data must not duplicate models or change the result.
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let data = data_with(
+                vec![provider("regtestprov")],
+                vec!["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2"],
+            );
+            let mut config = Config::default();
+            // Include hosted cloud so a reload does not synthesize canonical
+            // models for it; cloud discovers its own catalog from /models.
+            config
+                .providers
+                .insert(BITROUTER_CLOUD_ID.to_string(), ProviderConfig::default());
+
+            apply_registry(&mut config, &data);
+            let merged_models = config.providers["regtestprov"].models.len();
+            let cloud_models = config.providers[BITROUTER_CLOUD_ID].models.len();
+
+            apply_registry(&mut config, &data);
+            assert_eq!(config.providers["regtestprov"].models.len(), merged_models);
+            assert_eq!(
+                config.providers[BITROUTER_CLOUD_ID].models.len(),
+                cloud_models,
+                "re-running must not mutate the cloud catalog"
+            );
+            assert_eq!(cloud_models, 0);
+            Ok(())
+        })?;
+        Ok(())
+    }
+    #[test]
+    fn registry_protocol_tariffs_keep_missing_buckets_and_empty_overrides() -> anyhow::Result<()> {
+        let mut registry = provider("fixture");
+        let model = registry.models.first_mut().context("model missing")?;
+        model.id = "fixture/model".into();
+        model.provider_model_id = "native".into();
+        model.pricing_by_protocol.insert(
+            ApiProtocol::Decisions,
+            serde_json::from_value(
+                serde_json::json!({"endpoint_profile":"openai_global","input_tokens":{"no_cache":0.1},"output_tokens":{"text":0.0}}),
+            )?,
+        );
+        model.pricing_by_protocol.insert(
+            ApiProtocol::Responses,
+            serde_json::from_value(serde_json::json!({}))?,
+        );
+        let models = build_models(&registry);
+        let mapped = models.first().context("mapped model missing")?;
+        let native = mapped
+            .pricing_for(&ApiProtocol::Decisions)
+            .context("native override missing")?;
+        assert_eq!(
+            native.endpoint_profile,
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+        );
+        assert_eq!(native.input_micro_usd_per_token, Some(0.1));
+        assert_eq!(native.cache_read_micro_usd_per_token, None);
+        assert_eq!(native.output_micro_usd_per_token, Some(0.0));
+        let empty = mapped
+            .pricing_for(&ApiProtocol::Responses)
+            .context("empty explicit override was dropped")?;
+        assert_eq!(empty.input_micro_usd_per_token, None);
+        assert_eq!(empty.output_micro_usd_per_token, None);
+        Ok(())
+    }
+}

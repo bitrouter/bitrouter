@@ -95,6 +95,13 @@ impl BridgeCapture {
                         {
                             return Err(BitrouterError::UpstreamInvalidResponse {
                                 message: "Codex Lite terminal has unfinished output items".into(),
+                                usage: bitrouter_ai::protocol::OutboundAdapter::parse_response(
+                                    &bitrouter_ai::protocol::responses::ResponsesAdapter,
+                                    response.clone(),
+                                )
+                                .ok()
+                                .and_then(|result| result.usage)
+                                .map(Box::new),
                             });
                         }
                         response["output"] = serde_json::Value::Array(
@@ -125,7 +132,7 @@ impl BridgeCapture {
             return Ok(folded);
         };
         validate_nonstream_responses_terminal(&terminal)?;
-        let replayable = super::super::protocol::responses::output_replayable(&terminal);
+        let replayable = bitrouter_ai::protocol::responses::output_replayable(&terminal);
         let stored =
             source.storage_allowed && terminal.get("store") == Some(&serde_json::Value::Bool(true));
         // The terminal response carries the full output, including private reasoning
@@ -186,42 +193,51 @@ impl HttpExecutor {
 
         Self::check_response_format(prompt, adapter, target)?;
 
-        let mut body =
-            self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
-        let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-        if self.auth_appliers.lookup(&target.provider_name).is_some() {
-            native_work::observe(
-                ctx,
-                NativeProviderWorkKind::AuthenticationPreparation,
-                self.shape_request_body(&mut body, target),
-                |_| None,
-            )
-            .await?;
-        }
-        let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
-        let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
+        let mut error_scrubber = UpstreamErrorScrubber::new(None);
         error_scrubber.capture_effective_target_key(target);
-        let url = transport.endpoint_url(target, true);
+        error_scrubber.redactor.capture_prompt_continuity(prompt);
+        let url = transport.endpoint_url(&target.model_target(), true);
         let trace_headers = ctx.take_outbound_trace_headers();
 
-        let (client, timeouts) = self.client_for(
+        let (client, _) = self.client_for(
             target,
             ctx.extension::<super::super::native::NativeManagedRequest>()
                 .is_some(),
         );
-        let request_input = RequestBuildInput {
-            client: &client,
-            timeouts: &timeouts,
-            url: &url,
-            body: &body,
-            managed_expected: managed_expected.as_ref(),
-            target,
-            transport,
-            ctx,
-            trace_headers: trace_headers.as_ref(),
-        };
+
         let mut attempted_auth_refresh = false;
         let response = loop {
+            let mut body =
+                self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
+            let managed_expected = self.managed_expected_body(&body, target, ctx)?;
+            if self.auth_appliers.lookup(&target.provider_name).is_some() {
+                native_work::observe(
+                    ctx,
+                    NativeProviderWorkKind::AuthenticationPreparation,
+                    self.shape_request_body(&mut body, target),
+                    |_| None,
+                )
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+            }
+            let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
+            if let Some(continuation) = continuation_substitution {
+                error_scrubber
+                    .redactor
+                    .add_replacement(continuation.native, continuation.public_or_redacted);
+            }
+            let request_input = RequestBuildInput {
+                client: &client,
+
+                url: &url,
+                body: &body,
+                managed_expected: managed_expected.as_ref(),
+                target,
+                transport,
+                ctx,
+                trace_headers: trace_headers.as_ref(),
+            };
+
             let applied = self
                 .build_authenticated_request(&request_input)
                 .await
@@ -240,20 +256,10 @@ impl HttpExecutor {
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
-                    client.execute(request).await.map_err(|error| {
-                        let error = if error.is_timeout() {
-                            BitrouterError::UpstreamTimeout
-                        } else {
-                            BitrouterError::Upstream {
-                                status: 502,
-                                message: format!(
-                                    "stream request to {} failed: {error}",
-                                    target.provider_name
-                                ),
-                            }
-                        };
-                        error_scrubber.scrub_error(error)
-                    })
+                    client
+                        .send(request, &CancellationToken::new())
+                        .await
+                        .map_err(|error| error_scrubber.scrub_error(error.into()))
                 },
                 |response| Some(response.status().as_u16()),
             )
@@ -292,12 +298,14 @@ impl HttpExecutor {
         // Parse the upstream SSE byte stream into canonical stream parts via
         // the protocol's stateful decoder.
         let mut decoder = adapter.stream_decoder();
+        let protocol = adapter.protocol();
         let limit = response_body::limit(ctx);
         response_body::check_length(&response, limit)?;
         let byte_stream = response_body::bounded(response.bytes_stream(), limit);
 
         let stream = async_stream::stream! {
             use eventsource_stream::Eventsource;
+            let mut terminal = false;
             let events = byte_stream.eventsource();
             futures::pin_mut!(events);
             while let Some(event) = events.next().await {
@@ -315,13 +323,22 @@ impl HttpExecutor {
                                     return;
                                 }
                                 for p in parts {
+                                    terminal |= p.is_terminal();
                                     yield Ok(p);
                                 }
                             }
                             Err(e) => {
-                                yield Err(error_scrubber.scrub_error(
-                                    classify_stream_decoder_error(e)
-                                ));
+                                let mut error = classify_stream_decoder_error(e);
+                                // Match direct AI calls: retain independently valid usage
+                                // even when the rest of a Chat event cannot be decoded.
+                                if protocol == ApiProtocol::ChatCompletions
+                                    && let Ok(chunk) = serde_json::from_str::<serde_json::Value>(&sse.data)
+                                    && let Some(reported) = chunk.get("usage").and_then(bitrouter_ai::protocol::chat_completions::parse_usage)
+                                {
+                                    yield Ok(StreamPart::Usage { usage: reported.clone() });
+                                    if let BitrouterError::UpstreamInvalidResponse { usage, .. } = &mut error { *usage = Some(Box::new(reported)); }
+                                }
+                                yield Err(error_scrubber.scrub_error(error));
                                 return;
                             }
                         }
@@ -342,24 +359,33 @@ impl HttpExecutor {
             match decoder.finish() {
                 Ok(parts) => {
                     for p in parts {
+                        terminal |= p.is_terminal();
                         yield Ok(p);
                     }
                 }
-                Err(e) => yield Err(error_scrubber.scrub_error(
-                    classify_stream_decoder_error(e)
-                )),
+                Err(e) => {
+                    yield Err(error_scrubber.scrub_error(classify_stream_decoder_error(e)));
+                    return;
+                }
+            }
+            if !terminal {
+                yield Err(BitrouterError::UpstreamInvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
             }
         };
 
-        Ok(Box::pin(stream))
+        Ok(Box::pin(bitrouter_ai::providers::google_chat::bind_stream(
+            stream,
+            target.model_target(),
+        )))
     }
 }
 
 #[cfg(test)]
 mod lite_tests {
     use super::*;
-    use crate::language_model::protocol::OutboundAdapter;
-    use crate::language_model::protocol::responses::ResponsesAdapter;
+    use bitrouter_ai::protocol::OutboundAdapter;
+    use bitrouter_ai::protocol::responses::ResponsesAdapter;
+    use bitrouter_ai::types::Content;
 
     fn event(value: serde_json::Value) -> SseEvent {
         SseEvent {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use bitrouter_ai::types::{Message, Role};
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{Message, Role};
 
 use super::admission::{fingerprint, key_scope};
 use super::commit::lifecycle_fact;
@@ -159,7 +159,7 @@ impl ThreadService {
         &self,
         turn_id: &str,
         request: &mut ModelBoundary,
-    ) -> Result<(bitrouter_sdk::language_model::Prompt, u64), String> {
+    ) -> Result<(bitrouter_ai::types::Prompt, u64), String> {
         let gate = self
             .commit_gate(turn_id)
             .map_err(|error| error.to_string())?;

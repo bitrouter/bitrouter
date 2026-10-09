@@ -1,7 +1,7 @@
 //! Deterministic context allocation before shared model preparation. Admission
 //! here proves context eligibility, not provider capability or token capacity.
 
-use bitrouter_sdk::language_model::types::Message;
+use bitrouter_ai::types::Message;
 use serde::{Deserialize, Serialize};
 
 use super::collaboration::{Assignment, Work};

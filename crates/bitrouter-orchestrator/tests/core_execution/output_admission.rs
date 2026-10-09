@@ -1,7 +1,7 @@
 //! Oversized complete output retains billing evidence without durable content.
 
 use super::*;
-use bitrouter_sdk::language_model::types::UsageOrigin;
+use bitrouter_ai::types::UsageOrigin;
 
 #[derive(Clone, Default)]
 struct UsageRecords(Arc<Mutex<Vec<(u64, u64, bool)>>>);
@@ -912,7 +912,7 @@ async fn full_child_output_reaches_model_wait_after_ack_loss_and_restore() -> Te
             .find_map(|content| match content {
                 Content::ToolResult {
                     call_id,
-                    output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value },
+                    output: bitrouter_ai::types::ToolResultOutput::Text { value },
                     ..
                 } if call_id == "wait-for-child" => Some(value),
                 _ => None,

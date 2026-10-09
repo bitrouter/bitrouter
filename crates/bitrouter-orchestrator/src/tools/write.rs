@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use bitrouter_sdk::language_model::ToolResultOutput;
+use bitrouter_ai::types::ToolResultOutput;
 
 use super::{MAX_FILE_BYTES, WorkspaceTools, WriteArgs, persist_text};
 use crate::store::EffectStatus;

@@ -46,17 +46,6 @@ models:
         cache_read: 0.028
       output_tokens:
         text: 1.32
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: moonshotai/kimi-k2.6
-    pricing:
-      input_tokens:
-        no_cache: 1.09
-        cache_read: 0.37
-      output_tokens:
-        text: 4.6
-    capabilities:
-      - reasoning
-      - tools
   - id: moonshotai/kimi-k3
     provider_model_id: moonshotai/kimi-k3
     pricing:
@@ -70,17 +59,6 @@ models:
       - structured_outputs
       - tools
       - image_input
-  - id: z-ai/glm-5.1
-    provider_model_id: z-ai/glm-5.1
-    pricing:
-      input_tokens:
-        no_cache: 1.21
-        cache_read: 0.6
-      output_tokens:
-        text: 4.2
-    capabilities:
-      - reasoning
-      - tools
   - id: z-ai/glm-5.2
     provider_model_id: z-ai/glm-5.2
     pricing:

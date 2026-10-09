@@ -1,9 +1,10 @@
 //! Actual HTTP retries, durable sub-work barriers and shared settlement.
 
 use super::*;
+use bitrouter_ai::auth::{AuthApplier, AuthAppliers};
+use bitrouter_ai::client::HttpTimeouts;
 use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_sdk::language_model::auth::{AuthApplier, AuthAppliers};
-use bitrouter_sdk::language_model::executor::{HttpExecutor, HttpTimeouts};
+use bitrouter_sdk::language_model::executor::HttpExecutor;
 use bitrouter_sdk::language_model::native_work::NativeProviderWorkKind;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -16,15 +17,15 @@ struct RetryAuth {
 
 #[async_trait]
 impl AuthApplier for RetryAuth {
-    fn output_token_limit_support(&self, _: &RoutingTarget) -> Option<bool> {
+    fn output_token_limit_support(&self, _: &bitrouter_ai::target::ModelTarget) -> Option<bool> {
         Some(true)
     }
 
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _: &RoutingTarget,
-    ) -> bitrouter_sdk::Result<reqwest::Request> {
+        _: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         let token = if self.refreshes.load(Ordering::SeqCst) == 0 {
             "Bearer stale-private-token"
         } else {
@@ -39,12 +40,12 @@ impl AuthApplier for RetryAuth {
 
     async fn refresh_after_unauthorized(
         &self,
-        _: &RoutingTarget,
+        _: &bitrouter_ai::target::ModelTarget,
         _: Option<&reqwest::header::HeaderValue>,
-    ) -> bitrouter_sdk::Result<bool> {
+    ) -> bitrouter_ai::error::Result<bool> {
         self.refreshes.fetch_add(1, Ordering::SeqCst);
         if self.fail_refresh.load(Ordering::SeqCst) {
-            Err(bitrouter_sdk::BitrouterError::internal(
+            Err(bitrouter_ai::error::ModelError::invalid_request(
                 "private-refresh-diagnostic",
             ))
         } else {
@@ -232,7 +233,7 @@ async fn provider_work_http_retry_retains_phases_and_one_settlement() -> TestRes
         assert_eq!(done.run.as_ref().ok_or("run")?.status, RunStatus::Completed);
         assert_eq!(done.run.as_ref().ok_or("run")?.model_attempts, 2);
         let attempt = &done.root_turn().ok_or("turn")?.steps[0].attempts[0];
-        assert_eq!(attempt.provider_work.len(), 6);
+        assert_eq!(attempt.provider_work.len(), 7);
         let phases: Vec<_> = attempt
             .provider_work
             .iter()
@@ -245,6 +246,7 @@ async fn provider_work_http_retry_retains_phases_and_one_settlement() -> TestRes
                 NativeProviderWorkKind::Authentication,
                 NativeProviderWorkKind::HttpDispatch,
                 NativeProviderWorkKind::AuthenticationRefresh,
+                NativeProviderWorkKind::AuthenticationPreparation,
                 NativeProviderWorkKind::Authentication,
                 NativeProviderWorkKind::HttpDispatch
             ]
@@ -317,7 +319,7 @@ async fn provider_work_http_retry_retains_phases_and_one_settlement() -> TestRes
 async fn authority_revoked_during_http_intent_ack_blocks_initial_and_retry_dispatch() -> TestResult
 {
     for bridge in [false, true] {
-        for index in [2, 5] {
+        for index in [2, 6] {
             let harness = WorkHarness::new("provider.work.intent", index, false);
             let (session, server, _, _) = fixture(harness.clone(), bridge).await?;
             session.start("input", 1, input()).await?;
@@ -328,7 +330,7 @@ async fn authority_revoked_during_http_intent_ack_blocks_initial_and_retry_dispa
             tokio::time::timeout(Duration::from_secs(60), harness.seen.acquire())
                 .await??
                 .forget();
-            let sent = usize::from(index == 5);
+            let sent = usize::from(index == 6);
             assert_eq!(
                 server.received_requests().await.ok_or("requests")?.len(),
                 sent
@@ -389,7 +391,7 @@ async fn provider_work_internal_retry_obeys_shared_attempt_budget() -> TestResul
             done.root_turn().ok_or("turn")?.steps[0].attempts[0]
                 .provider_work
                 .len(),
-            5
+            6
         );
     }
     Ok(())
@@ -398,7 +400,7 @@ async fn provider_work_internal_retry_obeys_shared_attempt_budget() -> TestResul
 #[tokio::test]
 async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry() -> TestResult {
     for bridge in [false, true] {
-        for index in [2, 5] {
+        for index in [2, 6] {
             let harness = WorkHarness::new("provider.work.intent", index, false);
             let (session, server, _, _) = fixture(harness.clone(), bridge).await?;
             let accepted = session.start("input", 1, input()).await?;
@@ -409,7 +411,7 @@ async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry
             tokio::time::timeout(Duration::from_secs(3), harness.seen.acquire())
                 .await??
                 .forget();
-            let sent = usize::from(index == 5);
+            let sent = usize::from(index == 6);
             assert_eq!(
                 server.received_requests().await.ok_or("requests")?.len(),
                 sent
@@ -452,7 +454,7 @@ async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry
                     .as_ref()
                     .ok_or("accounting")?
                     .pending_attempts(run.model_attempts),
-                u32::from(index == 5)
+                u32::from(index == 6)
             );
             if index == 2 {
                 assert_eq!(attempt.receipt.as_ref().ok_or("receipt")?.report.continuation.input,
@@ -467,7 +469,7 @@ async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry
 async fn provider_work_http_outcome_ack_wait_is_excluded_and_usage_survives_loss() -> TestResult {
     for bridge in [false, true] {
         for fail in [false, true] {
-            let harness = WorkHarness::new("provider.work.outcome", 5, fail);
+            let harness = WorkHarness::new("provider.work.outcome", 6, fail);
             let (session, server, _, records) = fixture(harness.clone(), bridge).await?;
             session.start("input", 1, input()).await?;
             let driver = tokio::spawn({
@@ -480,7 +482,7 @@ async fn provider_work_http_outcome_ack_wait_is_excluded_and_usage_survives_loss
             assert_eq!(server.received_requests().await.ok_or("requests")?.len(), 2);
             let held = session.snapshot().await;
             assert!(
-                held.root_turn().ok_or("turn")?.steps[0].attempts[0].provider_work[5]
+                held.root_turn().ok_or("turn")?.steps[0].attempts[0].provider_work[6]
                     .report
                     .is_none()
             );

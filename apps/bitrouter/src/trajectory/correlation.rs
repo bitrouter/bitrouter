@@ -1,6 +1,6 @@
 use anyhow::Result;
-use bitrouter_sdk::language_model::protocol::responses::decode_gateway_continuation_id;
-use bitrouter_sdk::language_model::{ApiProtocol, Prompt};
+use bitrouter_ai::protocol::responses::decode_gateway_continuation_id;
+use bitrouter_ai::types::{ApiProtocol, Prompt};
 use sha2::{Digest, Sha256};
 
 use super::canonical::{CanonicalPromptDigests, Canonicalizer};
@@ -225,7 +225,7 @@ fn protocol_name(protocol: &ApiProtocol) -> &str {
         ApiProtocol::ChatCompletions => "chat_completions",
         ApiProtocol::Messages => "messages",
         ApiProtocol::Responses => "responses",
-        ApiProtocol::GenerateContent => "generate_content",
+        ApiProtocol::Decisions => "decisions",
         ApiProtocol::Custom(name) => name,
     }
 }
@@ -245,7 +245,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use bitrouter_sdk::language_model::{ApiProtocol, GenerationParams, Message, Prompt, Role};
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{CorrelationSource, TrajectoryRuntime};
@@ -714,9 +714,7 @@ mod tests {
         let runtime_a = runtime_with_key(&db, CorrelationKey::from_bytes([21; 32])?);
         let runtime_b = runtime_with_key(&db, CorrelationKey::from_bytes([22; 32])?);
         let public_continuation_id =
-            bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id(
-                "request-root",
-            )?;
+            bitrouter_ai::protocol::responses::encode_gateway_continuation_id("request-root")?;
 
         let root = runtime_a
             .begin_request(

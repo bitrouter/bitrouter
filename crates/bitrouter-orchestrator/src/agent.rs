@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bitrouter_ai::types::ReasoningEffort;
+use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput, Usage};
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::ReasoningEffort;
-use bitrouter_sdk::language_model::{Content, Message, Role, ToolResultOutput, Usage};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -237,7 +237,7 @@ impl Agent {
         self
     }
 
-    fn declarations(&self) -> Vec<bitrouter_sdk::language_model::Tool> {
+    fn declarations(&self) -> Vec<bitrouter_ai::types::Tool> {
         let mut tools = self.tools.declarations();
         if let Some(resources) = &self.resources {
             tools.extend(
@@ -685,9 +685,17 @@ impl Agent {
                     Err(_) => break (RunStatus::BoundExceeded, "time bound reached during model request".into()),
                 }
             };
+            let bitrouter_sdk::language_model::types::PipelineOutput::Generation(result) =
+                response.result
+            else {
+                break (
+                    RunStatus::Failed,
+                    "native model turn returned a decision result".into(),
+                );
+            };
             let mut usage_unavailable = false;
             if let Some(rates) = self.config.estimate_rates {
-                match response.result.usage.as_ref() {
+                match result.usage.as_ref() {
                     Some(usage) => {
                         report.estimated_spend_microusd = report
                             .estimated_spend_microusd
@@ -703,7 +711,7 @@ impl Agent {
             }
             let assistant = Message {
                 role: Role::Assistant,
-                content: response.result.content,
+                content: result.content,
             };
             let calls: Vec<PendingCall> = assistant
                 .content
@@ -774,7 +782,7 @@ impl Agent {
                     item_id: item_id.clone(),
                     request_id: response.request_id.clone(),
                     requested_model: self.config.model.clone(),
-                    usage: response.result.usage.clone(),
+                    usage: result.usage.clone(),
                     estimated_spend_microusd: report.estimated_spend_microusd,
                     message: assistant.clone(),
                     calls: call_records.clone(),
@@ -793,7 +801,7 @@ impl Agent {
                     item_id: item_id.clone(),
                     request_id: response.request_id,
                     requested_model: self.config.model.clone(),
-                    usage: response.result.usage,
+                    usage: result.usage,
                 },
             )
             .await;

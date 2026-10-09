@@ -14,13 +14,15 @@ use bitrouter::eval::types::{
 use bitrouter::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
+use bitrouter_ai::types::AuthScheme;
+use bitrouter_ai::types::{
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
+};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::event::EventBus;
-use bitrouter_sdk::language_model::types::AuthScheme;
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams,
-    HopOutcome, ObserveHook, PipelineContext, PipelineRequest, Prompt, RoutingTarget,
-    SettlementContext, SettlementRecorder, UsageOrigin,
+    ExecutionResult, HopOutcome, ObserveHook, PipelineContext, PipelineRequest, RoutingTarget,
+    SettlementContext, SettlementRecorder,
 };
 
 fn base_lock() -> PolicyLock {
@@ -275,7 +277,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         model: "model".into(),
         caller: CallerContext::local(),
         headers: http::HeaderMap::new(),
-        prompt: Prompt {
+        input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(Prompt {
             model: "model".into(),
             system: None,
             system_provider_metadata: BTreeMap::new(),
@@ -285,7 +287,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             response_format: None,
             tool_choice: None,
             stream: false,
-        },
+        })),
         inbound_protocol: Some(ApiProtocol::Responses),
     });
     context.emit(invocation.clone());
@@ -294,7 +296,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         provider_id: "provider".into(),
         model_id: "model".into(),
         account_label: None,
-        result: GenerateResult {
+        result: (GenerateResult {
             content: vec![Content::ToolCall {
                 id: "call-1".into(),
                 name: "apply_patch".into(),
@@ -308,7 +310,8 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             response_id: None,
             stop_details: None,
             provider_metadata: BTreeMap::new(),
-        },
+        })
+        .into(),
         request_duration_ms: 1,
         upstream_duration_ms: Some(1),
         server_tool_calls: Vec::new(),
@@ -325,6 +328,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
                 chat_token_limit_field: None,
                 chat_supports_store: None,
                 chat_supports_stream_options: None,
+                chat_google_extensions: false,
                 reasoning_effort: None,
                 model_constraints: Default::default(),
                 account_label: None,
@@ -336,12 +340,9 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             HopOutcome::Generated(&execution),
         )
         .await;
-    let recorder = EvalSettlementRecorder::new(
-        store.clone(),
-        pending,
-        std::sync::Arc::new(bitrouter::metering::PricingTable::new()),
-    );
+    let recorder = EvalSettlementRecorder::new(store.clone(), pending);
     let mut settlement = SettlementContext {
+        operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: "request-observed".into(),
         caller: CallerContext::local(),
         target: None,

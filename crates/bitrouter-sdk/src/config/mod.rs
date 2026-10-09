@@ -25,11 +25,10 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{BitrouterError, Result};
-use crate::language_model::HttpTimeouts;
 use crate::language_model::routing::SortOrder;
-use crate::language_model::types::{
-    ApiProtocol, ModelCompatibility, OutboundHeaderRule, ProtocolList,
-};
+use crate::language_model::types::OutboundHeaderRule;
+use bitrouter_ai::client::HttpTimeouts;
+use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
 pub mod checker;
 pub mod pattern;
@@ -190,6 +189,54 @@ impl Config {
     /// before activation. Config-backed routing also runs it at first
     /// resolution so infallible table constructors cannot bypass validation.
     pub fn validate_router_config(&self) -> Result<()> {
+        for (name, provider) in &self.providers {
+            if !provider.active {
+                continue;
+            }
+            if let Some(message) = bitrouter_ai::providers::retired::provider_message(name) {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}: {message}"
+                )));
+            }
+            if let Some(protocol) = provider
+                .api_protocol
+                .values()
+                .flat_map(|list| list.as_slice())
+                .find(|protocol| {
+                    bitrouter_ai::providers::retired::protocol_message(protocol.as_str()).is_some()
+                })
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}.api_protocol: retired protocol '{protocol}'; select Chat Completions and a verified endpoint explicitly"
+                )));
+            }
+            for (index, model) in provider.models.iter().enumerate() {
+                if let Some(protocol) = model.api_protocol.as_ref().and_then(|list| {
+                    list.as_slice().iter().find(|protocol| {
+                        bitrouter_ai::providers::retired::protocol_message(protocol.as_str())
+                            .is_some()
+                    })
+                }) {
+                    return Err(BitrouterError::bad_request(format!(
+                        "providers.{name}.models[{index}].api_protocol: retired protocol '{protocol}'; select Chat Completions and a verified endpoint explicitly"
+                    )));
+                }
+            }
+            if provider.api_protocol.is_empty()
+                && (provider.models.is_empty()
+                    || provider
+                        .models
+                        .iter()
+                        .any(|model| model.api_protocol.is_none()))
+                && let Some(message) = bitrouter_ai::providers::retired::protocol_message(
+                    infer_protocol(&provider.api_base).as_str(),
+                )
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}.api_base: {message}"
+                )));
+            }
+        }
         router::validate_router_config(self)
     }
 
@@ -197,6 +244,11 @@ impl Config {
     /// preset compatibility syntax.
     pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
         self.validate_router_config()?;
+        if let Some((provider, _)) = raw_model.split_once(':')
+            && let Some(message) = bitrouter_ai::providers::retired::provider_message(provider)
+        {
+            return Err(BitrouterError::bad_request(message));
+        }
         presets::resolve_routers(
             raw_model,
             &self.routers,
@@ -455,7 +507,7 @@ impl PolicyRuntimeMode {
 
 /// Default base URL for the public registry distribution artifacts — the raw
 /// files on bitrouter OSS `main` under `dist/registry/`. The
-/// `bitrouter-providers` fetch layer reads it through [`RegistryConfig`].
+/// application catalog integration reads it through [`RegistryConfig`].
 pub const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry";
 
@@ -507,7 +559,7 @@ pub enum PolicyModelTarget {
         /// Canonical or provider-qualified model id.
         model: String,
         /// Exact effort value owned by this policy target.
-        effort: crate::language_model::types::ReasoningEffort,
+        effort: bitrouter_ai::types::ReasoningEffort,
     },
 }
 
@@ -520,7 +572,7 @@ impl PolicyModelTarget {
     }
 
     /// Policy-owned reasoning effort, when explicitly configured.
-    pub fn effort(&self) -> Option<crate::language_model::types::ReasoningEffort> {
+    pub fn effort(&self) -> Option<bitrouter_ai::types::ReasoningEffort> {
         match self {
             Self::Model(_) => None,
             Self::ModelEffort { effort, .. } => Some(*effort),
@@ -1007,6 +1059,9 @@ pub struct ServerConfig {
     /// a synthesised local caller. Code default is **`false`** — only the
     /// config file produced by `bro init` writes `true`.
     pub skip_auth: bool,
+    /// Deny dispatch when any routed tariff cannot guarantee complete known-price
+    /// coverage. Decisions caching remains unverified and fails this admission.
+    pub require_known_pricing: bool,
 }
 
 impl Default for ServerConfig {
@@ -1016,6 +1071,7 @@ impl Default for ServerConfig {
             control_socket: "./bitrouter.sock".to_string(),
             log_level: "info".to_string(),
             skip_auth: false,
+            require_known_pricing: false,
         }
     }
 }
@@ -1128,6 +1184,10 @@ pub struct RateLimit {
 /// [`context_tiers`]: PricingConfig::context_tiers
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct PricingConfig {
+    /// Published tariff's processing profile. A mismatch with the effective
+    /// endpoint makes application price evidence unavailable.
+    #[serde(default)]
+    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
     /// Micro-USD per uncached prompt token (base bracket). `None` means the
     /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]
@@ -1426,7 +1486,7 @@ impl ProviderConfig {
     pub fn model_supports_capability(
         &self,
         model_id: &str,
-        capability: crate::language_model::types::Capability,
+        capability: bitrouter_ai::types::Capability,
     ) -> bool {
         self.model_config(model_id)
             .is_some_and(|model| model.capabilities.contains(&capability))
@@ -1496,8 +1556,13 @@ pub fn infer_protocol(api_base: &str) -> ApiProtocol {
     let host = api_base.to_ascii_lowercase();
     if host.contains("anthropic.com") {
         ApiProtocol::Messages
-    } else if host.contains("googleapis.com") || host.contains("generativelanguage") {
-        ApiProtocol::GenerateContent
+    } else if (host.contains("generativelanguage.googleapis.com")
+        && !host.trim_end_matches('/').ends_with("/openai"))
+        || (host.contains("aiplatform.googleapis.com") && host.contains("publishers/google"))
+    {
+        // A historical native base needs explicit migration rather than an
+        // invented Chat endpoint. The retired identifier remains provenance.
+        ApiProtocol::Custom("generate_content".into())
     } else {
         ApiProtocol::ChatCompletions
     }
@@ -1528,12 +1593,17 @@ pub struct ProviderModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
+    /// Independent complete tariffs by outbound wire. Missing buckets never inherit
+    /// ordinary generation rates; Decisions requires its own tariff.
+    #[serde(default)]
+    pub pricing_by_protocol: HashMap<ApiProtocol, PricingConfig>,
+
     /// Features this concrete provider/model route explicitly advertises.
     /// An empty list means unknown, not unsupported. Runtime routing preserves
     /// legacy unknown entries; policy code that grants a capability-specific
     /// exception requires a positive declaration.
     #[serde(default)]
-    pub capabilities: Vec<crate::language_model::types::Capability>,
+    pub capabilities: Vec<bitrouter_ai::types::Capability>,
     /// Concrete route token limits. Missing fields remain unknown. In
     /// particular, an input limit does not imply a combined context window.
     #[serde(default)]
@@ -1546,10 +1616,23 @@ pub struct ProviderModel {
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
-    pub reasoning_effort: Option<crate::language_model::types::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<bitrouter_ai::types::ReasoningEffortConfig>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
+}
+
+impl ProviderModel {
+    /// Exact wire override, otherwise ordinary pricing for generation only.
+    pub fn pricing_for(&self, protocol: &ApiProtocol) -> Option<&PricingConfig> {
+        self.pricing_by_protocol.get(protocol).or_else(|| {
+            if protocol.operation() == bitrouter_ai::types::ModelOperation::Generation {
+                self.pricing.as_ref()
+            } else {
+                None
+            }
+        })
+    }
 }
 
 /// An explicit virtual-model definition (Strategy 2).
@@ -1795,7 +1878,7 @@ fn overrides() -> &'static std::sync::RwLock<std::collections::HashMap<String, S
 
 /// Replace the in-memory override map atomically. Subsequent
 /// [`env_lookup`] / [`substitute_env`] calls — and
-/// `bitrouter_providers::zero_config`, which resolves through
+/// the application's `providers::apply::zero_config`, which resolves through
 /// `env_lookup` — see the new values. Empty map clears all overrides.
 pub fn set_env_overrides(values: std::collections::HashMap<String, String>) {
     let mut w = overrides().write().expect("env override lock poisoned");
@@ -1850,7 +1933,7 @@ where
             if let Some(reasoning_effort) = &model.reasoning_effort {
                 if !model
                     .capabilities
-                    .contains(&crate::language_model::types::Capability::Reasoning)
+                    .contains(&bitrouter_ai::types::Capability::Reasoning)
                 {
                     return Err(BitrouterError::bad_request(format!(
                         "provider '{id}' model '{}' reasoning_effort requires the reasoning capability",
@@ -2119,13 +2202,17 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// connect window (minutes). Discovery is best-effort; a 5s overall cap is
 /// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {
+    if let Err(error) = config.validate_router_config() {
+        tracing::warn!(%error, "invalid configuration; model discovery skipped");
+        return;
+    }
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     for (provider_id, provider) in config.providers.iter_mut() {
-        if !provider.auto_discover || !provider.models.is_empty() {
+        if !provider.active || !provider.auto_discover || !provider.models.is_empty() {
             continue;
         }
         let url = format!("{}/models", provider.api_base.trim_end_matches('/'));
@@ -2160,6 +2247,7 @@ pub async fn discover_models(config: &mut Config) {
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,
+                        pricing_by_protocol: HashMap::new(),
                         capabilities: Vec::new(),
                         token_limits: Default::default(),
                         input_token_counting: None,

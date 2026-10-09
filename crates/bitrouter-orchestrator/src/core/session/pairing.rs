@@ -1,7 +1,7 @@
 //! Canonical tool/history pairing, shared by execution and capacity projection.
 
 use super::*;
-use bitrouter_sdk::language_model::types::ToolResultOutput;
+use bitrouter_ai::types::ToolResultOutput;
 
 pub(super) fn consume(agent: &mut AgentState) -> Result<(), CoreError> {
     let turn = agent

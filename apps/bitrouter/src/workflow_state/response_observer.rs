@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
+use bitrouter_ai::types::{Content, StreamPart, Tool};
 use bitrouter_sdk::language_model::{
-    Content, HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome, RoutingTarget,
-    StreamContext, StreamInterest, StreamPart, Tool,
+    HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome, RoutingTarget, StreamContext,
+    StreamInterest,
 };
 use sha2::{Digest, Sha256};
 
@@ -138,8 +139,10 @@ impl PredictiveResponseObserver {
         if invocation.owner_user_id() != context.caller().user_id() {
             return;
         }
-        let definitions = context
-            .prompt()
+        let Some(prompt) = context.generation_prompt() else {
+            return;
+        };
+        let definitions = prompt
             .tools
             .iter()
             .take(MAX_TOOL_DEFINITIONS)
@@ -219,8 +222,10 @@ impl ObserveHook for PredictiveResponseObserver {
         if let HopOutcome::Generated(result) = outcome
             && let Some(invocation) = context.extension::<EvalInvocation>()
             && invocation.owner_user_id() == context.caller().user_id()
+            && let Some(generation) = result.result.generation()
+            && let Some(prompt) = context.generation_prompt()
         {
-            let observation = classify_content(&result.result.content, &context.prompt().tools);
+            let observation = classify_content(&generation.content, &prompt.tools);
             self.pending
                 .observe(&invocation, context.caller().user_id(), observation);
             self.clear_stream(&invocation);
@@ -1054,12 +1059,14 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, PoisonError};
 
+    use bitrouter_ai::types::AuthScheme;
+    use bitrouter_ai::types::{
+        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, StreamPart, Tool,
+    };
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::types::AuthScheme;
     use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams,
-        HopOutcome, ObserveHook, Phase, PipelineContext, PipelineRequest, RequestOutcome,
-        RoutingTarget, StreamPart, StreamProcessor, Tool,
+        ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, PipelineRequest,
+        RequestOutcome, RoutingTarget, StreamProcessor,
     };
 
     use super::{ObservedActionClass, PredictiveResponseObserver};
@@ -1076,6 +1083,7 @@ mod tests {
                 vec![Content::Reasoning {
                     text: "consider the tradeoffs".into(),
                     provider_metadata: BTreeMap::new(),
+                    native: None,
                 }],
                 Vec::new(),
                 ObservedActionClass::ReasonOrPlan,
@@ -1184,7 +1192,7 @@ mod tests {
         let original_prompt = prompt.clone();
         let context = pipeline_context("stream-fragments", prompt, &invocation);
         observer.after_phase(Phase::Route, &context).await;
-        assert_eq!(context.prompt(), &original_prompt);
+        assert_eq!(context.require_generation_prompt()?, &original_prompt);
         let mut processor = StreamProcessor::new(
             Vec::new(),
             vec![Arc::new(observer.clone())],
@@ -2000,14 +2008,15 @@ mod tests {
             provider_id: "provider".into(),
             model_id: "model".into(),
             account_label: None,
-            result: GenerateResult {
+            result: (GenerateResult {
                 content,
                 usage: None,
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,
                 stop_details: None,
                 provider_metadata: BTreeMap::new(),
-            },
+            })
+            .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
             server_tool_calls: Vec::new(),
@@ -2180,7 +2189,7 @@ mod tests {
 
     fn pipeline_context(
         request_id: &str,
-        prompt: bitrouter_sdk::language_model::Prompt,
+        prompt: bitrouter_ai::types::Prompt,
         invocation: &EvalInvocation,
     ) -> PipelineContext {
         pipeline_context_for(request_id, CallerContext::local(), prompt, invocation)
@@ -2189,7 +2198,7 @@ mod tests {
     fn pipeline_context_for(
         request_id: &str,
         caller: CallerContext,
-        prompt: bitrouter_sdk::language_model::Prompt,
+        prompt: bitrouter_ai::types::Prompt,
         invocation: &EvalInvocation,
     ) -> PipelineContext {
         let mut context = PipelineContext::new(PipelineRequest {
@@ -2198,7 +2207,9 @@ mod tests {
             model: "model".into(),
             caller,
             headers: http::HeaderMap::new(),
-            prompt,
+            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
+                prompt,
+            )),
             inbound_protocol: Some(ApiProtocol::Responses),
         });
         context.emit(invocation.clone());
@@ -2206,8 +2217,8 @@ mod tests {
         context
     }
 
-    fn prompt(tools: Vec<Tool>) -> bitrouter_sdk::language_model::Prompt {
-        bitrouter_sdk::language_model::Prompt {
+    fn prompt(tools: Vec<Tool>) -> bitrouter_ai::types::Prompt {
+        bitrouter_ai::types::Prompt {
             model: "model".into(),
             system: None,
             system_provider_metadata: BTreeMap::new(),
@@ -2251,6 +2262,7 @@ mod tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: None,

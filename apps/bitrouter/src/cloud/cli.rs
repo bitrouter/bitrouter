@@ -23,8 +23,9 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::{Subcommand, ValueEnum};
 
-use bitrouter_providers::hosted::account::credentials::{CredentialKind, StoredCredential};
-use bitrouter_providers::hosted::account::manager::CredentialManager;
+use bitrouter_ai::providers::hosted::credentials::{CredentialKind, StoredCredential};
+
+use crate::cloud::account::manager::CredentialManager;
 
 use super::api::ApiArgs;
 use super::auth::{LoginInputs, login, logout};

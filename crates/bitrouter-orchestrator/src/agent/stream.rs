@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::language_model::{
-    Content, FinishReason, GenerateResult, Message, PipelineResponse, Prompt, Role, StreamPart,
-    Usage,
+use bitrouter_ai::types::{
+    Content, FinishReason, GenerateResult, Message, Prompt, Role, StreamPart, Usage,
 };
+use bitrouter_sdk::language_model::PipelineResponse;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
@@ -40,7 +40,7 @@ impl StreamCollector {
         events: Option<&mpsc::Sender<RunEvent>>,
     ) -> Result<(), String> {
         let incoming = match &part {
-            StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text } => text.len(),
+            StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text, .. } => text.len(),
             StreamPart::ToolCallDelta { arguments, .. } => arguments.len(),
             _ => 0,
         };
@@ -76,49 +76,46 @@ impl StreamCollector {
             }
             StreamPart::TextEnd { .. } => {}
             StreamPart::ReasoningStart { .. } => self.content.push(Content::Reasoning {
+                native: None,
                 text: String::new(),
                 provider_metadata: Default::default(),
             }),
-            StreamPart::ReasoningDelta { text } => {
+            StreamPart::ReasoningDelta { text, .. } => {
                 self.content_bytes = self.content_bytes.saturating_add(text.len());
                 if let Some(Content::Reasoning { text: current, .. }) = self.content.last_mut() {
                     current.push_str(&text);
                 } else {
                     self.content.push(Content::Reasoning {
+                        native: None,
                         text,
                         provider_metadata: Default::default(),
                     });
                 }
             }
-            StreamPart::ReasoningEnd { signature, .. } => {
-                if let Some(signature) = signature
-                    && let Some(Content::Reasoning {
-                        provider_metadata, ..
-                    }) = self.content.last_mut()
+            StreamPart::ReasoningEnd {
+                signature, native, ..
+            } => {
+                if let Some(Content::Reasoning {
+                    provider_metadata,
+                    native: retained,
+                    ..
+                }) = self.content.last_mut()
                 {
-                    provider_metadata.insert(
-                        "anthropic".into(),
-                        serde_json::json!({"signature": signature}),
-                    );
+                    *retained = native;
+                    if let Some(signature) = signature {
+                        provider_metadata.insert(
+                            "anthropic".into(),
+                            serde_json::json!({"signature": signature}),
+                        );
+                    }
                 }
             }
             StreamPart::ToolCallDelta {
-                mut id,
+                id,
                 name,
                 arguments,
                 provider_metadata,
             } => {
-                // Gemini sends complete calls with optional provider IDs.
-                // Assign each ID-less frame its own identity before collecting
-                // it; other protocols still require provider correlation IDs.
-                if id.is_empty()
-                    && provider_metadata
-                        .get("google")
-                        .and_then(|metadata| metadata.get("functionCallId"))
-                        == Some(&serde_json::Value::Null)
-                {
-                    id = uuid::Uuid::new_v4().to_string();
-                }
                 self.content_bytes = self.content_bytes.saturating_add(arguments.len());
                 if let Some(index) = self.tool_indices.get(&id)
                     && name.is_some()
@@ -224,7 +221,7 @@ impl StreamCollector {
         content.retain(|part| {
             !matches!(
                 part,
-                Content::Text { text, .. } | Content::Reasoning { text, .. } if text.is_empty()
+                Content::Text { text, .. } | Content::Reasoning { text, native: None, .. } if text.is_empty()
             )
         });
         Ok(PipelineResponse {
@@ -236,7 +233,8 @@ impl StreamCollector {
                 response_id: self.response_id.clone(),
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            }
+            .into(),
         })
     }
 }

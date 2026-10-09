@@ -3,8 +3,8 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use bitrouter_sdk::language_model::UsageOrigin;
-use bitrouter_sdk::language_model::types::ReasoningEffort;
+use bitrouter_ai::types::ReasoningEffort;
+use bitrouter_ai::types::UsageOrigin;
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 

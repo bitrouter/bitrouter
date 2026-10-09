@@ -2,7 +2,7 @@
 //! held only for synchronous state changes/spawn, never database or worker I/O.
 use std::sync::Mutex;
 
-use bitrouter_sdk::language_model::Prompt;
+use bitrouter_ai::types::Prompt;
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub(crate) struct ModelBoundary {

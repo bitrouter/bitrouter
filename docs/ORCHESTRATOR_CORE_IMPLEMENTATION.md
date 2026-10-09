@@ -17,6 +17,22 @@ mock-provider demonstration does not establish production integration.
   dependency branches or treat their historical validation as this change's
   evidence.
 
+## Current model integration boundary
+
+The stack now integrates main `f252013c`, including `bitrouter-ai` and the
+first-class Decisions operation. Canonical generation/auth/protocol types live
+in `bitrouter-ai`; the SDK retains routing, bounded native execution and durable
+provider-work accounting. Managed Responses and ordinary Decisions keep separate
+operation contracts and authentication/settlement paths.
+
+Managed reasoning replay requires host-validated history, target and credential
+bindings. Ordinary conversion retains its strict admission rules. Failed native
+tool results use an explicit model-facing JSON error envelope before prompt
+commitment and counting; the journal retains the original typed result.
+Context reconstruction revalidates the frozen route's tariff snapshots without
+refreshing prices. Native cost evidence uses the actual admitted protocol and
+endpoint snapshot rather than a later provider/model-only lookup.
+
 ## Work plan
 
 | Stage | Work | Status / evidence |

@@ -29,9 +29,13 @@ pub mod reader;
 pub mod reconciliation;
 pub mod recorder;
 pub mod store;
+pub mod tariff;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod decisions_tests;
 
 pub use db::{ReconciliationStatus, RequestMetric};
 pub use pricing::{

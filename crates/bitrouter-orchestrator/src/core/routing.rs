@@ -1,8 +1,8 @@
 //! Immutable context evidence and model-step routing records. Estimates are
 //! distinct from observed usage; unknown token capacity is never a verified fit.
 
+use bitrouter_ai::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
 use bitrouter_sdk::language_model::native::{NativeAttemptReport, NativeInputCount, NativePlan};
-use bitrouter_sdk::language_model::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
 use serde::{Deserialize, Serialize};
 
 use super::checkpoint::sha256;

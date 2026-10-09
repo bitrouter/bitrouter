@@ -42,6 +42,7 @@ mod tests {
 
     fn input(fragments: &[&str]) -> Input {
         Input {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             content: fragments
                 .iter()
                 .map(|text| ContentFragment {

@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
+use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_sdk::Result as BitrouterResult;
 use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::types::ReasoningEffort;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, Usage};
+use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use uuid::Uuid;
@@ -17,7 +17,6 @@ use super::types::{
     EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject, EvidenceItem,
     RouteDecisionMeasurement, canonical_digest, evidence_digest,
 };
-use crate::metering::{PricingTable, calculate_charge_micro_usd};
 use crate::workflow_state::predictive::TaskFamily;
 use crate::workflow_state::predictive::is_task_family_reason_code;
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
@@ -524,20 +523,14 @@ impl PendingEvalDecisionStore {
 pub struct EvalSettlementRecorder {
     store: EvalStore,
     pending: PendingEvalDecisionStore,
-    pricing: Arc<PricingTable>,
     trajectory: Option<crate::trajectory::settlement::TrajectorySettlementRecorder>,
 }
 
 impl EvalSettlementRecorder {
-    pub fn new(
-        store: EvalStore,
-        pending: PendingEvalDecisionStore,
-        pricing: Arc<PricingTable>,
-    ) -> Self {
+    pub fn new(store: EvalStore, pending: PendingEvalDecisionStore) -> Self {
         Self {
             store,
             pending,
-            pricing,
             trajectory: None,
         }
     }
@@ -586,22 +579,14 @@ impl EvalSettlementRecorder {
             attributes.insert("reasoning_effort".into(), effort.to_string());
         }
         attributes.extend(decision.observation_snapshot().attributes());
-        let usage = Usage {
-            prompt_tokens: context.prompt_tokens,
-            completion_tokens: context.completion_tokens,
-            reasoning_tokens: context.reasoning_tokens,
-            cache_read_tokens: context.cache_read_tokens,
-            cache_write_tokens: context.cache_write_tokens,
-            web_search_count: context.web_search_count,
-            origin: context.usage_origin,
-            raw: None,
-        };
-        if let Some(pricing) = self
-            .pricing
-            .resolve(&context.provider_id, &context.model_id)
-            && let Some(cost) = calculate_charge_micro_usd(&usage, &pricing)
-        {
+        let charge = crate::metering::tariff::settlement_charge_evidence(context);
+        if let Some(cost) = charge.charge_micro_usd {
             attributes.insert("cost_micro_usd".into(), cost.to_string());
+        }
+        if let Some(snapshot) = &charge.tariff_snapshot {
+            attributes.insert("outbound_protocol".into(), snapshot.protocol.to_string());
+            attributes.insert("tariff_profile".into(), snapshot.endpoint_profile.clone());
+            attributes.insert("pricing_version".into(), snapshot.pricing_version.clone());
         }
         let evidence = vec![EvidenceItem {
             evidence_id: "request-outcome".into(),
@@ -708,12 +693,12 @@ impl SettlementRecorder for EvalSettlementRecorder {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::sync::Arc;
 
+    use bitrouter_ai::types::ReasoningEffort;
+    use bitrouter_ai::types::UsageOrigin;
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::types::ReasoningEffort;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
+    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{
@@ -722,7 +707,6 @@ mod tests {
     };
     use crate::eval::store::EvalStore;
     use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
-    use crate::metering::PricingTable;
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -810,11 +794,7 @@ mod tests {
                 observed_at: "2026-08-08T00:00:00Z".into(),
             },
         );
-        let recorder = EvalSettlementRecorder::new(
-            store.clone(),
-            pending.clone(),
-            Arc::new(PricingTable::new()),
-        );
+        let recorder = EvalSettlementRecorder::new(store.clone(), pending.clone());
         let mut context = settlement_context_with(&invocation);
         context.reasoning_effort = Some(ReasoningEffort::Low);
 
@@ -952,11 +932,7 @@ mod tests {
                 .to_owned(),
         ))
         .await?;
-        let recorder = EvalSettlementRecorder::new(
-            store.clone(),
-            pending.clone(),
-            Arc::new(PricingTable::new()),
-        );
+        let recorder = EvalSettlementRecorder::new(store.clone(), pending.clone());
         let mut context = settlement_context_with(&invocation);
 
         assert!(recorder.record(&mut context).await.is_err());
@@ -978,11 +954,8 @@ mod tests {
     async fn request_subject_digest_is_stable_across_storage_retries() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let recorder = EvalSettlementRecorder::new(
-            EvalStore::new(db),
-            PendingEvalDecisionStore::default(),
-            Arc::new(PricingTable::new()),
-        );
+        let recorder =
+            EvalSettlementRecorder::new(EvalStore::new(db), PendingEvalDecisionStore::default());
         let decision = PendingEvalDecision {
             request_id: "request-1".into(),
             decision_id: "decision-1".into(),
@@ -1086,6 +1059,7 @@ mod tests {
 
     fn settlement_context() -> SettlementContext {
         SettlementContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: "request-1".into(),
             caller: CallerContext::local(),
             target: None,
@@ -1114,6 +1088,94 @@ mod tests {
             error: None,
             events: EventBus::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn native_subject_uses_the_same_admitted_tariff_as_metering() -> anyhow::Result<()> {
+        use crate::metering::pricing::{ModelPricing, PricingTable};
+        use bitrouter_ai::types::{ApiProtocol, ModelOperation};
+        use bitrouter_sdk::language_model::types::RoutingTarget;
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let recorder =
+            EvalSettlementRecorder::new(EvalStore::new(db), PendingEvalDecisionStore::default());
+        let mut context = settlement_context();
+        context.operation = ModelOperation::Decisions;
+        context.completion_tokens = 0;
+        context.target = Some(RoutingTarget {
+            model_constraints: Default::default(),
+            provider_name: context.provider_id.clone(),
+            service_id: context.model_id.clone(),
+            api_protocol: ApiProtocol::Decisions,
+            api_base: "https://fixture.invalid/v1".into(),
+            api_key: String::new(),
+            api_key_override: None,
+            api_base_override: None,
+            account_label: None,
+            auth_scheme: Default::default(),
+            headers: Vec::new(),
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            chat_google_extensions: false,
+            reasoning_effort: None,
+        });
+        let target = context
+            .target
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing target"))?;
+        let mut table = PricingTable::new();
+        table.configure_endpoint(&target.provider_name, None, &target.api_base);
+        table.insert_for_protocol(
+            &target.provider_name,
+            &target.service_id,
+            ApiProtocol::Decisions,
+            ModelPricing::cache_aware(Some(0.1), Some(0.0), Some(0.0), Some(0.0)),
+        );
+        let snapshot = table.snapshot(target);
+        context.emit(snapshot.clone());
+        table.insert_for_protocol(
+            "provider",
+            "model",
+            ApiProtocol::Decisions,
+            ModelPricing::new(100.0, 100.0),
+        );
+        let metering = crate::metering::tariff::settlement_charge_evidence(&context);
+        let subject = recorder.subject(&test_decision("request-1"), &context)?;
+        let attributes = &subject
+            .evidence
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing outcome"))?
+            .attributes;
+        assert_eq!(metering.charge_micro_usd, Some(1));
+        assert_eq!(
+            attributes.get("cost_micro_usd").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            attributes.get("outbound_protocol").map(String::as_str),
+            Some("decisions")
+        );
+        assert_eq!(
+            attributes.get("pricing_version"),
+            Some(&snapshot.tariff.pricing_version)
+        );
+        context.cache_read_tokens = 4;
+        let gated = recorder.subject(&test_decision("request-1"), &context)?;
+        assert!(
+            !gated
+                .evidence
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("missing outcome"))?
+                .attributes
+                .contains_key("cost_micro_usd")
+        );
+        assert!(
+            crate::metering::tariff::settlement_charge_evidence(&context)
+                .charge_micro_usd
+                .is_none()
+        );
+        Ok(())
     }
 
     fn settlement_context_with(invocation: &EvalInvocation) -> SettlementContext {

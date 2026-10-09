@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
-use bitrouter_sdk::language_model::types::{Content, Message, Role};
+use bitrouter_ai::types::{Content, Message, Role};
 use sha2::{Digest, Sha256};
 
 use crate::workflow_state::extractors::{ExtractorInput, adapter_session_hints};
@@ -346,10 +346,8 @@ fn resolved(
 
 #[cfg(test)]
 mod tests {
+    use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
     use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::language_model::types::{
-        GenerationParams, Message, Prompt, ProviderMetadata, Role,
-    };
     use http::HeaderValue;
 
     use crate::workflow_state::extractors::ExtractorInput;

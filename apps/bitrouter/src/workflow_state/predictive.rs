@@ -3,8 +3,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use bitrouter_ai::types::{Content, Prompt, Role};
 use bitrouter_sdk::config::parse_agent_route_key;
-use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
 use crate::workflow_state::extractors::terminus_2::{
@@ -1636,7 +1636,7 @@ fn epoch_route_risk(
     }
 }
 
-fn message_text(message: &bitrouter_sdk::language_model::types::Message) -> Option<String> {
+fn message_text(message: &bitrouter_ai::types::Message) -> Option<String> {
     let text = message
         .content
         .iter()
@@ -1854,15 +1854,12 @@ pub(crate) fn has_complete_visible_causal_history(prompt: &Prompt) -> bool {
 
 pub(crate) fn authenticated_visible_causal_prefix(
     prompt: &Prompt,
-    expected: &bitrouter_sdk::language_model::protocol::responses::CausalPrefixCommitment,
+    expected: &bitrouter_ai::protocol::responses::CausalPrefixCommitment,
 ) -> Option<usize> {
     if !has_complete_visible_causal_history(prompt) {
         return None;
     }
-    bitrouter_sdk::language_model::protocol::responses::find_unique_causal_prefix(
-        &prompt.messages,
-        expected,
-    )
+    bitrouter_ai::protocol::responses::find_unique_causal_prefix(&prompt.messages, expected)
 }
 
 fn bounded_signal_count(count: u8) -> u8 {
@@ -2035,10 +2032,10 @@ fn unknown_prediction(
 mod tests {
     use super::*;
 
-    use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::language_model::types::{
+    use bitrouter_ai::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
     };
+    use bitrouter_sdk::HeaderMap;
     use sha2::{Digest, Sha256};
 
     use crate::workflow_state::extractors::generic::GenericPromptExtractor;
@@ -2569,9 +2566,7 @@ mod tests {
 
     #[test]
     fn authenticated_parent_requires_one_exact_last_assistant_turn() -> anyhow::Result<()> {
-        use bitrouter_sdk::language_model::protocol::responses::{
-            assistant_turn_commitment, extend_causal_prefix,
-        };
+        use bitrouter_ai::protocol::responses::{assistant_turn_commitment, extend_causal_prefix};
 
         let opening = Message::text(Role::User, "opening");
         let parent = Message::text(Role::Assistant, "the exact parent response");

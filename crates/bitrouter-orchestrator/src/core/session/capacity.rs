@@ -891,10 +891,9 @@ mod tests {
         let context = ContextManifest::capture(&state, "child", &prompt)?;
         // Retain the version-2 arithmetic fixture; live tests use the current policy.
         let bound = limits.checkpoint_bytes / (8 * (u64::from(limits.active_models) + 1));
-        let mut result: bitrouter_sdk::language_model::types::GenerateResult =
-            serde_json::from_value(json!({
-                "content":[],"finish_reason":"stop","provider_metadata":{}
-            }))?;
+        let mut result: bitrouter_ai::types::GenerateResult = serde_json::from_value(json!({
+            "content":[],"finish_reason":"stop","provider_metadata":{}
+        }))?;
         let empty = Message::text(Role::Assistant, "");
         result.content = empty.content;
         let padding = bound
@@ -1011,7 +1010,7 @@ mod tests {
             assert_eq!(root.history.len(), 3);
             for message in &root.history[1..] {
                 let Content::ToolResult {
-                    output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value },
+                    output: bitrouter_ai::types::ToolResultOutput::Text { value },
                     ..
                 } = &message.content[0]
                 else {

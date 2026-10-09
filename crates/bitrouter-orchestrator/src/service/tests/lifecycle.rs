@@ -276,7 +276,7 @@ async fn configured_verification_records_exit_status_and_controls_outcome()
         .ok_or("executable missing")?;
     assert!(stored.records.iter().any(|record| matches!(turn_fact(record),
         ExecutionRecord::ModelRequest { prompt, .. } if prompt.tools.iter().any(|tool|
-            matches!(tool, bitrouter_sdk::language_model::Tool::Function { name, description: Some(description), .. }
+            matches!(tool, bitrouter_ai::types::Tool::Function { name, description: Some(description), .. }
                 if name == "shell" && description.contains(executable))))));
     assert_eq!(
         passed
