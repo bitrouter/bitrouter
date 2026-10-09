@@ -12,18 +12,11 @@ rate_limits:
   - "*":
       requests_per_minute: 60
 models:
-  - id: z-ai/glm-5.1
-    provider_model_id: glm-5.1
-    capabilities:
-      - reasoning
-      - tools
   - id: z-ai/glm-5.2
     provider_model_id: glm-5.2
     capabilities:
       - reasoning
       - tools
-  - id: z-ai/glm-4.7
-    provider_model_id: glm-4.7
   - id: z-ai/glm-5.3
     provider_model_id: glm-5.3
   - id: z-ai/glm-5.3-flash

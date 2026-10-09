@@ -711,6 +711,10 @@ fn apply_model_discovery_plan(
     }
 
     if !plan.removals.is_empty() {
+        let empty_models = Regex::new(r"(?m)^(models:)([ \t]*(?:#[^\r\n]*)?\r?)$")?;
+        let active_status = Regex::new(
+            r#"(?m)^(status:[ \t]*)(?:active|'active'|"active")([ \t]*(?:#[^\r\n]*)?\r?)$"#,
+        )?;
         for provider in &loaded.providers {
             if !provider
                 .data
@@ -722,7 +726,7 @@ fn apply_model_discovery_plan(
             }
             let raw = fs::read_to_string(&provider.path)
                 .with_context(|| format!("reading {}", provider.path.display()))?;
-            let updated = remove_provider_model_items(&raw, &plan.removals)?;
+            let mut updated = remove_provider_model_items(&raw, &plan.removals)?;
             let parsed: ProviderFile = serde_saphyr::from_str(&updated)
                 .with_context(|| format!("validating updated {}", provider.path.display()))?;
             if parsed
@@ -734,6 +738,23 @@ fn apply_model_discovery_plan(
                     "failed to remove expired model from {}",
                     provider.path.display()
                 );
+            }
+            if parsed.models.is_empty() {
+                updated = empty_models.replace(&updated, "${1} []${2}").into_owned();
+            }
+            if has_invalid_empty_models(&parsed) {
+                // Feed-backed and local-auth providers may discover models later.
+                // Static providers must stop routing when their last model retires.
+                if !active_status.is_match(&updated) {
+                    bail!(
+                        "cannot suspend empty provider in {}",
+                        provider.path.display()
+                    );
+                }
+                updated = active_status
+                    .replace(&updated, "${1}suspended${2}")
+                    .into_owned();
+                println!("  ! {} suspended: no models remain", parsed.name);
             }
             fs::write(&provider.path, updated)
                 .with_context(|| format!("writing {}", provider.path.display()))?;
@@ -2290,11 +2311,7 @@ fn validate_provider<'a>(
     validate_auth(data.auth.as_ref(), &file, issues);
     validate_auto_sync(data.auto_sync.as_ref(), &file, issues);
 
-    if data.status == EntryStatus::Active
-        && data.models.is_empty()
-        && data.auto_sync.is_none()
-        && !matches!(data.access, Access::LocalOauth | Access::LocalPkce)
-    {
+    if has_invalid_empty_models(data) {
         issues.push(format!(
             "{file}: provider '{}' is active but declares no models",
             data.name
@@ -2395,6 +2412,13 @@ fn validate_provider<'a>(
             }
         }
     }
+}
+
+fn has_invalid_empty_models(data: &ProviderFile) -> bool {
+    data.status == EntryStatus::Active
+        && data.models.is_empty()
+        && data.auto_sync.is_none()
+        && !matches!(data.access, Access::LocalOauth | Access::LocalPkce)
 }
 
 fn validate_agent(agent: &CanonicalAgent, file: &str, issues: &mut Vec<String>) {
@@ -5969,6 +5993,7 @@ api_base: https://api.{provider}.test/v1
         apply_model_discovery_plan(&root, &loaded, &plan)?;
 
         let updated = load_registry(&root)?;
+        validate_loaded(&updated)?;
         assert_eq!(
             updated
                 .models()
@@ -5984,7 +6009,9 @@ api_base: https://api.{provider}.test/v1
             Some("2026-10-05")
         );
         assert!(updated.providers.iter().all(|provider| {
-            provider.data.models.len() == 1 && provider.data.models[0].id == "acme/new-2"
+            provider.data.status == EntryStatus::Active
+                && provider.data.models.len() == 1
+                && provider.data.models[0].id == "acme/new-2"
         }));
         assert_eq!(
             report.removed,
@@ -6005,6 +6032,85 @@ api_base: https://api.{provider}.test/v1
             let raw = fs::read_to_string(root.join(format!("registry/providers/{provider}.yaml")))?;
             assert!(raw.contains("# Keep the surviving route comment."));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn removing_last_model_suspends_only_static_active_providers() -> Result<()> {
+        let root = test_root("model-discovery-empty-providers");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            "- id: acme/old-1\n- id: acme/new-2\n",
+        );
+        let cases = [
+            ("static", "active", "", EntryStatus::Suspended),
+            ("staging", "staging", "", EntryStatus::Staging),
+            ("suspended", "suspended", "", EntryStatus::Suspended),
+            ("withdrawn", "withdrawn", "", EntryStatus::Withdrawn),
+            (
+                "feed",
+                "active",
+                "auto_sync:\n  feed: models_dev\n  key: acme\n  writes: [models]\n",
+                EntryStatus::Active,
+            ),
+            (
+                "oauth",
+                "active",
+                "access: local_oauth\n",
+                EntryStatus::Active,
+            ),
+            (
+                "pkce",
+                "active",
+                "access: local_pkce\n",
+                EntryStatus::Active,
+            ),
+        ];
+        for (name, status, extra, _) in &cases {
+            write(
+                &root,
+                &format!("registry/providers/{name}.yaml"),
+                &format!(
+                    r#"name: {name}
+status: '{status}' # Keep the status comment.
+api_base: https://api.{name}.test/v1
+billing: subscription
+{extra}models: # Keep the models comment.
+  - id: acme/old-1
+    provider_model_id: old
+"#
+                ),
+            );
+        }
+        let loaded = load_registry(&root)?;
+        validate_loaded(&loaded)?;
+        let plan = ModelDiscoveryPlan {
+            removals: HashSet::from(["acme/old-1".to_string()]),
+            ..ModelDiscoveryPlan::default()
+        };
+
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+
+        let updated = load_registry(&root)?;
+        validate_loaded(&updated)?;
+        for (name, _, _, expected) in &cases {
+            let provider = updated
+                .providers
+                .iter()
+                .find(|provider| provider.data.name == *name)
+                .context("updated provider missing")?;
+            assert!(provider.data.models.is_empty(), "{name}");
+            assert_eq!(provider.data.status, *expected, "{name}");
+            let raw = fs::read_to_string(&provider.path)?;
+            assert!(
+                raw.contains("models: [] # Keep the models comment."),
+                "{name}"
+            );
+            assert!(raw.contains("# Keep the status comment."), "{name}");
+        }
+        build(&root, false)?;
+        build(&root, true)?;
         Ok(())
     }
 

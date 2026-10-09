@@ -306,6 +306,12 @@ yet confirmed against the live API — keep a `# VERIFY BEFORE ACTIVATING` heade
 listing the exact fields a human must check (model ids via `GET /v1/models`,
 prices, env var, base URL) before flipping it to `active`.
 
+When model retirement removes an active provider's last model, registry sync
+sets its static catalog to `models: []` and its status to `suspended`. Providers
+with `auto_sync` or local OAuth/PKCE access may discover models later and retain
+their active status. Other lifecycle statuses are preserved. Restore a static
+provider to `active` only after adding and verifying its replacement models.
+
 The validator (`cargo run -p dist-helper -- registry validate`) enforces:
 
 - Model ids and provider model ids are lowercase `<org>/<model>`.
