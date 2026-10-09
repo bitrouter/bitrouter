@@ -23,10 +23,6 @@ models:
     provider_model_id: qwen3.6-plus
   - id: qwen/qwen3.7-plus
     provider_model_id: qwen3.7-plus
-  - id: qwen/qwen3.6-flash
-    provider_model_id: qwen3.6-flash
-  - id: z-ai/glm-4.7
-    provider_model_id: glm-4.7
 status: active
 weight: 1
 submitted_at: 2026-06-05

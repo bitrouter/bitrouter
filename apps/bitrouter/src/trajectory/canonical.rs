@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use bitrouter_sdk::language_model::{
-    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
-};
+use bitrouter_ai::types::{Content, Prompt, Role, ToolResultContentPart, ToolResultOutput};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha2::Sha256;
@@ -565,9 +563,8 @@ impl From<serde_json::Value> for CanonicalJson {
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, Prompt, ToolResultOutput, inbound_adapter_for,
-    };
+    use bitrouter_ai::protocol::inbound_adapter_for;
+    use bitrouter_ai::types::{ApiProtocol, Content, Prompt, ToolResultOutput};
 
     use super::{
         CANONICAL_PROMPT_VERSION, CanonicalPrefix, Canonicalizer, CorrelationKey,
@@ -773,7 +770,7 @@ mod tests {
             serde_json::json!("workflow-other"),
         );
         if let Some(first) = metadata_changed.messages.first_mut()
-            && let Some(bitrouter_sdk::language_model::Content::Text {
+            && let Some(bitrouter_ai::types::Content::Text {
                 provider_metadata, ..
             }) = first.content.first_mut()
         {
@@ -783,8 +780,8 @@ mod tests {
             );
         }
         let mut ancestry_changed = baseline.clone();
-        ancestry_changed.messages[1] = bitrouter_sdk::language_model::Message::text(
-            bitrouter_sdk::language_model::Role::Assistant,
+        ancestry_changed.messages[1] = bitrouter_ai::types::Message::text(
+            bitrouter_ai::types::Role::Assistant,
             "Different draft.",
         );
 

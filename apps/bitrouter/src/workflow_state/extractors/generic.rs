@@ -1,6 +1,4 @@
-use bitrouter_sdk::language_model::types::{
-    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
-};
+use bitrouter_ai::types::{Content, Prompt, Role, ToolResultContentPart, ToolResultOutput};
 
 use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
 use crate::workflow_state::ir::{
@@ -383,7 +381,7 @@ fn recent_terminal_outputs(prompt: &Prompt, maximum: usize) -> Vec<&str> {
     outputs
 }
 
-fn terminal_output(message: &bitrouter_sdk::language_model::types::Message) -> Option<&str> {
+fn terminal_output(message: &bitrouter_ai::types::Message) -> Option<&str> {
     const MARKER: &str = "New Terminal Output:";
     let mut plain_result = None;
     for content in message.content.iter().rev() {
@@ -473,10 +471,10 @@ fn tool_part_text(part: &ToolResultContentPart) -> Option<String> {
 mod tests {
     use super::*;
 
-    use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::language_model::types::{
+    use bitrouter_ai::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, Tool, ToolResultOutput,
     };
+    use bitrouter_sdk::HeaderMap;
 
     use crate::workflow_state::ir::{
         ContextSizeBucket, ProtocolKind, RecoverySignal, RequirementLevel, ToolDensity,

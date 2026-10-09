@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bitrouter-ai.workspace = true
 # The observability contract this crate renders. Default-features off: the
 # contract (`bitrouter_sdk::observe`) is ungated, so nothing here needs the
 # SDK's server, config or protocol features — `server` below adds the one that

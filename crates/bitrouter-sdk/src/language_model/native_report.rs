@@ -200,7 +200,7 @@ mod tests {
     use crate::language_model::native_continuation::{
         ContinuationFailure, NativeContinuationInput, NativeContinuationOutput,
     };
-    use crate::language_model::types::{NormalizedUsage, UsageOrigin};
+    use bitrouter_ai::types::{NormalizedUsage, UsageOrigin};
     use serde_json::json;
 
     fn report() -> Result<NativeAttemptReport> {

@@ -30,36 +30,6 @@ models:
       - reasoning
       - structured_outputs
       - tools
-  - id: anthropic/claude-opus-4.7
-    provider_model_id: claude-opus-4-7
-    reasoning_effort: *claude_full_effort
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: anthropic/claude-opus-4.6
-    provider_model_id: claude-opus-4-6
-    reasoning_effort: &claude_max_effort
-      levels: [low, medium, high, max]
-      default: high
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
     reasoning_effort: *claude_full_effort
@@ -78,7 +48,9 @@ models:
       - image_input
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: claude-sonnet-4-6
-    reasoning_effort: *claude_max_effort
+    reasoning_effort: &claude_max_effort
+      levels: [low, medium, high, max]
+      default: high
     pricing:
       input_tokens:
         no_cache: 3
@@ -166,6 +138,15 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 10
+  - id: anthropic/claude-haiku-5.5
+    provider_model_id: claude-haiku-5-5
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+        cache_write: 0.125
+      output_tokens:
+        text: 0.5
 status: active
 weight: 1
 submitted_at: 2026-05-25

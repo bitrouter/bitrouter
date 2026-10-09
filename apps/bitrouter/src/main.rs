@@ -175,7 +175,7 @@ struct TaskRunArgs {
     model: String,
     /// Fixed reasoning effort for each model turn.
     #[arg(long)]
-    effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    effort: Option<bitrouter_ai::types::ReasoningEffort>,
     /// Bounded project verification command. Without one, verification is not_requested.
     #[arg(long)]
     check: Option<String>,
@@ -576,7 +576,7 @@ enum Command {
     #[command(hide = true)]
     Spawn {
         /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
         /// configured `agents:` entry. A catalog id needs no config entry; run
         /// `--check` to see whether it will route or run direct in headless mode.
         #[arg(required_unless_present = "legacy_agent")]
@@ -715,7 +715,7 @@ enum Command {
     #[command(hide = true)]
     Chat {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
         /// config entry.
         agent: String,
@@ -1224,13 +1224,13 @@ enum PolicyAction {
         strong: Option<String>,
         /// Exact reasoning effort owned by the strong target.
         #[arg(long, requires = "strong")]
-        strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+        strong_effort: Option<bitrouter_ai::types::ReasoningEffort>,
         /// Economy model explored as a replacement.
         #[arg(long)]
         economy: String,
         /// Exact reasoning effort owned by the economy target.
         #[arg(long)]
-        economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+        economy_effort: Option<bitrouter_ai::types::ReasoningEffort>,
         /// Path to `bitrouter.yaml`.
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -1632,7 +1632,7 @@ enum AcpCmd {
     #[command(override_usage = "bro acp serve <AGENT> [OPTIONS]")]
     Serve {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
         /// config entry; `bro agents check <agent>` previews whether it
         /// will route or run direct.
@@ -1665,7 +1665,7 @@ enum AcpCmd {
     #[command(hide = true)]
     Prompt {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
         /// config entry; `bro agents check <agent>` previews whether it
         /// will route or run direct.
@@ -2861,10 +2861,10 @@ async fn settlement_api_key(
     let credentials_file = credentials_file.ok_or_else(|| {
         anyhow::anyhow!("settlement requires a static BitRouter API key or credentials file")
     })?;
-    let manager =
-        bitrouter_providers::hosted::account::manager::CredentialManager::new(credentials_file)
-            .context("build settlement credential manager")?;
+    let manager = bitrouter::cloud::account::manager::CredentialManager::new(credentials_file)
+        .context("build settlement credential manager")?;
     manager
+        .session()
         .resolve_api_key(None, Some(api_base))
         .await
         .map(|credential| credential.secret().to_owned())
@@ -3969,7 +3969,7 @@ async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     // requiring a full stop+start. The daemon writes them into its
     // env-override map before re-parsing config / re-running
     // zero-config provider detection.
-    let env: Vec<(String, String)> = bitrouter_providers::zero_config_env_var_providers()
+    let env: Vec<(String, String)> = bitrouter::catalog::credential_env_var_providers()
         .into_iter()
         .filter_map(|(_, var)| {
             std::env::var(&var)
@@ -5386,6 +5386,9 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
         } => {
             // `--key-stdin` reads the key from stdin (one line); it funnels into
             // the same non-interactive API-key path as `--api-key`.
+            if let Some(message) = bitrouter_ai::providers::retired::provider_message(&provider) {
+                anyhow::bail!("{message}");
+            }
             let api_key = if key_stdin {
                 Some(read_api_key_from_stdin()?)
             } else {
@@ -7134,8 +7137,9 @@ mod tests {
 
     #[tokio::test]
     async fn settlement_credentials_file_rejects_oauth() -> anyhow::Result<()> {
-        use bitrouter_providers::hosted::account::credentials::{Credentials, StoredCredential};
-        use bitrouter_providers::hosted::account::manager::CredentialManager;
+        use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+
+        use bitrouter::cloud::account::manager::CredentialManager;
 
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("account-credentials.json");
@@ -7169,8 +7173,8 @@ mod tests {
 
     #[tokio::test]
     async fn settlement_credentials_file_rejects_wrong_origin() -> anyhow::Result<()> {
-        use bitrouter_providers::hosted::account::credentials::StoredCredential;
-        use bitrouter_providers::hosted::account::manager::CredentialManager;
+        use bitrouter::cloud::account::manager::CredentialManager;
+        use bitrouter_ai::providers::hosted::credentials::StoredCredential;
 
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("account-credentials.json");
@@ -8030,12 +8034,12 @@ mod tests {
                 assert_eq!(strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
                 assert_eq!(
                     strong_effort,
-                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+                    Some(bitrouter_ai::types::ReasoningEffort::High)
                 );
                 assert_eq!(economy, "openai-codex:gpt-5.6-sol");
                 assert_eq!(
                     economy_effort,
-                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+                    Some(bitrouter_ai::types::ReasoningEffort::Low)
                 );
                 assert_eq!(config, Some(PathBuf::from("team/bitrouter.yaml")));
             }

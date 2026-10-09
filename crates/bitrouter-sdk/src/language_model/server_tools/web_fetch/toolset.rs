@@ -12,7 +12,7 @@ use super::backend::{FetchOptions, WebFetchBackend};
 use crate::error::Result;
 use crate::language_model::server_tools::declarations::{ServerToolDeclarations, WEB_FETCH_TOOL};
 use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
-use crate::language_model::types::{ProviderMetadata, Tool, ToolResultOutput};
+use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// A [`RouterToolset`] exposing the `web_fetch` server tool over one or more
 /// extraction backends.

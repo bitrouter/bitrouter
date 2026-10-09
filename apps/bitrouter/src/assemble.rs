@@ -9,11 +9,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 
+use bitrouter_ai::auth::AuthAppliers;
+use bitrouter_ai::client::HttpTimeouts;
+use bitrouter_ai::protocol::OutboundDispatch;
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
 use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
@@ -43,7 +46,7 @@ use bitrouter_sdk::language_model::server_tools::web_search::http::{
 };
 use bitrouter_sdk::language_model::server_tools::web_search::nested::NestedSearchBackend;
 use bitrouter_sdk::language_model::server_tools::web_search::toolset::WebSearchToolset;
-use bitrouter_sdk::language_model::{AuthAppliers, HttpExecutor, HttpTimeouts, PipelineBuilder};
+use bitrouter_sdk::language_model::{HttpExecutor, PipelineBuilder};
 use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
 use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
 use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
@@ -62,7 +65,8 @@ use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvid
 use crate::eval::EvalService;
 use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
 use crate::eval::store::EvalStore;
-use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
+use crate::metering::tariff::CaptureTariffs;
+use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
 use crate::trajectory::publisher::TrajectoryOutboxPublisher;
@@ -508,14 +512,13 @@ async fn assemble_app(
     // Fill empty fields on built-in providers from the compiled-in catalog
     // (api_base / api_protocol / api_key-from-env). No-op when
     // `inherit_defaults: false`, and never overrides user-set fields.
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    crate::providers::apply::apply_builtin_defaults(&mut resolved);
     // Subscription / "use your Claude Code session" logins persist their
     // credential in the store (not the config), so apply_builtin_defaults would
     // mark a keyless provider like `anthropic` inactive. Re-activate any
     // provider that has a stored credential so it stays routable.
-    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-    {
-        bitrouter_providers::activate_stored_credential_providers(&mut resolved, &store);
+    if let Ok(store) = crate::provider_credentials::load_default() {
+        crate::providers::apply::activate_stored_credential_providers(&mut resolved, &store);
     }
     bitrouter_sdk::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
@@ -535,16 +538,8 @@ async fn assemble_app(
     // Read from the user's `config` — per-provider timeouts are a user-only
     // field, never set by the registry/builtin-defaults merge.
     let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
-    // The `google-ai` subscription provider (Antigravity / `agy`) speaks a custom
-    // protocol (Gemini generateContent retargeted at cloudcode-pa's `v1internal:*`
-    // method endpoints), registered on the dispatch only when it is configured.
-    let mut dispatch = OutboundDispatch::builtin();
-    if config
-        .providers
-        .contains_key(bitrouter_providers::antigravity::PROVIDER_ID)
-    {
-        bitrouter_providers::antigravity::protocol::register(&mut dispatch);
-    }
+    let dispatch = OutboundDispatch::builtin();
+
     let executor = Arc::new(
         HttpExecutor::with_provider_timeouts(
             global_timeouts,
@@ -557,7 +552,7 @@ async fn assemble_app(
     let executor_for_reload = executor.clone();
 
     // ---- pricing, metering, policy — all derived from config ----
-    let pricing = Arc::new(build_pricing_table(config));
+    let pricing = Arc::new(build_pricing_table(&routing_table.snapshot_config()));
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
@@ -720,6 +715,10 @@ async fn assemble_app(
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
             .executor(executor.clone())
+            .route_hook(CaptureTariffs::new(
+                pricing.clone(),
+                config.server.require_known_pricing,
+            ))
             .settlement_recorder(
                 MeteringRecorder::new(metering_store.clone(), pricing.clone())
                     .with_reconciliation_provider("bitrouter"),
@@ -847,7 +846,6 @@ async fn assemble_app(
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
     let eval_store_for_recorder = eval_service.store().clone();
-    let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     let acp_runtime_for_session = Arc::clone(&acp_runtime);
@@ -860,6 +858,20 @@ async fn assemble_app(
             lm.native_cost_estimator(pricing_for_native);
             lm.native_cost_source(Arc::new(metering_for_native_costs));
             lm.native_private_context(Arc::new(private_context.clone()));
+            lm.served_operations(OperationScope::Both);
+            lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
+            lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
+            lm.require_hook::<crate::evolution::costs::JudgeCosts>(
+                HookStage::PreResolution,
+                OperationScope::Both,
+            );
+            lm.require_hook::<PolicyHook>(HookStage::PreRequest, OperationScope::Both);
+            lm.require_hook::<MeteringRecorder>(HookStage::Settlement, OperationScope::Both);
+            lm.require_hook::<CaptureTariffs>(HookStage::Route, OperationScope::Both);
+            lm.require_hook::<ContinuationRuntime>(
+                HookStage::Finalization,
+                OperationScope::Generation,
+            );
             lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
@@ -873,6 +885,13 @@ async fn assemble_app(
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             lm.route_hook(evolution_for_hooks.clone());
+            let metering_recorder =
+                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
+                    .with_reconciliation_provider("bitrouter");
+            lm.route_hook_for(
+                metering_recorder.tariff_capture(config.server.require_known_pricing),
+                OperationScope::Both,
+            );
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
@@ -884,28 +903,31 @@ async fn assemble_app(
             }
             // Reserved judge IDs are checked even before auth, so an early
             // rejection cannot overwrite an existing attempt's metering row.
-            lm.pre_resolution_hook(judge_costs.clone());
+            lm.pre_resolution_hook_for(judge_costs.clone(), OperationScope::Both);
             // Authenticate and normalize the selector before freezing the router
             // binding and applying its defaults. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
-            lm.pre_resolution_hook(AuthHook::new(db_for_hooks.clone()));
+            lm.pre_resolution_hook_for(AuthHook::new(db_for_hooks.clone()), OperationScope::Both);
+            lm.pre_resolution_hook_for(
+                SessionContextHook::new(acp_runtime_for_session),
+                OperationScope::Both,
+            );
             lm.pre_resolution_hook(private_context);
-            lm.pre_resolution_hook(SessionContextHook::new(acp_runtime_for_session));
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
             lm.router_preparation_hook(evolution_for_hooks.clone());
-            lm.pre_request_hook(PolicyHook::new(
-                policy_store.clone(),
-                Some(metering_store_for_policy),
-            ));
+            lm.pre_request_hook_for(
+                PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
+                OperationScope::Both,
+            );
             // OpenTelemetry exporter — register the *same* Arc as a hook
             // here. Construction happened above so `Assembled.observe`
             // can hold a query handle on it.
             if let Some(exporter) = otel_for_hook {
-                lm.observe_hook(OtelObserveHook::new(exporter));
+                lm.observe_hook_for(OtelObserveHook::new(exporter), OperationScope::Both);
             }
             lm.observe_hook(response_observer);
             lm.observe_hook(evolution_for_hooks.clone());
@@ -914,22 +936,16 @@ async fn assemble_app(
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
             // for spend caps.
-            lm.settlement_recorder(
-                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
-                    .with_reconciliation_provider("bitrouter"),
-            );
+            lm.settlement_recorder_for(metering_recorder, OperationScope::Both);
             lm.settlement_recorder(evolution_for_hooks);
             lm.settlement_recorder(judge_costs);
-            let eval_recorder = EvalSettlementRecorder::new(
-                eval_store_for_recorder,
-                pending_eval_decisions,
-                pricing_for_eval,
-            );
+            let eval_recorder =
+                EvalSettlementRecorder::new(eval_store_for_recorder, pending_eval_decisions);
             let eval_recorder = match trajectory_for_eval {
                 Some(trajectory) => eval_recorder.with_trajectory(trajectory),
                 None => eval_recorder,
             };
-            lm.settlement_recorder(eval_recorder);
+            lm.settlement_recorder_for(eval_recorder, OperationScope::Both);
             // Server-side tool loop (router-executed MCP tools), when configured.
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);
@@ -1039,30 +1055,29 @@ fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>
 ///
 /// The data is the **fetched** dist when reachable, else the most recent
 /// **disk cache** (stale-fallback on a network outage). On a never-fetched host
-/// with no network there is no data: the merge is a no-op and the registry is
-/// empty, so only locally-configured providers (and the compiled-in `bitrouter`
-/// cloud gateway) are routable. Network to the registry is expected to be
-/// stable, so this empty state is a rare first-run edge.
+/// the default public registry uses the application-bundled offline baseline.
+/// Disabled/custom registries retain their own policy; a custom source with no
+/// bound snapshot remains unavailable when refresh fails.
 ///
 /// Called by the `serve` entry point (before [`build_app`]) and by
 /// [`crate::reload`], the two paths that build a production routing config.
 /// Kept out of `build_app` itself so that function stays free of network I/O —
 /// integration tests assemble explicit configs through it. Lives in the app
-/// layer (above `bitrouter-providers`) because the SDK's own routing table sits
-/// below the providers crate and cannot fetch the registry itself.
+/// layer because the SDK routing table receives a resolved configuration
+/// and does not own application catalog fetching or persistence.
 pub async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
     crate::bundled_registry::enable_logged_in(config);
-    // Supplement the public registry with the ACP providers shipped in this
+    // Supplement the public registry with the model/provider baseline shipped in this
     // binary. Explicitly disabled/custom registries keep their own policy.
     let Some(data) = crate::bundled_registry::load(&config.registry).await else {
-        bitrouter_providers::apply_builtin_defaults(config);
+        crate::providers::apply::apply_builtin_defaults(config);
         return;
     };
-    bitrouter_providers::registry::apply::apply_registry(config, &data);
-    bitrouter_providers::apply_builtin_defaults(config);
+    crate::providers::registry::apply::apply_registry(config, &data);
+    crate::providers::apply::apply_builtin_defaults(config);
 }
 
 /// Build the server-side tool loop from `config.server_tools`. Returns `None`
@@ -1316,19 +1331,31 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// OpenAI Codex (ChatGPT-subscription OAuth).
 fn build_auth_appliers(
     config: &Config,
-    cloud_manager: Arc<bitrouter_providers::hosted::account::manager::CredentialManager>,
+    cloud_manager: Arc<crate::cloud::account::manager::CredentialManager>,
 ) -> Result<AuthAppliers> {
     let mut appliers = AuthAppliers::new();
-    let store_path = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+    let store_path = crate::provider_credentials::load_default()
         .map(|s| s.path().to_path_buf())
         .context("resolving credential store path")?;
+    let account_store = Arc::new(
+        bitrouter_ai::auth::file::backend::FileCredentialStore::new(&store_path)
+            .map_err(|failure| bitrouter_ai::error::ModelError::CredentialStorage { failure })?,
+    );
+    let refresh_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("building provider refresh/exchange HTTP client")?;
     // The `bitrouter` provider's account store and the generic upstream
-    // provider store above are isolated modules within `bitrouter-providers`.
+    // provider store above have separate injected transaction contracts. The
+    // ordinary backend belongs to AI; hosted file assembly remains above AI.
     // Register the hosted applier through the application Cloud glue.
     crate::cloud::register_if_configured(config, &mut appliers, cloud_manager)?;
     if config.providers.contains_key("github-copilot") {
-        let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(&store_path)
-            .context("building the github-copilot AuthApplier")?;
+        let applier = bitrouter_ai::providers::copilot::CopilotAuthApplier::new(
+            refresh_client.clone(),
+            bitrouter_ai::providers::copilot::exchange::TOKEN_EXCHANGE_URL,
+            account_store.clone(),
+        );
         appliers.register("github-copilot", Arc::new(applier));
     }
     // The Anthropic Platform-API applier is registered when the provider is
@@ -1337,77 +1364,103 @@ fn build_auth_appliers(
     // when no stored key is present. It is `x-api-key`-only; the Claude
     // Pro/Max subscription lives in the separate `claude-code` provider below.
     if config.providers.contains_key("anthropic") {
-        let applier = bitrouter_providers::anthropic::AnthropicApiKeyApplier::new(&store_path)
-            .context("building the anthropic AuthApplier")?;
+        let applier =
+            bitrouter_ai::providers::anthropic::AnthropicApiKeyApplier::new(account_store.clone());
         appliers.register("anthropic", Arc::new(applier));
     }
     // The Claude Pro/Max subscription applier (OAuth / live `~/.claude`
     // session). Registered under `claude-code`, distinct from the
     // Platform-API `anthropic` provider above.
     if config.providers.contains_key("claude-code") {
-        let applier = bitrouter_providers::claude_code::ClaudeCodeAuthApplier::new(&store_path)
-            .context("building the claude-code AuthApplier")?;
+        let backend = crate::providers::claude_code::store::ClaudeStore::new(
+            store_path.clone(),
+            crate::providers::import::claude_code::ClaudeCodeStore::system(),
+        )
+        .map_err(|failure| bitrouter_ai::error::ModelError::CredentialStorage { failure })?;
+        let registration = bitrouter_ai::providers::login::find("anthropic")
+            .context("Claude OAuth registration is missing")?;
+        let claude_refresh_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent(concat!("bitrouter-providers/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .context("building Claude OAuth HTTP client")?;
+        let session = bitrouter_ai::auth::store::OAuthSession::new(
+            Arc::new(backend),
+            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+                claude_refresh_client,
+                registration.auth.token_endpoint,
+                registration.auth.client_id,
+            )),
+            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+        );
+        let applier = bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier::new(session)
+            .with_fallback_token(crate::providers::claude_code::env_oauth_token());
         appliers.register("claude-code", Arc::new(applier));
     }
     if config.providers.contains_key("openai-codex") {
-        let applier = bitrouter_providers::codex::OpenAiCodexAuthApplier::new(&store_path)
-            .context("building the openai-codex AuthApplier")?;
+        let registration = bitrouter_ai::providers::login::find("openai-codex")
+            .context("openai-codex OAuth registration is missing")?;
+        let session = bitrouter_ai::auth::store::OAuthSession::new(
+            account_store.clone(),
+            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+                refresh_client.clone(),
+                registration.auth.token_endpoint,
+                registration.auth.client_id,
+            )),
+            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+        );
+        let applier = bitrouter_ai::providers::codex::OpenAiCodexAuthApplier::new(session);
         appliers.register("openai-codex", Arc::new(applier));
     }
     // The SuperGrok subscription applier (OAuth imported from the Grok CLI
     // session). Registered under `supergrok`, distinct from the metered `xai`
     // API-key provider.
     if config.providers.contains_key("supergrok") {
-        let applier = bitrouter_providers::supergrok::SuperGrokAuthApplier::new(&store_path)
-            .context("building the supergrok AuthApplier")?;
+        let session = bitrouter_ai::auth::store::OAuthSession::new(
+            account_store.clone(),
+            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+                refresh_client.clone(),
+                bitrouter_ai::providers::supergrok::TOKEN_ENDPOINT,
+                bitrouter_ai::providers::supergrok::CLIENT_ID,
+            )),
+            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+        );
+        let applier = bitrouter_ai::providers::supergrok::SuperGrokAuthApplier::new(session);
         appliers.register("supergrok", Arc::new(applier));
     }
-    // The `google-ai` subscription applier (Google OAuth imported from the `agy`
-    // CLI session). The custom protocol adapter is registered separately on the
-    // dispatch above.
-    if config
-        .providers
-        .contains_key(bitrouter_providers::antigravity::PROVIDER_ID)
-    {
-        let applier = bitrouter_providers::antigravity::AntigravityAuthApplier::new(&store_path)
-            .context("building the google-ai AuthApplier")?;
-        appliers.register(
-            bitrouter_providers::antigravity::PROVIDER_ID,
-            Arc::new(applier),
-        );
-    }
+
     Ok(appliers)
 }
 
 pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
     let mut table = PricingTable::new();
     for (provider_id, provider) in &config.providers {
+        table.configure_endpoint(provider_id, None, &provider.api_base);
+        for (protocol, endpoint) in &provider.protocol_endpoints {
+            if let Ok(protocol) =
+                serde_json::from_value(serde_json::Value::String(protocol.clone()))
+            {
+                table.configure_endpoint(provider_id, Some(protocol), endpoint);
+            }
+        }
         for model in &provider.models {
-            if let Some(pricing) = &model.pricing {
-                let mut model_pricing = ModelPricing::cache_aware(
-                    pricing.input_micro_usd_per_token,
-                    pricing.cache_read_micro_usd_per_token,
-                    pricing.cache_write_micro_usd_per_token,
-                    pricing.output_micro_usd_per_token,
-                );
-                // Carry context brackets through with absent rates intact;
-                // resolution inherits each omitted bucket from the base tier.
-                model_pricing.context_tiers = pricing
-                    .context_tiers
-                    .iter()
-                    .map(|t| ContextTier {
-                        above_input_tokens: t.above_input_tokens,
-                        input_micro_usd_per_token: t.input_micro_usd_per_token,
-                        cache_read_micro_usd_per_token: t.cache_read_micro_usd_per_token,
-                        cache_write_micro_usd_per_token: t.cache_write_micro_usd_per_token,
-                        output_micro_usd_per_token: t.output_micro_usd_per_token,
-                    })
-                    .collect();
-                table.insert(provider_id.clone(), model.id.clone(), model_pricing.clone());
-                if let Some(native_id) = model.provider_model_id.as_deref()
-                    && native_id != model.id
-                {
-                    table.insert(provider_id.clone(), native_id, model_pricing);
+            let aliases = std::iter::once(model.id.as_str()).chain(
+                model
+                    .provider_model_id
+                    .as_deref()
+                    .filter(|native| *native != model.id),
+            );
+            for alias in aliases {
+                if let Some(pricing) = &model.pricing {
+                    table.insert(provider_id, alias, ModelPricing::from(pricing));
+                }
+                for (protocol, pricing) in &model.pricing_by_protocol {
+                    table.insert_for_protocol(
+                        provider_id,
+                        alias,
+                        protocol.clone(),
+                        ModelPricing::from(pricing),
+                    );
                 }
             }
         }
@@ -1439,13 +1492,21 @@ providers:
         let pricing = build_pricing_table(&config);
         assert_eq!(
             pricing
-                .resolve("example", "example/canonical-model")
+                .resolve(
+                    "example",
+                    "example/canonical-model",
+                    &bitrouter_ai::types::ApiProtocol::ChatCompletions
+                )
                 .and_then(|entry| entry.input_micro_usd_per_token),
             Some(1.25)
         );
         assert_eq!(
             pricing
-                .resolve("example", "native-model")
+                .resolve(
+                    "example",
+                    "native-model",
+                    &bitrouter_ai::types::ApiProtocol::ChatCompletions
+                )
                 .and_then(|entry| entry.input_micro_usd_per_token),
             Some(1.25)
         );
@@ -2431,10 +2492,9 @@ mod server_tools_tests {
 mod trajectory_assembly_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{
-        ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
-    };
+    use bitrouter_sdk::language_model::PipelineRequest;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2722,12 +2782,10 @@ presets:
     async fn enabled_guarded_policy_persists_its_first_route_atomically() -> anyhow::Result<()> {
         use std::collections::{BTreeMap, BTreeSet};
 
+        use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
         use bitrouter_sdk::config::PresetConfig;
-        use bitrouter_sdk::language_model::{
-            ApiProtocol, GenerationParams, Message, ModelSelector, PipelineContext,
-            PipelineRequest, Prompt, Role,
-        };
+        use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, PipelineRequest};
 
         use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
         use crate::trajectory::correlation::CorrelatedRequest;
@@ -2829,7 +2887,7 @@ presets:
     async fn enabled_startup_applies_configured_retention_before_serving() -> anyhow::Result<()> {
         use std::collections::BTreeMap;
 
-        use bitrouter_sdk::language_model::{ApiProtocol, GenerationParams, Message, Prompt, Role};
+        use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 
         use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
         use crate::trajectory::correlation::TrajectoryRuntime;

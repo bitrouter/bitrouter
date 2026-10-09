@@ -1,7 +1,7 @@
 use super::*;
-use crate::language_model::auth::CredentialAuthority;
 use crate::language_model::types::PipelineRequest;
-use crate::language_model::types::{ApiProtocol, AuthScheme, FinishReason, Message, Role, Usage};
+use bitrouter_ai::auth::CredentialAuthority;
+use bitrouter_ai::types::{ApiProtocol, AuthScheme, FinishReason, Message, Role, Usage};
 
 struct FailAfterWrite;
 impl NativePrivateContextPolicy for FailAfterWrite {
@@ -51,6 +51,7 @@ fn target() -> RoutingTarget {
         api_base: "https://example.invalid".into(),
         api_key: "fixture-key".into(),
         api_protocol: ApiProtocol::Messages,
+        chat_google_extensions: false,
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
@@ -72,7 +73,7 @@ fn context() -> PipelineContext {
         caller: CallerContext::local(),
         headers: Default::default(),
         inbound_protocol: None,
-        prompt: Prompt {
+        input: crate::language_model::types::PipelineInput::Generation(Box::new(Prompt {
             model: "served".into(),
             system: None,
             system_provider_metadata: Default::default(),
@@ -82,13 +83,14 @@ fn context() -> PipelineContext {
             response_format: None,
             tool_choice: None,
             stream: false,
-        },
+        })),
     })
 }
 
 fn result() -> GenerateResult {
     GenerateResult {
         content: vec![Content::Reasoning {
+            native: None,
             text: "thought".into(),
             provider_metadata: [
                 (
@@ -122,7 +124,7 @@ fn authority() -> ContinuationAuthority {
 }
 
 #[test]
-fn private_output_never_promotes_unproven_mutated_or_stale_attempts() {
+fn private_output_never_promotes_unproven_mutated_or_stale_attempts() -> Result<()> {
     for case in [
         "custom_executor",
         "changed_result",
@@ -135,7 +137,7 @@ fn private_output_never_promotes_unproven_mutated_or_stale_attempts() {
         let usage = output.usage.clone();
         if case != "custom_executor" {
             runtime.succeeded(
-                context().prompt(),
+                context().require_generation_prompt()?,
                 &target(),
                 (case != "missing_authority").then(authority),
                 &output,
@@ -170,6 +172,7 @@ fn private_output_never_promotes_unproven_mutated_or_stale_attempts() {
         );
         assert_eq!(runtime.observation().input, PrivateContextEvidence::Unknown);
     }
+    Ok(())
 }
 
 #[test]
@@ -219,13 +222,16 @@ async fn native_continuation_binds_the_actual_http_prompt_and_redacts_unverified
     ctx.insert_extension(Arc::new(NativeManagedRequest));
     // A custom wrapper can change the explicit prompt while retaining ctx. The
     // built-in HTTP execution must not certify ctx's untransmitted prefix.
-    let mut dispatched = ctx.prompt().clone();
+    let mut dispatched = ctx.require_generation_prompt()?.clone();
     dispatched.messages = vec![Message::text(Role::User, "different actual input")];
     let mut output = HttpExecutor::with_defaults()?
         .execute(&route, &dispatched, &ctx)
         .await?
         .result;
-    runtime.seal_output(&ctx, &route, &mut output);
+    let output = output
+        .generation_mut()
+        .ok_or_else(|| BitrouterError::internal("generation fixture"))?;
+    runtime.seal_output(&ctx, &route, output);
     assert_eq!(
         runtime.continuation_observation().output,
         NativeContinuationOutput::Unverified {
@@ -248,7 +254,7 @@ async fn native_continuation_binds_the_actual_http_prompt_and_redacts_unverified
     // still erase the provider ID without claiming a proven continuation.
     runtime.begin_attempt();
     output.response_id = Some("resp_custom_private".into());
-    runtime.seal_output(&ctx, &route, &mut output);
+    runtime.seal_output(&ctx, &route, output);
     assert!(output.response_id.is_none());
     assert_eq!(
         runtime.continuation_observation().output,
@@ -258,7 +264,7 @@ async fn native_continuation_binds_the_actual_http_prompt_and_redacts_unverified
     );
     assert!(runtime.response_terminal_valid());
     runtime.begin_attempt();
-    runtime.seal_output(&ctx, &route, &mut output);
+    runtime.seal_output(&ctx, &route, output);
     assert!(!runtime.response_terminal_valid());
     Ok(())
 }

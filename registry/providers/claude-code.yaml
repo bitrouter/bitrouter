@@ -24,22 +24,6 @@ models:
       - reasoning
       - structured_outputs
       - tools
-  - id: anthropic/claude-opus-4.7
-    provider_model_id: claude-opus-4-7
-    reasoning_effort: *claude_full_effort
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: anthropic/claude-opus-4.6
-    provider_model_id: claude-opus-4-6
-    reasoning_effort: &claude_max_effort
-      levels: [low, medium, high, max]
-      default: high
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
     reasoning_effort: *claude_full_effort
@@ -50,7 +34,9 @@ models:
       - image_input
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: claude-sonnet-4-6
-    reasoning_effort: *claude_max_effort
+    reasoning_effort: &claude_max_effort
+      levels: [low, medium, high, max]
+      default: high
     capabilities:
       - reasoning
       - structured_outputs
@@ -76,6 +62,8 @@ models:
     provider_model_id: claude-opus-5-5
   - id: anthropic/claude-sonnet-5.5
     provider_model_id: claude-sonnet-5-5
+  - id: anthropic/claude-haiku-5.5
+    provider_model_id: claude-haiku-5-5
 status: active
 weight: 1
 community: false

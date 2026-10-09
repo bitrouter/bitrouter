@@ -19,12 +19,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use bitrouter_ai::types::{Content, StreamPart};
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::Result;
 use bitrouter_sdk::error::BitrouterError;
 use bitrouter_sdk::language_model::{
-    Content, DenyReason, HookDecision, PipelineContext, PreRequestHook, StreamAction,
-    StreamContext, StreamHook, StreamInterest, StreamOutcome, StreamPart,
+    DenyReason, HookDecision, PipelineContext, PreRequestHook, StreamAction, StreamContext,
+    StreamHook, StreamInterest, StreamOutcome,
 };
 
 use crate::rules::{RuleSet, SlidingWindowMatcher, WindowResult};
@@ -35,8 +36,8 @@ fn plugin_id() -> PluginId {
 
 /// Collect every text-bearing fragment of a request prompt into one string for
 /// scanning (system instruction + each message's text / reasoning content).
-fn request_text(ctx: &PipelineContext) -> String {
-    let prompt = ctx.prompt();
+fn request_text(ctx: &PipelineContext) -> Result<String> {
+    let prompt = ctx.require_generation_prompt()?;
     let mut buf = String::new();
     if let Some(system) = &prompt.system {
         buf.push_str(system);
@@ -85,7 +86,7 @@ fn request_text(ctx: &PipelineContext) -> String {
             }
         }
     }
-    buf
+    Ok(buf)
 }
 
 /// Upstream hook that deposits a shared [`RuleSet`] into the request's typed
@@ -136,7 +137,7 @@ impl PreRequestHook for GuardrailPreHook {
         if rules.is_empty() {
             return Ok(HookDecision::Allow);
         }
-        let text = request_text(ctx);
+        let text = request_text(ctx)?;
         if let Some(rule_name) = rules.first_block(&text) {
             return Ok(HookDecision::Deny(DenyReason::GuardrailViolation(format!(
                 "request blocked by guardrail rule '{rule_name}'"
@@ -192,14 +193,10 @@ impl StreamHook for GuardrailStreamHook {
         if rules.is_empty() {
             return Ok(StreamAction::Pass);
         }
-        let (text, rebuild): (&str, fn(String) -> StreamPart) = match &part {
-            StreamPart::TextDelta { text } => {
-                (text.as_str(), |t| StreamPart::TextDelta { text: t })
+        let text = match &part {
+            StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text, .. } => {
+                text.as_str()
             }
-            StreamPart::ReasoningDelta { text } => {
-                (text.as_str(), |t| StreamPart::ReasoningDelta { text: t })
-            }
-            // not a text-bearing part — interest() should have filtered it out
             _ => return Ok(StreamAction::Pass),
         };
 
@@ -221,7 +218,17 @@ impl StreamHook for GuardrailStreamHook {
                 if emitted == text {
                     Ok(StreamAction::Pass)
                 } else {
-                    Ok(StreamAction::Replace(vec![rebuild(emitted)]))
+                    let replacement = match part {
+                        StreamPart::TextDelta { .. } => StreamPart::TextDelta { text: emitted },
+                        StreamPart::ReasoningDelta { source_kind, .. } => {
+                            StreamPart::ReasoningDelta {
+                                text: emitted,
+                                source_kind,
+                            }
+                        }
+                        _ => return Ok(StreamAction::Pass),
+                    };
+                    Ok(StreamAction::Replace(vec![replacement]))
                 }
             }
         }

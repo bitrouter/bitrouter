@@ -1,9 +1,9 @@
 //! Borrowed Responses wire views; output text is never copied into JSON values.
 
+use bitrouter_ai::types::Content;
 use bitrouter_orchestrator::core::protocol::{ToolExecute, VERSION};
 use bitrouter_orchestrator::core::session::RunStatus;
 use bitrouter_orchestrator::core::session::responses::{ResponseEvent, ResponseExchange};
-use bitrouter_sdk::language_model::types::Content;
 use serde::Serialize;
 use serde::ser::{SerializeSeq, Serializer};
 use serde_json::Value;

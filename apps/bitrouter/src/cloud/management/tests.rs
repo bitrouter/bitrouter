@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use bitrouter_providers::hosted::account::credentials::{Credentials, StoredCredential};
-use bitrouter_providers::hosted::account::manager::CredentialManager;
+use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+
+use crate::cloud::account::manager::CredentialManager;
 use chrono::{Duration, Utc};
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, header, method, path};
@@ -136,48 +137,79 @@ async fn fresh_oauth_bearer_skips_discovery() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn refresh_preserves_namespace_and_persists_rotation() -> anyhow::Result<()> {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    Mock::given(method("GET"))
-        .and(path("/.well-known/oauth-authorization-server"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "issuer": uri,
-            "device_authorization_endpoint": format!("{uri}/oauth/device"),
-            "token_endpoint": format!("{uri}/oauth/token")
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .and(body_string_contains("grant_type=refresh_token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": "rotated-access",
-            "token_type": "Bearer",
-            "expires_in": 3600,
-            "refresh_token": "rotated-refresh",
-            "scope": "keys:read",
-            "namespace_id": "ns-other"
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/v1/namespaces/ns-1/keys"))
-        .and(header("authorization", "Bearer rotated-access"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
-        .mount(&server)
-        .await;
-    let (_directory, manager, client) =
-        client_with(oauth_credential(&server.uri(), Duration::seconds(10))).await?;
+    for namespace in [None, Some("ns-1"), Some("ns-other")] {
+        let server = MockServer::start().await;
+        let uri = server.uri();
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": uri,
+                "device_authorization_endpoint": format!("{uri}/oauth/device"),
+                "token_endpoint": format!("{uri}/oauth/token")
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "rotated-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rotated-refresh",
+                "scope": "keys:read",
+                "namespace_id": namespace
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/ns-1/keys"))
+            .and(header("authorization", "Bearer rotated-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+            .mount(&server)
+            .await;
+        let (_directory, manager, client) =
+            client_with(oauth_credential(&server.uri(), Duration::seconds(10))).await?;
 
-    client.list_keys().await?;
-    let current = manager
-        .current()
-        .await?
-        .context("credential disappeared after refresh")?;
-    let oauth = current.oauth().context("OAuth credential changed kind")?;
+        let result = client.list_keys().await;
+        if namespace == Some("ns-other") {
+            assert!(matches!(result, Err(Error::Auth(_))));
+            assert!(matches!(client.list_keys().await, Err(Error::Auth(_))));
+            let requests = server
+                .received_requests()
+                .await
+                .context("missing recorded requests")?;
+            assert!(
+                requests
+                    .iter()
+                    .all(|request| !request.url.path().starts_with("/v1/namespaces/"))
+            );
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request.url.path() == "/oauth/token")
+                    .count(),
+                1
+            );
+        } else {
+            result?;
+        }
+        let current = manager
+            .current()
+            .await?
+            .context("credential disappeared after refresh")?;
+        let oauth = current.oauth().context("OAuth credential changed kind")?;
 
-    assert_eq!(oauth.refresh_token.as_deref(), Some("rotated-refresh"));
-    assert_eq!(oauth.namespace_id.as_deref(), Some("ns-1"));
+        assert_eq!(
+            oauth.refresh_token.as_deref(),
+            Some(if namespace == Some("ns-other") {
+                "oauth-refresh"
+            } else {
+                "rotated-refresh"
+            })
+        );
+        assert_eq!(oauth.namespace_id.as_deref(), Some("ns-1"));
+    }
     Ok(())
 }
 

@@ -47,15 +47,6 @@ models:
         cache_write: 1.25
       output_tokens:
         text: 5
-  - id: anthropic/claude-opus-4.6
-    provider_model_id: claude-opus-4-6
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
   - id: anthropic/claude-opus-4.8
     provider_model_id: claude-opus-4-8
     pricing:
@@ -83,13 +74,6 @@ models:
         cache_write: 3.75
       output_tokens:
         text: 15
-  - id: deepseek/deepseek-v3.2
-    provider_model_id: deepseek-v3.2
-    pricing:
-      input_tokens:
-        no_cache: 0.58
-      output_tokens:
-        text: 1.68
   - id: deepseek/deepseek-v4-flash
     provider_model_id: deepseek-v4-flash
     pricing:
@@ -104,37 +88,6 @@ models:
         no_cache: 1.74
       output_tokens:
         text: 3.48
-  - id: openai/gpt-5.4
-    provider_model_id: gpt-5.4
-    pricing:
-      input_tokens:
-        no_cache: 2.5
-        cache_read: 0.25
-      output_tokens:
-        text: 15
-  - id: openai/gpt-5.4-mini
-    provider_model_id: gpt-5.4-mini
-    pricing:
-      input_tokens:
-        no_cache: 0.75
-        cache_read: 0.075
-      output_tokens:
-        text: 4.5
-  - id: openai/gpt-5.5
-    provider_model_id: gpt-5.5
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-      output_tokens:
-        text: 30
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: kimi-k2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-      output_tokens:
-        text: 4
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
     pricing:
@@ -185,15 +138,6 @@ models:
         cache_read: 0.19
       output_tokens:
         text: 4
-  - id: anthropic/claude-opus-4.7
-    provider_model_id: claude-opus-4-7
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
   - id: anthropic/claude-fable-5.1
     provider_model_id: claude-fable-5-1
     pricing:
@@ -257,6 +201,23 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 10
+  - id: anthropic/claude-haiku-5.5
+    provider_model_id: claude-haiku-5-5
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+        cache_write: 0.125
+      output_tokens:
+        text: 0.5
+  - id: x-ai/grok-4.6
+    provider_model_id: grok-4.6
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.5
+      output_tokens:
+        text: 6.0
 auto_sync:
   feed: models_dev
   key: azure

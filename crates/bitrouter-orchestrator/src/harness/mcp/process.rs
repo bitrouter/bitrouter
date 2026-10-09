@@ -45,13 +45,7 @@ impl ProcessOwner {
             // A repeated kill may fail after the transport has already killed
             // the process. Confirm that the owned scope is gone instead.
             #[cfg(unix)]
-            loop {
-                match rustix::process::test_kill_process_group(child.group) {
-                    Err(rustix::io::Errno::SRCH) => break,
-                    Err(error) => return Err(error.into()),
-                    Ok(()) => tokio::time::sleep(Duration::from_millis(5)).await,
-                }
-            }
+            wait_for_group_exit(|| rustix::process::test_kill_process_group(child.group)).await?;
             self.closed.store(true, Ordering::SeqCst);
             *slot = None;
             Ok(())
@@ -67,6 +61,25 @@ impl ProcessOwner {
             && child.process.id().is_some()
         {
             let _ = child.process.start_kill();
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_group_exit(
+    mut probe: impl FnMut() -> Result<(), rustix::io::Errno>,
+) -> std::io::Result<()> {
+    loop {
+        match probe() {
+            Err(rustix::io::Errno::SRCH) => return Ok(()),
+            // Darwin can return EPERM for a group containing only zombies.
+            // Wait for reaping within stop()'s existing deadline. EPERM never
+            // proves cleanup: persistent permission failures still time out.
+            // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c
+            Err(rustix::io::Errno::PERM) | Ok(()) => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -152,5 +165,41 @@ impl Transport<RoleClient> for StdioTransport {
         let io = self.io.close().await;
         self.owner.stop().await?;
         io
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::wait_for_group_exit;
+    use rustix::io::Errno;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn cleanup_waits_through_permission_probe_until_group_disappears() -> std::io::Result<()>
+    {
+        let mut probes = 0;
+        wait_for_group_exit(|| {
+            probes += 1;
+            match probes {
+                1 => Err(Errno::PERM),
+                2 => Ok(()),
+                _ => Err(Errno::SRCH),
+            }
+        })
+        .await?;
+        assert_eq!(probes, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permission_denial_never_confirms_cleanup() {
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                wait_for_group_exit(|| Err(Errno::PERM)),
+            )
+            .await
+            .is_err()
+        );
     }
 }

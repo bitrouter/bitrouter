@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-use bitrouter_sdk::language_model::{Tool, ToolResultOutput};
+use bitrouter_ai::types::{Tool, ToolResultOutput};
 use globset::Glob;
 use ignore::WalkBuilder;
 use serde::Deserialize;

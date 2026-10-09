@@ -2,13 +2,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bitrouter_ai::types::{
+    ApiProtocol, Content, FinishReason, Message, Role, StreamPart, ToolResultOutput, Usage,
+};
+use bitrouter_ai::types::{AuthScheme, GenerateResult};
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::{AuthScheme, GenerateResult, RoutingTarget};
-use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, FinishReason, Message, MockExecutor, MockResponse, Role,
-    StaticRoutingTable, StreamPart, ToolResultOutput, Usage,
-};
+use bitrouter_sdk::language_model::types::RoutingTarget;
+use bitrouter_sdk::language_model::{MockExecutor, MockResponse, StaticRoutingTable};
 use tempfile::TempDir;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -67,6 +68,7 @@ fn target() -> RoutingTarget {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         model_constraints: Default::default(),
         account_label: None,
@@ -120,6 +122,22 @@ fn mock_stream(turn: GenerateResult) -> MockResponse {
     for content in turn.content {
         match content {
             Content::Text { text, .. } => parts.push(StreamPart::TextDelta { text }),
+            Content::Reasoning { text, native, .. } => {
+                parts.push(StreamPart::ReasoningStart {
+                    source_protocol: Some(ApiProtocol::Responses),
+                    id: "reasoning".into(),
+                });
+                parts.push(StreamPart::ReasoningDelta {
+                    text,
+                    source_kind: None,
+                });
+                parts.push(StreamPart::ReasoningEnd {
+                    id: "reasoning".into(),
+                    signature: None,
+                    native,
+                });
+            }
+
             Content::ToolCall {
                 id,
                 name,
@@ -176,23 +194,23 @@ fn agent(
 }
 
 #[tokio::test]
-async fn gemini_optional_ids_execute_separately_and_replay_provider_ids()
+async fn chat_tool_calls_execute_separately_and_replay_provider_ids()
 -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_sdk::language_model::protocol::{
-        OutboundAdapter, SseEvent, generate_content::GenerateContentAdapter,
+    use bitrouter_ai::protocol::{
+        OutboundAdapter, SseEvent, chat_completions::ChatCompletionsAdapter,
     };
 
     let workspace = TempDir::new()?;
     for name in ["first.txt", "second.txt", "third.txt"] {
         std::fs::write(workspace.path().join(name), name)?;
     }
-    let adapter = GenerateContentAdapter;
+    let adapter = ChatCompletionsAdapter;
     let wire = serde_json::json!({
-        "candidates": [{"content": {"role":"model", "parts":[
-            {"functionCall":{"name":"read", "args":{"path":"first.txt"}}, "thoughtSignature":"signature"},
-            {"functionCall":{"name":"read", "args":{"path":"second.txt"}}},
-            {"functionCall":{"id":"provider-3", "name":"read", "args":{"path":"third.txt"}}}
-        ]}, "finishReason":"STOP"}]
+        "choices": [{"index": 0, "delta": {"tool_calls": [
+            {"index": 0, "id": "provider-1", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"first.txt\"}"}},
+            {"index": 1, "id": "provider-2", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"second.txt\"}"}},
+            {"index": 2, "id": "provider-3", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"third.txt\"}"}}
+        ]}, "finish_reason": "tool_calls"}]
     });
     let mut decoder = adapter.stream_decoder();
     let mut parts = decoder.decode(&SseEvent {
@@ -254,22 +272,21 @@ async fn gemini_optional_ids_execute_separately_and_replay_provider_ids()
         512 * 1024,
     )?;
     let replay = adapter.render_request(&prompt)?;
-    let calls = &replay["contents"][1]["parts"];
-    assert!(calls[0]["functionCall"].get("id").is_none());
-    assert!(calls[1]["functionCall"].get("id").is_none());
-    assert_eq!(calls[0]["thoughtSignature"], "signature");
-    assert_eq!(calls[2]["functionCall"]["id"], "provider-3");
-    let results: Vec<_> = replay["contents"]
-        .as_array()
-        .ok_or("missing contents")?
+    let messages = replay["messages"].as_array().ok_or("missing messages")?;
+    let calls = messages
         .iter()
-        .flat_map(|content| content["parts"].as_array().into_iter().flatten())
-        .filter_map(|part| part.get("functionResponse"))
+        .find_map(|message| message.get("tool_calls"))
+        .ok_or("missing calls")?;
+    let results: Vec<_> = messages
+        .iter()
+        .filter(|message| message["role"] == "tool")
         .collect();
     assert_eq!(results.len(), 3);
-    assert!(results[0].get("id").is_none());
-    assert!(results[1].get("id").is_none());
-    assert_eq!(results[2]["id"], "provider-3");
+    for (index, result) in results.iter().enumerate() {
+        let id = format!("provider-{}", index + 1);
+        assert_eq!(calls[index]["id"], id);
+        assert_eq!(result["tool_call_id"], id);
+    }
     Ok(())
 }
 
@@ -374,7 +391,7 @@ async fn failed_batch_settles_and_provider_ids_can_repeat_in_later_steps()
         |_| {},
     )?;
     let report = agent.run("try tools", CancellationToken::new(), None).await;
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("note.txt"))?,
         "changed"
@@ -428,7 +445,7 @@ async fn read_only_mode_denies_unadvertised_effects_without_approval()
     let names = tools
         .iter()
         .filter_map(|tool| match tool {
-            bitrouter_sdk::language_model::Tool::Function { name, .. } => Some(name.as_str()),
+            bitrouter_ai::types::Tool::Function { name, .. } => Some(name.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -962,7 +979,7 @@ async fn a_read_error_stops_new_calls_and_settles_after_existing_workers()
     assert_eq!(report.status, RunStatus::Completed);
     assert_eq!(report.steps, 2);
     assert_eq!(gate.entered()?.0.len(), 2);
-    assert!(report.messages.iter().flat_map(|message| &message.content).any(|part| matches!(part, Content::ToolResult { call_id, output: ToolResultOutput::ErrorJson { value }, .. } if call_id == "later" && value.get("execution_status").and_then(serde_json::Value::as_str) == Some("not_executed"))));
+    assert!(report.messages.iter().flat_map(|message| &message.content).any(|part| matches!(part, Content::ToolResult { call_id, output: ToolResultOutput::Json { value }, .. } if call_id == "later" && value["status"] == "error" && value["output"]["type"] == "error_json" && value["output"]["value"]["execution_status"] == "not_executed")));
     Ok(())
 }
 
@@ -1266,5 +1283,35 @@ async fn duplicate_complete_call_ids_reject_the_response_before_any_effect()
     assert!(!workspace.path().join("earlier.txt").exists());
     assert!(!workspace.path().join("one.txt").exists());
     assert!(!workspace.path().join("two.txt").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_reasoning_survives_tool_followup_without_unauthorized_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    std::fs::write(workspace.path().join("note.txt"), "hello")?;
+    let native = bitrouter_ai::types::NativeReasoning::Responses(
+        serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "inspect"}], "encrypted_content": "opaque"}),
+    );
+    let agent = agent(
+        &workspace,
+        vec![
+            turn(vec![
+                Content::Reasoning {
+                    text: "inspect".into(),
+                    native: Some(native.clone()),
+                    provider_metadata: Default::default(),
+                },
+                call("read-1", "read", serde_json::json!({"path": "note.txt"})),
+            ]),
+            turn(vec![text("done")]),
+        ],
+        |_| {},
+    )?;
+    let report = agent.run("inspect", CancellationToken::new(), None).await;
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
+    assert_eq!(report.steps, 2);
+    assert!(report.events.iter().any(|event| matches!(event, RunEvent::AssistantMessage { message, .. } if message.content.iter().any(|content| matches!(content, Content::Reasoning { native: Some(retained), .. } if retained == &native)))));
     Ok(())
 }

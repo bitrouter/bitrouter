@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use bitrouter_sdk::language_model::types::{Message, Role, Tool};
+use bitrouter_ai::types::{Message, Role, Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

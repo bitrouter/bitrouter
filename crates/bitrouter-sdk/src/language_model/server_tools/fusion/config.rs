@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::language_model::types::Tool;
+use bitrouter_ai::types::Tool;
 
 /// Router-tool name the model calls to run a deliberation.
 pub const FUSION_TOOL: &str = "fusion";
@@ -161,7 +161,7 @@ pub struct FusionSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::ProviderMetadata;
+    use bitrouter_ai::types::ProviderMetadata;
 
     fn fusion_tool(name: &str, args: serde_json::Value) -> Tool {
         Tool::ProviderDefined {

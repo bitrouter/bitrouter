@@ -77,9 +77,13 @@ impl TerminalClient {
     }
 
     fn wait_for(&mut self, needle: &str) -> Result<()> {
+        self.wait_for_presence(needle, true)
+    }
+
+    fn wait_for_presence(&mut self, needle: &str, present: bool) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
-            if self.screen.screen().contents().contains(needle) {
+            if self.screen.screen().contents().contains(needle) == present {
                 return Ok(());
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -89,13 +93,13 @@ impl TerminalClient {
                     self.screen.process(&bytes);
                 }
                 Err(error) => anyhow::bail!(
-                    "PTY output missing {needle:?}: {error}; screen: {:?}",
+                    "PTY output did not reach {needle:?} presence={present}: {error}; screen: {:?}",
                     self.screen.screen().contents()
                 ),
             }
         }
         anyhow::bail!(
-            "PTY output missing {needle:?}; screen: {:?}",
+            "PTY output did not reach {needle:?} presence={present}; screen: {:?}",
             self.screen.screen().contents()
         )
     }
@@ -641,8 +645,14 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
     tui.wait_for_frame_since(resume_frame)?;
     tui.wait_for("Enter view")?;
     tui.send(b"/")?;
+    tui.wait_for("Agents · search:")?;
     tui.send(second.thread_id.as_bytes())?;
-    tui.send(b"\r\r")?;
+    tui.wait_for(&format!("{}▏", second.thread_id))?;
+    // Acknowledge leaving the search editor before requesting the preview.
+    // PTY writes and terminal redraws do not share message boundaries.
+    tui.send(b"\r")?;
+    tui.wait_for_presence(&format!("{}▏", second.thread_id), false)?;
+    tui.send(b"\r")?;
     tui.wait_for("o Open conversation")?;
     tui.wait_for(&format!("Thread: {}", second.thread_id))?;
     ensure!(

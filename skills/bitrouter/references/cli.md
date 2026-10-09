@@ -205,7 +205,7 @@ quiescence. Finish native work and use explicit `bro restart` to change binaries
 | Command | Effect |
 |---|---|
 | `bro route <model> [--prompt TEXT] [--config PATH]` | Preview a model or router using the running daemon, otherwise local config (`resolved_via: live/config/zero_config`). The config fallback discovers models for `auto_discover: true` providers, as `bro models` does. Fixed routes show `effective_model`, `provider_chain`, and available rate estimates. Policy-bound routers show identity, source, `bound_policy`, candidates, and `policy_decision_executed: false`; their `effective_model` is the base model and their provider chain is empty. No dynamic selection is executed. `--prompt` only affects the existing local static policy-table preview. Nothing is sent upstream for inference; discovery may query provider `/models` endpoints. |
-| `bro models [--config PATH] [--provider ID]` | List every routable model selector, each with **all** the providers that can serve it (the fallback chain, in order). Subscription providers are explicit-route-only and therefore appear as pinned `provider:canonical-model` selectors; every displayed selector can be passed unchanged to `bro route`. Tries the running daemon first, falls back to a standalone config parse — same order as `bro route`. The parse is resolved the way the daemon resolves its own config at start-up (built-in defaults, then subscription providers such as `claude-code` / `google-ai` re-activated from the OAuth credential store), so a subscription-backed provider is listed with no daemon running; the live table additionally reflects `reload`s and whatever the daemon resolved at start-up. `--json` reports `resolved_via: "live" \| "config"`. Filter with `--provider`. |
+| `bro models [--config PATH] [--provider ID]` | List every routable model selector, each with **all** the providers that can serve it (the fallback chain, in order). Subscription providers are explicit-route-only and therefore appear as pinned `provider:canonical-model` selectors; every displayed selector can be passed unchanged to `bro route`. Tries the running daemon first, falls back to a standalone config parse — same order as `bro route`. The parse is resolved the way the daemon resolves its own config at start-up (built-in defaults, then subscription providers such as `claude-code` re-activated from the OAuth credential store), so a subscription-backed provider is listed with no daemon running; the live table additionally reflects `reload`s and whatever the daemon resolved at start-up. `--json` reports `resolved_via: "live" \| "config"`. Filter with `--provider`. |
 | `bro providers list [--config PATH] [--socket PATH]` | Local compatibility output retains `ID  MODELS  ACTIVE  API_BASE`; a named remote context and the dashboard use the redacted accepted catalog without API bases or credentials. Active means configured for routing rather than connectivity-probed. |
 | `bro mcp check [server] [--config PATH]` | Connect to one configured upstream MCP server, or all of them, and report transport, reachability, latency, negotiated tools capability, and advertised tool names. |
 | `bro agents list [--remote] [--config PATH] [--socket PATH]` | Show the accepted ACP catalog + which are configured. A named BitRouter context exposes this catalog only. Local `--remote` also fetches the official ACP agent registry (cdn.agentclientprotocol.com) and lists its agents with version + install support (`npx`/`uvx` stub-able; `manual` for binary-only). |
@@ -541,7 +541,7 @@ OAuth 2.0 device-flow or non-interactive API-key sign-in against BitRouter Cloud
 | `--silent` | Drain without printing the body. |
 | `--verbose` | Redacted method/URL/header/status diagnostics on stderr. |
 
-Non-TTY JSON, binary bodies, and SSE stream byte-for-byte to stdout. HTTP 4xx/5xx preserves the body on stdout, writes the error to stderr, and exits non-zero. Tested endpoints include models, providers, public usage stats, Chat Completions, Messages, Responses, `generateContent`, `streamGenerateContent`, settlement receipts, routing presets, OAuth clients, billing ledger/status routes, and namespace/account management routes.
+Non-TTY JSON, binary bodies, and SSE stream byte-for-byte to stdout. HTTP 4xx/5xx preserves the body on stdout, writes the error to stderr, and exits non-zero. Tested endpoints include models, providers, public usage stats, Chat Completions, Messages, Responses, settlement receipts, routing presets, OAuth clients, billing ledger/status routes, and namespace/account management routes.
 
 Side effect: when the credentials file exists, the local daemon auto-adds the `bitrouter` provider to the zero-config providers map, so every model your account is entitled to is routable as `bitrouter:<model-id>` against `localhost:4356` without further configuration.
 
@@ -665,3 +665,17 @@ Active Turns discover workspace skills plus the daemon user's `.agents/skills`,
 `.codex/skills`, `.claude/skills` and `$CODEX_HOME/skills` when configured. Runtime
 snapshots expose metadata and hashed versions. Discovery does not inject skill
 bodies or MCP instructions into the prompt, install skills or execute scripts.
+
+### Native model history across protocol boundaries
+
+Native tool errors and execution denials remain typed in the durable journal.
+Model prompts represent them as JSON containing an explicit `status` and the
+original typed `output`, so Chat Completions and Responses preserve the failure
+meaning without a protocol-native error flag. Prompt byte limits include this
+representation.
+
+The standalone native harness retains source-native Responses reasoning as
+journal evidence but rebuilds follow-up prompts from public assistant messages
+and tool results. It does not treat opaque reasoning as permission to replay a
+provider continuation. Signed Anthropic reasoning remains intact. Managed Core
+continuation adds its own authenticated origin and replay-authority checks.

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bitrouter_sdk::language_model::ToolResultOutput;
+use bitrouter_ai::types::ToolResultOutput;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 

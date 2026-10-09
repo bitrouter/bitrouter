@@ -16,7 +16,7 @@ use super::judge::{JudgeAnalysis, analysis_schema, judge_system_prompt};
 use crate::language_model::server_tools::declarations::forwarded_tools;
 use crate::language_model::server_tools::nested::{NestedRequest, NestedRunner};
 use crate::language_model::server_tools::toolset::ToolContext;
-use crate::language_model::types::{ResponseFormat, ToolResultOutput, Usage};
+use bitrouter_ai::types::{ResponseFormat, ToolResultOutput, Usage};
 
 /// The engine's result: the tool output (the analysis JSON, or synthesized
 /// prose) plus the usage summed across panel + judge (+ synthesizer), so the
@@ -165,8 +165,8 @@ mod tests {
     use crate::caller::CallerContext;
     use crate::language_model::server_tools::nested::{NestedOutcome, NestedRequest, NestedRunner};
     use crate::language_model::server_tools::toolset::ToolContext;
-    use crate::language_model::types::{ToolResultOutput, Usage};
     use async_trait::async_trait;
+    use bitrouter_ai::types::{ToolResultOutput, Usage};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 

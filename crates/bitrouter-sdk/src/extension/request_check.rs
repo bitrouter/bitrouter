@@ -9,6 +9,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
+use crate::language_model::operations::OperationScope;
+use bitrouter_ai::types::ModelOperation;
 
 /// Maximum fragments in the projected entry request.
 pub const MAX_CONTENT_FRAGMENTS: usize = 4096;
@@ -45,6 +47,22 @@ pub enum ContentFragmentKind {
     ToolResult,
     /// A tool-approval decision.
     ToolApproval,
+    /// Shared evidence in a Decisions request.
+    DecisionEvidence,
+    /// Optional name attached to a decision question.
+    DecisionQuestionName,
+    /// Instructions for a decision question.
+    DecisionInstructions,
+    /// A string choice value, distinct from a boolean spelling.
+    DecisionStringChoice,
+    /// A native boolean choice value.
+    DecisionBooleanChoice,
+    /// Description of a choice value.
+    DecisionChoiceDescription,
+    /// Label of an ordered score level.
+    DecisionLevelLabel,
+    /// Description of a score level.
+    DecisionLevelDescription,
 }
 
 /// Coverage scope for the first request-check contract.
@@ -100,6 +118,8 @@ pub struct ContentFragment {
 /// Bounded entry-request text passed to trusted extension code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Input {
+    /// Semantic operation of the original typed request.
+    pub operation: ModelOperation,
     /// Canonical textual fragments after the named router's defaults.
     pub content: Vec<ContentFragment>,
     /// Scope and completeness of the projected input.
@@ -144,6 +164,8 @@ pub type Callback = dyn Fn(&Input) -> Decision + Send + Sync + 'static;
 /// One statically linked implementation consumed by a host at startup.
 #[derive(Clone)]
 pub struct Registration {
+    /// Operations whose projection the callback explicitly supports.
+    pub supported_operations: OperationScope,
     /// Code/rules revision that must match the configured binding.
     pub revision: String,
     /// Trusted business implementation.
@@ -155,9 +177,15 @@ impl Registration {
     /// its configuration match before executing it.
     pub fn new(revision: impl Into<String>, callback: Arc<Callback>) -> Self {
         Self {
+            supported_operations: OperationScope::Generation,
             revision: revision.into(),
             callback,
         }
+    }
+    /// Opt into a migrated projection contract for these operations.
+    pub fn with_supported_operations(mut self, operations: OperationScope) -> Self {
+        self.supported_operations = operations;
+        self
     }
 }
 

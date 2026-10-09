@@ -321,3 +321,12 @@ at a time. Harnesses still provide the original checkpoint bytes and preserve
 all referenced archive dependencies; this is an internal buffer-lifetime change,
 with no new message or smaller legacy reply allowance. Ordinary checkpoint JSON
 keeps omitted optional fields intact during historical receipt validation.
+
+### Model integration boundary
+
+Managed Responses runs through the generation pipeline. The ordinary native
+Decisions API remains a separate operation; it is not the managed agent channel.
+Core prepares failed tool results as explicit JSON error envelopes for models
+whose wire lacks a tool-error flag, while durable history retains typed outcomes.
+Context rebuild keeps the admitted route and price snapshot and rechecks
+credentials and required context before another provider call.

@@ -75,14 +75,15 @@ async fn native_continuation_uses_suffix_and_same_count_body_after_restart() -> 
             capture.reports.lock().await[0].continuation.output,
             NativeContinuationOutput::Issued
         );
-        assert!(first.result.response_id.is_none());
+        assert!(generation(&first.result)?.response_id.is_none());
         assert!(
             !serde_json::to_string(&capture.reports.lock().await[0])?.contains("resp_native_first")
         );
-        let token = artifact(&first.result.content)?;
+        let first_generation = generation(&first.result)?;
+        let token = artifact(&first_generation.content)?;
         assert!(!token.contains("resp_native_first"));
         assert!(!token.contains("fixture-owner"));
-        let next = suffix_prompt(first.result.content);
+        let next = suffix_prompt(generation(&first.result)?.content);
         let restarted = assemble(&fixture.source, &fixture.home, fixture.checked.clone()).await?;
         let continued = restarted
             .app
@@ -96,7 +97,7 @@ async fn native_continuation_uses_suffix_and_same_count_body_after_restart() -> 
         );
         drop(plans);
         let reports = capture.reports.lock().await;
-        assert_eq!(reports[1].result.as_ref(), Some(&continued.result));
+        assert_eq!(reports[1].result.as_ref(), continued.result.generation());
         assert_eq!(
             reports[1].continuation.input,
             NativeContinuationInput::Resumed { prefix_messages: 2 }
@@ -152,7 +153,7 @@ async fn native_continuation_rejects_tampering_before_checker_or_upstream() -> R
         .app
         .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
         .await?;
-    let original = suffix_prompt(first.result.content);
+    let original = suffix_prompt(generation(&first.result)?.content);
     for case in ["cipher", "message", "owner", "role", "position"] {
         let mut next = original.clone();
         let mut caller = owner();
@@ -211,7 +212,7 @@ async fn native_continuation_detaches_only_when_complete_replay_is_available() -
             .app
             .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
             .await?;
-        let next = suffix_prompt(first.result.content);
+        let next = suffix_prompt(generation(&first.result)?.content);
         for (case, reason) in [
             ("model", FullHistoryReason::TargetChanged),
             ("effort", FullHistoryReason::EffortChanged),
@@ -278,7 +279,7 @@ async fn native_continuation_key_rotation_and_unstored_responses_never_reuse_han
         .app
         .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
         .await?;
-    let next = suffix_prompt(first.result.content);
+    let next = suffix_prompt(generation(&first.result)?.content);
     let rotated = assemble(
         &fixture
             .source
@@ -325,14 +326,13 @@ async fn native_continuation_key_rotation_and_unstored_responses_never_reuse_han
         .app
         .execute_native_controlled(not_stored, owner(), capture.clone())
         .await?;
-    assert!(artifact(&response.result.content).is_err());
+    assert!(artifact(&generation(&response.result)?.content).is_err());
     assert_eq!(
         capture.reports.lock().await[0].continuation.output,
         NativeContinuationOutput::NotStored
     );
     assert_eq!(
-        response
-            .result
+        generation(&response.result)?
             .usage
             .as_ref()
             .context("usage")?
@@ -359,7 +359,7 @@ async fn native_continuation_never_replays_unrepresented_state_without_coverage(
         .app
         .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
         .await?;
-    let mut next = suffix_prompt(first.result.content);
+    let mut next = suffix_prompt(generation(&first.result)?.content);
     assert!(
         metadata(&next.messages[1].content[0])[ORIGIN_NAMESPACE][REQUIRED_STATE_FIELD].is_string()
     );
@@ -372,7 +372,7 @@ async fn native_continuation_never_replays_unrepresented_state_without_coverage(
     let mut older = next.clone();
     older.messages.push(Message {
         role: Role::Assistant,
-        content: second.result.content,
+        content: generation(&second.result)?.content,
     });
     older.messages.push(Message::text(Role::User, "third task"));
     remove_field(&mut older.messages[3].content[0], CONTINUATION_FIELD)?;
@@ -438,10 +438,10 @@ async fn native_continuation_cannot_detach_a_lossy_imported_branch() -> Result<(
         .app
         .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
         .await?;
-    let mut joined = suffix_prompt(lossy.result.content);
+    let mut joined = suffix_prompt(generation(&lossy.result)?.content);
     joined.messages.push(Message {
         role: Role::Assistant,
-        content: complete.result.content,
+        content: generation(&complete.result)?.content,
     });
     joined
         .messages
@@ -480,8 +480,8 @@ async fn native_continuation_identical_visible_outputs_cannot_exchange_hidden_st
         .app
         .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
         .await?;
-    let second_token = artifact(&second.result.content)?.to_owned();
-    let mut next = suffix_prompt(first.result.content);
+    let second_token = artifact(&generation(&second.result)?.content)?.to_owned();
+    let mut next = suffix_prompt(generation(&first.result)?.content);
     metadata_mut(&mut next.messages[1].content[0])
         .get_mut(ORIGIN_NAMESPACE)
         .context("metadata")?[CONTINUATION_FIELD] = second_token.into();
@@ -657,19 +657,23 @@ async fn native_continuation_failed_seal_or_storage_preserves_billed_output_and_
             .app
             .execute_native_controlled(input, owner(), capture.clone())
             .await?;
-        assert!(artifact(&output.result.content).is_err());
-        assert!(output.result.response_id.is_none());
+        assert!(artifact(&generation(&output.result)?.content).is_err());
+        assert!(generation(&output.result)?.response_id.is_none());
         assert_eq!(
-            output.result.usage.as_ref().context("usage")?.prompt_tokens,
+            generation(&output.result)?
+                .usage
+                .as_ref()
+                .context("usage")?
+                .prompt_tokens,
             100
         );
         assert!(
             bitrouter_sdk::language_model::native_continuation::requires_stored_state(
-                &output.result.content[0]
+                &generation(&output.result)?.content[0]
             )
         );
         let report = &capture.reports.lock().await[0];
-        assert_eq!(report.result.as_ref(), Some(&output.result));
+        assert_eq!(report.result.as_ref(), Some(&generation(&output.result)?));
         assert_eq!(
             report.continuation.output,
             if key_failure {
@@ -694,7 +698,7 @@ async fn native_continuation_failed_seal_or_storage_preserves_billed_output_and_
                 .app
                 .app
                 .execute_native_controlled(
-                    suffix_prompt(output.result.content),
+                    suffix_prompt(generation(&output.result)?.content),
                     owner(),
                     Arc::new(Capture::default())
                 )

@@ -75,22 +75,6 @@ models:
         cache_read: 0.028
       output_tokens:
         text: 1.32
-  - id: deepseek/deepseek-v3.2
-    provider_model_id: deepseek-ai/deepseek-v3.2
-    pricing:
-      input_tokens:
-        no_cache: 0.26
-        cache_read: 0.13
-      output_tokens:
-        text: 0.38
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: moonshotai/kimi-k2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-        cache_read: 0.16
-      output_tokens:
-        text: 4
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: moonshotai/kimi-k2.7-code
     pricing:
@@ -114,14 +98,6 @@ models:
             cache_read: 0.12
           output_tokens:
             text: 2.4
-  - id: z-ai/glm-5.1
-    provider_model_id: zai-org/glm-5.1
-    pricing:
-      input_tokens:
-        no_cache: 1.26
-        cache_read: 0.234
-      output_tokens:
-        text: 3.96
   - id: z-ai/glm-5.2
     provider_model_id: zai-org/glm-5.2
     pricing:

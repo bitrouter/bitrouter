@@ -15,6 +15,7 @@ default = []
 sdk = ["dep:async-trait", "dep:serde_json"]
 
 [dependencies]
+bitrouter-ai.workspace = true
 bitrouter-sdk = { workspace = true, default-features = false }
 async-trait = { workspace = true, optional = true }
 serde.workspace = true

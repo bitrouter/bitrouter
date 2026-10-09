@@ -20,7 +20,7 @@ use crate::error::Result;
 use crate::language_model::server_tools::declarations::ServerToolDeclarations;
 use crate::language_model::server_tools::nested::NestedRunner;
 use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
-use crate::language_model::types::{ProviderMetadata, Tool, ToolResultOutput};
+use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// The `bitrouter:fusion` server tool, generic over a [`NestedRunner`] so each
 /// deployment supplies its own (a custom runner can add identity + metering).
@@ -126,8 +126,8 @@ mod tests {
     };
     use crate::language_model::server_tools::nested::{NestedOutcome, NestedRequest, NestedRunner};
     use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
-    use crate::language_model::types::ToolResultOutput;
     use async_trait::async_trait;
+    use bitrouter_ai::types::ToolResultOutput;
     use std::collections::HashMap;
     use std::sync::Arc;
 
