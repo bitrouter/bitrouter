@@ -27,18 +27,6 @@ models:
       - reasoning
       - structured_outputs
       - tools
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: kimi-k2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-        cache_read: 0.16
-      output_tokens:
-        text: 4
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: kimi-k2.7-code
     pricing:

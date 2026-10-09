@@ -41,8 +41,6 @@ models:
     provider_model_id: qwen3.8-max
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: kimi-k2.7-code
-  - id: z-ai/glm-5.1
-    provider_model_id: glm-5.1
   - id: deepseek/deepseek-v4-pro
     provider_model_id: deepseek-v4-pro
   - id: z-ai/glm-5.2
@@ -55,8 +53,6 @@ models:
     provider_model_id: mimo-v2.5
   - id: xiaomi/mimo-v2-omni
     provider_model_id: mimo-v2-omni
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: kimi-k2.6
   - id: xiaomi/mimo-v2-pro
     provider_model_id: mimo-v2-pro
   - id: xiaomi/mimo-v2.5-pro
@@ -87,6 +83,8 @@ models:
     provider_model_id: mimo-v2.6-pro
   - id: openai/gpt-6-luna
     provider_model_id: gpt-6-luna
+  - id: anthropic/claude-haiku-5.5
+    provider_model_id: claude-haiku-5-5
 status: active
 auto_sync:
   feed: models_dev

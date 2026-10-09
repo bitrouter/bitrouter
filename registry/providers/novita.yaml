@@ -38,14 +38,6 @@ models:
         cache_read: 0.028
       output_tokens:
         text: 0.28
-  - id: deepseek/deepseek-v3.2
-    provider_model_id: deepseek/deepseek-v3.2
-    pricing:
-      input_tokens:
-        no_cache: 0.269
-        cache_read: 0.1345
-      output_tokens:
-        text: 0.4
   - id: qwen/qwen3.7-max
     provider_model_id: qwen/qwen3.7-max
     pricing:
@@ -55,28 +47,6 @@ models:
         cache_write: 1.5625
       output_tokens:
         text: 3.75
-  - id: qwen/qwen3.5-122b-a10b
-    provider_model_id: qwen/qwen3.5-122b-a10b
-    pricing:
-      input_tokens:
-        no_cache: 0.4
-      output_tokens:
-        text: 3.2
-  - id: qwen/qwen3.5-27b
-    provider_model_id: qwen/qwen3.5-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 2.4
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: moonshotai/kimi-k2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.8
-        cache_read: 0.16
-      output_tokens:
-        text: 3.4
   - id: minimax/minimax-m2.7
     provider_model_id: minimax/minimax-m2.7
     pricing:
@@ -85,14 +55,6 @@ models:
         cache_read: 0.06
       output_tokens:
         text: 1.2
-  - id: z-ai/glm-5.1
-    provider_model_id: zai-org/glm-5.1
-    pricing:
-      input_tokens:
-        no_cache: 1.38
-        cache_read: 0.26
-      output_tokens:
-        text: 4.4
   - id: z-ai/glm-5.2
     provider_model_id: zai-org/glm-5.2
     pricing:
@@ -101,14 +63,6 @@ models:
         cache_read: 0.26
       output_tokens:
         text: 4.4
-  - id: z-ai/glm-4.7
-    provider_model_id: zai-org/glm-4.7
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-        cache_read: 0.11
-      output_tokens:
-        text: 2.2
   - id: openai/gpt-oss-120b
     provider_model_id: openai/gpt-oss-120b
     pricing:

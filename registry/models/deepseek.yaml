@@ -1,17 +1,3 @@
-- id: deepseek/deepseek-v3.2
-  deprecation_date: 2026-10-05
-  name: 'DeepSeek: DeepSeek V3.2'
-  description: DeepSeek-V3.2 — high-efficiency reasoning model.
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 131072
-  max_output_tokens: 65536
-  release_date: 2025-01-01
-  knowledge_cutoff: 2024-12
-  open_weights: true
-  family: deepseek
 - id: deepseek/deepseek-v4-flash
   deprecation_date: 2026-10-14
   name: 'DeepSeek: DeepSeek V4 Flash'
