@@ -186,7 +186,7 @@ impl SettlementClient {
     }
 }
 
-fn validate_receipt(request_id: &str, receipt: &SettlementReceipt) -> Result<()> {
+pub(crate) fn validate_receipt(request_id: &str, receipt: &SettlementReceipt) -> Result<()> {
     if receipt.request_id != request_id {
         return Err(SettlementError::IdentityMismatch);
     }

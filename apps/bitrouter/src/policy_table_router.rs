@@ -1127,6 +1127,15 @@ fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
 }
 
 impl PromptTransform for PolicyTableRouter {
+    fn validate_context_rebuild(
+        &self,
+        _original: &Prompt,
+        _rebuilt: &Prompt,
+    ) -> bitrouter_sdk::Result<()> {
+        // Model and effort stay frozen. Do not classify or record a second selection.
+        Ok(())
+    }
+
     fn apply(&self, prompt: &mut Prompt) {
         PolicyTableRouter::apply(self, prompt);
     }

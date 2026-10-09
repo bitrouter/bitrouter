@@ -2442,84 +2442,139 @@ impl InboundAdapter for ResponsesAdapter {
     }
 }
 
+fn render_responses_request(prompt: &Prompt, replay_reasoning: bool) -> Result<serde_json::Value> {
+    let mut input = Vec::new();
+    for m in &prompt.messages {
+        input.extend(render_message_items(m, replay_reasoning));
+    }
+    let mut req = serde_json::Map::new();
+    req.insert("model".into(), prompt.model.clone().into());
+    req.insert("input".into(), input.into());
+    if let Some(system) = &prompt.system {
+        req.insert("instructions".into(), system.clone().into());
+    }
+    if !prompt.tools.is_empty() {
+        req.insert(
+            "tools".into(),
+            prompt
+                .tools
+                .iter()
+                .map(render_responses_tool)
+                .collect::<Vec<_>>()
+                .into(),
+        );
+    }
+    if let Some(t) = prompt.params.temperature {
+        req.insert("temperature".into(), t.into());
+    }
+    if let Some(p) = prompt.params.top_p {
+        req.insert("top_p".into(), p.into());
+    }
+    if let Some(mt) = prompt.params.max_tokens {
+        req.insert("max_output_tokens".into(), mt.into());
+    }
+    let mut reasoning = prompt
+        .params
+        .extra_value_for_protocol(&ApiProtocol::Responses, "reasoning")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    if let Some(effort) = &prompt.params.reasoning_effort {
+        reasoning.insert("effort".into(), effort.as_str().into());
+    }
+    if !reasoning.is_empty() {
+        req.insert("reasoning".into(), serde_json::Value::Object(reasoning));
+    }
+    if let Some(store) = prompt.params.store {
+        req.insert("store".into(), store.into());
+    }
+    if let Some(parallel) = prompt.params.parallel_tool_calls {
+        req.insert("parallel_tool_calls".into(), parallel.into());
+    }
+    // Render the canonical response_format into Responses' `text.format`.
+    // Merge with any extras-supplied `text` blob so caller-supplied
+    // sibling keys (e.g. `verbosity`) survive.
+    if let Some(rf) = &prompt.response_format {
+        let mut text = prompt
+            .params
+            .extra_value_for_protocol(&ApiProtocol::Responses, "text")
+            .and_then(|t| t.as_object().cloned())
+            .unwrap_or_default();
+        text.insert("format".into(), render_responses_response_format(rf));
+        req.insert("text".into(), serde_json::Value::Object(text));
+    }
+    // Render the canonical tool_choice into Responses' native shape, before
+    // the extras splat so it wins over any leftover `tool_choice`.
+    if let Some(tc) = &prompt.tool_choice {
+        req.insert("tool_choice".into(), render_responses_tool_choice(tc));
+    }
+    // Splat Responses-API extras (metadata, include, …) only for a native
+    // round trip. Typed fields win.
+    for (k, v) in prompt.params.extras_for_protocol(&ApiProtocol::Responses) {
+        req.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    req.insert("stream".into(), prompt.stream.into());
+    Ok(serde_json::Value::Object(req))
+}
+
 impl OutboundAdapter for ResponsesAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }
 
+    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        super::managed::validate_prompt(&ApiProtocol::Responses, prompt)
+    }
+
+    fn validate_managed_body(
+        &self,
+        expected: &serde_json::Value,
+        actual: &serde_json::Value,
+        _target: &ModelTarget,
+    ) -> std::result::Result<(), &'static str> {
+        super::managed::validate_body(&ApiProtocol::Responses, expected, actual)
+    }
+
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
         crate::protocol::require_request_admission(prompt, &ApiProtocol::Responses)?;
-        let mut input = Vec::new();
-        for m in &prompt.messages {
-            input.extend(render_message_items(m));
+        render_responses_request(prompt, false)
+    }
+
+    fn render_managed_request_for_target(
+        &self,
+        prompt: &Prompt,
+        _target: &ModelTarget,
+    ) -> Result<(serde_json::Value, crate::conversion::ConversionReport)> {
+        self.validate_managed_prompt(prompt)
+            .map_err(ModelError::invalid_request)?;
+        // Normalize only a temporary projection after host proof validation.
+        // Existing durable origin commitments include their original shape.
+        let mut normalized = prompt.clone();
+        for content in normalized
+            .messages
+            .iter_mut()
+            .flat_map(|message| &mut message.content)
+        {
+            if let Content::Reasoning {
+                native,
+                provider_metadata,
+                ..
+            } = content
+                && native.is_none()
+            {
+                *native = provider_namespace(provider_metadata, "openai")
+                    .and_then(|fields| fields.get("reasoningItem"))
+                    .cloned()
+                    .map(NativeReasoning::Responses);
+            }
         }
-        let mut req = serde_json::Map::new();
-        req.insert("model".into(), prompt.model.clone().into());
-        req.insert("input".into(), input.into());
-        if let Some(system) = &prompt.system {
-            req.insert("instructions".into(), system.clone().into());
-        }
-        if !prompt.tools.is_empty() {
-            req.insert(
-                "tools".into(),
-                prompt
-                    .tools
-                    .iter()
-                    .map(render_responses_tool)
-                    .collect::<Vec<_>>()
-                    .into(),
-            );
-        }
-        if let Some(t) = prompt.params.temperature {
-            req.insert("temperature".into(), t.into());
-        }
-        if let Some(p) = prompt.params.top_p {
-            req.insert("top_p".into(), p.into());
-        }
-        if let Some(mt) = prompt.params.max_tokens {
-            req.insert("max_output_tokens".into(), mt.into());
-        }
-        let mut reasoning = prompt
-            .params
-            .extra_value_for_protocol(&ApiProtocol::Responses, "reasoning")
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        if let Some(effort) = &prompt.params.reasoning_effort {
-            reasoning.insert("effort".into(), effort.as_str().into());
-        }
-        if !reasoning.is_empty() {
-            req.insert("reasoning".into(), serde_json::Value::Object(reasoning));
-        }
-        if let Some(store) = prompt.params.store {
-            req.insert("store".into(), store.into());
-        }
-        if let Some(parallel) = prompt.params.parallel_tool_calls {
-            req.insert("parallel_tool_calls".into(), parallel.into());
-        }
-        // Render the canonical response_format into Responses' `text.format`.
-        // Merge with any extras-supplied `text` blob so caller-supplied
-        // sibling keys (e.g. `verbosity`) survive.
-        if let Some(rf) = &prompt.response_format {
-            let mut text = prompt
-                .params
-                .extra_value_for_protocol(&ApiProtocol::Responses, "text")
-                .and_then(|t| t.as_object().cloned())
-                .unwrap_or_default();
-            text.insert("format".into(), render_responses_response_format(rf));
-            req.insert("text".into(), serde_json::Value::Object(text));
-        }
-        // Render the canonical tool_choice into Responses' native shape, before
-        // the extras splat so it wins over any leftover `tool_choice`.
-        if let Some(tc) = &prompt.tool_choice {
-            req.insert("tool_choice".into(), render_responses_tool_choice(tc));
-        }
-        // Splat Responses-API extras (metadata, include, …) only for a native
-        // round trip. Typed fields win.
-        for (k, v) in prompt.params.extras_for_protocol(&ApiProtocol::Responses) {
-            req.entry(k.clone()).or_insert_with(|| v.clone());
-        }
-        req.insert("stream".into(), prompt.stream.into());
-        Ok(serde_json::Value::Object(req))
+        let mut report = self.admission(&normalized);
+        // Every reasoning item above passed the strict managed validator;
+        // the host supplies its origin/target proof and validates final auth.
+        report.issues.retain(|issue| {
+            issue.reason != crate::conversion::ConversionReason::NativeReasoningAuthorityUnproven
+        });
+        report.require_admitted()?;
+        Ok((render_responses_request(&normalized, true)?, report))
     }
 
     fn parse_response(&self, body: serde_json::Value) -> Result<GenerateResult> {
@@ -2993,6 +3048,11 @@ fn render_responses_tool_choice(tc: &ToolChoice) -> serde_json::Value {
 
 #[async_trait]
 impl Transport for ResponsesTransport {
+    fn input_token_count_endpoint(&self, target: &ModelTarget) -> Option<String> {
+        // https://developers.openai.com/api/docs/guides/token-counting
+        Some(format!("{}/input_tokens", self.endpoint_url(target, false)))
+    }
+
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }
@@ -3020,7 +3080,7 @@ impl Transport for ResponsesTransport {
 }
 
 /// Render one canonical message into zero or more Responses `input` items.
-fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
+fn render_message_items(m: &Message, replay_reasoning: bool) -> Vec<serde_json::Value> {
     let mut items = Vec::new();
     let mut text_parts = Vec::new();
     for c in &m.content {
@@ -3034,9 +3094,13 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                 };
                 text_parts.push(serde_json::json!({ "type": kind, "text": text }));
             }
-            Content::Reasoning { .. } => {
-                // reasoning is not re-sent as input; drop on the request side
+            Content::Reasoning {
+                native: Some(NativeReasoning::Responses(item)),
+                ..
+            } if replay_reasoning => {
+                items.push(item.clone());
             }
+            Content::Reasoning { .. } => {}
             Content::ToolCall {
                 id,
                 name,
@@ -4860,3 +4924,191 @@ impl StreamEncoder for ResponsesStreamEncoder {
         Ok(Vec::new())
     }
 }
+
+/// Validate retained reasoning without granting any selected-target replay authority.
+pub fn validate_reasoning_projection(content: &Content) -> std::result::Result<(), &'static str> {
+    let Content::Reasoning {
+        text,
+        native,
+        provider_metadata,
+    } = content
+    else {
+        return Ok(());
+    };
+    let legacy = provider_namespace(provider_metadata, "openai")
+        .and_then(|fields| fields.get("reasoningItem"));
+    let item = match (native, legacy) {
+        (Some(NativeReasoning::Responses(item)), Some(legacy)) if item != legacy => {
+            return Err("responses_reasoning_item_invalid");
+        }
+        (Some(NativeReasoning::Responses(item)), _) | (None, Some(item)) => item,
+        (None, None) => return Ok(()),
+    };
+    let known = item.as_object().is_some_and(|fields| {
+        fields.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "type" | "id" | "summary" | "content" | "status" | "encrypted_content"
+            )
+        })
+    });
+    let foreign_opaque = provider_namespace(provider_metadata, "anthropic").is_some_and(|fields| {
+        fields.contains_key("redactedThinking") || fields.contains_key("redactedData")
+    });
+    let retained = NativeReasoning::Responses(item.clone());
+    if !known
+        || foreign_opaque
+        || native_reasoning_item(&retained).is_err()
+        || retained.visible_text() != *text
+        || item
+            .get("id")
+            .is_some_and(|value| !value.as_str().is_some_and(|id| !id.is_empty()))
+        || item.get("encrypted_content").is_some_and(|value| {
+            !value.is_null() && !value.as_str().is_some_and(|value| !value.is_empty())
+        })
+        || item.get("status").is_some_and(|value| {
+            !value.is_null()
+                && !matches!(
+                    value.as_str(),
+                    Some("in_progress" | "completed" | "incomplete")
+                )
+        })
+        || ["summary", "content"].iter().any(|field| {
+            item.get(*field)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        !part.as_object().is_some_and(|fields| {
+                            fields
+                                .keys()
+                                .all(|key| matches!(key.as_str(), "type" | "text"))
+                        })
+                    })
+                })
+        })
+    {
+        return Err("responses_reasoning_item_invalid");
+    }
+    Ok(())
+}
+
+pub(super) fn validate_reasoning_history(
+    content: &Content,
+) -> std::result::Result<(), &'static str> {
+    validate_reasoning_projection(content)?;
+    let Content::Reasoning {
+        native,
+        provider_metadata,
+        ..
+    } = content
+    else {
+        return Err("reasoning_history_would_be_dropped");
+    };
+    let item = match native {
+        Some(NativeReasoning::Responses(item)) => Some(item),
+        None => provider_namespace(provider_metadata, "openai")
+            .and_then(|fields| fields.get("reasoningItem")),
+    }
+    .ok_or("reasoning_history_would_be_dropped")?;
+    if item
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err("responses_reasoning_item_invalid");
+    }
+    Ok(())
+}
+
+/// Whether all output items have a complete canonical history representation.
+pub fn output_replayable(response: &serde_json::Value) -> bool {
+    fn fields(value: &serde_json::Value, known: &[&str]) -> bool {
+        value
+            .as_object()
+            .is_some_and(|object| object.keys().all(|key| known.contains(&key.as_str())))
+    }
+    response
+        .get("output")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| {
+            !items.is_empty()
+                && items.iter().all(|item| {
+                    match item.get("type").and_then(serde_json::Value::as_str) {
+                        Some("reasoning") => validate_reasoning_history(&Content::Reasoning {
+                            text: NativeReasoning::Responses(item.clone()).visible_text(),
+                            native: Some(NativeReasoning::Responses(item.clone())),
+                            provider_metadata: ProviderMetadata::new(),
+                        })
+                        .is_ok(),
+                        Some("message") => {
+                            fields(item, &["type", "id", "role", "status", "content"])
+                                && item.get("role").and_then(serde_json::Value::as_str)
+                                    == Some("assistant")
+                                && item
+                                    .get("content")
+                                    .and_then(serde_json::Value::as_array)
+                                    .is_some_and(|parts| {
+                                        !parts.is_empty()
+                                            && parts.iter().all(|part| {
+                                                fields(
+                                                    part,
+                                                    &["type", "text", "annotations", "logprobs"],
+                                                ) && part
+                                                    .get("type")
+                                                    .and_then(serde_json::Value::as_str)
+                                                    == Some("output_text")
+                                                    && part
+                                                        .get("text")
+                                                        .is_some_and(serde_json::Value::is_string)
+                                                    && ["annotations", "logprobs"].iter().all(
+                                                        |key| {
+                                                            part.get(*key).is_none_or(|value| {
+                                                                value.is_null()
+                                                                    || value
+                                                                        .as_array()
+                                                                        .is_some_and(Vec::is_empty)
+                                                            })
+                                                        },
+                                                    )
+                                            })
+                                    })
+                        }
+                        Some("function_call" | "custom_tool_call") => {
+                            fields(
+                                item,
+                                &[
+                                    "type",
+                                    "id",
+                                    "status",
+                                    "call_id",
+                                    "name",
+                                    if item["type"] == "custom_tool_call" {
+                                        "input"
+                                    } else {
+                                        "arguments"
+                                    },
+                                    "namespace",
+                                ],
+                            ) && ["call_id", "name"].iter().all(|key| {
+                                item.get(*key)
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|value| !value.is_empty())
+                            }) && item
+                                .get(if item["type"] == "custom_tool_call" {
+                                    "input"
+                                } else {
+                                    "arguments"
+                                })
+                                .is_some_and(serde_json::Value::is_string)
+                                && item
+                                    .get("namespace")
+                                    .is_none_or(|value| value.is_null() || value.is_string())
+                        }
+                        _ => false,
+                    }
+                })
+        })
+}
+
+#[cfg(test)]
+mod reasoning_tests;

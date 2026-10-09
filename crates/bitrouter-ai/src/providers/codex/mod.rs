@@ -179,6 +179,19 @@ impl AuthApplier for OpenAiCodexAuthApplier {
         Ok(Self::continuation_authority(&token))
     }
 
+    fn output_token_limit_support(&self, _target: &ModelTarget) -> Option<bool> {
+        Some(false)
+    }
+
+    fn normalize_managed_body(
+        &self,
+        body: &mut serde_json::Value,
+        _target: &ModelTarget,
+    ) -> Result<()> {
+        shape_codex_responses_body(body);
+        Ok(())
+    }
+
     async fn prepare_body(
         &self,
         body: &mut serde_json::Value,

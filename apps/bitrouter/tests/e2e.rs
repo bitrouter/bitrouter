@@ -1809,6 +1809,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
             chat_supports_stream_options: None,
             chat_google_extensions: false,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,

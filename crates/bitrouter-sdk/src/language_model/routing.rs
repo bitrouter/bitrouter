@@ -51,9 +51,10 @@ pub struct RoutingPrefs {
     pub only: Vec<String>,
     /// Drop these providers from the chain.
     pub ignore: Vec<String>,
-    /// The capabilities a request needs; a capability-aware [`RoutingTable`]
-    /// should treat only providers advertising all of these as eligible. The
-    /// pipeline populates it from
+    /// The capabilities a request needs. A [`RoutingTable`] may use these with
+    /// authoritative support constraints; the configured model catalog contains
+    /// positive observations, so omitted capabilities remain unknown rather
+    /// than proving a route unsupported. The pipeline populates this from
     /// [`Prompt::required_capabilities`](bitrouter_ai::types::Prompt::required_capabilities).
     /// Empty (the default) imposes no capability constraint.
     pub require_capabilities: Vec<Capability>,

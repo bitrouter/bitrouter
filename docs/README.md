@@ -5,6 +5,14 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`ORCHESTRATOR_CORE_SPEC.md`](ORCHESTRATOR_CORE_SPEC.md) — **v1.0, frozen
+  implementation contract; implementation in progress.** Core-owned model/context routing
+  and agent scheduling, harness-owned tools and durable state, managed
+  multi-agent API, recovery protocol, stages and acceptance criteria.
+- [`ORCHESTRATOR_CORE_IMPLEMENTATION.md`](ORCHESTRATOR_CORE_IMPLEMENTATION.md) —
+  Stage plan, independent review findings, validation evidence and remaining gates.
+- [`ORCHESTRATOR_CORE_ACCEPTANCE.md`](ORCHESTRATOR_CORE_ACCEPTANCE.md) —
+  A01–A23 source/test evidence and remaining core/harness integration exit criteria.
 - [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **design
   baseline; phased implementation started.** Recorded Core native integration, conversion admission,
   catalog/auth boundaries, data-driven ACP relocation and alpha API migration;

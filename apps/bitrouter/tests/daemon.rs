@@ -934,6 +934,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
     let mut pricing = PricingTable::new();
     pricing.insert("openai", "gpt-5", ModelPricing::new(2.0, 10.0));
     let target = bitrouter_sdk::language_model::types::RoutingTarget {
+        model_constraints: Default::default(),
         provider_name: "openai".into(),
         service_id: "gpt-5".into(),
         api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,

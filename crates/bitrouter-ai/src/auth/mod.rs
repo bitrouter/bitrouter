@@ -167,14 +167,48 @@ impl ContinuationAuthority {
         self.effective_scheme
     }
 
-    /// Revalidate that the final mutated request still has the exact,
-    /// unambiguous wire-auth shape from which this authority was proven.
-    ///
-    /// The credential principal proof is returned atomically by the auth
-    /// applier; this last-mile check ensures later request mutations neither
-    /// replace its scheme nor add a second credential family.
+    /// Verify that the request still has the proven authentication scheme.
     pub fn validates_final_request(&self, request: &reqwest::Request) -> bool {
         request_effective_auth_scheme(request) == Some(self.effective_scheme)
+    }
+
+    /// Bind an explicitly resolved set of account-selection headers.
+    pub fn with_request_scope(mut self, headers: &reqwest::header::HeaderMap) -> Self {
+        if headers.is_empty() {
+            return self;
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"bitrouter.transport.request-scope.v1");
+        digest.update(self.credential.proof_bytes());
+        for name in CONTINUATION_SCOPE_HEADERS {
+            digest_header(&mut digest, headers, name);
+        }
+        self.credential = CredentialAuthority(digest.finalize().into());
+        self
+    }
+}
+
+const CONTINUATION_SCOPE_HEADERS: [&str; 5] = [
+    "openai-organization",
+    "openai-project",
+    "anthropic-workspace-id",
+    "chatgpt-account-id",
+    "x-goog-user-project",
+];
+
+/// Whether a header selects an account or billing scope.
+pub fn is_continuation_scope_header(name: &str) -> bool {
+    CONTINUATION_SCOPE_HEADERS.contains(&name)
+}
+
+fn digest_header(digest: &mut Sha256, headers: &reqwest::header::HeaderMap, name: &str) {
+    digest.update((name.len() as u64).to_be_bytes());
+    digest.update(name.as_bytes());
+    let values = headers.get_all(name);
+    digest.update((values.iter().count() as u64).to_be_bytes());
+    for value in values {
+        digest.update((value.as_bytes().len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
     }
 }
 
@@ -239,9 +273,16 @@ fn request_effective_auth_scheme(request: &reqwest::Request) -> Option<AuthSchem
 /// applier cannot prove a stable continuation authority; ordinary requests
 /// still work, but successful native Responses continuation publication fails
 /// closed.
+///
+/// Construct the proof after installing authentication. Later mutation of the
+/// destination, credential values or known account-selection headers invalidates
+/// the proof. Trace and ordinary compatibility headers may still be attached.
 pub struct AppliedAuth {
     request: reqwest::Request,
     continuation_authority: Option<ContinuationAuthority>,
+    // Transient commitment to this exact authentication, separate from stable
+    // principal identity so an OAuth refresh can retain the same principal.
+    wire_authentication: Option<[u8; 32]>,
 }
 
 impl AppliedAuth {
@@ -250,6 +291,9 @@ impl AppliedAuth {
         let continuation_authority = request_effective_auth_scheme(&request)
             .map(|scheme| ContinuationAuthority::new(authority, scheme));
         Self {
+            wire_authentication: continuation_authority
+                .as_ref()
+                .map(|_| wire_authentication_digest(&request)),
             request,
             continuation_authority,
         }
@@ -265,6 +309,9 @@ impl AppliedAuth {
             == Some(effective_scheme))
         .then(|| ContinuationAuthority::new(authority, effective_scheme));
         Self {
+            wire_authentication: continuation_authority
+                .as_ref()
+                .map(|_| wire_authentication_digest(&request)),
             request,
             continuation_authority,
         }
@@ -276,6 +323,7 @@ impl AppliedAuth {
         Self {
             request,
             continuation_authority: None,
+            wire_authentication: None,
         }
     }
 
@@ -284,10 +332,38 @@ impl AppliedAuth {
         self.request
     }
 
-    /// Recover the authenticated request and its exact continuation proof.
+    /// Recover the request and authority after checking final wire mutations.
     pub fn into_parts(self) -> (reqwest::Request, Option<ContinuationAuthority>) {
-        (self.request, self.continuation_authority)
+        let authority = self.continuation_authority.filter(|authority| {
+            request_effective_auth_scheme(&self.request) == Some(authority.effective_scheme)
+                && self.wire_authentication == Some(wire_authentication_digest(&self.request))
+        });
+        (self.request, authority)
     }
+}
+
+/// Bind the credential values, destination and known account-selection headers
+/// observed at authentication time. Framing, tracing and compatibility headers
+/// may still change without invalidating that proof. Never publish this digest.
+fn wire_authentication_digest(request: &reqwest::Request) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"bitrouter.transport.wire-authentication.v1");
+    let url = request.url().as_str();
+    digest.update((url.len() as u64).to_be_bytes());
+    digest.update(url.as_bytes());
+    for name in [
+        "authorization",
+        "x-api-key",
+        "x-goog-api-key",
+        "openai-organization",
+        "openai-project",
+        "anthropic-workspace-id",
+        "chatgpt-account-id",
+        "x-goog-user-project",
+    ] {
+        digest_header(&mut digest, request.headers(), name);
+    }
+    digest.finalize().into()
 }
 
 impl std::ops::Deref for AppliedAuth {
@@ -326,6 +402,25 @@ impl std::fmt::Debug for AppliedAuth {
 /// exchanges) — the executor awaits the result before sending.
 #[async_trait]
 pub trait AuthApplier: Send + Sync {
+    /// Whether provider body/auth shaping preserves a requested output-token
+    /// limit. Unknown remains `None`; managed execution also checks the final
+    /// wire body before sending it.
+    fn output_token_limit_support(&self, _target: &ModelTarget) -> Option<bool> {
+        None
+    }
+
+    /// Pure, deterministic normalization of the expected managed wire body.
+    /// This must preserve required input and controls. It performs no I/O and
+    /// must not depend on credentials; final authenticated requests are checked
+    /// against this baseline. The default expects unchanged semantic fields.
+    fn normalize_managed_body(
+        &self,
+        _body: &mut serde_json::Value,
+        _target: &ModelTarget,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Apply authentication. The default `Transport::authorise` is **not**
     /// called when this applier runs; the applier owns the full credential
     /// surface for the request.
@@ -475,7 +570,7 @@ impl AuthAppliers {
         )))
     }
 
-    /// Resolve the typed route-time continuation authority proof.
+    /// Resolve the selected credential principal and effective wire scheme.
     pub async fn continuation_authority_proof(
         &self,
         target: &ModelTarget,
@@ -496,5 +591,307 @@ impl AuthAppliers {
             CredentialAuthority::derive("static-transport-credential", credential),
             static_effective_auth_scheme(target),
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ApiProtocol;
+
+    #[test]
+    fn applied_authority_rejects_mutated_wire_credentials() -> Result<()> {
+        for (name, before, after) in [
+            ("authorization", "Bearer first", "Bearer second"),
+            ("x-api-key", "first", "second"),
+            ("x-goog-api-key", "first", "second"),
+        ] {
+            let request = reqwest::Client::new()
+                .post("https://example.invalid/v1/generate")
+                .header(name, before)
+                .build()
+                .map_err(|_| ModelError::invalid_request("fixture request failed"))?;
+            let mut applied = AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive("test", "same-principal"),
+            );
+            applied.headers_mut().insert(
+                reqwest::header::HeaderName::from_static(name),
+                reqwest::header::HeaderValue::from_static(after),
+            );
+            let (request, authority) = applied.into_parts();
+            assert!(request_effective_auth_scheme(&request).is_some());
+            assert!(authority.is_none(), "mutated {name} retained old proof");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn applied_authority_rejects_mutated_destination_and_account_scope() -> Result<()> {
+        for name in [
+            "openai-organization",
+            "openai-project",
+            "anthropic-workspace-id",
+            "chatgpt-account-id",
+            "x-goog-user-project",
+            "destination",
+            "credential-family",
+        ] {
+            let request = reqwest::Client::new()
+                .post("https://example.invalid/v1/generate")
+                .header("x-api-key", "first")
+                .build()
+                .map_err(|_| ModelError::invalid_request("fixture request failed"))?;
+            let mut applied = AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive("test", "same-principal"),
+            );
+            match name {
+                "destination" => applied.url_mut().set_path("/another-account/generate"),
+                "credential-family" => {
+                    applied.headers_mut().remove("x-api-key");
+                    applied.headers_mut().insert(
+                        "x-goog-api-key",
+                        reqwest::header::HeaderValue::from_static("first"),
+                    );
+                }
+                _ => {
+                    applied.headers_mut().insert(
+                        reqwest::header::HeaderName::from_static(name),
+                        reqwest::header::HeaderValue::from_static("other-account"),
+                    );
+                }
+            }
+            assert!(applied.into_parts().1.is_none(), "mutation: {name}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn applied_authority_rejects_replaced_removed_or_duplicate_scope() -> Result<()> {
+        for scope in ["openai-organization", "openai-project"] {
+            for mutation in ["replace", "remove", "duplicate"] {
+                let request = reqwest::Client::new()
+                    .post("https://example.invalid/v1/generate")
+                    .header("authorization", "Bearer first")
+                    .header(scope, "initial-scope")
+                    .build()
+                    .map_err(|_| ModelError::invalid_request("fixture request failed"))?;
+                let mut applied = AppliedAuth::proven(
+                    request,
+                    CredentialAuthority::derive("test", "same-principal"),
+                );
+                let header = reqwest::header::HeaderName::from_static(scope);
+                let value = reqwest::header::HeaderValue::from_static("other-scope");
+                match mutation {
+                    "replace" => {
+                        applied.headers_mut().insert(header, value);
+                    }
+                    "remove" => {
+                        applied.headers_mut().remove(header);
+                    }
+                    _ => {
+                        applied.headers_mut().append(header, value);
+                    }
+                }
+                assert!(applied.into_parts().1.is_none(), "{mutation}: {scope}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_auth_refresh_retains_principal_and_allows_trace_headers() -> Result<()> {
+        let principal = CredentialAuthority::derive("test", "same-principal");
+        let expected = ContinuationAuthority::new(principal.clone(), AuthScheme::Bearer);
+        for bearer in ["Bearer before-refresh", "Bearer after-refresh"] {
+            let request = reqwest::Client::new()
+                .post("https://example.invalid/v1/generate")
+                .header("authorization", bearer)
+                .build()
+                .map_err(|_| ModelError::invalid_request("fixture request failed"))?;
+            let mut applied = AppliedAuth::proven(request, principal.clone());
+            for name in ["traceparent", "x-bitrouter-request-id", "anthropic-beta"] {
+                applied.headers_mut().insert(
+                    reqwest::header::HeaderName::from_static(name),
+                    reqwest::header::HeaderValue::from_static("fixture-value"),
+                );
+            }
+            assert_eq!(applied.into_parts().1, Some(expected.clone()));
+        }
+        Ok(())
+    }
+
+    struct LegacyApplier;
+
+    #[async_trait]
+    impl AuthApplier for LegacyApplier {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &ModelTarget,
+        ) -> Result<reqwest::Request> {
+            request.headers_mut().insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("Bearer legacy"),
+            );
+            Ok(request)
+        }
+    }
+
+    fn target() -> ModelTarget {
+        ModelTarget {
+            provider_name: "legacy-provider".into(),
+            service_id: "legacy-model".into(),
+            api_base: "https://example.invalid".into(),
+            api_key: String::new(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            account_label: None,
+            credential_priority: Default::default(),
+            compatibility: Default::default(),
+            auth_scheme: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_applier_remains_compatible_and_is_conservatively_unproven() {
+        let request = reqwest::Client::new()
+            .post("https://example.invalid")
+            .build()
+            .unwrap();
+
+        let applied = LegacyApplier
+            .apply_with_authority(request, &target())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            applied.request.headers()[reqwest::header::AUTHORIZATION],
+            "Bearer legacy"
+        );
+        assert!(applied.continuation_authority.is_none());
+    }
+
+    #[test]
+    fn applied_auth_debug_redacts_the_complete_authenticated_url() {
+        let request = reqwest::Client::new()
+            .post(
+                "https://debug-user:debug-password@example.invalid/private-path?api_key=debug-query-secret",
+            )
+            .build()
+            .unwrap();
+        let debug = format!("{:?}", AppliedAuth::unproven(request));
+
+        for private in [
+            "debug-user",
+            "debug-password",
+            "private-path",
+            "api_key",
+            "debug-query-secret",
+        ] {
+            assert!(
+                !debug.contains(private),
+                "AppliedAuth Debug exposed authenticated URL data: {debug}"
+            );
+        }
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn opaque_error_normalization_retains_failure_class_without_private_detail() {
+        const SENTINEL: &str = "auth-normalizer-private-sentinel";
+        for error in [
+            ModelError::InvalidRequest {
+                message: SENTINEL.into(),
+            },
+            ModelError::InvalidResponse {
+                message: SENTINEL.into(),
+                usage: None,
+            },
+            ModelError::Provider {
+                status: 503,
+                message: SENTINEL.into(),
+            },
+            ModelError::Transport {
+                message: SENTINEL.into(),
+            },
+        ] {
+            let kind = std::mem::discriminant(&error);
+            let normalized =
+                normalize_auth_extension_error(error, AuthOperation::RequestAuthentication);
+            assert_eq!(std::mem::discriminant(&normalized), kind);
+            assert!(!normalized.to_string().contains(SENTINEL));
+            assert!(!format!("{normalized:?}").contains(SENTINEL));
+            assert!(std::error::Error::source(&normalized).is_none());
+        }
+    }
+
+    #[test]
+    fn effective_scheme_requires_one_well_formed_credential_header() {
+        let client = reqwest::Client::new();
+        let request = |authorization: Option<reqwest::header::HeaderValue>,
+                       x_key: Option<reqwest::header::HeaderValue>| {
+            let mut request = client.post("https://example.invalid").build().unwrap();
+            if let Some(authorization) = authorization {
+                request
+                    .headers_mut()
+                    .insert(reqwest::header::AUTHORIZATION, authorization);
+            }
+            if let Some(x_key) = x_key {
+                request.headers_mut().insert("x-api-key", x_key);
+            }
+            request
+        };
+
+        let header = reqwest::header::HeaderValue::from_static;
+        assert_eq!(
+            request_effective_auth_scheme(&request(Some(header("Bearer secret")), None)),
+            Some(AuthScheme::Bearer)
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(Some(header("bEaReR secret")), None)),
+            Some(AuthScheme::Bearer)
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(None, Some(header("secret")))),
+            Some(AuthScheme::XApiKey)
+        );
+        for invalid in [
+            header("Basic secret"),
+            header("AWS4-HMAC-SHA256 credential"),
+            header("Bearer"),
+            header("Bearer "),
+            header("Bearer    "),
+        ] {
+            assert_eq!(
+                request_effective_auth_scheme(&request(Some(invalid), None)),
+                None
+            );
+        }
+        assert_eq!(
+            request_effective_auth_scheme(&request(
+                Some(reqwest::header::HeaderValue::from_bytes(b"Bearer \xff").unwrap()),
+                None,
+            )),
+            None
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(None, Some(header("")))),
+            None
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(
+                Some(header("Bearer secret")),
+                Some(header("secret")),
+            )),
+            None
+        );
+        assert_eq!(request_effective_auth_scheme(&request(None, None)), None);
+        let mismatched = AppliedAuth::proven_with_scheme(
+            request(Some(header("Bearer secret")), None),
+            CredentialAuthority::derive("test", "principal"),
+            AuthScheme::XApiKey,
+        );
+        assert!(mismatched.continuation_authority.is_none());
     }
 }

@@ -1,5 +1,7 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
+pub mod native_context;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2048,10 +2050,32 @@ impl ContinuationRuntime {
     pub fn registry(&self) -> &ContinuationRegistry {
         &self.registry
     }
+
+    fn validate_context_rebuild(&self, ctx: &PipelineContext) -> PipelineResult<()> {
+        if ctx.extension::<ContinuationRequestPlan>().is_some()
+            || ctx.extension::<CausalPrefixPlan>().is_some()
+            || ctx.extension::<RejectContinuationPreflight>().is_some()
+            || ["previous_response_id", "conversation"].iter().any(|key| {
+                ctx.generation_prompt()
+                    .and_then(|prompt| prompt.params.extra.get(*key))
+                    .is_some_and(|value| !value.is_null())
+            })
+        {
+            return Err(BitrouterError::bad_request(
+                "provider continuation cannot be reconstructed",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl PreRequestHook for ContinuationRuntime {
+    async fn revalidate_context(&self, ctx: &PipelineContext) -> PipelineResult<HookDecision> {
+        self.validate_context_rebuild(ctx)?;
+        Ok(HookDecision::Allow)
+    }
+
     async fn check(&self, ctx: &mut PipelineContext) -> PipelineResult<HookDecision> {
         if ctx.inbound_protocol() != Some(ApiProtocol::Responses) {
             return Ok(HookDecision::Allow);
@@ -2160,6 +2184,14 @@ impl PreRequestHook for ContinuationRuntime {
 
 #[async_trait]
 impl RouteHook for ContinuationRuntime {
+    async fn revalidate_context(
+        &self,
+        _chain: &[RoutingTarget],
+        ctx: &PipelineContext,
+    ) -> PipelineResult<()> {
+        self.validate_context_rebuild(ctx)
+    }
+
     async fn resolve(
         &self,
         chain: &mut Vec<RoutingTarget>,
@@ -2244,9 +2276,7 @@ impl RouteHook for ContinuationRuntime {
                     if target.api_protocol != ApiProtocol::Responses {
                         continue;
                     }
-                    let credential_authority = self
-                        .auth_appliers
-                        .continuation_authority_proof(&target.model_target())
+                    let credential_authority = bitrouter_sdk::language_model::native_auth::continuation_authority_for_request(&self.auth_appliers, target, Some(ctx.headers()))
                         .await
                         .map_err(|error| {
                             BitrouterError::internal(format!(
@@ -2275,11 +2305,17 @@ impl RouteHook for ContinuationRuntime {
                 })?;
                 chain.clear();
                 chain.push(selected.clone());
-                ctx.insert_extension(Arc::new(ProviderContinuation::new(
+                let continuation = ProviderContinuation::new(
                     active.provider_response_id,
                     &selected,
                     credential_authority,
-                )));
+                );
+                let continuation = if active.effort_authoritative {
+                    continuation.with_effort_constraint(active.effective_effort)
+                } else {
+                    continuation
+                };
+                ctx.insert_extension(Arc::new(continuation));
                 Ok(())
             }
             ContinuationResolution::Expired => Err(BitrouterError::bad_request(
@@ -2319,16 +2355,20 @@ impl ContinuationRuntime {
         })?;
         let credential_authority = match ctx.credential_authority.as_ref() {
             Some(authority) => authority.clone(),
-            None if self.auth_appliers.lookup(&target.provider_name).is_none() => self
-                .auth_appliers
-                .continuation_authority_proof(&target.model_target())
+            None if self.auth_appliers.lookup(&target.provider_name).is_none() => {
+                bitrouter_sdk::language_model::native_auth::continuation_authority_for_request(
+                    &self.auth_appliers,
+                    target,
+                    None,
+                )
                 .await
                 .map_err(|error| {
                     BitrouterError::internal(format!(
                         "resolving static continuation authority: {error}"
                     ))
                 })?
-                .ok_or_else(|| BitrouterError::internal("continuation authority unavailable"))?,
+                .ok_or_else(|| BitrouterError::internal("continuation authority unavailable"))?
+            }
             None => {
                 return Err(BitrouterError::internal(
                     "continuation authority unavailable for dynamic authentication",
@@ -2760,6 +2800,7 @@ mod tests {
             chat_supports_stream_options: None,
             chat_google_extensions: false,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: Some("primary".into()),
             api_key_override: None,
             api_base_override: None,

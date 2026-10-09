@@ -235,6 +235,17 @@ fn build_targets(
     let reasoning_effort = provider
         .model_config(model_id)
         .and_then(|model| model.reasoning_effort.clone());
+    let model_constraints = provider
+        .model_config(model_id)
+        .map(
+            |model| crate::language_model::native::NativeRouteConstraints {
+                capabilities: model.capabilities.clone(),
+                token_limits: model.token_limits.clone(),
+                input_token_counting: model.input_token_counting,
+                source: Some("provider_model_config".into()),
+            },
+        )
+        .unwrap_or_default();
     let headers = provider.outbound_headers()?;
 
     if provider.accounts.is_empty() {
@@ -252,6 +263,7 @@ fn build_targets(
             chat_supports_stream_options,
             chat_google_extensions,
             reasoning_effort: reasoning_effort.clone(),
+            model_constraints: model_constraints.clone(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -295,6 +307,7 @@ fn build_targets(
                 chat_supports_stream_options,
                 chat_google_extensions,
                 reasoning_effort: reasoning_effort.clone(),
+                model_constraints: model_constraints.clone(),
                 account_label: Some(label),
                 api_key_override: None,
                 api_base_override: None,

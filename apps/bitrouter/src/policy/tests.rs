@@ -485,3 +485,46 @@ async fn rate_limit_is_enforced_via_metering_store() {
         HookDecision::Allow => panic!("at-limit request must be rate-limited"),
     }
 }
+
+#[tokio::test]
+async fn revalidation_preserves_selector_binding_and_reads_live_policy() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let file = directory.path().join("policy.yaml");
+    tokio::fs::write(
+        &file,
+        "id: router-access\nallowed_models: [bitrouter/coding]\n",
+    )
+    .await?;
+    let store = Arc::new(PolicyStore::load_dir(directory.path()).await?);
+    let hook = PolicyHook::new(store.clone(), None);
+    let mut context = ctx("bitrouter/coding", Some("router-access"));
+    assert!(matches!(
+        hook.check(&mut context).await?,
+        HookDecision::Allow
+    ));
+    context.set_model("vendor:physical");
+    assert!(matches!(
+        hook.revalidate_context(&context).await?,
+        HookDecision::Allow
+    ));
+    context.set_metadata(
+        &PluginId::new("bitrouter-auth"),
+        serde_json::json!({"policy_id":"other"}),
+    );
+    assert!(hook.revalidate_context(&context).await.is_err());
+    context.set_metadata(
+        &PluginId::new("bitrouter-auth"),
+        serde_json::json!({"policy_id":"router-access"}),
+    );
+    tokio::fs::write(
+        &file,
+        "id: router-access\ndenied_models: [bitrouter/coding]\n",
+    )
+    .await?;
+    store.reload().await?;
+    assert!(matches!(
+        hook.revalidate_context(&context).await?,
+        HookDecision::Deny(_)
+    ));
+    Ok(())
+}

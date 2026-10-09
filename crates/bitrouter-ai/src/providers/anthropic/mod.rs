@@ -24,9 +24,10 @@ pub mod headers;
 use async_trait::async_trait;
 use reqwest::header::HeaderValue;
 
-use crate::auth::AuthApplier;
+use crate::auth::{AppliedAuth, AuthApplier, ContinuationAuthority, CredentialAuthority};
 use crate::error::{ModelError, Result};
 use crate::target::ModelTarget;
+use crate::types::AuthScheme;
 
 use crate::auth::credentials::Credential;
 use crate::auth::store::DEFAULT_ACCOUNT;
@@ -82,16 +83,59 @@ impl AnthropicApiKeyApplier {
 impl AuthApplier for AnthropicApiKeyApplier {
     async fn apply(
         &self,
-        mut request: reqwest::Request,
+        request: reqwest::Request,
         target: &ModelTarget,
     ) -> Result<reqwest::Request> {
+        Ok(self
+            .apply_with_authority(request, target)
+            .await?
+            .into_request())
+    }
+
+    async fn apply_with_authority(
+        &self,
+        mut request: reqwest::Request,
+        target: &ModelTarget,
+    ) -> Result<AppliedAuth> {
         request.headers_mut().insert(
             "anthropic-version",
             HeaderValue::from_static(headers::ANTHROPIC_VERSION),
         );
         let key = self.resolve_key(target).await?;
         apply_api_key_header(&mut request, &key)?;
-        Ok(request)
+        // An explicit workspace selector has not been resolved to a principal.
+        // https://platform.claude.com/docs/en/api/overview#authentication
+        Ok(
+            if request.headers().contains_key("anthropic-workspace-id") {
+                AppliedAuth::unproven(request)
+            } else {
+                AppliedAuth::proven(
+                    request,
+                    CredentialAuthority::derive("anthropic/api-key", &key),
+                )
+            },
+        )
+    }
+
+    async fn continuation_authority(
+        &self,
+        target: &ModelTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        let key = self.resolve_key(target).await?;
+        Ok(
+            (!key.trim().is_empty())
+                .then(|| CredentialAuthority::derive("anthropic/api-key", &key)),
+        )
+    }
+
+    async fn continuation_authority_proof(
+        &self,
+        target: &ModelTarget,
+    ) -> Result<Option<ContinuationAuthority>> {
+        Ok(self
+            .continuation_authority(target)
+            .await?
+            .map(|authority| ContinuationAuthority::new(authority, AuthScheme::XApiKey)))
     }
 
     async fn prepare_body(

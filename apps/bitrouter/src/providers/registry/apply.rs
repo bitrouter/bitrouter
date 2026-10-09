@@ -239,6 +239,8 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
                 })
                 .collect(),
             capabilities: m.capabilities.clone(),
+            token_limits: Default::default(),
+            input_token_counting: None,
             reasoning_effort: m.reasoning_effort.clone(),
             compatibility: m.compatibility.clone(),
         })
@@ -760,6 +762,8 @@ mod tests {
                 rate_limits: None,
                 pricing: None,
                 pricing_by_protocol: std::collections::HashMap::new(),
+                token_limits: Default::default(),
+                input_token_counting: None,
                 capabilities: Vec::new(),
                 reasoning_effort: None,
                 compatibility: Default::default(),

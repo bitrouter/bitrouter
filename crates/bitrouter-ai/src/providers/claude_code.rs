@@ -168,7 +168,11 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         Ok(request)
     }
 
-    async fn prepare_body(
+    async fn prepare_body(&self, body: &mut serde_json::Value, target: &ModelTarget) -> Result<()> {
+        self.normalize_managed_body(body, target)
+    }
+
+    fn normalize_managed_body(
         &self,
         body: &mut serde_json::Value,
         _target: &ModelTarget,
