@@ -53,7 +53,7 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
                 step_id: format!("step-{index}"),
                 item_id: format!("assistant-{index}"),
                 context_version: 0,
-                prompt: Box::new(bitrouter_sdk::language_model::Prompt {
+                prompt: Box::new(bitrouter_ai::types::Prompt {
                     model: "model".into(),
                     system: None,
                     system_provider_metadata: Default::default(),

@@ -1,14 +1,14 @@
 //! Production SQLite persistence with real MCP HTTP, using scripted model output.
+use bitrouter_ai::types::AuthScheme;
+use bitrouter_ai::types::{ApiProtocol, FinishReason, StreamPart, Usage};
 use bitrouter_orchestrator::agent::AgentConfig;
 use bitrouter_orchestrator::harness::HarnessConfig;
 use bitrouter_orchestrator::service::ThreadService;
 use bitrouter_orchestrator::store::{ExecutionRecord, ExecutionStore};
 use bitrouter_orchestrator::thread::{PermissionProfile, ThreadRequest, ThreadTarget};
 use bitrouter_orchestrator::turn::{ApprovalAnswer, TurnRequest, TurnSnapshot, TurnStatus};
-use bitrouter_sdk::language_model::types::AuthScheme;
 use bitrouter_sdk::language_model::{
-    ApiProtocol, FinishReason, MockExecutor, MockResponse, RoutingTarget, StaticRoutingTable,
-    StreamPart, Usage,
+    MockExecutor, MockResponse, RoutingTarget, StaticRoutingTable,
 };
 use bitrouter_sdk::{App, caller::CallerContext};
 use rmcp::model::ProtocolVersion;
@@ -32,6 +32,7 @@ fn app(executor: MockExecutor) -> Result<Arc<App>, Box<dyn std::error::Error>> {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,

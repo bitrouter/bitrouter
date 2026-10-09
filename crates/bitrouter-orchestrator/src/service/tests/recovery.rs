@@ -16,10 +16,9 @@ use crate::store::{
 use crate::thread::{
     PermissionProfile, RecoveryBlocker, ThreadHistoryRequest, ThreadObservation, ThreadStatus,
 };
-use crate::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus,
-    VerificationStatus,
-};
+#[cfg(unix)]
+use crate::turn::VerificationStatus;
+use crate::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus};
 
 fn recovery_request(
     view: &crate::thread::ThreadView,
@@ -994,7 +993,7 @@ impl bitrouter_sdk::language_model::Executor for PartialModel {
     async fn execute(
         &self,
         _target: &bitrouter_sdk::language_model::RoutingTarget,
-        _prompt: &bitrouter_sdk::language_model::Prompt,
+        _prompt: &bitrouter_ai::types::Prompt,
         _ctx: &bitrouter_sdk::language_model::PipelineContext,
     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
         Err(bitrouter_sdk::error::BitrouterError::Internal(
@@ -1004,18 +1003,18 @@ impl bitrouter_sdk::language_model::Executor for PartialModel {
     async fn execute_stream(
         &self,
         _target: &bitrouter_sdk::language_model::RoutingTarget,
-        _prompt: &bitrouter_sdk::language_model::Prompt,
+        _prompt: &bitrouter_ai::types::Prompt,
         _ctx: &bitrouter_sdk::language_model::PipelineContext,
     ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
         use futures::StreamExt;
         Ok(Box::pin(
             futures::stream::once(async {
-                Ok(bitrouter_sdk::language_model::StreamPart::TextDelta {
+                Ok(bitrouter_ai::types::StreamPart::TextDelta {
                     text: "partial evidence only".into(),
                 })
             })
             .chain(futures::stream::pending::<
-                bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPart>,
+                bitrouter_sdk::Result<bitrouter_ai::types::StreamPart>,
             >()),
         ))
     }

@@ -15,7 +15,8 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
 
-use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome, StreamPart};
+use bitrouter_ai::types::StreamPart;
+use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome};
 
 use crate::otel::cardinality::CardinalityLimiter;
 use crate::otel::config::OtelConfig;
@@ -154,7 +155,7 @@ impl OtelMetrics {
                 attributes.push(KeyValue::new("bitrouter.account_label", label.clone()));
             }
 
-            if let Some(usage) = &result.result.usage {
+            if let Some(usage) = result.result.usage() {
                 let mut input_attrs = attributes.clone();
                 input_attrs.push(KeyValue::new("gen_ai.token.type", "input"));
                 self.token_usage.record(usage.prompt_tokens, &input_attrs);
@@ -229,10 +230,9 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use bitrouter_ai::types::{GenerateResult, GenerationParams, Prompt};
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{
-        ExecutionResult, GenerateResult, GenerationParams, PipelineRequest, Prompt,
-    };
+    use bitrouter_sdk::language_model::{ExecutionResult, PipelineRequest};
 
     use super::*;
 
@@ -256,14 +256,15 @@ mod tests {
             provider_id: "openai".into(),
             model_id: "test-model".into(),
             account_label: None,
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: Vec::new(),
                 usage: None,
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
             server_tool_calls: Vec::new(),
@@ -402,9 +403,9 @@ mod tests {
             provider_id: "openai".into(),
             model_id: "test-model".into(),
             account_label: Some("primary".into()),
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: Vec::new(),
-                usage: Some(bitrouter_sdk::language_model::Usage {
+                usage: Some(bitrouter_ai::types::Usage {
                     prompt_tokens: 11,
                     completion_tokens: 7,
                     ..Default::default()
@@ -413,7 +414,8 @@ mod tests {
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
             server_tool_calls: Vec::new(),

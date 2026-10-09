@@ -5,21 +5,47 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **design
+  baseline; phased implementation started.** Recorded Core native integration, conversion admission,
+  catalog/auth boundaries, data-driven ACP relocation and alpha API migration;
+  implementation contracts, acceptance criteria and remaining review items.
+- [`MODEL_HISTORY_COMPATIBILITY_AUDIT.md`](MODEL_HISTORY_COMPATIBILITY_AUDIT.md) —
+  Baseline model-history replay, conversion, omission and synthesis rules;
+  evidence and boundaries for the proposed `bitrouter-ai` extraction.
+- [`BITROUTER_AI_REFACTOR_PROGRESS.md`](BITROUTER_AI_REFACTOR_PROGRESS.md) —
+  Implemented extraction batches, breaking import migration, validation evidence
+  and remaining work against the AI spec.
+- [`DECISIONS_API_SPEC.md`](DECISIONS_API_SPEC.md) — **v0.2, design direction
+  accepted; implemented and verified locally, in CI and with bounded API-key calls.**
+  First-class OpenAI Decisions support
+  stacked on #962: typed calls, operation-compatible routing, shared lifecycle
+  and protocol pricing. Decision-driven routing policy remains a separate PR.
+- [`DECISIONS_API_PROGRESS.md`](DECISIONS_API_PROGRESS.md) — Local batch evidence
+  and remaining gateway/provider acceptance for the stacked Decisions change.
+- [`DECISIONS_API_MIGRATION.md`](DECISIONS_API_MIGRATION.md) — Alpha payload,
+  hook and pricing migration, with the read-only external Cloud inventory.
+- [`DECISIONS_API_ACCEPTANCE.md`](DECISIONS_API_ACCEPTANCE.md) — Requirement-by-requirement
+  local/hosted/live evidence and qualified provider/Cloud delivery boundaries.
+- [`GEMINI_PROTOCOL_RETIREMENT_SPEC.md`](GEMINI_PROTOCOL_RETIREMENT_SPEC.md) —
+  **approved; implementation in progress.** Removes native Gemini Generate Content ingress and
+  upstream support, retains metered Gemini through Chat Completions, and defines
+  provider retirement, Antigravity SDK connectivity, and replacement validation.
 - [`LOCAL_DAEMON_UPGRADE_SPEC.md`](LOCAL_DAEMON_UPGRADE_SPEC.md) — **implemented
-  and locally verified.** Safe local daemon handoff after a CLI upgrade: version and
-  capability detection, idle-only restart, migration preflight, and truthful
-  recovery states.
+  in #932; local and CI verification passed.** Safe local daemon handoff after
+  a CLI upgrade: version and capability detection, idle-only restart,
+  migration preflight, and truthful recovery states.
 - [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
   setup, migration boundaries, distribution and process-level validation.
 - [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —
-  Local implementation, test/artifact evidence and remaining release gates.
+  Dated local implementation and test evidence, plus the release update.
 
 - [`ROUTER_EXTENSION_SPEC.md`](ROUTER_EXTENSION_SPEC.md) — **v0.7, compile-only
-  extensions implemented locally; public release pending.** Current router,
+  extensions merged in #923 and shipped in v1.0.0-alpha.33.** Current router,
   SDK author API, execution and migration contracts.
-- [`HOST_EXTENSION_DX_SPEC.md`](HOST_EXTENSION_DX_SPEC.md) — **v0.2, implementation
-  in this worktree; see acceptance evidence.** Shared foreground host startup, capability-owned
-  author types and inactive unused registrations, informed by Zed's extension design.
+- [`HOST_EXTENSION_DX_SPEC.md`](HOST_EXTENSION_DX_SPEC.md) — **v0.3, S1–S4
+  merged in #923 and shipped in v1.0.0-alpha.33.** Shared foreground host startup,
+  capability-owned author types and inactive unused registrations; see the
+  acceptance evidence for the validation scope.
 - [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
   **implemented and locally verified.** Whole-configuration saved/running/restart
   evidence shared by local and remote status, CLI, and Code inspectors.
@@ -89,7 +115,7 @@ separate ACP contracts below.
 - [`CODE_TUI_CODEX_IMPLEMENTATION.md`](CODE_TUI_CODEX_IMPLEMENTATION.md) —
   first-delivery changes, acceptance evidence and live PTY screenshots.
 - [`CODE_SLASH_COMMAND_UX_SPEC.md`](CODE_SLASH_COMMAND_UX_SPEC.md) — **implemented
-  locally.** Makes `/` the command input, preserves drafts on cancel,
+  in #935.** Makes `/` the command input, preserves drafts on cancel,
   removes default action hotkeys, and adds configurable bindings under
   `/hotkeys`.
 - [`BACKGROUND_AGENT_UX_SPEC.md`](BACKGROUND_AGENT_UX_SPEC.md) — **implemented;
@@ -104,8 +130,8 @@ separate ACP contracts below.
   `claude`/`codex` shortcuts, the `code` TUI, headless `run`, and one raw
   `acp serve` bridge; retires visible `spawn` and keeps sessions harness-owned.
   Its origin-MCP proposal is superseded in part.
-- [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) — **implemented and
-  ready for review.** Replaces the OSS first-party origin MCP with
+- [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) — **implemented in
+  #913.** Replaces the OSS first-party origin MCP with
   the `/bitrouter` Skill plus structured CLI for shell-capable local agents,
   while retaining the MCP gateway, aggregate `/mcp` endpoint, server-side tool
   loop, and Skills-over-MCP relay. Places any multi-tenant BitRouter control
@@ -141,32 +167,21 @@ separate ACP contracts below.
   completion criteria. [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) is written to be
   driven by `/goal`.
 
-- [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) — **proposed, nothing
-  built.** Interrogates the goal "every headless CLI command has the same
-  interactive TUI command" and argues against it: 103 leaves rather than 29, a
-  quarter of them hostile in a session, no mature tool in the field achieving
-  parity, and a three-set topology rather than a subset with a gap. Proposes ~6
-  session commands dispatched through the same action ports the CLI uses, with
-  `ACTIONS` extended by `tui_command` / `effect` / `requires` and five guards.
-  Knowingly reverses [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8.3 in a narrowed
-  form; read its §5 and §16 D1 before agreeing to anything.
-- [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) — **proposed,
-  nothing built.** The buildable form of the above: the Rust for the `ACTIONS`
-  extension, the resolver that replaces the TUI's string compares, five phases
-  with the files each touches, the guards as tests, and what each open decision
-  blocks. Written against the actions-table stack tip (#869 → #870 → #875),
-  not `main`; its Appendix A lists the research spec's `file:line` references
-  that have since moved.
-- [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md) — **ready to
-  execute.** The impl spec re-cut for an autonomous agent under `/loop`: a
-  one-task-per-iteration protocol, a resumable ledger
-  ([`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md)), ten tasks with
-  the impl-spec sections each reads, all fifteen open decisions collapsed into
-  instructions, four stop conditions, and fifteen prohibitions. It carries no
-  design of its own — every type and function body stays in the impl spec.
-- [`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md) — the build
-  plan's ledger: which task the loop is on and what has landed. Mutable; the
-  only state the loop keeps.
+- [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) — **track 1 implemented
+  in #880; historical rationale.** Explains why CLI/TUI parity uses shared
+  actions instead of a command-per-command mirror. Covers the selected session
+  commands and the `tui_command` / `effect` / `requires` action fields. Its
+  origin-MCP portions were superseded by #913.
+- [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) — **track 1
+  implemented in #880; historical build design.** Specifies the shared action
+  rows, resolver and guards. Its source paths predate the #913 refactor.
+- [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md) — **executed
+  in #880; all ten tasks complete.** The implementation plan and iteration
+  protocol, with a resumable ledger
+  ([`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md)); retained as a
+  record of the completed work.
+- [`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md) — **closed at T9.**
+  Records what each task landed and the corrections made to the impl spec.
 
 ## Where product docs live
 
@@ -175,10 +190,12 @@ The **product** documentation that used to live here now lives in the
 `content/docs/` — it is authored, reviewed, and published there.
 
 - Edit product docs in `bitrouter-docs`, not here.
-- The `supported-models` / `supported-providers` tables are generated on the docs
-  site from this repo's committed `dist/registry/{models,providers}.json`
-  (`scripts/generate-registry-tables.mjs`), so keep the registry catalog current
-  here as usual — the tables follow automatically.
+- The docs site's `supported-models` table is generated from its committed
+  catalog snapshot. Refreshing it reads the public `/v1/models` catalog and
+  falls back to this repository's `dist/registry/models.json` only for
+  open-weight metadata. There is no generated `supported-providers` table;
+  provider discovery lives in the API reference. Keep this repository's
+  registry catalog current, then refresh the snapshot in `bitrouter-docs`.
 - On each release, an agent in `bitrouter-docs` drafts a docs update from the
   changelog for human review.
 

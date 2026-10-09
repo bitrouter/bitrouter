@@ -5,13 +5,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use bitrouter_ai::types::AuthScheme;
+use bitrouter_ai::types::{
+    ApiProtocol, Content, FinishReason, GenerateResult, Prompt, StreamPart, Usage,
+};
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::AuthScheme;
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, ExecutionResult, Executor, FinishReason, GenerateResult, MockExecutor,
-    MockResponse, PipelineContext, Prompt, RoutingTarget, StaticRoutingTable, StreamPart,
-    StreamPartStream, Usage,
+    ExecutionResult, Executor, MockExecutor, MockResponse, PipelineContext, RoutingTarget,
+    StaticRoutingTable, StreamPartStream,
 };
 use tempfile::TempDir;
 
@@ -31,6 +33,7 @@ fn routing_target() -> RoutingTarget {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,

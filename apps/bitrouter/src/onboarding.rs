@@ -8,11 +8,11 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::cloud::account::credentials::default_credentials_path;
+use crate::cloud::account::manager::CredentialManager;
 use anyhow::{Context, Result};
-use bitrouter_providers::hosted::account::credentials::default_credentials_path;
-use bitrouter_providers::hosted::account::manager::CredentialManager;
-use bitrouter_providers::hosted::applier::PROVIDER_ID;
-use bitrouter_providers::oauth::credential_store::CredentialStore;
+use bitrouter_ai::auth::file::snapshot::CredentialStore;
+use bitrouter_ai::providers::hosted::PROVIDER_ID;
 use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
@@ -100,7 +100,7 @@ pub fn probe() -> ProbeSignals {
     // A local marker check: the credential store is a single on-disk JSON file;
     // `providers()` lists ids with a stored credential without any refresh or
     // network call. An unresolved/unreadable store is simply "none".
-    let subscription_providers = CredentialStore::default_path()
+    let subscription_providers = crate::provider_credentials::load_default()
         .map(|store| store.providers().into_iter().map(String::from).collect())
         .unwrap_or_default();
     ProbeSignals {
@@ -626,7 +626,7 @@ async fn apply_flag_credentials(
             None if headless => skipped.push(provider.clone()),
             None => match login_provider_with_options(
                 provider,
-                bitrouter_providers::oauth::credential_store::DEFAULT_LABEL,
+                bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
                 ProviderLoginOptions::default(),
             )
             .await
@@ -670,7 +670,7 @@ async fn seed_cloud_api_key(key: &str, manager: Arc<CredentialManager>) -> Resul
 async fn seed_provider_api_key(provider: &str, key: &str) -> Result<()> {
     login_provider_with_options(
         provider,
-        bitrouter_providers::oauth::credential_store::DEFAULT_LABEL,
+        bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
         ProviderLoginOptions {
             import_existing: false,
             no_browser: true,
@@ -754,12 +754,12 @@ async fn run_interactive(
 
 /// Providers offered by the OSS registry, with no special placement for Cloud.
 fn provider_choices(
-    data: &bitrouter_providers::registry::types::RegistryData,
-) -> Vec<&bitrouter_providers::registry::types::RegistryProvider> {
+    data: &bitrouter_ai::catalog::types::RegistryData,
+) -> Vec<&bitrouter_ai::catalog::types::RegistryProvider> {
     let mut providers: Vec<_> = data
         .providers
         .iter()
-        .filter(|provider| provider.is_active() && provider.is_mergeable())
+        .filter(|provider| provider.is_active() && provider.is_public())
         .collect();
     providers.sort_by_key(|provider| {
         (
@@ -1040,7 +1040,7 @@ fn build_snippet(listen: &str) -> Snippet {
 /// the stored provider credentials.
 async fn reset_credentials(assume_yes: bool, interactive: bool) -> Result<()> {
     let cloud_path = default_credentials_path().ok();
-    let mut store = CredentialStore::default_path().ok();
+    let mut store = crate::provider_credentials::load_default().ok();
 
     let provider_ids: Vec<String> = store
         .as_ref()
@@ -1181,7 +1181,7 @@ mod tests {
 
     #[test]
     fn provider_menu_contains_every_public_active_entry_in_display_order() -> Result<()> {
-        let data: bitrouter_providers::registry::types::RegistryData =
+        let data: bitrouter_ai::catalog::types::RegistryData =
             serde_json::from_value(serde_json::json!({
                 "providers": [
                     {"name": "zulu", "display_name": "Zulu", "status": "active"},
@@ -1401,14 +1401,14 @@ mod tests {
             .set(
                 "claude-code",
                 "default",
-                bitrouter_providers::oauth::credential_store::Credential::ClaudeCodeCli,
+                bitrouter_ai::auth::credentials::Credential::ClaudeCodeCli,
             )
             .unwrap();
         store
             .set(
                 "openai",
                 "default",
-                bitrouter_providers::oauth::credential_store::Credential::api_key("sk-x"),
+                bitrouter_ai::auth::credentials::Credential::api_key("sk-x"),
             )
             .unwrap();
 

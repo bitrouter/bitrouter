@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
-use bitrouter_sdk::language_model::ToolResultOutput;
+use bitrouter_ai::types::ToolResultOutput;
 
 use super::{
     DEFAULT_DIRECTORY_ENTRIES, MAX_FILE_BYTES, MAX_READ_BYTES, MAX_READ_LINES, ReadArgs,

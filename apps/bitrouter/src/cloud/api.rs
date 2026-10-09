@@ -4,8 +4,8 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::cloud::account::manager::CredentialManager;
 use anyhow::{Context, Result};
-use bitrouter_providers::hosted::account::manager::CredentialManager;
 use futures::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode, Version};
@@ -775,7 +775,7 @@ mod tests {
     use axum::Router;
     use axum::body::{Body, Bytes};
     use axum::routing::get;
-    use bitrouter_providers::hosted::account::credentials::StoredCredential;
+    use bitrouter_ai::providers::hosted::credentials::StoredCredential;
     use clap::Parser;
     use serde_json::json;
     use wiremock::matchers::{body_json, body_string, header, method, path, query_param};

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
-use bitrouter_sdk::language_model::types::ReasoningEffortConfig;
+use bitrouter_ai::types::ReasoningEffortConfig;
 use chrono::{Days, NaiveDate, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -711,6 +711,10 @@ fn apply_model_discovery_plan(
     }
 
     if !plan.removals.is_empty() {
+        let empty_models = Regex::new(r"(?m)^(models:)([ \t]*(?:#[^\r\n]*)?\r?)$")?;
+        let active_status = Regex::new(
+            r#"(?m)^(status:[ \t]*)(?:active|'active'|"active")([ \t]*(?:#[^\r\n]*)?\r?)$"#,
+        )?;
         for provider in &loaded.providers {
             if !provider
                 .data
@@ -722,7 +726,7 @@ fn apply_model_discovery_plan(
             }
             let raw = fs::read_to_string(&provider.path)
                 .with_context(|| format!("reading {}", provider.path.display()))?;
-            let updated = remove_model_items(&raw, "  ", &plan.removals);
+            let mut updated = remove_provider_model_items(&raw, &plan.removals)?;
             let parsed: ProviderFile = serde_saphyr::from_str(&updated)
                 .with_context(|| format!("validating updated {}", provider.path.display()))?;
             if parsed
@@ -735,6 +739,23 @@ fn apply_model_discovery_plan(
                     provider.path.display()
                 );
             }
+            if parsed.models.is_empty() {
+                updated = empty_models.replace(&updated, "${1} []${2}").into_owned();
+            }
+            if has_invalid_empty_models(&parsed) {
+                // Feed-backed and local-auth providers may discover models later.
+                // Static providers must stop routing when their last model retires.
+                if !active_status.is_match(&updated) {
+                    bail!(
+                        "cannot suspend empty provider in {}",
+                        provider.path.display()
+                    );
+                }
+                updated = active_status
+                    .replace(&updated, "${1}suspended${2}")
+                    .into_owned();
+                println!("  ! {} suspended: no models remain", parsed.name);
+            }
             fs::write(&provider.path, updated)
                 .with_context(|| format!("writing {}", provider.path.display()))?;
         }
@@ -746,6 +767,19 @@ fn remove_model_items(raw: &str, indent: &str, ids: &HashSet<String>) -> String 
     if ids.is_empty() {
         return raw.to_string();
     }
+    let ranges = removed_model_item_ranges(raw, indent, ids);
+    let mut updated = raw.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        updated.replace_range(start..end, "");
+    }
+    updated
+}
+
+fn removed_model_item_ranges(
+    raw: &str,
+    indent: &str,
+    ids: &HashSet<String>,
+) -> Vec<(usize, usize)> {
     let marker = format!("{indent}- id: ");
     let mut lines = Vec::new();
     let mut offset = 0;
@@ -781,11 +815,56 @@ fn remove_model_items(raw: &str, indent: &str, ids: &HashSet<String>) -> String 
         let end = lines.get(end_index).map_or(raw.len(), |(start, _)| *start);
         ranges.push((*start, end));
     }
-    let mut updated = raw.to_string();
-    for (start, end) in ranges.into_iter().rev() {
-        updated.replace_range(start..end, "");
+    ranges
+}
+
+fn remove_provider_model_items(raw: &str, ids: &HashSet<String>) -> Result<String> {
+    let removed = removed_model_item_ranges(raw, "  ", ids);
+    let mut updated = remove_model_items(raw, "  ", ids);
+    let anchor = Regex::new(r"^[ \t]*[^#\r\n]+:[ \t]*&([A-Za-z0-9_-]+)([^\r\n]*)$")?;
+
+    // YAML aliases must follow their anchor. Move a removed model's anchor to
+    // the first surviving alias, leaving later aliases and comments intact.
+    for (start, end) in removed {
+        let lines: Vec<&str> = raw[start..end].lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let Some(captures) = anchor.captures(line) else {
+                continue;
+            };
+            let name = &captures[1];
+            let alias = Regex::new(&format!(
+                r"(?m)^([ \t]*[^\r\n#]+:[ \t]*)\*{}([ \t]*(?:#[^\r\n]*)?)$",
+                regex::escape(name)
+            ))?;
+            let Some(reference) = alias.captures(&updated) else {
+                continue;
+            };
+            let reference_line = reference.get(0).context("missing YAML alias line")?;
+            let key = reference.get(1).context("missing YAML alias key")?.as_str();
+            let trailing = reference
+                .get(2)
+                .context("missing YAML alias suffix")?
+                .as_str();
+            let source_indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+            let target_indent = key.len() - key.trim_start_matches([' ', '\t']).len();
+            let mut replacement = format!("{key}&{name}{}{trailing}", &captures[2]);
+            for child in lines.iter().skip(index + 1) {
+                let child_indent = child.len() - child.trim_start_matches([' ', '\t']).len();
+                if !child.trim().is_empty() && child_indent <= source_indent {
+                    break;
+                }
+                if child.trim().is_empty() {
+                    replacement.push('\n');
+                } else {
+                    replacement.push('\n');
+                    replacement.push_str(&" ".repeat(target_indent));
+                    replacement.push_str(&child[source_indent..]);
+                }
+            }
+            updated.replace_range(reference_line.range(), &replacement);
+        }
     }
-    updated
+    Ok(updated)
 }
 
 fn insert_canonical_deprecation_dates(raw: &str, schedules: &BTreeMap<String, String>) -> String {
@@ -1144,6 +1223,7 @@ fn models_dev_plan_for_provider(
             provider_model_id: model_id.clone(),
             api_protocol: None,
             pricing,
+            pricing_by_protocol: BTreeMap::new(),
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
@@ -1198,6 +1278,7 @@ fn v1_models_plan_for_provider(
             provider_model_id: model.id,
             api_protocol: None,
             pricing,
+            pricing_by_protocol: BTreeMap::new(),
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
@@ -1777,6 +1858,17 @@ fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
                 "api_protocol".to_string(),
                 serde_json::to_value(api_protocol).context("serializing api_protocol")?,
             );
+            if !model.pricing_by_protocol.is_empty() {
+                let prices = model
+                    .pricing_by_protocol
+                    .iter()
+                    .map(|(protocol, pricing)| (protocol.runtime_key(), pricing))
+                    .collect::<BTreeMap<_, _>>();
+                obj.insert(
+                    "pricing_by_protocol".into(),
+                    serde_json::to_value(prices).context("serializing protocol tariffs")?,
+                );
+            }
             if let Some(pricing) = &model.pricing {
                 obj.insert(
                     "pricing".to_string(),
@@ -2219,11 +2311,7 @@ fn validate_provider<'a>(
     validate_auth(data.auth.as_ref(), &file, issues);
     validate_auto_sync(data.auto_sync.as_ref(), &file, issues);
 
-    if data.status == EntryStatus::Active
-        && data.models.is_empty()
-        && data.auto_sync.is_none()
-        && !matches!(data.access, Access::LocalOauth | Access::LocalPkce)
-    {
+    if has_invalid_empty_models(data) {
         issues.push(format!(
             "{file}: provider '{}' is active but declares no models",
             data.name
@@ -2270,6 +2358,14 @@ fn validate_provider<'a>(
         if let Some(pricing) = &model.pricing {
             validate_pricing(pricing, &file, &model.id, issues);
         }
+        for (protocol, pricing) in &model.pricing_by_protocol {
+            validate_pricing(
+                pricing,
+                &file,
+                &format!("{}:{}", model.id, protocol.source_key()),
+                issues,
+            );
+        }
         if let Some(reasoning_effort) = &model.reasoning_effort {
             if !model.capabilities.contains(&Capability::Reasoning) {
                 issues.push(format!(
@@ -2297,7 +2393,7 @@ fn validate_provider<'a>(
     match data.billing {
         Billing::Subscription => {
             for model in &data.models {
-                if model.pricing.is_some() {
+                if model.pricing.is_some() || !model.pricing_by_protocol.is_empty() {
                     issues.push(format!(
                         "{file}: subscription provider must not set per-token pricing (model '{}')",
                         model.id
@@ -2307,7 +2403,7 @@ fn validate_provider<'a>(
         }
         Billing::UsageToken => {
             for model in &data.models {
-                if model.pricing.is_none() {
+                if model.pricing.is_none() && model.pricing_by_protocol.is_empty() {
                     issues.push(format!(
                         "{file}: usage_token provider must set pricing for every model (model '{}')",
                         model.id
@@ -2316,6 +2412,13 @@ fn validate_provider<'a>(
             }
         }
     }
+}
+
+fn has_invalid_empty_models(data: &ProviderFile) -> bool {
+    data.status == EntryStatus::Active
+        && data.models.is_empty()
+        && data.auto_sync.is_none()
+        && !matches!(data.access, Access::LocalOauth | Access::LocalPkce)
 }
 
 fn validate_agent(agent: &CanonicalAgent, file: &str, issues: &mut Vec<String>) {
@@ -3078,17 +3181,6 @@ fn validate_pricing(pricing: &ModelPricing, file: &str, model_id: &str, issues: 
             ));
         }
         prev = Some(tier.above_input_tokens);
-        if tier
-            .input_tokens
-            .as_ref()
-            .and_then(|p| p.no_cache)
-            .is_none()
-            || tier.output_tokens.as_ref().and_then(|p| p.text).is_none()
-        {
-            issues.push(format!(
-                "{file}: model '{model_id}' context tier must set no_cache and text rates"
-            ));
-        }
     }
 }
 
@@ -3308,6 +3400,7 @@ fn pricing_from_cost(cost: Option<&ModelsDevCost>) -> Option<ModelPricing> {
         return None;
     }
     Some(ModelPricing {
+        endpoint_profile: None,
         input_tokens: Some(input),
         output_tokens: Some(output),
         context_tiers: Vec::new(),
@@ -3331,7 +3424,7 @@ fn append_models_to_provider(path: &Path, adds: &[ProviderModel]) -> Result<()> 
         .with_context(|| format!("locating models list in {}", path.display()))?;
     let mut append = String::new();
     for model in adds {
-        append.push_str(&render_model_append(model));
+        append.push_str(&render_model_append(model)?);
     }
     raw.insert_str(insert_at, &append);
     let parsed: ProviderFile = serde_saphyr::from_str(&raw)
@@ -3370,37 +3463,15 @@ fn models_insert_offset(raw: &str) -> Result<usize> {
     Ok(insert_at.unwrap_or(raw.len()))
 }
 
-fn render_model_append(model: &ProviderModel) -> String {
-    let mut out = format!(
-        "  - id: {}\n    provider_model_id: {}\n",
-        model.id, model.provider_model_id
-    );
-    if let Some(pricing) = &model.pricing {
-        out.push_str("    pricing:\n");
-        if let Some(input) = &pricing.input_tokens
-            && (input.no_cache.is_some()
-                || input.cache_read.is_some()
-                || input.cache_write.is_some())
-        {
-            out.push_str("      input_tokens:\n");
-            if let Some(v) = input.no_cache {
-                out.push_str(&format!("        no_cache: {v}\n"));
-            }
-            if let Some(v) = input.cache_read {
-                out.push_str(&format!("        cache_read: {v}\n"));
-            }
-            if let Some(v) = input.cache_write {
-                out.push_str(&format!("        cache_write: {v}\n"));
-            }
-        }
-        if let Some(output) = &pricing.output_tokens
-            && let Some(v) = output.text
-        {
-            out.push_str("      output_tokens:\n");
-            out.push_str(&format!("        text: {v}\n"));
-        }
+fn render_model_append(model: &ProviderModel) -> Result<String> {
+    let yaml = serde_saphyr::to_string(model).context("serializing appended provider model")?;
+    let mut lines = yaml.lines();
+    let first = lines.next().context("serialized provider model is empty")?;
+    let mut out = format!("  - {first}\n");
+    for line in lines {
+        out.push_str(&format!("    {line}\n"));
     }
-    out
+    Ok(out)
 }
 
 fn dist_dir(root: &Path) -> PathBuf {
@@ -3856,6 +3927,9 @@ struct ProviderModel {
     api_protocol: Option<ProtocolList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pricing: Option<ModelPricing>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pricing_by_protocol: BTreeMap<ApiProtocol, ModelPricing>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rate_limits: Option<RateLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3878,6 +3952,8 @@ struct ModelCompatibility {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ChatCompletionsCompatibility {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    google_extensions: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token_limit_field: Option<ChatTokenLimitField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3898,11 +3974,8 @@ enum ChatTokenLimitField {
 enum ApiProtocol {
     Openai,
     Anthropic,
-    Google,
     Responses,
-    /// Google Antigravity Code Assist — a custom, externally-registered runtime
-    /// protocol (`bitrouter_providers::antigravity`). No models.dev source.
-    Antigravity,
+    Decisions,
 }
 
 impl ApiProtocol {
@@ -3910,9 +3983,8 @@ impl ApiProtocol {
         match self {
             Self::Openai => "openai",
             Self::Anthropic => "anthropic",
-            Self::Google => "google",
             Self::Responses => "responses",
-            Self::Antigravity => "antigravity",
+            Self::Decisions => "decisions",
         }
     }
 
@@ -3920,11 +3992,8 @@ impl ApiProtocol {
         match self {
             Self::Openai => "chat_completions",
             Self::Anthropic => "messages",
-            Self::Google => "generate_content",
             Self::Responses => "responses",
-            // The runtime maps any unknown protocol string to `Custom(_)`; this
-            // is the name the antigravity adapter registers under.
-            Self::Antigravity => "antigravity",
+            Self::Decisions => "decisions",
         }
     }
 }
@@ -4085,6 +4154,8 @@ struct RateLimits {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     input_tokens: Option<InputTokenPricing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4726,6 +4797,7 @@ auto_sync:
             provider_model_id: "two".to_string(),
             api_protocol: None,
             pricing: None,
+            pricing_by_protocol: BTreeMap::new(),
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
@@ -5921,6 +5993,7 @@ api_base: https://api.{provider}.test/v1
         apply_model_discovery_plan(&root, &loaded, &plan)?;
 
         let updated = load_registry(&root)?;
+        validate_loaded(&updated)?;
         assert_eq!(
             updated
                 .models()
@@ -5936,7 +6009,9 @@ api_base: https://api.{provider}.test/v1
             Some("2026-10-05")
         );
         assert!(updated.providers.iter().all(|provider| {
-            provider.data.models.len() == 1 && provider.data.models[0].id == "acme/new-2"
+            provider.data.status == EntryStatus::Active
+                && provider.data.models.len() == 1
+                && provider.data.models[0].id == "acme/new-2"
         }));
         assert_eq!(
             report.removed,
@@ -5957,6 +6032,146 @@ api_base: https://api.{provider}.test/v1
             let raw = fs::read_to_string(root.join(format!("registry/providers/{provider}.yaml")))?;
             assert!(raw.contains("# Keep the surviving route comment."));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn removing_last_model_suspends_only_static_active_providers() -> Result<()> {
+        let root = test_root("model-discovery-empty-providers");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            "- id: acme/old-1\n- id: acme/new-2\n",
+        );
+        let cases = [
+            ("static", "active", "", EntryStatus::Suspended),
+            ("staging", "staging", "", EntryStatus::Staging),
+            ("suspended", "suspended", "", EntryStatus::Suspended),
+            ("withdrawn", "withdrawn", "", EntryStatus::Withdrawn),
+            (
+                "feed",
+                "active",
+                "auto_sync:\n  feed: models_dev\n  key: acme\n  writes: [models]\n",
+                EntryStatus::Active,
+            ),
+            (
+                "oauth",
+                "active",
+                "access: local_oauth\n",
+                EntryStatus::Active,
+            ),
+            (
+                "pkce",
+                "active",
+                "access: local_pkce\n",
+                EntryStatus::Active,
+            ),
+        ];
+        for (name, status, extra, _) in &cases {
+            write(
+                &root,
+                &format!("registry/providers/{name}.yaml"),
+                &format!(
+                    r#"name: {name}
+status: '{status}' # Keep the status comment.
+api_base: https://api.{name}.test/v1
+billing: subscription
+{extra}models: # Keep the models comment.
+  - id: acme/old-1
+    provider_model_id: old
+"#
+                ),
+            );
+        }
+        let loaded = load_registry(&root)?;
+        validate_loaded(&loaded)?;
+        let plan = ModelDiscoveryPlan {
+            removals: HashSet::from(["acme/old-1".to_string()]),
+            ..ModelDiscoveryPlan::default()
+        };
+
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+
+        let updated = load_registry(&root)?;
+        validate_loaded(&updated)?;
+        for (name, _, _, expected) in &cases {
+            let provider = updated
+                .providers
+                .iter()
+                .find(|provider| provider.data.name == *name)
+                .context("updated provider missing")?;
+            assert!(provider.data.models.is_empty(), "{name}");
+            assert_eq!(provider.data.status, *expected, "{name}");
+            let raw = fs::read_to_string(&provider.path)?;
+            assert!(
+                raw.contains("models: [] # Keep the models comment."),
+                "{name}"
+            );
+            assert!(raw.contains("# Keep the status comment."), "{name}");
+        }
+        build(&root, false)?;
+        build(&root, true)?;
+        Ok(())
+    }
+
+    #[test]
+    fn removing_model_preserves_anchors_used_by_surviving_models() -> Result<()> {
+        let root = test_root("model-discovery-shared-anchors");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/old-1
+  deprecation_date: 2026-09-05
+- id: acme/new-2
+- id: acme/new-3
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/old-1
+    provider_model_id: old
+    reasoning_effort: &shared_effort
+      levels: [low, high]
+      default: high
+    capabilities: &shared_capabilities [reasoning, tools]
+  - id: acme/new-2
+    provider_model_id: new-2
+    reasoning_effort: *shared_effort
+    capabilities: *shared_capabilities
+  - id: acme/new-3
+    provider_model_id: new-3
+    reasoning_effort: *shared_effort
+    capabilities: *shared_capabilities
+status: active
+billing: subscription
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let plan = ModelDiscoveryPlan {
+            additions: Vec::new(),
+            schedules: BTreeMap::new(),
+            cancellations: HashSet::new(),
+            removals: HashSet::from(["acme/old-1".to_string()]),
+        };
+
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+
+        let raw = fs::read_to_string(root.join("registry/providers/acme.yaml"))?;
+        assert!(!raw.contains("acme/old-1"));
+        assert!(raw.contains("reasoning_effort: &shared_effort\n      levels: [low, high]"));
+        assert!(raw.contains("capabilities: &shared_capabilities [reasoning, tools]"));
+        assert_eq!(raw.matches("reasoning_effort: *shared_effort").count(), 1);
+        assert_eq!(raw.matches("capabilities: *shared_capabilities").count(), 1);
+        let updated = load_registry(&root)?;
+        assert_eq!(updated.providers[0].data.models.len(), 2);
         Ok(())
     }
 
@@ -5989,5 +6204,79 @@ families:
         let path = root.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents.trim_start()).unwrap();
+    }
+    #[test]
+    fn protocol_tariffs_translate_runtime_keys_and_survive_model_append() -> Result<()> {
+        let source = r#"
+name: fixture
+display_name: Fixture
+status: active
+api_protocol:
+  - "*": [openai, responses, decisions]
+models:
+  - id: fixture/model
+    provider_model_id: native
+    pricing:
+      input_tokens: {no_cache: 2}
+      output_tokens: {text: 9}
+    pricing_by_protocol:
+      openai:
+        input_tokens: {no_cache: 1}
+      decisions:
+        endpoint_profile: openai_global
+        input_tokens: {no_cache: 0.1, cache_read: 0, cache_write: 0}
+        output_tokens: {text: 0}
+        context_tiers:
+          - above_input_tokens: 272000
+            input_tokens: {no_cache: 0.2}
+"#;
+        let provider: ProviderFile = serde_saphyr::from_str(source)?;
+        let pricing = provider
+            .models
+            .first()
+            .and_then(|model| model.pricing_by_protocol.get(&ApiProtocol::Decisions))
+            .context("source tariff missing")?;
+        let mut issues = Vec::new();
+        validate_pricing(pricing, "fixture.yaml", "fixture/model", &mut issues);
+        assert!(issues.is_empty(), "{issues:?}");
+        let models = resolved_models(&provider)?;
+        let model = models.first().context("resolved model missing")?;
+        assert_eq!(
+            model["pricing_by_protocol"]["chat_completions"]["input_tokens"]["no_cache"],
+            1.0
+        );
+        assert_eq!(
+            model["pricing_by_protocol"]["decisions"]["output_tokens"]["text"],
+            0.0
+        );
+        assert!(model["pricing_by_protocol"].get("openai").is_none());
+        assert_eq!(
+            model["pricing_by_protocol"]["decisions"]["endpoint_profile"],
+            "openai_global"
+        );
+        let model = provider.models.first().context("source model missing")?;
+        let append = render_model_append(model)?;
+        let parsed: ProviderFile = serde_saphyr::from_str(&format!(
+            "name: fixture\ndisplay_name: Fixture\nstatus: active\nmodels:\n{append}"
+        ))?;
+        let parsed = parsed.models.first().context("appended model missing")?;
+        let tariff = parsed
+            .pricing_by_protocol
+            .get(&ApiProtocol::Decisions)
+            .context("native tariff lost during append")?;
+        assert_eq!(
+            tariff.endpoint_profile,
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+        );
+        let tier = tariff
+            .context_tiers
+            .first()
+            .context("context tier lost during append")?;
+        assert_eq!(tier.above_input_tokens, 272000);
+        assert_eq!(
+            tier.input_tokens.as_ref().and_then(|input| input.no_cache),
+            Some(0.2)
+        );
+        Ok(())
     }
 }

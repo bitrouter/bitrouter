@@ -5,10 +5,10 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::auth::entities::api_keys;
 
+use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{
-    GenerationParams, HookDecision, Message, PipelineContext, PipelineRequest, PreRequestHook,
-    Prompt, Role,
+    HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
 };
 use bitrouter_sdk::mcp::{McpContext, McpRequest};
 

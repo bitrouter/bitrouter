@@ -16,6 +16,7 @@ serde-saphyr.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 bitrouter-sdk.workspace = true
+bitrouter-ai.workspace = true
 futures.workspace = true
 globset.workspace = true
 ignore.workspace = true

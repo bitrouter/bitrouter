@@ -203,9 +203,8 @@ pub(crate) struct GuardedRouteInput {
     pub route_projection: String,
     pub request_key: String,
     pub baseline_tier: Option<String>,
-    pub baseline_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    pub tier_efforts:
-        std::collections::BTreeMap<String, bitrouter_sdk::language_model::types::ReasoningEffort>,
+    pub baseline_effort: Option<bitrouter_ai::types::ReasoningEffort>,
+    pub tier_efforts: std::collections::BTreeMap<String, bitrouter_ai::types::ReasoningEffort>,
     pub preset: Option<String>,
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,

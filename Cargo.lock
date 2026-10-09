@@ -664,9 +664,9 @@ dependencies = [
  "axum",
  "axum-test",
  "base64 0.22.1",
+ "bitrouter-ai",
  "bitrouter-guardrails",
  "bitrouter-orchestrator",
- "bitrouter-providers",
  "bitrouter-sdk",
  "bitrouter-telemetry",
  "bitrouter-tui",
@@ -680,6 +680,7 @@ dependencies = [
  "http",
  "http-body",
  "jsonschema",
+ "keyring",
  "opentelemetry-proto",
  "portable-pty",
  "prost",
@@ -713,10 +714,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-ai"
+version = "1.0.0-alpha.33"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "eventsource-stream",
+ "futures",
+ "futures-core",
+ "httpdate",
+ "rand 0.10.2",
+ "reqwest",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "bitrouter-guardrails"
 version = "1.0.0-alpha.33"
 dependencies = [
  "async-trait",
+ "bitrouter-ai",
  "bitrouter-sdk",
  "futures",
  "regex",
@@ -731,6 +761,7 @@ name = "bitrouter-orchestrator"
 version = "1.0.0-alpha.33"
 dependencies = [
  "async-trait",
+ "bitrouter-ai",
  "bitrouter-sdk",
  "futures",
  "globset",
@@ -754,30 +785,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-providers"
-version = "1.0.0-alpha.33"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "bitrouter-sdk",
- "chrono",
- "keyring",
- "rand 0.10.2",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tracing",
- "url",
- "wiremock",
-]
-
-[[package]]
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.33"
 dependencies = [
@@ -789,12 +796,11 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "eventsource-stream",
+ "bitrouter-ai",
  "futures",
  "futures-core",
  "hex",
  "http",
- "httpdate",
  "pin-project-lite",
  "reqwest",
  "rmcp",
@@ -813,6 +819,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -821,6 +828,7 @@ version = "1.0.0-alpha.33"
 dependencies = [
  "async-trait",
  "axum",
+ "bitrouter-ai",
  "bitrouter-sdk",
  "bytes",
  "criterion",
@@ -1671,6 +1679,7 @@ name = "dist-helper"
 version = "1.0.0-alpha.33"
 dependencies = [
  "anyhow",
+ "bitrouter-ai",
  "bitrouter-sdk",
  "chrono",
  "clap",

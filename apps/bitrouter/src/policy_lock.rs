@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use anyhow::{Context, Result};
+#[cfg(test)]
+use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_sdk::config::{
     AdequacyConfig, Config, PolicyKeyStrategy, PolicyModelTarget, PolicyRuntimeMode,
     PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
 };
 use bitrouter_sdk::invocation;
-#[cfg(test)]
-use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
@@ -1891,9 +1891,9 @@ struct PolicyInitRequest<'a> {
     policy_name: &'a str,
     binding: PolicyInitBinding<'a>,
     strong_model: Option<&'a str>,
-    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    strong_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     economy_model: &'a str,
-    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    economy_effort: Option<bitrouter_ai::types::ReasoningEffort>,
 }
 
 /// Create one named adaptive policy and bind it to a preset. The candidate
@@ -1925,9 +1925,9 @@ pub async fn initialize_files_with_efforts(
     policy_name: &str,
     preset_name: &str,
     strong_model: Option<&str>,
-    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    strong_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     economy_model: &str,
-    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    economy_effort: Option<bitrouter_ai::types::ReasoningEffort>,
 ) -> Result<PolicyFileUpdate> {
     initialize_target_files_with_efforts(
         config_path,
@@ -1950,9 +1950,9 @@ pub async fn initialize_router_files_with_efforts(
     policy_name: &str,
     router_name: &str,
     strong_model: Option<&str>,
-    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    strong_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     economy_model: &str,
-    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    economy_effort: Option<bitrouter_ai::types::ReasoningEffort>,
 ) -> Result<PolicyFileUpdate> {
     initialize_target_files_with_efforts(
         config_path,
@@ -1989,9 +1989,9 @@ pub async fn initialize_files_unlocked(
     policy_name: &str,
     preset_name: &str,
     strong_model: Option<&str>,
-    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    strong_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     economy_model: &str,
-    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    economy_effort: Option<bitrouter_ai::types::ReasoningEffort>,
 ) -> Result<PolicyFileUpdate> {
     initialize_files_unlocked_with_writer(
         config_path,
@@ -2102,12 +2102,12 @@ where
 
     let mut capability_config = config.clone();
     crate::merge_registry_into(&mut capability_config).await;
-    bitrouter_providers::apply_builtin_defaults(&mut capability_config);
+    crate::providers::apply::apply_builtin_defaults(&mut capability_config);
     let mut tool_safe_tiers = vec!["strong".to_string()];
     if route_supports_capability(
         &capability_config,
         economy_model,
-        bitrouter_sdk::language_model::types::Capability::Tools,
+        bitrouter_ai::types::Capability::Tools,
     ) {
         tool_safe_tiers.push("economy".to_string());
     }
@@ -2263,7 +2263,7 @@ where
 fn route_supports_capability(
     config: &bitrouter_sdk::config::Config,
     route: &str,
-    capability: bitrouter_sdk::language_model::types::Capability,
+    capability: bitrouter_ai::types::Capability,
 ) -> bool {
     let Some((provider_id, model_id)) = route.split_once(':') else {
         return false;
@@ -2278,7 +2278,7 @@ fn route_supports_capability(
 fn embedded_catalog_supports_capability(
     provider_id: &str,
     model_id: &str,
-    capability: bitrouter_sdk::language_model::types::Capability,
+    capability: bitrouter_ai::types::Capability,
 ) -> bool {
     let Ok(catalog) =
         serde_json::from_str::<serde_json::Value>(include_str!("../registry-dist/models.json"))
@@ -2699,7 +2699,7 @@ pub async fn validate_routable_model(
     }
     let mut resolved = source.clone();
     crate::merge_registry_into(&mut resolved).await;
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    crate::providers::apply::apply_builtin_defaults(&mut resolved);
     let provider_config = resolved.providers.get(provider).ok_or_else(|| {
         anyhow::anyhow!(
             "policy provider '{provider}' is not available from the config or provider registry"
@@ -2722,14 +2722,14 @@ pub async fn validate_routable_model(
 pub async fn validate_routable_effort(
     source: &bitrouter_sdk::config::Config,
     route: &str,
-    effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    effort: Option<bitrouter_ai::types::ReasoningEffort>,
 ) -> Result<()> {
     let Some(effort) = effort else {
         return Ok(());
     };
     let mut resolved = source.clone();
     crate::merge_registry_into(&mut resolved).await;
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    crate::providers::apply::apply_builtin_defaults(&mut resolved);
     let chain = bitrouter_sdk::config::routing_table::resolve_route_chain(
         &resolved,
         route,
@@ -3295,8 +3295,9 @@ impl ModelSelector for PolicyRuntime {
                 ))
             })?;
             let input_model = ctx.model().to_string();
-            let input_effort = ctx.prompt().params.reasoning_effort;
-            let mut decision = router.candidate_for_guarded_policy(ctx.prompt(), ctx.headers());
+            let input_effort = ctx.require_generation_prompt()?.params.reasoning_effort;
+            let mut decision = router
+                .candidate_for_guarded_policy(ctx.require_generation_prompt()?, ctx.headers());
             let projection = RouteProjection::parse_key(&decision.observed_route_projection)
                 .ok_or_else(|| {
                     bitrouter_sdk::BitrouterError::internal(
@@ -3343,7 +3344,7 @@ impl ModelSelector for PolicyRuntime {
                 experiment: decision.experiment.clone(),
                 route_measurement: decision.route_measurement.clone(),
                 policy: guard.clone(),
-                carries_tools: !ctx.prompt().tools.is_empty(),
+                carries_tools: !ctx.require_generation_prompt()?.tools.is_empty(),
                 tool_use_tier: decision.tool_use_tier(),
                 tool_safe_tiers: decision.tool_safe_tiers(),
             };
@@ -3352,7 +3353,7 @@ impl ModelSelector for PolicyRuntime {
                     ctx.caller().user_id(),
                     ctx.request_id(),
                     inbound_protocol,
-                    ctx.prompt(),
+                    ctx.require_generation_prompt()?,
                     &captured_at,
                     guarded_input,
                 )
@@ -3409,10 +3410,10 @@ impl ModelSelector for PolicyRuntime {
             if let Some(target) = selected {
                 ctx.set_model(target.model());
                 if let Some(effort) = target.effort() {
-                    ctx.set_policy_reasoning_effort(effort);
+                    ctx.set_policy_reasoning_effort(effort)?;
                 }
                 if let Some(effort) = pinned_continuation_effort(ctx) {
-                    ctx.set_policy_reasoning_effort_override(effort);
+                    ctx.set_policy_reasoning_effort_override(effort)?;
                 }
                 mark_predictive_single_target(&route_projection, ctx);
             }
@@ -3420,8 +3421,9 @@ impl ModelSelector for PolicyRuntime {
             return Ok(());
         }
         let input_model = ctx.model().to_string();
-        let input_effort = ctx.prompt().params.reasoning_effort;
-        let mut decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        let input_effort = ctx.require_generation_prompt()?.params.reasoning_effort;
+        let mut decision =
+            router.decision_for_bound_policy(ctx.require_generation_prompt()?, ctx.headers());
         if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
             && let Some(adjustment) = plan.adjustment.as_ref()
         {
@@ -3439,10 +3441,10 @@ impl ModelSelector for PolicyRuntime {
         if let Some(target) = selected {
             ctx.set_model(target.model());
             if let Some(effort) = target.effort() {
-                ctx.set_policy_reasoning_effort(effort);
+                ctx.set_policy_reasoning_effort(effort)?;
             }
             if let Some(effort) = pinned_continuation_effort(ctx) {
-                ctx.set_policy_reasoning_effort_override(effort);
+                ctx.set_policy_reasoning_effort_override(effort)?;
             }
             mark_predictive_single_target(&route_projection, ctx);
         }
@@ -3452,7 +3454,7 @@ impl ModelSelector for PolicyRuntime {
 
 fn pinned_continuation_effort(
     ctx: &PipelineContext,
-) -> Option<Option<bitrouter_sdk::language_model::types::ReasoningEffort>> {
+) -> Option<Option<bitrouter_ai::types::ReasoningEffort>> {
     ctx.extension::<ContinuationRequestPlan>().and_then(|plan| {
         plan.adjustment
             .as_ref()
@@ -4374,10 +4376,9 @@ certificates:
 
     #[tokio::test]
     async fn frozen_and_adaptive_modes_route_identically_from_the_lock() -> anyhow::Result<()> {
+        use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::{
-            GenerationParams, Message, PipelineRequest, Prompt, Role,
-        };
+        use bitrouter_sdk::language_model::PipelineRequest;
 
         fn context() -> PipelineContext {
             let prompt = Prompt {
@@ -4501,10 +4502,9 @@ presets:
 
     #[tokio::test]
     async fn policy_runtime_prefers_exact_variant_then_falls_back() -> anyhow::Result<()> {
+        use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::{
-            GenerationParams, Message, PipelineRequest, Prompt, Role,
-        };
+        use bitrouter_sdk::language_model::PipelineRequest;
 
         fn context() -> PipelineContext {
             PipelineContext::new(PipelineRequest::new(
@@ -4569,10 +4569,9 @@ presets:
     #[tokio::test]
     async fn policy_runtime_trajectory_is_optional_and_metadata_is_noncausal() -> anyhow::Result<()>
     {
+        use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::{
-            ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
-        };
+        use bitrouter_sdk::language_model::PipelineRequest;
         use http::HeaderValue;
         use sea_orm::ConnectionTrait;
 
@@ -5046,9 +5045,8 @@ policies:
 
     #[test]
     fn auto_router_template_lock_is_bound_and_canonical() -> anyhow::Result<()> {
-        use bitrouter_sdk::language_model::{
-            GenerationParams, Message, Prompt, Role,
-            types::{Content, ProviderMetadata, ToolResultOutput},
+        use bitrouter_ai::types::{
+            Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
         };
 
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -6211,10 +6209,9 @@ presets:
 
     #[tokio::test]
     async fn reload_swaps_valid_policy_and_keeps_last_known_good_on_error() {
+        use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
         use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::{
-            GenerationParams, Message, PipelineRequest, Prompt, Role,
-        };
+        use bitrouter_sdk::language_model::PipelineRequest;
 
         fn context(model: &str) -> PipelineContext {
             let prompt = Prompt {

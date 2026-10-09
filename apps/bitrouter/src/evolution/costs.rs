@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
+use bitrouter_ai::types::{StreamPart, ToolChoice, UsageOrigin};
 use bitrouter_sdk::PipelineEvent;
 use bitrouter_sdk::language_model::hooks::{HopOutcome, Phase, RequestOutcome};
 use bitrouter_sdk::language_model::{
     HookDecision, ObserveHook, PipelineContext, PreRequestHook, RoutingTarget, SettlementContext,
-    SettlementRecorder, StreamContext, StreamPart, ToolChoice, UsageOrigin,
+    SettlementRecorder, StreamContext,
 };
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Serialize};
@@ -172,9 +173,11 @@ impl JudgeCosts {
             && ctx.caller().is_local()
             && ctx.headers().is_empty()
             && ctx.original_model() == reserved.model
-            && ctx.prompt().tools.is_empty()
-            && ctx.prompt().tool_choice == Some(ToolChoice::None)
-            && !ctx.prompt().stream;
+            && ctx.generation_prompt().is_some_and(|prompt| {
+                prompt.tools.is_empty()
+                    && prompt.tool_choice == Some(ToolChoice::None)
+                    && !prompt.stream
+            });
         if !valid_request {
             ctx.emit(JudgeAttemptReplayRejected);
             anyhow::bail!("judge request does not match its reserved purpose");
@@ -246,6 +249,81 @@ impl PreRequestHook for JudgeCosts {
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
         self.admit(ctx).await.map_err(internal)?;
         Ok(HookDecision::Allow)
+    }
+}
+
+#[cfg(test)]
+mod native_admission_tests {
+    use super::*;
+    use crate::metering::pricing::PricingTable;
+    use crate::metering::recorder::MeteringRecorder;
+    use crate::metering::store::{MeteringStore, TimeWindow};
+    use bitrouter_ai::protocol::decisions::DecisionsCodec;
+    use bitrouter_sdk::caller::CallerContext;
+    use bitrouter_sdk::language_model::builder::PipelineBuilder;
+    use bitrouter_sdk::language_model::executor::MockExecutor;
+    use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
+    use bitrouter_sdk::language_model::routing::StaticRoutingTable;
+    use bitrouter_sdk::language_model::types::PipelineRequest;
+
+    #[tokio::test]
+    async fn native_reserved_identity_rejection_keeps_metering_namespace_untouched() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let costs = JudgeCosts::new(db.clone());
+        let request_id = "brjudge_reserved_native";
+        let binding = RequestOwner {
+            request_id: request_id.into(),
+            owner: "reserved-owner".into(),
+        };
+        let tx = db.begin().await?;
+        costs
+            .lookup()?
+            .initialize_in(&tx, LOOKUP_KIND, request_id, None, &binding)
+            .await?;
+        tx.commit().await?;
+        let metering = MeteringStore::new(db);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(StaticRoutingTable::new()))
+            .executor(Arc::new(MockExecutor::new(Vec::new())))
+            .served_operations(OperationScope::Both)
+            .require_hook::<JudgeCosts>(HookStage::PreResolution, OperationScope::Both)
+            .pre_resolution_hook_for(costs.clone(), OperationScope::Both)
+            .settlement_recorder_for(
+                MeteringRecorder::new(metering.clone(), Arc::new(PricingTable::new())),
+                OperationScope::Both,
+            );
+        let pipeline = builder.build()?;
+        let request = DecisionsCodec::parse_request(serde_json::json!({
+            "model":"test","input":"evidence","questions":[{"type":"predicate","name":"q","instructions":"check"}]
+        }))?;
+        let mut invocation =
+            PipelineRequest::new_decisions("test", CallerContext::local(), request);
+        invocation.request_id = request_id.into();
+        let error = pipeline
+            .execute(invocation)
+            .await
+            .err()
+            .context("reserved native call was admitted")?;
+        assert!(
+            error
+                .to_string()
+                .contains("reserved judge request metadata is missing")
+        );
+        assert_eq!(
+            metering
+                .get_request_count("local", TimeWindow::ThisMonth)
+                .await?,
+            0
+        );
+        let (_, saved) = costs
+            .lookup()?
+            .get::<RequestOwner>(LOOKUP_KIND, request_id)
+            .await?
+            .context("reservation lost")?;
+        assert_eq!(saved, binding);
+        Ok(())
     }
 }
 

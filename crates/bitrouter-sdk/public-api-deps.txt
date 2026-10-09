@@ -40,6 +40,7 @@ agent_client_protocol_schema
 anyhow
 axum
 axum_core
+bitrouter_ai
 futures_channel
 futures_core
 http

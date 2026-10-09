@@ -99,48 +99,6 @@ models:
             no_cache: 2
           output_tokens:
             text: 6
-  - id: qwen/qwen3.6-flash
-    provider_model_id: qwen3.6-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.1875
-        cache_write: 0.234375
-      output_tokens:
-        text: 1.125
-      context_tiers:
-        - above_input_tokens: 256000
-          input_tokens:
-            no_cache: 1
-          output_tokens:
-            text: 4
-  - id: qwen/qwen3.5-122b-a10b
-    provider_model_id: qwen3.5-122b-a10b
-    pricing:
-      input_tokens:
-        no_cache: 0.4
-      output_tokens:
-        text: 3.2
-  - id: qwen/qwen3.5-27b
-    provider_model_id: qwen3.5-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 2.4
-  - id: qwen/qwen3.6-27b
-    provider_model_id: qwen3.6-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-      output_tokens:
-        text: 3.6
-  - id: qwen/qwen3.6-35b-a3b
-    provider_model_id: qwen3.6-35b-a3b
-    pricing:
-      input_tokens:
-        no_cache: 0.248
-      output_tokens:
-        text: 1.485
   - id: deepseek/deepseek-v4-flash-0731
     provider_model_id: deepseek-v4-flash-0731
     pricing:

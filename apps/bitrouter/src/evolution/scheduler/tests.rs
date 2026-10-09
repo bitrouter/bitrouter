@@ -1,11 +1,12 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use bitrouter_ai::types::ToolChoice;
 use bitrouter_sdk::App;
 use bitrouter_sdk::acp::capture::{CaptureDirection, CapturePort};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::executor::MockExecutor;
-use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook, ToolChoice};
+use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
 use serde_json::json;
 
 use crate::acp_trajectory::checkpoint::types::AssessmentSource;
@@ -18,9 +19,12 @@ struct CountRequests(Arc<AtomicUsize>);
 impl PreRequestHook for CountRequests {
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        assert!(ctx.prompt().tools.is_empty());
-        assert_eq!(ctx.prompt().tool_choice, Some(ToolChoice::None));
-        assert!(ctx.prompt().params.max_tokens.is_none());
+        assert!(ctx.require_generation_prompt()?.tools.is_empty());
+        assert_eq!(
+            ctx.require_generation_prompt()?.tool_choice,
+            Some(ToolChoice::None)
+        );
+        assert!(ctx.require_generation_prompt()?.params.max_tokens.is_none());
         assert!(!ctx.headers().contains_key("x-bitrouter-controller-id"));
         Ok(HookDecision::Allow)
     }

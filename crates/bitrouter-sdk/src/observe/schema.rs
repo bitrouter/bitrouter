@@ -49,7 +49,7 @@ use serde::Serialize;
 /// release bump, turning a guard that should be silent into routine noise. The
 /// crate version reaches the wire through the instrumentation scope instead
 /// (see [`SpanSchema::scope_version`]).
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 
 /// Attribute-key prefixes this schema owns outright. See [`ExtensionRegion`].
 const RESERVED_PREFIXES: &[&str] = &["bitrouter.", "gen_ai."];
@@ -283,8 +283,10 @@ const RESOURCE_ATTRIBUTES: &[AttrDef] = &[
 const SPANS: &[SpanDef] = &[
     SERVER_SPAN,
     ROOT_CHAT_SPAN,
+    ROOT_DECISIONS_SPAN,
     ROUTE_SPAN,
     HOP_CHAT_SPAN,
+    HOP_DECISIONS_SPAN,
     SETTLE_SPAN,
     INVOKE_AGENT_SPAN,
     EXECUTE_TOOL_SPAN,
@@ -348,6 +350,36 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
            ultimately served it.",
     attributes: &[
         AttrDef {
+            key: "bitrouter.operation",
+            ty: AttrType::String,
+            requirement: Requirement::Required,
+            note: "Operation derived from the typed input: generation or decisions.",
+        },
+        AttrDef {
+            key: "bitrouter.inbound_protocol",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Actual ingress wire, when known; caller headers cannot select it.",
+        },
+        AttrDef {
+            key: "bitrouter.outbound_protocol",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Actual final serving or attempted target wire, when dispatch was reached.",
+        },
+        AttrDef {
+            key: "bitrouter.decisions.input",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Native evidence and questions only under full content capture, with the configured byte cap; safety identifier excluded.",
+        },
+        AttrDef {
+            key: "bitrouter.decisions.answers",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Native ordered answers only under full content capture, with the configured byte cap.",
+        },
+        AttrDef {
             key: "bitrouter.request_id",
             ty: AttrType::String,
             requirement: Requirement::Required,
@@ -369,7 +401,7 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
             key: "gen_ai.operation.name",
             ty: AttrType::String,
             requirement: Requirement::Required,
-            note: "Always `chat` on this span.",
+            note: "`chat` for generation; `decisions` for the native Decisions operation.",
         },
         AttrDef {
             key: "gen_ai.request.model",
@@ -556,6 +588,13 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
     events: &[EXCEPTION_EVENT, TOOL_CALL_STARTED_EVENT],
 };
 
+/// Native Decisions has its own name while sharing model-call observation rules.
+const ROOT_DECISIONS_SPAN: SpanDef = SpanDef {
+    name: "decisions {gen_ai.request.model}",
+    note: "Full native Decisions request lifetime; no first token, generated messages, or continuation is invented.",
+    ..ROOT_CHAT_SPAN
+};
+
 /// Routing decision.
 const ROUTE_SPAN: SpanDef = SpanDef {
     name: "route",
@@ -594,6 +633,18 @@ const HOP_CHAT_SPAN: SpanDef = SpanDef {
            the `single-generation` invariant. Distinguished from the root `chat` span by kind: \
            this one is CLIENT, the root is INTERNAL.",
     attributes: &[
+        AttrDef {
+            key: "bitrouter.operation",
+            ty: AttrType::String,
+            requirement: Requirement::Required,
+            note: "Operation of this selected target.",
+        },
+        AttrDef {
+            key: "bitrouter.outbound_protocol",
+            ty: AttrType::String,
+            requirement: Requirement::Required,
+            note: "Actual selected wire, independent of the inbound format.",
+        },
         AttrDef {
             key: "bitrouter.provider_id",
             ty: AttrType::String,
@@ -639,6 +690,14 @@ const HOP_CHAT_SPAN: SpanDef = SpanDef {
         },
     ],
     events: &[EXCEPTION_EVENT],
+};
+
+/// One native Decisions upstream HTTP attempt.
+const HOP_DECISIONS_SPAN: SpanDef = SpanDef {
+    name: "decisions {bitrouter.model_id}",
+    parent: "The root decisions span.",
+    note: "Plain HTTP client attempt; native usage is recorded once on the root model-call span.",
+    ..HOP_CHAT_SPAN
 };
 
 /// Settlement summary.
@@ -935,9 +994,9 @@ const TOKEN_USAGE_DIMENSIONS: &[AttrDef] = &[
 
 const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
     carrier: "observe.span_attributes",
-    target_span: "chat {gen_ai.request.model}",
+    target_span: "chat {gen_ai.request.model} or decisions {gen_ai.request.model}",
     reserved_prefixes: RESERVED_PREFIXES,
-    rule: "A deployment may stamp any attribute onto the root `chat` span except keys under a \
+    rule: "A deployment may stamp any attribute onto the root model-call span except keys under a \
            reserved prefix and keys this schema already declares on any span. Reserved keys are \
            dropped, not stamped: a deployment that redefined `bitrouter.*` would make the schema \
            deployment-dependent, which is the one thing it exists not to be.",
@@ -950,7 +1009,7 @@ const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
 const INVARIANTS: &[Invariant] = &[
     Invariant {
         id: "single-generation",
-        rule: "Only the root `chat` INTERNAL span carries `gen_ai.*` attributes. The auxiliary \
+        rule: "Only the root `chat` or `decisions` INTERNAL span carries `gen_ai.*` attributes. The auxiliary \
                spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and \
                `server.*` only.",
         failure: "A gen_ai-aware backend renders any span carrying `gen_ai.*` as its own \
@@ -1204,8 +1263,9 @@ mod tests {
         // itself — the exporter's own conformance test asserts it against the
         // spans actually emitted.
         for span in SCHEMA.spans {
-            let is_root_generation =
-                span.name.starts_with("chat ") && span.kind == SpanKind::Internal;
+            let is_root_generation = (span.name.starts_with("chat ")
+                || span.name.starts_with("decisions "))
+                && span.kind == SpanKind::Internal;
             let is_agent_span =
                 span.name.starts_with("invoke_agent ") || span.name.starts_with("execute_tool ");
             if is_root_generation || is_agent_span {

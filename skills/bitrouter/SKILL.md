@@ -15,7 +15,7 @@ metadata:
 ---
 
 # BitRouter
-BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Native CLI tasks use bounded read workers and database execution records; see `references/cli.md` for permissions and restart limitations.
+BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Native CLI tasks use bounded read workers and database execution records; see `references/cli.md` for permissions and restart limitations. Metered `google` uses Chat Completions with `GEMINI_API_KEY`; native Gemini routes, `google-ai` and Vertex Express are retired.
 
 ## Activate in one pass
 Work top to bottom, probing before asking.
@@ -67,7 +67,6 @@ bro providers login claude-code    # adopts the live Claude Code session
 bro providers login openai-codex   # ChatGPT PKCE flow in a browser
 bro providers login bitrouter      # hosted; same sign-in as `cloud login`
 ```
-
 Auth is catalog-derived; `references/providers.md` lists each login method.
 
 **b. Hosted BitRouter for everything else.** Signing in adds a managed
@@ -76,7 +75,6 @@ Auth is catalog-derived; `references/providers.md` lists each login method.
 **c. BYOK for anything they want to own directly.** Export the key and start —
 the daemon auto-enables every provider whose key is present, and
 `export ...; bro reload` rotates one without a restart.
-
 Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not `GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
 
 `providers login` also takes `--api-key` / `--key-stdin`; `references/cloud-setup.md`
@@ -158,13 +156,13 @@ boundaries. Remote errors never fall back to this machine's configuration.
 | `references/remote-administration.md` | Remote contexts, operator credentials, and host boundaries |
 | `references/guardrails.md` | Independent input checker, router binding, and blocked legacy guardrails migration |
 | `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |
+| `references/decisions.md` | Native Decisions requests, API-key setup, operation routing and tariff limits |
 | `references/cloud-setup.md` | Cloud signup, key mint, billing, wallet path |
 | `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
 | `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
-
 ## Gotchas
 
 - Request-check extensions use SDK ExtensionApi and the shared foreground host. Restart the same custom binary, not official `bro restart`. No HTTP service or probe; legacy `plugins.bitrouter-guardrails` blocks startup. See `references/guardrails.md`.

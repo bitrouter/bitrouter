@@ -13,8 +13,9 @@ use crate::extension::request_check::{
     ContentFragment, ContentFragmentKind, ContentRole, Decision, Input, RequestCheckCoverage,
     RequestCheckCoverageScope, RequestCheckCoverageStatus,
 };
-use crate::language_model::types::{
-    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
+use bitrouter_ai::decisions::{DecisionRequest, DecisionTextKind};
+use bitrouter_ai::types::{
+    Content, ModelOperation, Prompt, Role, ToolResultContentPart, ToolResultOutput,
 };
 
 /// Maximum number of ordered request checks attached to one named router.
@@ -86,6 +87,16 @@ pub struct CheckerFailure {
 /// Host runner for statically linked request-check extensions.
 #[async_trait]
 pub trait RequestCheckerRunner: Send + Sync {
+    /// Pure applicability preflight, before defaults or external checker work.
+    /// Existing runners support generation until explicitly migrated.
+    fn supports_operation(
+        &self,
+        _binding: &RequestCheckBinding,
+        operation: ModelOperation,
+    ) -> bool {
+        operation == ModelOperation::Generation
+    }
+
     /// Evaluate one configured entry-request invocation. Request and router
     /// identities stay outside the runner input. The pipeline validates the
     /// returned business decision before proceeding.
@@ -311,6 +322,38 @@ pub(crate) fn content_fragments(
     Ok(projection.finish())
 }
 
+/// Project native Decisions text in stable order, preserving typed choice kinds.
+/// Images and safety identifiers remain outside textual checker coverage.
+pub(crate) fn decision_content_fragments(
+    request: &DecisionRequest,
+    max_input_bytes: u64,
+) -> Result<(Vec<ContentFragment>, RequestCheckCoverage), RequestCheckCoverage> {
+    let mut projection = ContentProjection::new(request.image_count(), max_input_bytes);
+    let mut failure = None;
+    request.visit_text(|kind, _, text| {
+        if failure.is_some() {
+            return;
+        }
+        let kind = match kind {
+            DecisionTextKind::Evidence => ContentFragmentKind::DecisionEvidence,
+            DecisionTextKind::QuestionName => ContentFragmentKind::DecisionQuestionName,
+            DecisionTextKind::Instructions => ContentFragmentKind::DecisionInstructions,
+            DecisionTextKind::StringChoice => ContentFragmentKind::DecisionStringChoice,
+            DecisionTextKind::BooleanChoice => ContentFragmentKind::DecisionBooleanChoice,
+            DecisionTextKind::ChoiceDescription => ContentFragmentKind::DecisionChoiceDescription,
+            DecisionTextKind::LevelLabel => ContentFragmentKind::DecisionLevelLabel,
+            DecisionTextKind::LevelDescription => ContentFragmentKind::DecisionLevelDescription,
+        };
+        if let Err(error) = projection.push(ContentRole::User, kind, text) {
+            failure = Some(error);
+        }
+    });
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(projection.finish()),
+    }
+}
+
 fn count_excluded_media(prompt: &Prompt) -> u64 {
     prompt.messages.iter().fold(0_u64, |total, message| {
         message.content.iter().fold(total, |count, content| {
@@ -345,7 +388,7 @@ fn count_excluded_media(prompt: &Prompt) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::{
+    use bitrouter_ai::types::{
         DataContent, GenerationParams, Message, ProviderMetadata, ToolResultContentPart,
         ToolResultOutput,
     };

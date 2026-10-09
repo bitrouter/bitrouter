@@ -28,6 +28,12 @@ pub type Result<T> = std::result::Result<T, BitrouterError>;
 /// settlement recorders, the caller).
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum BitrouterError {
+    /// 400 before dispatch, or 502 when client output cannot be represented.
+    #[error("model conversion incompatible")]
+    Incompatible {
+        /// Content-free model diagnostics, preserved for trusted callers.
+        report: bitrouter_ai::conversion::ConversionReport,
+    },
     /// 400 — malformed request (bad JSON, unknown enum variant, …).
     #[error("bad request: {message}")]
     BadRequest {
@@ -108,6 +114,8 @@ pub enum BitrouterError {
         /// Internal diagnostic detail. Public HTTP/SSE responses use a fixed
         /// safe message and never expose this value.
         message: String,
+        /// Available provider-reported usage from the failed successful response.
+        usage: Option<Box<bitrouter_ai::types::Usage>>,
     },
 
     /// 401 / 403 — upstream MCP server demanded authorization. Distinct from
@@ -133,6 +141,10 @@ pub enum BitrouterError {
     #[error("upstream unavailable")]
     UpstreamUnavailable,
 
+    /// Caller cancelled the request; represented as 499 at the gateway.
+    #[error("request cancelled")]
+    Cancelled,
+
     /// 500 — internal error.
     #[error("internal error: {0}")]
     Internal(String),
@@ -146,9 +158,26 @@ fn upstream_payload_text(error: &serde_json::Value) -> String {
 }
 
 impl BitrouterError {
+    /// Select the safe public presentation before a model codec encodes SSE.
+    pub fn stream_error(&self) -> bitrouter_ai::stream::StreamError {
+        bitrouter_ai::stream::StreamError {
+            message: self.public_message(),
+            error_type: self.error_type().to_owned(),
+            code: self.error_code().to_owned(),
+            status: self.status(),
+        }
+    }
+
     /// The HTTP status code this error renders as.
     pub fn status(&self) -> u16 {
         match self {
+            Self::Incompatible { report } => {
+                if report.is_output_failure() {
+                    502
+                } else {
+                    400
+                }
+            }
             Self::BadRequest { .. } => 400,
             Self::Unauthorized(_) => 401,
             Self::PaymentRequired(_) => 402,
@@ -164,6 +193,7 @@ impl BitrouterError {
             Self::UpstreamAuth { status, .. } => *status,
             Self::UpstreamTimeout => 504,
             Self::UpstreamUnavailable => 503,
+            Self::Cancelled => 499,
             Self::Internal(_) => 500,
         }
     }
@@ -171,6 +201,13 @@ impl BitrouterError {
     /// The OpenAI-compatible `error.type` tag.
     pub fn error_type(&self) -> &'static str {
         match self {
+            Self::Incompatible { report } => {
+                if report.is_output_failure() {
+                    "upstream_error"
+                } else {
+                    "invalid_request_error"
+                }
+            }
             Self::BadRequest { .. } => "invalid_request_error",
             Self::Unauthorized(_) => "authentication_error",
             Self::PaymentRequired(_) => "payment_required",
@@ -187,6 +224,7 @@ impl BitrouterError {
             Self::UpstreamUnavailable => "upstream_error",
             Self::UpstreamAuth { status: 403, .. } => "permission_error",
             Self::UpstreamAuth { .. } => "authentication_error",
+            Self::Cancelled => "request_cancelled",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -194,6 +232,7 @@ impl BitrouterError {
     /// Stable machine-readable code for OpenAI-compatible error envelopes.
     pub fn error_code(&self) -> &'static str {
         match self {
+            Self::Incompatible { .. } => "model_conversion_incompatible",
             Self::BadRequest { .. } => "invalid_request",
             Self::Unauthorized(_) => "authentication_error",
             Self::PaymentRequired(_) => "payment_required",
@@ -209,6 +248,7 @@ impl BitrouterError {
             Self::UpstreamAuth { .. } => "upstream_auth_required",
             Self::UpstreamTimeout => "upstream_timeout",
             Self::UpstreamUnavailable => "upstream_unavailable",
+            Self::Cancelled => "request_cancelled",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -234,7 +274,7 @@ impl BitrouterError {
             }
             Self::UpstreamPolicyViolation { message }
             | Self::Upstream { message, .. }
-            | Self::UpstreamInvalidResponse { message } => Some(message),
+            | Self::UpstreamInvalidResponse { message, .. } => Some(message),
             _ => None,
         }
     }
@@ -242,6 +282,7 @@ impl BitrouterError {
     /// The machine-readable [`ErrorKind`] for this error.
     pub fn kind(&self) -> ErrorKind {
         match self {
+            Self::Incompatible { .. } => ErrorKind::Incompatible,
             Self::BadRequest { .. } => ErrorKind::BadRequest,
             Self::Unauthorized(_) => ErrorKind::Unauthorized,
             Self::PaymentRequired(_) => ErrorKind::PaymentRequired,
@@ -257,6 +298,7 @@ impl BitrouterError {
             Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
             Self::UpstreamTimeout => ErrorKind::UpstreamTimeout,
             Self::UpstreamUnavailable => ErrorKind::UpstreamUnavailable,
+            Self::Cancelled => ErrorKind::Cancelled,
             Self::Internal(_) => ErrorKind::Internal,
         }
     }
@@ -267,6 +309,7 @@ impl BitrouterError {
     /// themselves — this base projection leaves them empty.
     pub fn to_envelope(&self) -> ErrorEnvelope {
         let message = match self {
+            Self::Incompatible { .. } => "model conversion incompatible".to_string(),
             Self::BadRequest { message } => message.clone(),
             Self::Unauthorized(m)
             | Self::PaymentRequired(m)
@@ -281,7 +324,7 @@ impl BitrouterError {
             Self::Upstream { status, message } => {
                 format!("upstream error ({status}): {message}")
             }
-            Self::UpstreamInvalidResponse { message } => {
+            Self::UpstreamInvalidResponse { message, .. } => {
                 format!("upstream returned an invalid response: {message}")
             }
             Self::UpstreamAuth { status, .. } => {
@@ -289,6 +332,7 @@ impl BitrouterError {
             }
             Self::UpstreamTimeout => "upstream timeout".to_string(),
             Self::UpstreamUnavailable => "upstream unavailable".to_string(),
+            Self::Cancelled => "request cancelled".to_string(),
         };
         ErrorEnvelope {
             error: ErrorBody {
@@ -326,6 +370,8 @@ impl BitrouterError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
+    /// Conversion admission or output representation was refused.
+    Incompatible,
     /// 400 — malformed request.
     BadRequest,
     /// 401 — missing/invalid credentials.
@@ -352,6 +398,8 @@ pub enum ErrorKind {
     UpstreamTimeout,
     /// 503 — the upstream route set is temporarily unavailable.
     UpstreamUnavailable,
+    /// Caller cancelled the request.
+    Cancelled,
     /// 500 — internal error.
     Internal,
 }
@@ -381,6 +429,42 @@ pub struct ErrorBody {
 pub struct ErrorEnvelope {
     /// The error detail.
     pub error: ErrorBody,
+}
+
+impl From<bitrouter_ai::error::ModelError> for BitrouterError {
+    fn from(error: bitrouter_ai::error::ModelError) -> Self {
+        use bitrouter_ai::error::ModelError;
+        match error {
+            ModelError::Incompatible { report } => Self::Incompatible { report },
+            ModelError::InvalidRequest { message } => Self::bad_request(message),
+            ModelError::InvalidResponse { message, usage } => {
+                Self::UpstreamInvalidResponse { message, usage }
+            }
+            ModelError::DecisionResponse { failure } => Self::UpstreamInvalidResponse {
+                message: failure.message,
+                usage: failure.usage,
+            },
+            ModelError::Provider { status, message } => Self::Upstream { status, message },
+            ModelError::PolicyViolation { message } => Self::UpstreamPolicyViolation { message },
+            ModelError::InvalidCredential { message } | ModelError::Configuration { message } => {
+                Self::internal(message)
+            }
+            ModelError::Transport { message } | ModelError::Decode { message } => Self::Upstream {
+                status: 502,
+                message,
+            },
+            ModelError::CredentialStorage { failure } => Self::internal(failure.to_string()),
+            ModelError::Timeout => Self::UpstreamTimeout,
+            ModelError::Cancelled => Self::Cancelled,
+            ModelError::HttpResponse {
+                status,
+                body,
+                retry_after,
+            } => {
+                crate::language_model::executor::classify_upstream_error(status, &body, retry_after)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

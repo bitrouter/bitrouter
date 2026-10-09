@@ -21,7 +21,8 @@ use crate::config::Config;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
 use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
-use crate::language_model::types::{ApiProtocol, RoutingTarget};
+use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::types::{ApiProtocol, ModelOperation};
 
 fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
     let base = UsagePricingBracket {
@@ -141,7 +142,7 @@ impl ConfigRoutingTable {
     /// against the new config first. Used by the daemon's reload path
     /// when there's no source file to re-read from (zero-config mode):
     /// the caller produces a fresh `Config` from
-    /// `bitrouter_providers::zero_config` and hands it here. Holds the
+    /// the application's `providers::apply::zero_config` and hands it here. Holds the
     /// same `reload_lock` as the `RoutingTable::reload` impl so the two
     /// paths serialise against each other.
     pub async fn replace_config(&self, fresh: Config) -> Result<()> {
@@ -195,11 +196,15 @@ fn build_targets(
     provider: &crate::config::ProviderConfig,
     model_id: &str,
     inbound: Option<&ApiProtocol>,
+    operation: ModelOperation,
 ) -> Result<Vec<RoutingTarget>> {
     // Protocol-native routing: prefer the inbound protocol when this upstream
     // supports it (a faithful same-protocol round-trip), else the provider's
     // configured default head.
-    let protocol = select_protocol(&provider.protocols_for(model_id), inbound);
+    let Some(protocol) = select_protocol(&provider.protocols_for(model_id), inbound, operation)
+    else {
+        return Ok(Vec::new());
+    };
     // A per-protocol endpoint override lets one provider serve different
     // protocols at different paths (e.g. OpenAI under `/v1`, Anthropic Messages
     // under `/anthropic`). It applies to the provider base, not to an account
@@ -225,6 +230,8 @@ fn build_targets(
         chat_compatibility.and_then(|compatibility| compatibility.supports_store);
     let chat_supports_stream_options =
         chat_compatibility.and_then(|compatibility| compatibility.supports_stream_options);
+    let chat_google_extensions =
+        chat_compatibility.is_some_and(|compatibility| compatibility.google_extensions);
     let reasoning_effort = provider
         .model_config(model_id)
         .and_then(|model| model.reasoning_effort.clone());
@@ -243,6 +250,7 @@ fn build_targets(
             chat_token_limit_field,
             chat_supports_store,
             chat_supports_stream_options,
+            chat_google_extensions,
             reasoning_effort: reasoning_effort.clone(),
             account_label: None,
             api_key_override: None,
@@ -285,6 +293,7 @@ fn build_targets(
                 chat_token_limit_field,
                 chat_supports_store,
                 chat_supports_stream_options,
+                chat_google_extensions,
                 reasoning_effort: reasoning_effort.clone(),
                 account_label: Some(label),
                 api_key_override: None,
@@ -301,16 +310,21 @@ fn build_targets(
 /// provider's preferred head. `protocols` is non-empty —
 /// [`ProviderConfig::protocols_for`](crate::config::ProviderConfig::protocols_for)
 /// always yields at least one.
-fn select_protocol(protocols: &[ApiProtocol], inbound: Option<&ApiProtocol>) -> ApiProtocol {
-    if let Some(p) = inbound
-        && protocols.contains(p)
+fn select_protocol(
+    protocols: &[ApiProtocol],
+    inbound: Option<&ApiProtocol>,
+    operation: ModelOperation,
+) -> Option<ApiProtocol> {
+    if let Some(protocol) = inbound
+        && protocol.operation() == operation
+        && protocols.contains(protocol)
     {
-        return p.clone();
+        return Some(protocol.clone());
     }
     protocols
-        .first()
+        .iter()
+        .find(|protocol| protocol.operation() == operation)
         .cloned()
-        .unwrap_or(ApiProtocol::ChatCompletions)
 }
 
 /// The rotation offset in `0..n` for a `balance` provider's next
@@ -401,6 +415,7 @@ fn resolve_virtual_model(
                 provider,
                 &endpoint.service_id,
                 prefs.inbound_protocol.as_ref(),
+                prefs.operation,
             )?,
         ));
     }
@@ -420,6 +435,9 @@ fn resolve_virtual_model(
 
     let chain: Vec<RoutingTarget> = endpoints.into_iter().flat_map(|(_, t)| t).collect();
     if chain.is_empty() {
+        if prefs.operation == ModelOperation::Decisions {
+            return require_compatible_chain(chain, prefs.operation);
+        }
         return Err(BitrouterError::NotFound(format!(
             "virtual model '{clean}' has no active endpoints"
         )));
@@ -460,7 +478,9 @@ fn resolve_clean_route_chain(
             provider,
             model_id,
             prefs.inbound_protocol.as_ref(),
-        );
+            prefs.operation,
+        )
+        .and_then(|chain| require_compatible_chain(chain, prefs.operation));
     }
 
     // ---- Strategy 2: explicit virtual model ----
@@ -508,6 +528,7 @@ fn resolve_clean_route_chain(
                     provider,
                     clean,
                     prefs.inbound_protocol.as_ref(),
+                    prefs.operation,
                 )?,
             ));
         }
@@ -548,7 +569,22 @@ fn resolve_clean_route_chain(
             });
         }
     }
-    Ok(chain.into_iter().flat_map(|(_, _, t)| t).collect())
+    require_compatible_chain(
+        chain.into_iter().flat_map(|(_, _, t)| t).collect(),
+        prefs.operation,
+    )
+}
+
+fn require_compatible_chain(
+    chain: Vec<RoutingTarget>,
+    operation: ModelOperation,
+) -> Result<Vec<RoutingTarget>> {
+    if chain.is_empty() && operation == ModelOperation::Decisions {
+        return Err(BitrouterError::bad_request(
+            "no compatible Decisions target for the selected model",
+        ));
+    }
+    Ok(chain)
 }
 
 /// Whether a provider may only be selected explicitly.
@@ -688,13 +724,17 @@ impl RoutingTable for ConfigRoutingTable {
     }
 
     fn usage_pricing(&self, _model: &str, target: &RoutingTarget) -> Option<UsagePricing> {
-        let config = self.config.read().expect("config lock poisoned");
+        let config = self.config.read().ok()?;
         config
             .providers
             .get(&target.provider_name)?
             .model_config(&target.service_id)?
-            .pricing
-            .as_ref()
+            .pricing_for(&target.api_protocol)
+            .filter(|pricing| {
+                pricing
+                    .endpoint_profile
+                    .is_none_or(|profile| profile.matches_api_base(target.effective_api_base()))
+            })
             .map(usage_pricing)
     }
 
@@ -755,6 +795,7 @@ impl RoutingTable for ConfigRoutingTable {
 
 /// Merge `extra`'s knobs additively into `base` (caller prefs refine defaults).
 fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
+    base.operation = extra.operation;
     if extra.sort != SortOrder::default() {
         base.sort = extra.sort;
     }
@@ -789,7 +830,7 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
 mod tests {
     use super::*;
     use crate::config::parse;
-    use crate::language_model::types::Capability;
+    use bitrouter_ai::types::Capability;
 
     fn table(yaml: &str) -> ConfigRoutingTable {
         ConfigRoutingTable::from_config(parse(yaml).unwrap())
@@ -1670,23 +1711,6 @@ providers:
     }
 
     #[tokio::test]
-    async fn falls_back_to_default_head_when_inbound_unsupported() {
-        // GenerateContent isn't in the set → fall back to the preferred head
-        // (chat_completions), at the default base.
-        let t = table(MULTI_PROTOCOL);
-        let chain = t
-            .route_chain(
-                "minimax:MiniMax-M2",
-                &prefs_inbound(ApiProtocol::GenerateContent),
-                &CallerContext::local(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(chain[0].api_protocol, ApiProtocol::ChatCompletions);
-        assert_eq!(chain[0].api_base, "https://api.minimax.io/v1");
-    }
-
-    #[tokio::test]
     async fn no_inbound_protocol_uses_default_head() {
         // Today's default path: no inbound protocol → the preferred head at the
         // provider base. Guards the backward-compatible behaviour.
@@ -1985,7 +2009,7 @@ providers:
             .unwrap();
         assert_eq!(
             chain[0].chat_token_limit_field,
-            Some(crate::language_model::types::ChatTokenLimitField::MaxCompletionTokens)
+            Some(bitrouter_ai::types::ChatTokenLimitField::MaxCompletionTokens)
         );
         assert_eq!(chain[0].chat_supports_store, Some(false));
         assert_eq!(chain[0].chat_supports_stream_options, Some(false));

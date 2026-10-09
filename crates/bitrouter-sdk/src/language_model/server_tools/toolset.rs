@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use crate::caller::CallerContext;
 use crate::error::Result;
 use crate::language_model::context::PipelineContext;
-use crate::language_model::types::{Tool, ToolResultOutput};
 use crate::plugin::PluginId;
+use bitrouter_ai::types::{Tool, ToolResultOutput};
 
 /// An owned, cheap-to-clone snapshot of the per-request context handed to a
 /// [`RouterToolset`]. Carries the [`CallerContext`] and the request's
@@ -120,7 +120,7 @@ impl ToolsetRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::ProviderMetadata;
+    use bitrouter_ai::types::ProviderMetadata;
 
     struct MockToolset {
         tools: Vec<Tool>,

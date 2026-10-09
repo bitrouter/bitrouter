@@ -1,5 +1,5 @@
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "scope_name": "io.bitrouter.observe",
   "scope_version": "{rendering crate version}",
   "resource_attributes": [
@@ -63,6 +63,36 @@
       "note": "Full request lifetime, named for the model the caller asked for — not the model that ultimately served it.",
       "attributes": [
         {
+          "key": "bitrouter.operation",
+          "type": "string",
+          "requirement": "required",
+          "note": "Operation derived from the typed input: generation or decisions."
+        },
+        {
+          "key": "bitrouter.inbound_protocol",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Actual ingress wire, when known; caller headers cannot select it."
+        },
+        {
+          "key": "bitrouter.outbound_protocol",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Actual final serving or attempted target wire, when dispatch was reached."
+        },
+        {
+          "key": "bitrouter.decisions.input",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Native evidence and questions only under full content capture, with the configured byte cap; safety identifier excluded."
+        },
+        {
+          "key": "bitrouter.decisions.answers",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Native ordered answers only under full content capture, with the configured byte cap."
+        },
+        {
           "key": "bitrouter.request_id",
           "type": "string",
           "requirement": "required",
@@ -84,7 +114,275 @@
           "key": "gen_ai.operation.name",
           "type": "string",
           "requirement": "required",
-          "note": "Always `chat` on this span."
+          "note": "`chat` for generation; `decisions` for the native Decisions operation."
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "requirement": "required",
+          "note": "Model the caller requested."
+        },
+        {
+          "key": "gen_ai.request.temperature",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "When the request set it."
+        },
+        {
+          "key": "gen_ai.request.top_p",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "When the request set it."
+        },
+        {
+          "key": "gen_ai.request.max_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "When the request set it."
+        },
+        {
+          "key": "gen_ai.request.seed",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Read opportunistically from the request's untyped `extra` map."
+        },
+        {
+          "key": "gen_ai.request.frequency_penalty",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "Read opportunistically from the request's untyped `extra` map."
+        },
+        {
+          "key": "gen_ai.request.presence_penalty",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "Read opportunistically from the request's untyped `extra` map."
+        },
+        {
+          "key": "gen_ai.request.stop_sequences",
+          "type": "string_array",
+          "requirement": "conditional",
+          "note": "Read from the request's `stop` extra; omitted when it holds no strings."
+        },
+        {
+          "key": "$screen_name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Vendor-specific: PostHog's \"URL / Screen\" column reads this key. Set once at request end to `<provider>/<model>`, or to the requested model when no provider was reached."
+        },
+        {
+          "key": "bitrouter.request_duration_ms",
+          "type": "int",
+          "requirement": "required",
+          "note": "End-to-end request latency."
+        },
+        {
+          "key": "bitrouter.outcome",
+          "type": "string",
+          "requirement": "required",
+          "note": "One of `completed`, `failed`, `disconnected`."
+        },
+        {
+          "key": "bitrouter.provider_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Provider that served the request; absent when none was reached."
+        },
+        {
+          "key": "bitrouter.model_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Model that served the request; absent when none was reached."
+        },
+        {
+          "key": "bitrouter.upstream_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Time spent in the upstream call, when the executor reported it."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Label of the credential used, when the target carried one."
+        },
+        {
+          "key": "bitrouter.ttft_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Time to first token, for a streamed response."
+        },
+        {
+          "key": "bitrouter.first_token_kind",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Which delta arrived first — reasoning, text or tool call."
+        },
+        {
+          "key": "bitrouter.generation_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "First-token-to-last-token span of a streamed generation."
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Serving provider. The semconv's current key — it replaced `gen_ai.system`."
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Model that actually served the request, which may differ from the requested one."
+        },
+        {
+          "key": "gen_ai.response.id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Gateway-observable response id — see the `gateway-observable-ids` invariant."
+        },
+        {
+          "key": "gen_ai.response.finish_reasons",
+          "type": "string_array",
+          "requirement": "conditional",
+          "note": "Single-element array; the semconv types this as an array."
+        },
+        {
+          "key": "gen_ai.response.time_to_first_chunk",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "Time to first token in *seconds*, as the semconv requires. Measured from the first content delta, never from response headers."
+        },
+        {
+          "key": "gen_ai.usage.input_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "When the upstream reported usage."
+        },
+        {
+          "key": "gen_ai.usage.output_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "When the upstream reported usage."
+        },
+        {
+          "key": "gen_ai.usage.reasoning_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Only when non-zero."
+        },
+        {
+          "key": "gen_ai.input.messages",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "JSON-encoded prompt messages. Only under full content capture, which is off by default; truncated at the configured byte cap on a char boundary."
+        },
+        {
+          "key": "gen_ai.output.messages",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "JSON-encoded response content blocks, from the IR for a non-streamed response and reassembled from deltas for a streamed one. Full content capture only."
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Error class, kept low-cardinality so metrics can dimension on it. The human-readable message rides the `exception` event instead."
+        }
+      ],
+      "events": [
+        {
+          "name": "exception",
+          "note": "OTel exception semconv. Carries the human-readable message that deliberately stays off `error.type`, which is kept low-cardinality for metric dimensions.",
+          "attributes": [
+            {
+              "key": "exception.type",
+              "type": "string",
+              "requirement": "required",
+              "note": "Error class — the same value as `error.type`."
+            },
+            {
+              "key": "exception.message",
+              "type": "string",
+              "requirement": "required",
+              "note": "Rendered error."
+            }
+          ]
+        },
+        {
+          "name": "tool_call.started",
+          "note": "Emitted per streamed tool-call delta that names a tool.",
+          "attributes": [
+            {
+              "key": "tool.name",
+              "type": "string",
+              "requirement": "required",
+              "note": "Tool being called."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "decisions {gen_ai.request.model}",
+      "kind": "internal",
+      "parent": "The ingress SERVER span when one exists; otherwise the inbound W3C trace context; otherwise a trace root.",
+      "note": "Full native Decisions request lifetime; no first token, generated messages, or continuation is invented.",
+      "attributes": [
+        {
+          "key": "bitrouter.operation",
+          "type": "string",
+          "requirement": "required",
+          "note": "Operation derived from the typed input: generation or decisions."
+        },
+        {
+          "key": "bitrouter.inbound_protocol",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Actual ingress wire, when known; caller headers cannot select it."
+        },
+        {
+          "key": "bitrouter.outbound_protocol",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Actual final serving or attempted target wire, when dispatch was reached."
+        },
+        {
+          "key": "bitrouter.decisions.input",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Native evidence and questions only under full content capture, with the configured byte cap; safety identifier excluded."
+        },
+        {
+          "key": "bitrouter.decisions.answers",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Native ordered answers only under full content capture, with the configured byte cap."
+        },
+        {
+          "key": "bitrouter.request_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Per-request id; the join key to logs and settlement records."
+        },
+        {
+          "key": "bitrouter.api_key_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling key's id. Raw on the span — cardinality caps apply to metrics only."
+        },
+        {
+          "key": "bitrouter.user_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling user's id. Raw on the span, as above."
+        },
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "`chat` for generation; `decisions` for the native Decisions operation."
         },
         {
           "key": "gen_ai.request.model",
@@ -327,6 +625,100 @@
       "parent": "The root `chat` span.",
       "note": "A plain HTTP client span for one upstream attempt — *not* a gen_ai generation. See the `single-generation` invariant. Distinguished from the root `chat` span by kind: this one is CLIENT, the root is INTERNAL.",
       "attributes": [
+        {
+          "key": "bitrouter.operation",
+          "type": "string",
+          "requirement": "required",
+          "note": "Operation of this selected target."
+        },
+        {
+          "key": "bitrouter.outbound_protocol",
+          "type": "string",
+          "requirement": "required",
+          "note": "Actual selected wire, independent of the inbound format."
+        },
+        {
+          "key": "bitrouter.provider_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Provider this attempt targeted."
+        },
+        {
+          "key": "bitrouter.model_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Upstream model id this attempt targeted."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Label of the credential used, when the target carried one."
+        },
+        {
+          "key": "bitrouter.upstream_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Time in the upstream call, when the executor reported it."
+        },
+        {
+          "key": "server.address",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Upstream host, parsed from the effective API base."
+        },
+        {
+          "key": "server.port",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Upstream port, when the API base spelled one."
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Error class for a failed attempt, or `stream_dropped` / `client_disconnected` when the response body ended abnormally."
+        }
+      ],
+      "events": [
+        {
+          "name": "exception",
+          "note": "OTel exception semconv. Carries the human-readable message that deliberately stays off `error.type`, which is kept low-cardinality for metric dimensions.",
+          "attributes": [
+            {
+              "key": "exception.type",
+              "type": "string",
+              "requirement": "required",
+              "note": "Error class — the same value as `error.type`."
+            },
+            {
+              "key": "exception.message",
+              "type": "string",
+              "requirement": "required",
+              "note": "Rendered error."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "decisions {bitrouter.model_id}",
+      "kind": "client",
+      "parent": "The root decisions span.",
+      "note": "Plain HTTP client attempt; native usage is recorded once on the root model-call span.",
+      "attributes": [
+        {
+          "key": "bitrouter.operation",
+          "type": "string",
+          "requirement": "required",
+          "note": "Operation of this selected target."
+        },
+        {
+          "key": "bitrouter.outbound_protocol",
+          "type": "string",
+          "requirement": "required",
+          "note": "Actual selected wire, independent of the inbound format."
+        },
         {
           "key": "bitrouter.provider_id",
           "type": "string",
@@ -709,19 +1101,19 @@
   ],
   "extension_region": {
     "carrier": "observe.span_attributes",
-    "target_span": "chat {gen_ai.request.model}",
+    "target_span": "chat {gen_ai.request.model} or decisions {gen_ai.request.model}",
     "reserved_prefixes": [
       "bitrouter.",
       "gen_ai."
     ],
-    "rule": "A deployment may stamp any attribute onto the root `chat` span except keys under a reserved prefix and keys this schema already declares on any span. Reserved keys are dropped, not stamped: a deployment that redefined `bitrouter.*` would make the schema deployment-dependent, which is the one thing it exists not to be.",
+    "rule": "A deployment may stamp any attribute onto the root model-call span except keys under a reserved prefix and keys this schema already declares on any span. Reserved keys are dropped, not stamped: a deployment that redefined `bitrouter.*` would make the schema deployment-dependent, which is the one thing it exists not to be.",
     "value_types": "Scalars only — string, bool, integer, float. Null and nested JSON are skipped, because an OTel attribute value is scalar.",
     "diagnostic": "One DEBUG line per dropped key on the `bitrouter::observe::span_attributes` target."
   },
   "invariants": [
     {
       "id": "single-generation",
-      "rule": "Only the root `chat` INTERNAL span carries `gen_ai.*` attributes. The auxiliary spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and `server.*` only.",
+      "rule": "Only the root `chat` or `decisions` INTERNAL span carries `gen_ai.*` attributes. The auxiliary spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and `server.*` only.",
       "failure": "A gen_ai-aware backend renders any span carrying `gen_ai.*` as its own generation. Stamping a hop makes it count two generations per request and double the reported cost. Nothing errors; the bill is just wrong."
     },
     {

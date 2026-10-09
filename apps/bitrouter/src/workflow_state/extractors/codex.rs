@@ -85,10 +85,8 @@ pub(crate) fn previous_response_id(raw_body: &serde_json::Value) -> Option<Strin
 mod tests {
     use super::*;
 
+    use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
     use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::language_model::types::{
-        GenerationParams, Message, Prompt, ProviderMetadata, Role,
-    };
     use http::HeaderValue;
 
     use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};

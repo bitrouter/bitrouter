@@ -16,7 +16,7 @@
 
 use super::config::{FUSION_TOOL, FusionSettings};
 use crate::error::BitrouterError;
-use crate::language_model::types::{Prompt, ProviderMetadata, Tool};
+use bitrouter_ai::types::{Prompt, ProviderMetadata, Tool};
 
 const DEFAULT_FUSION_ALIAS: &str = "bitrouter/fusion";
 
@@ -154,7 +154,7 @@ impl crate::app::PromptTransform for FusionAliasConfig {
 mod tests {
     use super::super::config::{FusionConfig, FusionSettings};
     use super::*;
-    use crate::language_model::types::{GenerationParams, ProviderMetadata};
+    use bitrouter_ai::types::{GenerationParams, ProviderMetadata};
 
     fn prompt_with_model(model: &str) -> Prompt {
         Prompt {

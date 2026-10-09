@@ -33,32 +33,6 @@ models:
         no_cache: 0.14
       output_tokens:
         text: 0.28
-  - id: deepseek/deepseek-v3.2
-    provider_model_id: deepseek-v3.2
-    pricing:
-      input_tokens:
-        no_cache: 0.28
-      output_tokens:
-        text: 0.42
-      context_tiers:
-        - above_input_tokens: 32000
-          input_tokens:
-            no_cache: 0.56
-          output_tokens:
-            text: 0.83
-  - id: z-ai/glm-5.1
-    provider_model_id: glm-5.1
-    pricing:
-      input_tokens:
-        no_cache: 0.83
-      output_tokens:
-        text: 3.33
-      context_tiers:
-        - above_input_tokens: 32000
-          input_tokens:
-            no_cache: 1.11
-          output_tokens:
-            text: 3.89
 status: active
 weight: 1
 submitted_at: 2026-07-07

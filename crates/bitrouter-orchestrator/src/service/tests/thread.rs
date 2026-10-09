@@ -1,5 +1,7 @@
+#[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
 
 use bitrouter_sdk::caller::CallerContext;
@@ -11,10 +13,9 @@ use super::support::{
 use crate::service::{ErrorCode, ThreadService};
 use crate::store::{EffectStatus, ExecutionRecord, ExecutionStore, MemoryExecutionStore};
 use crate::thread::{PermissionProfile, ThreadStatus};
-use crate::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus,
-    VerificationStatus,
-};
+#[cfg(unix)]
+use crate::turn::VerificationStatus;
+use crate::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus};
 
 fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     SteeringRequest {

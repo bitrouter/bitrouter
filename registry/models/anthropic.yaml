@@ -24,34 +24,6 @@
   knowledge_cutoff: 2025-02-28
   open_weights: false
   family: claude-haiku
-- id: anthropic/claude-opus-4.6
-  deprecation_date: 2026-10-05
-  name: 'Anthropic: Claude Opus 4.6'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 200000
-  max_output_tokens: 16384
-  release_date: 2026-02-05
-  knowledge_cutoff: 2025-05-31
-  open_weights: false
-  family: claude-opus
-- id: anthropic/claude-opus-4.7
-  deprecation_date: 2026-10-05
-  name: 'Anthropic: Claude Opus 4.7'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 200000
-  max_output_tokens: 16384
-  release_date: 2026-04-16
-  knowledge_cutoff: 2026-01-31
-  open_weights: false
-  family: claude-opus
 - id: anthropic/claude-opus-4.8
   deprecation_date: 2026-10-23
   name: 'Anthropic: Claude Opus 4.8'
@@ -141,3 +113,14 @@
   max_input_tokens: 1000000
   max_output_tokens: 128000
   release_date: 2026-09-28
+- id: anthropic/claude-haiku-5.5
+  name: 'Anthropic: Claude Haiku 5.5'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-10-07

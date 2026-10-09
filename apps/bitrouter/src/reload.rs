@@ -5,10 +5,10 @@
 //!
 //! Both reload paths build a fresh `Config` **in the app layer** and swap
 //! it into the routing table via `ConfigRoutingTable::replace_config`.
-//! Building the config here — above `bitrouter-providers` — is what lets
-//! [`bitrouter_providers::apply_builtin_defaults`] fill the empty fields
-//! of a built-in provider (`openai: {}`). The SDK's own
-//! `RoutingTable::reload` sits *below* `bitrouter-providers` and so cannot
+//! Building the config in the application is what lets
+//! [`crate::providers::apply::apply_builtin_defaults`] fill the empty fields
+//! of the built-in Cloud gateway. The SDK's own
+//! `RoutingTable::reload` has no application provider bridge and cannot
 //! apply the catalog; routing through it on reload would leave a built-in
 //! provider with an empty `api_base`, and an `auto_discover` provider
 //! would then silently drop every model.
@@ -603,6 +603,9 @@ fn restart_required_fields(
     if current.server.log_level != candidate.server.log_level {
         fields.insert("server.log_level".to_string());
     }
+    if current.server.require_known_pricing != candidate.server.require_known_pricing {
+        fields.insert("server.require_known_pricing".to_string());
+    }
     if current.server.skip_auth != candidate.server.skip_auth {
         fields.insert("server.skip_auth".to_string());
     }
@@ -678,7 +681,6 @@ fn restart_required_fields(
         "claude-code",
         "openai-codex",
         "supergrok",
-        bitrouter_providers::antigravity::PROVIDER_ID,
     ] {
         if current.providers.contains_key(provider_id)
             != candidate.providers.contains_key(provider_id)
@@ -1067,12 +1069,35 @@ fn server_tools_changed(
 fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
     let mut entries = Vec::new();
     for (provider_id, provider) in &config.providers {
+        if provider
+            .models
+            .iter()
+            .any(|model| model.pricing.is_some() || !model.pricing_by_protocol.is_empty())
+        {
+            entries.push(format!(
+                "{provider_id}|endpoint|{}",
+                crate::metering::tariff::endpoint_profile(&provider.api_base)
+            ));
+            for (protocol, endpoint) in &provider.protocol_endpoints {
+                entries.push(format!(
+                    "{provider_id}|endpoint|{protocol}|{}",
+                    crate::metering::tariff::endpoint_profile(endpoint)
+                ));
+            }
+        }
         for model in &provider.models {
             if let Some(pricing) = &model.pricing {
                 let provider_model_id = model.provider_model_id.as_deref().unwrap_or_default();
                 entries.push(format!(
                     "{provider_id}|{}|{}|{pricing:?}",
                     model.id, provider_model_id
+                ));
+            }
+            for (protocol, pricing) in &model.pricing_by_protocol {
+                let native_id = model.provider_model_id.as_deref().unwrap_or_default();
+                entries.push(format!(
+                    "{provider_id}|{}|{native_id}|{protocol}|{pricing:?}",
+                    model.id
                 ));
             }
         }
@@ -1086,9 +1111,8 @@ fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
 /// startup pass in `assemble.rs` so a subscription / Claude Code session
 /// provider survives a hot-reload instead of dropping out of routing.
 fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Config) {
-    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
-    {
-        bitrouter_providers::activate_stored_credential_providers(config, &store);
+    if let Ok(store) = crate::provider_credentials::load_default() {
+        crate::providers::apply::activate_stored_credential_providers(config, &store);
     }
 }
 
@@ -1096,7 +1120,7 @@ fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Conf
 /// constructs a replacement routing snapshot. Keeping this in one helper makes
 /// the current and candidate shapes comparable before remote classification.
 async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
-    bitrouter_providers::apply_builtin_defaults(config);
+    crate::providers::apply::apply_builtin_defaults(config);
     crate::claude_code::enable_if_logged_in(config);
     crate::assemble::merge_registry_into(config).await;
     activate_stored_credential_providers(config);
@@ -1106,7 +1130,7 @@ async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
 
 /// Whether the daemon is running against a `bitrouter.yaml` on disk
 /// (re-readable on reload) or a zero-config in-memory default
-/// (rebuilt by re-running [`bitrouter_providers::zero_config`]).
+/// (rebuilt by re-running [`crate::providers::apply::zero_config`]).
 pub enum ReloadSource {
     /// File-backed; the reloader re-reads the `bitrouter.yaml` at this
     /// path (re-substituting `${VAR}` references), re-applies the
@@ -1245,9 +1269,11 @@ fn changed_configuration_fields(
 
 fn fixed_restart_field(path: &str) -> String {
     match path {
-        "server.listen" | "server.control_socket" | "server.log_level" | "server.skip_auth" => {
-            path.to_string()
-        }
+        "server.listen"
+        | "server.control_socket"
+        | "server.log_level"
+        | "server.skip_auth"
+        | "server.require_known_pricing" => path.to_string(),
         "inherit_defaults"
         | "control"
         | "chat"
@@ -1418,7 +1444,7 @@ async fn load_configuration_baseline_at(
             })
         }
         crate::paths::ConfigSource::Default { .. } => {
-            let mut config = bitrouter_providers::zero_config();
+            let mut config = crate::providers::apply::zero_config();
             crate::cloud::enable_in_zero_config(&mut config);
             Ok(ConfigurationBaseline {
                 source: source.clone(),
@@ -1439,8 +1465,8 @@ async fn load_configuration_baseline_at(
 pub struct AppReloader {
     policy_store: Arc<PolicyStore>,
     /// Concrete handle on the routing table. Both reload paths build a
-    /// fresh `Config` in the app layer — so `bitrouter_providers`'
-    /// built-in catalog can be applied above the SDK — and swap it in
+    /// fresh `Config` in the app layer — so product provider
+    /// defaults can be applied above the SDK — and swap it in
     /// via `ConfigRoutingTable::replace_config`.
     routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
     /// The fully assembled configuration at daemon startup. Every reload
@@ -2297,10 +2323,11 @@ impl DaemonReloader for AppReloader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_ai::client::HttpTimeouts;
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use bitrouter_sdk::config::{self, ConfigRoutingTable};
     use bitrouter_sdk::language_model::{
-        ApiProtocol, Executor, GenerationParams, HttpExecutor, HttpTimeouts, Message,
-        PipelineContext, PipelineRequest, Prompt, Role, RoutingTarget,
+        Executor, HttpExecutor, PipelineContext, PipelineRequest, RoutingTarget,
     };
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2566,6 +2593,7 @@ policies:
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,
@@ -3500,6 +3528,76 @@ presets:
         assert!(fields.contains(&"server.listen".to_string()));
         assert!(fields.contains(&"upstream.fallback_backoff_ms".to_string()));
         assert!(fields.contains(&"future_runtime".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_tariffs_endpoint_profiles_and_known_price_policy_require_restart()
+    -> anyhow::Result<()> {
+        use bitrouter_ai::types::ApiProtocol;
+        let current: bitrouter_sdk::config::Config = serde_json::from_value(serde_json::json!({
+            "providers":{"fixture":{"api_base":"https://api.openai.com/v1", "models":[{
+                "id":"test", "pricing_by_protocol":{"decisions":{"input_micro_usd_per_token":0.1,"output_micro_usd_per_token":0}}
+            }]}}
+        }))?;
+        let expected = "providers.*.models.*.pricing".to_string();
+        let mut rate = current.clone();
+        let provider = rate
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing fixture"))?;
+        let model = provider
+            .models
+            .first_mut()
+            .ok_or_else(|| anyhow::anyhow!("missing model"))?;
+        model
+            .pricing_by_protocol
+            .get_mut(&ApiProtocol::Decisions)
+            .ok_or_else(|| anyhow::anyhow!("missing tariff"))?
+            .input_micro_usd_per_token = Some(0.2);
+        assert!(
+            restart_required_fields(&current, &rate, Some(&BTreeSet::new())).contains(&expected)
+        );
+        let mut endpoint = current.clone();
+        endpoint
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing fixture"))?
+            .api_base = "https://eu.api.openai.com/v1".into();
+        assert!(
+            restart_required_fields(&current, &endpoint, Some(&BTreeSet::new()))
+                .contains(&expected)
+        );
+        let mut protocol_endpoint = current.clone();
+        protocol_endpoint
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing fixture"))?
+            .protocol_endpoints
+            .insert("decisions".into(), "https://us.api.openai.com/v1".into());
+        assert!(
+            restart_required_fields(&current, &protocol_endpoint, Some(&BTreeSet::new()))
+                .contains(&expected)
+        );
+        let mut provenance = current.clone();
+        provenance
+            .providers
+            .get_mut("fixture")
+            .and_then(|provider| provider.models.first_mut())
+            .and_then(|model| model.pricing_by_protocol.get_mut(&ApiProtocol::Decisions))
+            .ok_or_else(|| anyhow::anyhow!("missing tariff"))?
+            .endpoint_profile =
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal);
+        assert!(
+            restart_required_fields(&current, &provenance, Some(&BTreeSet::new()))
+                .contains(&expected)
+        );
+        let mut strict = current.clone();
+        strict.server.require_known_pricing = true;
+        assert!(
+            restart_required_fields(&current, &strict, Some(&BTreeSet::new()))
+                .contains(&"server.require_known_pricing".to_string())
+        );
         Ok(())
     }
 

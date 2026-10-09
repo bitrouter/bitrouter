@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bitrouter_sdk::language_model::{Content, Message, ProviderMetadata, Role, ToolResultOutput};
+use bitrouter_ai::types::{Content, Message, ProviderMetadata, Role, ToolResultOutput};
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;

@@ -1,11 +1,13 @@
 use std::time::Duration;
 
-use bitrouter_sdk::language_model::{Tool, ToolResultOutput};
+use bitrouter_ai::types::{Tool, ToolResultOutput};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::read::{directory_name, read_page, sort_directory_entries};
+use super::read::read_page;
+#[cfg(unix)]
+use super::read::{directory_name, sort_directory_entries};
 use super::*;
 use crate::agent::{RunEvent, ToolMode};
 use crate::store::EffectStatus;
@@ -569,7 +571,7 @@ async fn dropped_shell_future_stops_unix_descendants() -> Result<(), Box<dyn std
 
 #[test]
 fn openai_requests_preserve_optional_tool_arguments() -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_sdk::language_model::protocol::{
+    use bitrouter_ai::protocol::{
         OutboundAdapter, chat_completions::ChatCompletionsAdapter, responses::ResponsesAdapter,
     };
 
