@@ -33,6 +33,7 @@ hmac.workspace = true
 ring.workspace = true
 subtle.workspace = true
 base64.workspace = true
+zstd = { version = "0.13", default-features = false }
 rand.workspace = true
 rand_distr = "0.6"
 hex.workspace = true

@@ -742,6 +742,14 @@ fn show_event(state: &mut NativeState, event: &ThreadEvent) {
                 },
             ),
             ThreadChange::TurnLifecycle {
+                turn_id,
+                lifecycle: TurnLifecycle::Finished { status, detail, .. },
+            } if *status == bitrouter_orchestrator::turn::TurnStatus::Failed => (
+                format!("failure:{turn_id}"),
+                format!("Turn failed: {detail}"),
+                NativeEntryKind::Detail,
+            ),
+            ThreadChange::TurnLifecycle {
                 lifecycle:
                     TurnLifecycle::InputRequested {
                         request_id,
@@ -879,6 +887,15 @@ fn context_status(
 }
 
 fn update_snapshot(state: &mut NativeState, snapshot: &TurnSnapshot) {
+    if snapshot.status == bitrouter_orchestrator::turn::TurnStatus::Failed
+        && let Some(detail) = &snapshot.detail
+    {
+        state.upsert(
+            format!("failure:{}", snapshot.turn_id),
+            format!("Turn failed: {detail}"),
+            NativeEntryKind::Detail,
+        );
+    }
     if let Some(inspection) = &snapshot.context_routing {
         state.upsert(
             format!("context:{}", snapshot.turn_id),
@@ -936,6 +953,58 @@ mod tests {
     use bitrouter_orchestrator::turn::TurnStatus;
     use crossterm::event::KeyEvent;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    #[test]
+    fn failed_turn_renders_resource_cause_once_on_events_and_reconnect() -> Result<()> {
+        let detail = "checkpoint capacity exhausted; run cleanup required";
+        let mut state = NativeState::default();
+        let event = ThreadEvent {
+            server_instance_id: "instance".into(),
+            thread_id: "thread".into(),
+            seq: 2,
+            timestamp_ms: 0,
+            changes: vec![ThreadChange::TurnLifecycle {
+                turn_id: "turn".into(),
+                lifecycle: TurnLifecycle::Finished {
+                    status: TurnStatus::Failed,
+                    detail: detail.into(),
+                    final_answer: None,
+                    verification: bitrouter_orchestrator::turn::VerificationStatus::Unavailable,
+                    verification_evidence: None,
+                    unknown_effect: false,
+                },
+            }],
+        };
+        show_event(&mut state, &event);
+        let snapshot = TurnSnapshot {
+            context_routing: None,
+            resources: None,
+            steering: vec![],
+            thread_id: "thread".into(),
+            server_instance_id: "instance".into(),
+            model: "fixture".into(),
+            turn_id: "turn".into(),
+            status: TurnStatus::Failed,
+            cursor: 2,
+            workspace: Default::default(),
+            tool_mode: Default::default(),
+            final_answer: None,
+            detail: Some(detail.into()),
+            unknown_effect: false,
+            verification: bitrouter_orchestrator::turn::VerificationStatus::Unavailable,
+            verification_evidence: None,
+            pending_input_id: None,
+            pending_input: None,
+            live: None,
+        };
+        update_snapshot(&mut state, &snapshot);
+        assert_eq!(state.entries.len(), 1);
+        assert!(state.entries[0].text.contains(detail));
+        let mut reconnected = NativeState::default();
+        update_snapshot(&mut reconnected, &snapshot);
+        assert_eq!(reconnected.entries[0].text, state.entries[0].text);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn busy_enter_enqueues_and_control_enter_targets_active_turn() -> Result<()> {
