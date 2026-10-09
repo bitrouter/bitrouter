@@ -188,6 +188,7 @@ impl AuthApplier for OpenAiCodexAuthApplier {
         body: &mut serde_json::Value,
         _target: &ModelTarget,
     ) -> Result<()> {
+        validate_managed_codex_body(body)?;
         shape_codex_responses_body(body);
         Ok(())
     }
@@ -219,6 +220,78 @@ impl AuthApplier for OpenAiCodexAuthApplier {
             )
             .await?;
         Ok(true)
+    }
+}
+
+/// The managed profile supports ordinary function tools and already separated
+/// instructions. Refuse controls the subscription shaper cannot preserve before
+/// capturing its deterministic wire baseline. Output admission is checked
+/// independently against the configured model ceiling by the shared executor.
+/// Responses control schema: https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/common.rs
+fn validate_managed_codex_body(body: &serde_json::Value) -> Result<()> {
+    use serde_json::Value;
+    let invalid = || {
+        ModelError::invalid_request("Codex managed request contains unsupported input or controls")
+    };
+    let object = body.as_object().ok_or_else(invalid)?;
+    if [
+        "stream_options",
+        "client_metadata",
+        "metadata",
+        "thinking",
+        "context_management",
+        "output_config",
+    ]
+    .iter()
+    .any(|key| object.contains_key(*key))
+        || contains_cache_control(body)
+        || ["store", "parallel_tool_calls"].iter().any(|key| {
+            object
+                .get(*key)
+                .is_some_and(|value| value != &Value::Bool(false))
+        })
+        || object.get("reasoning").is_some_and(|value| {
+            !value.is_object()
+                || value
+                    .get("context")
+                    .is_some_and(|context| context != "all_turns")
+        })
+        || object
+            .get("instructions")
+            .is_some_and(|value| !value.is_string())
+        || object.get("include").is_some_and(|value| {
+            value
+                .as_array()
+                .is_none_or(|items| items.iter().any(|item| !item.is_string()))
+        })
+        || object
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().any(is_instruction_message))
+        || object.get("tools").is_some_and(|value| {
+            value.as_array().is_none_or(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("type").and_then(Value::as_str) != Some("function")
+                        || tool
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .is_none_or(str::is_empty)
+                })
+            })
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn contains_cache_control(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.contains_key("cache_control") || object.values().any(contains_cache_control)
+        }
+        serde_json::Value::Array(items) => items.iter().any(contains_cache_control),
+        _ => false,
     }
 }
 
@@ -486,6 +559,35 @@ fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn managed_codex_normalization_preserves_history_tools_and_effort() -> Result<()> {
+        let mut body = serde_json::json!({
+            "model":"m", "instructions":"Required instructions", "store":false,
+            "input":[{"role":"user","content":[{"type":"input_text","text":"Inspect the workspace"}]}],
+            "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}],
+            "reasoning":{"effort":"low"}, "max_output_tokens":128
+        });
+        super::validate_managed_codex_body(&body)?;
+        super::shape_codex_responses_body(&mut body);
+        assert_eq!(body["instructions"], "Required instructions");
+        assert_eq!(body["reasoning"]["effort"], "low");
+        assert_eq!(body["input"][0]["tools"][0]["name"], "read");
+        for extra in [
+            serde_json::json!({"parallel_tool_calls":true}),
+            serde_json::json!({"store":true}),
+            serde_json::json!({"thinking":{"type":"adaptive"}}),
+            serde_json::json!({"context_management":{}}),
+            serde_json::json!({"reasoning":{"context":"last_turn"}}),
+            serde_json::json!({"tools":[{"type":"custom"}]}),
+            serde_json::json!({"input":[{"role":"developer","content":"required"}]}),
+            serde_json::json!({"input":[{"role":"user","content":[{"type":"input_text","text":"required","cache_control":{}}]}]}),
+        ] {
+            let body = extra;
+            assert!(super::validate_managed_codex_body(&body).is_err());
+        }
+        Ok(())
+    }
+
     use super::*;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     fn make_jwt_with_account(account_id: &str) -> String {

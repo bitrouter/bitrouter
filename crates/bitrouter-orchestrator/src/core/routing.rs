@@ -197,6 +197,10 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                     .push("input_limit_exceeded".into());
             }
             match route.output_token_limit_supported {
+                Some(false)
+                    if plan.prompt.params.max_tokens.is_some_and(|reservation| {
+                        limits.output_reservation_covers_model(reservation)
+                    }) => {}
                 Some(false) => assessment
                     .rejection_reasons
                     .push("output_reservation_unsupported".into()),

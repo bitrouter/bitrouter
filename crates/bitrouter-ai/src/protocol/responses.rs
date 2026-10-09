@@ -304,6 +304,10 @@ fn observe_content(turn: &mut TurnAccumulator, content: &Content) {
     let mut fields = Vec::with_capacity(8);
     let (tag, meaningful) = match content {
         Content::Text { text, .. } => {
+            if phased_message(content).is_some() {
+                turn.invalidate();
+                return;
+            }
             let Some(value) = field(text) else {
                 turn.invalidate();
                 return;
@@ -370,6 +374,9 @@ fn terminal_assistant_turn_commitment(
     for item in output {
         match item.get("type")?.as_str()? {
             "message" => {
+                if item.get("phase").is_some_and(|phase| !phase.is_null()) {
+                    return None;
+                }
                 if item.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
                     return None;
                 }
@@ -1863,7 +1870,17 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                     Some("message") | None => {
                         if let Some(role) = item.get("role").and_then(|r| r.as_str()) {
                             let role = parse_role(role)?;
-                            let content = parse_responses_content(item.get("content"));
+                            let mut content = parse_responses_content(item.get("content"));
+                            if role == Role::Assistant {
+                                for part in &mut content {
+                                    if let Content::Text {
+                                        provider_metadata, ..
+                                    } = part
+                                    {
+                                        provider_metadata.extend(message_metadata(item));
+                                    }
+                                }
+                            }
                             messages.push(Message { role, content });
                         }
                     }
@@ -2594,7 +2611,7 @@ impl OutboundAdapter for ResponsesAdapter {
                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                 content.push(Content::Text {
                                     text: text.to_string(),
-                                    provider_metadata: ProviderMetadata::new(),
+                                    provider_metadata: message_metadata(item),
                                 });
                             }
                             // An `output_text` part may carry web-search / file
@@ -3084,6 +3101,15 @@ fn render_message_items(m: &Message, replay_reasoning: bool) -> Vec<serde_json::
     let mut items = Vec::new();
     let mut text_parts = Vec::new();
     for c in &m.content {
+        if m.role == Role::Assistant
+            && let Some(item) = phased_message(c)
+        {
+            if !text_parts.is_empty() {
+                items.push(serde_json::json!({"type":"message", "role":role_str(m.role), "content":std::mem::take(&mut text_parts)}));
+            }
+            items.push(item);
+            continue;
+        }
         let item_start = items.len();
         match c {
             Content::Text { text, .. } => {
@@ -3449,6 +3475,11 @@ fn render_output_items(result: &GenerateResult) -> Result<Vec<serde_json::Value>
     let mut text = String::new();
     let mut annotations = Vec::new();
     for c in &result.content {
+        if let Some(item) = phased_message(c) {
+            flush_output_text(&mut items, &mut text, &mut annotations);
+            items.push(item);
+            continue;
+        }
         match c {
             Content::Text { text: fragment, .. } => text.push_str(fragment),
             Content::Source { source, .. } => annotations.push(render_source_annotation(source)),
@@ -5041,7 +5072,14 @@ pub fn output_replayable(response: &serde_json::Value) -> bool {
                         })
                         .is_ok(),
                         Some("message") => {
-                            fields(item, &["type", "id", "role", "status", "content"])
+                            fields(item, &["type", "id", "role", "status", "content", "phase"])
+                                && item.get("phase").is_none_or(|phase| {
+                                    phase.is_null()
+                                        || matches!(
+                                            phase.as_str(),
+                                            Some("commentary" | "final_answer")
+                                        )
+                                })
                                 && item.get("role").and_then(serde_json::Value::as_str)
                                     == Some("assistant")
                                 && item
@@ -5108,6 +5146,36 @@ pub fn output_replayable(response: &serde_json::Value) -> bool {
                     }
                 })
         })
+}
+
+// Message phase separates commentary from a final answer in replayed Codex
+// history. Preserve it on each text block instead of requiring stored state.
+// https://github.com/openai/codex/blob/main/codex-rs/protocol/src/models.rs
+fn message_metadata(item: &serde_json::Value) -> ProviderMetadata {
+    let mut metadata = ProviderMetadata::new();
+    if let Some(phase) = item.get("phase").filter(|phase| !phase.is_null()) {
+        set_provider_metadata(
+            &mut metadata,
+            PROVIDER_ID_OPENAI,
+            "messagePhase",
+            phase.clone(),
+        );
+    }
+    metadata
+}
+
+fn phased_message(content: &Content) -> Option<serde_json::Value> {
+    let Content::Text {
+        text,
+        provider_metadata,
+    } = content
+    else {
+        return None;
+    };
+    let phase = provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)?.get("messagePhase")?;
+    Some(
+        serde_json::json!({"type":"message", "role":"assistant", "phase":phase, "content":[{"type":"output_text","text":text}]}),
+    )
 }
 
 #[cfg(test)]

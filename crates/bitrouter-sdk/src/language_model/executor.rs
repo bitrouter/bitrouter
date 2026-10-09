@@ -1188,7 +1188,18 @@ impl HttpExecutor {
                 })?;
             let body = serde_json::from_slice(bytes)
                 .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
-            if adapter.output_token_limit(&body)? != Some(reservation.0) {
+            let wire_limit = adapter.output_token_limit(&body)?;
+            // Subscription transports may explicitly reject request-level caps.
+            // Only absence, declared non-support and a sufficient model ceiling
+            // permit this alternative; an altered cap is still a shaping error.
+            let model_bound = wire_limit.is_none()
+                && self.output_token_limit_support(input.target) == Some(false)
+                && input
+                    .target
+                    .model_constraints
+                    .token_limits
+                    .output_reservation_covers_model(reservation.0);
+            if wire_limit != Some(reservation.0) && !model_bound {
                 return Err(BitrouterError::bad_request(
                     "provider shaping changed the managed output reservation",
                 ));
@@ -2606,6 +2617,90 @@ mod beta_forward_tests {
                         .to_string()
                         .contains("changed the managed output reservation")
                 }));
+            }
+        }
+        Ok(())
+    }
+
+    struct RemoveOutputLimit(Option<bool>);
+
+    #[async_trait]
+    impl bitrouter_ai::auth::AuthApplier for RemoveOutputLimit {
+        fn output_token_limit_support(
+            &self,
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> Option<bool> {
+            self.0
+        }
+
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| {
+                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                })?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+                bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+            })?;
+            if let Some(object) = body.as_object_mut() {
+                object.remove("max_output_tokens");
+            }
+            *request.body_mut() = Some(
+                serde_json::to_vec(&body)
+                    .map_err(|error| {
+                        bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                    })?
+                    .into(),
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn uncapped_managed_wire_requires_declared_support_and_model_bound() -> crate::Result<()>
+    {
+        for support in [None, Some(true), Some(false)] {
+            for ceiling in [None, Some(0), Some(128), Some(129)] {
+                let mut target = target(ApiProtocol::Responses);
+                target.model_constraints.token_limits.max_output_tokens = ceiling;
+                let executor = HttpExecutor::with_dispatch_and_auth(
+                    Default::default(),
+                    OutboundDispatch::builtin(),
+                    AuthAppliers::new()
+                        .with(&target.provider_name, Arc::new(RemoveOutputLimit(support))),
+                )?;
+                let (_, transport) = executor
+                    .dispatch
+                    .lookup(&target.api_protocol)
+                    .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
+                let (client, _) = executor.client_for(&target, false);
+                let mut ctx = ctx_with_beta(None);
+                ctx.insert_extension(Arc::new(
+                    crate::language_model::native::NativeOutputReservation(128),
+                ));
+                let body = serde_json::json!({"model":"m","input":"hello","max_output_tokens":128});
+                let result = executor
+                    .build_authenticated_request(&RequestBuildInput {
+                        client: &client,
+                        url: "https://example.invalid/v1/responses",
+                        body: &body,
+                        managed_expected: None,
+                        target: &target,
+                        transport,
+                        ctx: &ctx,
+                        trace_headers: None,
+                    })
+                    .await;
+                assert_eq!(
+                    result.is_ok(),
+                    support == Some(false) && ceiling == Some(128),
+                    "{support:?}, {ceiling:?}"
+                );
             }
         }
         Ok(())

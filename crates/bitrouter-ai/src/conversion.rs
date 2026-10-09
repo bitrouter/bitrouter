@@ -450,6 +450,23 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
         let mut chat_reasoning_seen = false;
         for (block, content) in entry.content.iter().enumerate() {
             let location = ConversionLocation::MessageContent { message, block };
+            if let Content::Text {
+                provider_metadata, ..
+            } = content
+                && provider_metadata
+                    .get("openai")
+                    .and_then(|value| value.get("messagePhase"))
+                    .is_some()
+                && (*protocol != ApiProtocol::Responses || entry.role != Role::Assistant)
+            {
+                report.push_projection(
+                    protocol,
+                    location,
+                    ConversionReason::HistoryContentUnrepresentable,
+                    ConversionEffect::TaskSemantics,
+                );
+                continue;
+            }
             if let Content::Reasoning {
                 native: Some(_), ..
             } = content

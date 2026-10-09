@@ -51,6 +51,8 @@ pub mod gateways;
 pub mod harness;
 pub mod host;
 mod local_cli;
+pub mod managed_store;
+pub mod managed_task;
 pub mod mcp_registry;
 pub mod metering;
 pub mod native_code;

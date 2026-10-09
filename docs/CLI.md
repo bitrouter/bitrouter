@@ -27,7 +27,24 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; foreground `run` and `task run` stream NDJSON; `code`, `launch`, bare `agents`, and `agents attach` own the terminal; and `cloud api` streams the remote response body. `run --background` and `agents sessions|stop|remove` remain ordinary structured reports.
+> Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; foreground `run`, `task run` and `task managed` emit NDJSON; `code`, `launch`, bare `agents`, and `agents attach` own the terminal; and `cloud api` streams the remote response body. `run --background` and `agents sessions|stop|remove` remain ordinary structured reports.
+
+## Native tasks through the managed core
+
+`bro task managed PROMPT --model PROVIDER/MODEL --workspace PATH --session NAME`
+connects native tools, AGENTS.md, skills and MCP resources to an in-process
+CoreSession. The core owns routing and sub-agent scheduling; the native harness
+owns workspace execution and durable checkpoint/ACK storage. It accepts
+`--config`, `--effort`, `--read-only`, `--check`, and `--max-output-tokens`
+(default 4096). Read-only mode conflicts with verification. Coding mode approves
+its own headless tools. Explicit remote contexts are rejected.
+
+Output is NDJSON (`managed_session`, then `terminal`), with nonzero exit for an
+unsuccessful task. Reuse `--session` after a clean release to continue durable
+context in the same workspace/mode. Abrupt process loss remains recovery-blocked;
+there is no automatic running-owner takeover. This entry opens no listener and
+has no Thread/Turn directory UI. See the managed-core skill reference for
+subscription output reservations and storage bounds.
 
 ## BRO native coding conversations
 

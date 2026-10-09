@@ -752,6 +752,54 @@ async fn unsupported_output_reservation_rejects_before_authentication_or_attempt
     Ok(())
 }
 
+#[tokio::test]
+async fn model_ceiling_reserves_uncapped_output_before_authentication() -> TestResult {
+    use bitrouter_ai::auth::AuthAppliers;
+    use bitrouter_ai::protocol::OutboundDispatch;
+    use bitrouter_sdk::language_model::executor::HttpExecutor;
+    for ceiling in [None, Some(0), Some(127), Some(128), Some(129)] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with("first", Arc::new(NoOutputLimitAuth(calls.clone()))),
+        )?;
+        let table = StaticRoutingTable::new();
+        let mut route = target("first");
+        route.model_constraints.token_limits.max_output_tokens = ceiling;
+        table.insert("fixture-model", vec![route]);
+        let app = App::builder()
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(Arc::new(executor));
+            })
+            .build()?;
+        let session = bind_app(Arc::new(app), Arc::new(Harness::new(None, None))).await?;
+        let mut task = input();
+        task.max_output_tokens = Some(128);
+        session
+            .start("input", session.head().await.state_revision, task)
+            .await?;
+        let state = session.drive().await?;
+        let step = &state.root_turn().ok_or("missing turn")?.steps[0];
+        let admitted = ceiling == Some(128);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            usize::from(admitted),
+            "{ceiling:?}"
+        );
+        assert_eq!(step.attempts.len(), usize::from(admitted), "{ceiling:?}");
+        let route = &step.decision.as_ref().ok_or("missing decision")?.routes[0];
+        assert_eq!(route.rejection_reasons.is_empty(), admitted, "{ceiling:?}");
+        assert_eq!(
+            step.plan.as_ref().ok_or("missing plan")?.routes[0].output_token_limit_supported,
+            Some(false)
+        );
+    }
+    Ok(())
+}
+
 async fn setup_capacity_routes(
     limits: &[serde_json::Value],
     responses: Vec<MockResponse>,
