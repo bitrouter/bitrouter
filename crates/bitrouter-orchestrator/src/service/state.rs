@@ -115,7 +115,7 @@ impl ThreadRecord {
         Ok(())
     }
 
-    pub(super) fn bytes(&self) -> usize {
+    pub(super) fn context_bytes(&self) -> usize {
         serde_json::to_vec(&self.messages)
             .map_or(usize::MAX, |value| value.len().saturating_mul(2))
             .saturating_add(
@@ -127,10 +127,13 @@ impl ThreadRecord {
                     .map(|entry| entry.prompt.len().saturating_mul(2))
                     .sum::<usize>(),
             )
-            .saturating_add(
-                self.native
-                    .as_ref()
-                    .map_or(0, crate::agent::native::Saved::bytes),
-            )
+    }
+
+    pub(super) fn bytes(&self) -> usize {
+        self.context_bytes().saturating_add(
+            self.native
+                .as_ref()
+                .map_or(0, crate::agent::native::Saved::bytes),
+        )
     }
 }

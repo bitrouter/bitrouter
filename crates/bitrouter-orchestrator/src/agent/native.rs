@@ -135,11 +135,22 @@ impl Saved {
                     .as_mut()
                     .ok_or("native checkpoint reconstruction failed")?;
                 let journal = Arc::make_mut(&mut saved.journal);
-                if journal.grant.session_id != batch.identity.session_id
-                    || serde_json::to_value(&journal.limits).map_err(|error| error.to_string())?
-                        != serde_json::to_value(limits).map_err(|error| error.to_string())?
-                {
+                if journal.grant.session_id != batch.identity.session_id {
                     return Err("native Core binding changed within a Thread".into());
+                }
+                if journal.limits != *limits {
+                    if journal.grant.execution_epoch.checked_add(1)
+                        != Some(batch.identity.execution_epoch)
+                        || !payload
+                            .events
+                            .iter()
+                            .any(|event| event.kind == "session.restored")
+                    {
+                        return Err("native capacity changed outside restoration".into());
+                    }
+                    journal
+                        .upgrade_capacity(limits)
+                        .map_err(|error| error.message)?;
                 }
                 if journal.grant.execution_epoch != batch.identity.execution_epoch {
                     if journal.grant.execution_epoch.checked_add(1)
@@ -245,7 +256,7 @@ impl Agent {
         let text = task_text.as_str();
         // Thread persistence splits large checkpoints across bounded store
         // pages without changing Core's exact-byte ACK or state capacity.
-        let checkpoint_bytes = 2 * 1024 * 1024;
+        let checkpoint_bytes = self.native_checkpoint_bytes;
         let limits = Limits {
             model_attempts: remaining,
             active_seconds: self
@@ -343,6 +354,14 @@ impl Agent {
             return Err(
                 "native recovery record policy is smaller than its retained Core contract".into(),
             );
+        }
+        if resumed.is_none() {
+            let mut upgraded = journal.limits.clone();
+            upgraded.checkpoint_bytes = limits.checkpoint_bytes;
+            upgraded.unacknowledged_bytes = limits.unacknowledged_bytes;
+            journal
+                .upgrade_capacity(&upgraded)
+                .map_err(|error| error.message)?;
         }
         capabilities.limits = journal.limits.clone();
         let restore = if journal.checkpoint.is_some() {

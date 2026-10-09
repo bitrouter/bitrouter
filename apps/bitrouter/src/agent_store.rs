@@ -10,6 +10,8 @@ use sea_orm::{
     QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 
+mod codec;
+
 pub struct DatabaseExecutionStore {
     db: DatabaseConnection,
 }
@@ -257,6 +259,7 @@ impl ExecutionStore for DatabaseExecutionStore {
         .map_err(|error| error.to_string())?;
         let owner = convert_owner(server_instance_id.into(), generation, None)?;
         reconcile_execution_index(&transaction).await?;
+        compact_legacy_records(&transaction).await?;
         transaction
             .commit()
             .await
@@ -379,14 +382,15 @@ impl ExecutionStore for DatabaseExecutionStore {
             if sequence != cursor + 1 {
                 return Err("execution record sequence is not contiguous".into());
             }
-            if bytes.saturating_add(row.payload.len()) > max_bytes {
+            let payload = codec::decode(&row.payload)?;
+            if bytes.saturating_add(payload.len()) > max_bytes {
                 if records.is_empty() {
                     return Err("execution record exceeds page byte bound".into());
                 }
                 break;
             }
-            bytes = bytes.saturating_add(row.payload.len());
-            records.push(serde_json::from_str(&row.payload).map_err(|error| error.to_string())?);
+            bytes = bytes.saturating_add(payload.len());
+            records.push(serde_json::from_str(&payload).map_err(|error| error.to_string())?);
             cursor = sequence;
         }
         transaction
@@ -522,7 +526,8 @@ impl ExecutionStore for DatabaseExecutionStore {
                 if row.sequence != i64::try_from(offset).map_err(|error| error.to_string())? + 1 {
                     return Err("execution record sequence is not contiguous".into());
                 }
-                serde_json::from_str(&row.payload).map_err(|error| error.to_string())
+                serde_json::from_str(&codec::decode(&row.payload)?)
+                    .map_err(|error| error.to_string())
             })
             .collect::<Result<Vec<_>, String>>()?;
         transaction
@@ -594,9 +599,10 @@ impl DatabaseExecutionStore {
             .ok_or("execution version exhausted")?;
         let payloads = records
             .iter()
-            .map(serde_json::to_string)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
+            .map(|record| {
+                codec::encode(serde_json::to_string(record).map_err(|error| error.to_string())?)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let transaction = self.db.begin().await.map_err(|error| error.to_string())?;
         let current = lock_ownership(&transaction).await?;
         match owner {
@@ -695,6 +701,73 @@ impl DatabaseExecutionStore {
     }
 }
 
+// Repack old rows only while a new writer owns the store lock. Sequence,
+// version and exact decoded facts are unchanged; rollback covers the whole
+// upgrade. SQLite reuses the freed pages for subsequent execution records.
+async fn compact_legacy_records(tx: &sea_orm::DatabaseTransaction) -> Result<(), String> {
+    let mut cursor: Option<(String, i64)> = None;
+    let mut packed = 0_u64;
+    let mut saved = 0_usize;
+    loop {
+        let mut query = record::Entity::find()
+            .filter(record::Column::Payload.starts_with("{\"record\":"))
+            .filter(record::Column::Payload.not_like("{\"record\":\"thread_event\",%"))
+            .filter(sea_orm::sea_query::Expr::cust("length(payload) >= 4096"));
+        if let Some((id, sequence)) = &cursor {
+            query = query.filter(
+                sea_orm::Condition::any()
+                    .add(record::Column::ExecutionId.gt(id))
+                    .add(
+                        sea_orm::Condition::all()
+                            .add(record::Column::ExecutionId.eq(id))
+                            .add(record::Column::Sequence.gt(*sequence)),
+                    ),
+            );
+        }
+        let Some(row) = query
+            .order_by_asc(record::Column::ExecutionId)
+            .order_by_asc(record::Column::Sequence)
+            .one(tx)
+            .await
+            .map_err(|e| e.to_string())?
+        else {
+            break;
+        };
+        cursor = Some((row.execution_id.clone(), row.sequence));
+        let root = execution::Entity::find_by_id(&row.execution_id)
+            .one(tx)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("execution root missing")?;
+        if validate_runtime_format(u32::try_from(root.format_version).unwrap_or(0)).is_err() {
+            continue;
+        }
+        let original_bytes = row.payload.len();
+        let payload = codec::encode(row.payload)?;
+        if payload.len() >= original_bytes {
+            continue;
+        }
+        saved = saved.saturating_add(original_bytes - payload.len());
+        record::ActiveModel {
+            execution_id: Set(row.execution_id),
+            sequence: Set(row.sequence),
+            payload: Set(payload),
+        }
+        .update(tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        packed += 1;
+    }
+    if packed > 0 {
+        tracing::info!(
+            records = packed,
+            saved_bytes = saved,
+            "compressed retained native execution records"
+        );
+    }
+    Ok(())
+}
+
 // Older cooperating writers can add roots after migration backfill but before
 // retirement. Reconcile under the same store owner lock before admitting a new
 // owner; this never infers effect status or modifies execution facts.
@@ -743,6 +816,109 @@ impl DatabaseExecutionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn compressed_rows_and_legacy_upgrade_preserve_facts_and_page_bounds()
+    -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let url = format!("sqlite://{}/compressed.db", directory.path().display());
+        let db = crate::db::connect(&url).await?;
+        crate::db::run_migrations(&db).await?;
+        let store = DatabaseExecutionStore::new(db.clone());
+        let fact = ExecutionRecord::TurnQueued {
+            turn_id: "turn".into(),
+            user_item_id: "user".into(),
+            prompt: "retained context ".repeat(4000),
+            queue_order: 1,
+        };
+        let raw = serde_json::to_string(&fact)?;
+        store
+            .commit(
+                "thread",
+                0,
+                &[fact.clone(), history_event(2, &"visible ".repeat(1000))],
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let row = record::Entity::find_by_id(("thread".to_string(), 1))
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing compressed row"))?;
+        assert!(row.payload.len() < raw.len() / 10);
+        assert!(
+            store
+                .read_records("thread", 0, None, 2, 4096)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .thread_history("thread", 0, 2, 10, 16000)
+                .await
+                .map_err(anyhow::Error::msg)?
+                .events
+                .len(),
+            1
+        );
+        // Recreate an uncompressed row written by the previous binary.
+        record::ActiveModel {
+            execution_id: Set("thread".into()),
+            sequence: Set(1),
+            payload: Set(raw.clone()),
+        }
+        .update(&db)
+        .await?;
+        store
+            .commit("opaque", 0, &[fact])
+            .await
+            .map_err(anyhow::Error::msg)?;
+        execution::ActiveModel {
+            id: Set("opaque".into()),
+            version: Set(1),
+            format_version: Set(0),
+        }
+        .update(&db)
+        .await?;
+        record::ActiveModel {
+            execution_id: Set("opaque".into()),
+            sequence: Set(1),
+            payload: Set(raw.clone()),
+        }
+        .update(&db)
+        .await?;
+        let tx = db.begin().await?;
+        compact_legacy_records(&tx)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        tx.commit().await?;
+        let opaque = record::Entity::find_by_id(("opaque".into(), 1))
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("opaque row missing"))?;
+        assert_eq!(opaque.payload, raw);
+        let packed = record::Entity::find_by_id(("thread".into(), 1))
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("packed row missing"))?;
+        assert!(packed.payload.len() < raw.len() / 10);
+        drop(store);
+        db.close().await?;
+        let store = DatabaseExecutionStore::new(crate::db::connect(&url).await?);
+        let page = store
+            .read_records("thread", 0, Some(2), 2, 128 * 1024)
+            .await
+            .map_err(anyhow::Error::msg)?
+            .ok_or_else(|| anyhow::anyhow!("missing page"))?;
+        assert_eq!(page.records.len(), 2);
+        assert_eq!(serde_json::to_string(&page.records[0])?, raw);
+        let saved = store
+            .load("thread")
+            .await
+            .map_err(anyhow::Error::msg)?
+            .ok_or_else(|| anyhow::anyhow!("missing execution"))?;
+        assert_eq!(serde_json::to_string(&saved.records[0])?, raw);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn ownership_fences_independent_connections_and_preserves_stopped_proofs()

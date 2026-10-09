@@ -305,7 +305,8 @@ impl ThreadService {
                 ));
             }
             let extra = request.prompt.len().saturating_mul(2);
-            if thread.bytes().saturating_add(extra) > self.inner.limits.context_bytes_per_thread
+            if thread.context_bytes().saturating_add(extra)
+                > self.inner.limits.context_bytes_per_thread
                 || state
                     .threads
                     .values()

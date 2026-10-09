@@ -2627,3 +2627,134 @@ async fn steering_retries_use_bounded_receipt_pages() -> Result<(), Box<dyn std:
     service.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery()
+-> Result<(), Box<dyn std::error::Error>> {
+    async fn settled(
+        service: &ThreadService,
+        turn_id: &str,
+    ) -> Result<crate::turn::TurnSnapshot, Box<dyn std::error::Error>> {
+        // Full checkpoint replay deliberately exercises multi-megabyte state;
+        // leave room for debug serialization under parallel CI load.
+        Ok(tokio::time::timeout(Duration::from_secs(180), async {
+            loop {
+                let snapshot = service.read(turn_id)?;
+                if snapshot.status.terminal() {
+                    return Ok::<_, crate::service::ServiceError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await??)
+    }
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        workspace.path().join("evidence"),
+        "retained evidence ".repeat(450),
+    )?;
+    let memory = Arc::new(MemoryExecutionStore::default());
+    let make_app = |turns: Vec<bitrouter_ai::types::GenerateResult>| {
+        super::support::app_with_execution_mode(
+            Arc::new(bitrouter_sdk::language_model::MockExecutor::new(
+                turns.into_iter().map(super::support::mock_stream).collect(),
+            )),
+            true,
+        )
+    };
+    let mut turns = (0..6)
+        .map(|index| {
+            turn(vec![tool_call(
+                &format!("read-{index}"),
+                "read",
+                serde_json::json!({"path":"evidence"}),
+            )])
+        })
+        .collect::<Vec<_>>();
+    turns.extend([final_turn(), final_turn()]);
+    let source =
+        ThreadService::with_store(make_app(turns)?, &[workspace.path().into()], memory.clone())?;
+    let thread = source
+        .create_thread(
+            &source.inner.instance_id,
+            thread_request(&workspace, "large-native"),
+        )
+        .await?;
+    let first = source
+        .start_turn(
+            &target(&thread),
+            &CallerContext::local(),
+            input(&"context ".repeat(5000), "first"),
+        )
+        .await?;
+    let first = settled(&source, &first.turn_id).await?;
+    assert_eq!(first.status, TurnStatus::Completed, "{:?}", first.detail);
+    {
+        let state = source.lock_state();
+        let retained = state
+            .threads
+            .get(&thread.thread_id)
+            .ok_or("missing thread")?;
+        assert!(
+            retained
+                .native
+                .as_ref()
+                .ok_or("missing native checkpoint")?
+                .bytes()
+                > 2 * 1024 * 1024
+        );
+        assert!(retained.context_bytes() < source.inner.limits.context_bytes_per_thread);
+    }
+    let second = source
+        .start_turn(
+            &target(&thread),
+            &CallerContext::local(),
+            input("continue", "second"),
+        )
+        .await?;
+    let second = settled(&source, &second.turn_id).await?;
+    assert_eq!(second.status, TurnStatus::Completed, "{:?}", second.detail);
+    source.shutdown().await;
+    let destination = ThreadService::with_store(
+        make_app(vec![final_turn()])?,
+        &[workspace.path().into()],
+        memory,
+    )?;
+    let rebound = crate::thread::ThreadTarget {
+        thread_id: thread.thread_id,
+        server_instance_id: destination.inner.instance_id.clone(),
+    };
+    let loaded = destination
+        .load_thread(&rebound, &CallerContext::local())
+        .await?;
+    assert!(
+        loaded
+            .recovery
+            .as_ref()
+            .ok_or("missing recovery")?
+            .context_valid,
+        "{:?}",
+        loaded.recovery
+    );
+    destination
+        .recover_thread(
+            &rebound,
+            &CallerContext::local(),
+            recovery_request(&loaded, "recover")?,
+        )
+        .await?;
+    destination
+        .resume_queue(&rebound, &CallerContext::local(), "resume".into())
+        .await?;
+    let third = destination
+        .start_turn(
+            &rebound,
+            &CallerContext::local(),
+            input("continue after restart", "third"),
+        )
+        .await?;
+    let third = settled(&destination, &third.turn_id).await?;
+    assert_eq!(third.status, TurnStatus::Completed, "{:?}", third.detail);
+    destination.shutdown().await;
+    Ok(())
+}

@@ -92,7 +92,7 @@ impl Default for RuntimeLimits {
             hot_threads: 32,
             queued_turns_per_thread: 32,
             context_bytes_per_thread: 2 * 1024 * 1024,
-            hot_context_bytes: 64 * 1024 * 1024,
+            hot_context_bytes: 256 * 1024 * 1024,
             tools_per_turn: 4,
             global_tools: 16,
             active_turns: 8,

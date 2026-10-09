@@ -115,12 +115,22 @@ covering its known model output ceiling; a smaller or unknown bound is rejected.
 For Codex subscription setup and a runnable example, see
 [harness-codex.md](harness-codex.md).
 
-Native Core checkpoints are bounded at 2 MiB; the artifact journal retains at
+Native Core checkpoints are bounded at 32 MiB; the artifact journal retains at
 most 32 MiB of bodies. Large checkpoints are split atomically across the host's
 recovery pages, independently of the online Core capacity. Incomplete parts,
 changed hashes or missing Item projections block recovery. These bounds remain
 explicit capacity limits; context omission never deletes historical evidence.
-A native capacity failure reports the resource cause after cleanup. Prepared
+The database losslessly compresses large private execution rows with Zstandard;
+public conversation events remain directly queryable. Exact checkpoint bytes,
+hashes and replay order are preserved, and recovery page limits apply to decoded
+bytes. On ownership handoff, supported legacy rows are packed transactionally;
+freed database pages are reused without deleting historical evidence. This is
+compression, not a fixed total disk quota; retained history still grows with use.
+Settled older native sessions adopt the larger checkpoint envelope at restore;
+active runs retain their negotiated limits. Conversation input keeps its separate
+2 MiB budget; live Thread state shares a 256 MiB runtime budget. A native capacity
+failure reports the resource cause after cleanup, including in the TUI and after
+reopening the conversation. Prepared
 plans rejected before provider dispatch consume no model attempt; cold recovery
 uses Core attempt counters, including fallback attempts. A stopped, fully
 settled terminal journal permits fresh workspace work without replaying tools.
