@@ -530,3 +530,58 @@ async fn native_terminal_cannot_restore_reasoning_removed_by_stream_policy()
     assert_eq!(records.0.lock().await.as_slice(), &[(true, 40, true)]);
     Ok(())
 }
+
+#[tokio::test]
+async fn invalid_native_terminal_retains_error_usage_in_attempt_and_settlement()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let server = MockServer::start().await;
+    let body = [
+        serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"unfinished","role":"assistant","content":[]}}),
+        serde_json::json!({"type":"response.completed","response":{"id":"response","status":"completed","output":[],"usage":{"input_tokens":40,"output_tokens":7}}}),
+    ].iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut route = target("responses");
+    route.api_protocol = ApiProtocol::Responses;
+    route.api_base = server.uri();
+    let table = StaticRoutingTable::new();
+    table.insert("test-model", vec![route]);
+    let records = Records::default();
+    let control = Arc::new(Control::default());
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(table))
+        .executor(Arc::new(HttpExecutor::with_defaults()?))
+        .settlement_recorder(records.clone());
+    assert!(
+        Arc::new(builder.build()?)
+            .execute_native_controlled(request(), control.clone())
+            .await
+            .is_err()
+    );
+    let reports = control.reports.lock().await;
+    assert_eq!(reports.len(), 1);
+    let result = reports[0].result.as_ref().ok_or("missing attempt result")?;
+    let usage = result
+        .usage
+        .as_ref()
+        .ok_or("missing error terminal usage")?;
+    assert_eq!((usage.prompt_tokens, usage.completion_tokens), (40, 7));
+    assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+    assert_eq!(records.0.lock().await.as_slice(), &[(true, 40, true)]);
+    assert!(
+        result
+            .content
+            .iter()
+            .all(|part| !matches!(part, Content::ToolCall { .. }))
+    );
+    Ok(())
+}

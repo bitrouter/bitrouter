@@ -496,6 +496,14 @@ impl StreamProcessor {
         &self.ctx
     }
 
+    /// Retain authoritative counters carried by a rejected terminal response.
+    /// These are original upstream evidence, independent of display policy.
+    pub(crate) fn record_failed_response_usage(&mut self, usage: &Usage) {
+        self.ctx.accumulated_usage.observe(&StreamPart::Usage {
+            usage: usage.clone(),
+        });
+    }
+
     /// Run one part through the hook chain. Returns the parts to emit
     /// downstream, or an `Abort` error if a hook aborted the stream.
     ///
