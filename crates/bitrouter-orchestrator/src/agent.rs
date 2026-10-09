@@ -32,6 +32,9 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "fixed_model_mode")]
     pub model_mode: crate::core::protocol::ModelMode,
     pub effort: Option<ReasoningEffort>,
+    /// Per-step output reservation, retained with the Thread configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
     pub instructions: String,
     pub max_steps: u32,
     pub max_tool_calls: u32,
@@ -60,6 +63,7 @@ impl AgentConfig {
             model: model.into(),
             model_mode: crate::core::protocol::ModelMode::Fixed,
             effort,
+            max_output_tokens: None,
             instructions: DEFAULT_INSTRUCTIONS.into(),
             max_steps: 32,
             max_tool_calls: 128,
@@ -79,6 +83,11 @@ impl AgentConfig {
 
     pub fn with_model_mode(mut self, mode: crate::core::protocol::ModelMode) -> Self {
         self.model_mode = mode;
+        self
+    }
+
+    pub fn with_output_reservation(mut self, tokens: Option<u32>) -> Self {
+        self.max_output_tokens = tokens;
         self
     }
 
@@ -308,8 +317,11 @@ impl Agent {
             || config.max_tool_calls == 0
             || config.max_duration.is_zero()
             || config.max_context_bytes == 0
+            || config.max_output_tokens == Some(0)
         {
-            return Err("model and positive step, time, and context bounds are required".into());
+            return Err(
+                "model and positive step, time, context, and output bounds are required".into(),
+            );
         }
         if config.max_spend_microusd.is_some() && config.estimate_rates.is_none() {
             return Err("a spend bound requires explicit estimate rates".into());

@@ -62,6 +62,8 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
                 "task",
                 "run",
                 "Change the word in note.txt",
+                "--max-output-tokens",
+                "512",
                 "--model",
                 "test-model",
                 "--check",
@@ -100,6 +102,13 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
         .context("missing model requests")?
     {
         let body: Value = serde_json::from_slice(&request.body)?;
+        ensure!(
+            body.get("max_tokens")
+                .or_else(|| body.get("max_completion_tokens"))
+                .and_then(Value::as_u64)
+                == Some(512),
+            "native reservation was not propagated: {body}"
+        );
         let names: Vec<_> = body["tools"]
             .as_array()
             .context("missing tools")?
@@ -721,9 +730,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
     let (local_thread, _) = local_client
         .create_and_start(
             unlisted.clone(),
-            "test-model".into(),
-            None,
-            true,
+            bitrouter_orchestrator::agent::AgentConfig::fixed("test-model", None).read_only(),
             None,
             "Local inspection".into(),
         )

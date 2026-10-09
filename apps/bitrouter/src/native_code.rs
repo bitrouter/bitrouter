@@ -30,6 +30,7 @@ enum SubmissionMode {
 #[derive(Default)]
 struct Session {
     model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
+    max_output_tokens: Option<u32>,
     thread_id: Option<String>,
     create_key: String,
     create_uncertain: bool,
@@ -142,6 +143,7 @@ fn show_directory(state: &mut NativeState, directory: &mut Directory, page: Thre
 pub struct Options {
     pub read_only: bool,
     pub model_policy: bool,
+    pub max_output_tokens: Option<u32>,
 }
 
 pub async fn run(
@@ -178,6 +180,7 @@ pub async fn run(
         ..NativeState::default()
     };
     let mut session = Session {
+        max_output_tokens: options.max_output_tokens,
         model_mode: if options.model_policy {
             bitrouter_orchestrator::core::protocol::ModelMode::Policy
         } else {
@@ -497,6 +500,7 @@ async fn handle_event(
                         model: state.model.clone(),
                         model_mode: session.model_mode,
                         effort: None,
+                        max_output_tokens: session.max_output_tokens,
                         read_only,
                         verification_command: check.clone(),
                         idempotency_key: session.create_key.clone(),

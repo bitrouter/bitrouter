@@ -78,25 +78,27 @@ is a settled bill. Native estimated spend limits include observed decision
 estimates and stop new model work when completed work cannot be estimated.
 Set explicit prices when using a spend limit with the decision backend.
 
-To enable joint generation-model/context selection, list up to 16 explicit
-`decision_model.policy.generation_models`. Each entry requires `model`,
-`description`, `max_prompt_bytes`, `input_microusd_per_million`, and
-`output_microusd_per_million`. The model supplied by `--model` must be one of the
-entries and is the conservative fallback. Descriptions and prices are operator
-assumptions; use normal SDK model selectors and provide actual configured routes.
-Create-Thread HTTP/local requests expose the same opt-in as `model_mode: policy`.
-Existing requests default to `fixed`.
+Model selection uses the version 4 named policy lock, shared with HTTP requests.
+Configure `policy.path` and a router whose `policy` names a lock entry. Each tier
+is an object with `model`, optional `effort`, and `context: preserve` or `evidence`.
+Use that router selector with `bro code --model-policy --model SELECTOR`.
+Without `--model-policy`, native generation stays fixed. Create-Thread HTTP/local
+requests expose the same opt-in as `model_mode: policy`.
 
-The planner asks independent Noul suitability questions alongside evidence
-Choice questions, then compares each eligible model with a selected view and,
-when it fits, a complete view. Prices use a four-bytes-per-token planning
-estimate and the output reservation. SDK permission, protocol, capability and
-token-capacity admission still run before generation. The default
-`minimum_savings_fraction: 0.1` and `model_switch_penalty_microusd: 1000`
-discourage small switches. An optional
-`prefix_loss_penalty_microusd_per_kib` defaults to zero. Exact shared prompt
-prefix bytes are recorded; they do not prove provider cache availability or
-discounts. All candidates, assumptions and the selection survive recovery.
+The named policy selects the generation model. The shared planner then chooses
+among context views admitted by their owner; it does not optimize a separate
+model catalog. `decision_model.policy.generation_models`, global `policy_table`,
+scalar tiers and lockfile versions 1–3 are rejected. See the version 4 starter
+lock in `templates/auto-router/policy-lock.yaml`.
+
+Native `bro code` and `bro task run` accept `--max-output-tokens` (default 4096).
+The value is stored with the Thread and used by later Turns and child agents.
+Reattaching with `--thread-id` uses that stored value. Native HTTP/local
+Create-Thread requests accept the same optional `max_output_tokens` field.
+A provider that cannot enforce a request output cap requires a reservation
+covering its known model output ceiling; a smaller or unknown bound is rejected.
+For Codex subscription setup and a runnable example, see
+[harness-codex.md](harness-codex.md).
 
 Native Core checkpoints are bounded at 2 MiB; the artifact journal retains at
 most 32 MiB of bodies. Large checkpoints are split atomically across the host's

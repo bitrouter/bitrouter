@@ -57,3 +57,35 @@ and a missing local daemon is auto-started unless `--no-start` is set.
 Existing Codex processes must be restarted before changed provider routing
 takes effect. Inspect routed traffic with `bro requests`; ACP session
 diagnostics live under the BitRouter home in `logs/session-*.log`.
+
+## BRO native tools with a Codex subscription
+
+`bro code` (without an agent ID) and `bro task run` use BRO's native harness.
+Use an explicit subscription route and its known output ceiling, for example:
+
+```yaml
+inherit_defaults: true
+registry:
+  enabled: true
+providers:
+  openai-codex:
+    active: true
+    models:
+      - id: openai/gpt-6.1-sol
+        provider_model_id: gpt-6.1-sol
+        api_protocol: responses
+        token_limits:
+          max_output_tokens: 128000
+```
+
+```bash
+bro providers login openai-codex --import-existing
+bro code --model openai-codex:openai/gpt-6.1-sol --max-output-tokens 128000 --workspace PATH -c bitrouter.yaml
+bro task run "Inspect this workspace" --read-only --model openai-codex:openai/gpt-6.1-sol --max-output-tokens 128000 --workspace PATH -c bitrouter.yaml
+```
+
+The reservation is persisted with the Thread. It bounds admission; it does not
+promise a provider-enforced cap or establish a monetary subscription cost.
+The registry currently omits runtime token limits, so the example declares the
+ceiling explicitly. Use metadata for the selected model; do not lower a model's
+declared ceiling to make a smaller reservation pass.

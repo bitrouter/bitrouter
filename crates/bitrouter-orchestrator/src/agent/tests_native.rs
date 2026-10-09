@@ -133,10 +133,14 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
 struct Recording {
     mock: MockExecutor,
     prompts: Mutex<Vec<Prompt>>,
+    output_limit_support: Option<bool>,
 }
 
 #[async_trait::async_trait]
 impl Executor for Recording {
+    fn output_token_limit_support(&self, _: &RoutingTarget) -> Option<bool> {
+        self.output_limit_support
+    }
     async fn execute(
         &self,
         _: &RoutingTarget,
@@ -207,6 +211,7 @@ fn app_with_policy(
     let executor = Arc::new(Recording {
         mock: MockExecutor::new(turns.into_iter().map(mock_stream).collect()),
         prompts: Mutex::new(Vec::new()),
+        output_limit_support: None,
     });
     let table = StaticRoutingTable::new();
     table.insert("fixture-model", vec![target()]);
@@ -230,6 +235,51 @@ fn app_with_policy(
         })
         .build()?;
     Ok((Arc::new(app), executor))
+}
+
+#[tokio::test]
+async fn native_subscription_reservation_survives_configuration_restore()
+-> Result<(), Box<dyn std::error::Error>> {
+    for reservation in [None, Some(128_000)] {
+        let workspace = TempDir::new()?;
+        let executor = Arc::new(Recording {
+            mock: MockExecutor::new(vec![mock_stream(turn(vec![text("completed")]))]),
+            prompts: Mutex::new(Vec::new()),
+            output_limit_support: Some(false),
+        });
+        let table = StaticRoutingTable::new();
+        let mut route = target();
+        route.model_constraints.token_limits.max_output_tokens = Some(128_000);
+        table.insert("subscription-model", vec![route]);
+        let app = Arc::new(
+            App::builder()
+                .language_model(|builder| {
+                    builder
+                        .routing_table(Arc::new(table))
+                        .executor(executor.clone());
+                })
+                .build()?,
+        );
+        let config =
+            AgentConfig::fixed("subscription-model", None).with_output_reservation(reservation);
+        let restored = serde_json::from_slice(&serde_json::to_vec(&config)?)?;
+        let report = Agent::new(app, CallerContext::local(), workspace.path(), restored)?
+            .run("Reply briefly", CancellationToken::new(), None)
+            .await;
+        let prompts = executor.prompts.lock().await;
+        if reservation.is_some() {
+            assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
+            assert_eq!(prompts.len(), 1);
+            assert_eq!(prompts[0].params.max_tokens, reservation);
+        } else {
+            assert_eq!(report.status, RunStatus::Failed);
+            assert!(
+                prompts.is_empty(),
+                "an insufficient reservation must not dispatch"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]

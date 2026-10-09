@@ -61,9 +61,12 @@ and preserves the in-process draft; instance loss never resubmits input.
 `--thread-id` reattaches stored configuration and permissions; `--task-id` has
 been removed. No draft persistence across process exit is provided.
 For new native Threads, `--model-policy` permits the configured decision backend
-to choose among declared generation models, using `--model` as the fallback.
+to use the version 4 named policy selected by the `--model` router selector.
 Without this flag the model remains fixed. See [decision-native.md](decision-native.md)
 for bounded model/context planning and its explicit price assumptions.
+Native `code` and `task run` accept `--max-output-tokens` (default 4096), retained
+with the Thread. Subscription routes need a reservation covering their known
+model ceiling; `--thread-id` reuses the stored reservation.
 
 Conversation and Agents use the terminal's normal buffer and native scrollback.
 An empty composer permits plain Left to open the **BRO conversation directory**;

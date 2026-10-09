@@ -84,6 +84,8 @@ struct CreateBody {
     model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
     effort: Option<ReasoningEffort>,
     #[serde(default)]
+    max_output_tokens: Option<u32>,
+    #[serde(default)]
     read_only: bool,
     verification_command: Option<String>,
 }
@@ -349,9 +351,12 @@ async fn create(
                 config: if body.read_only {
                     AgentConfig::fixed(body.model, body.effort)
                         .with_model_mode(body.model_mode)
+                        .with_output_reservation(body.max_output_tokens)
                         .read_only()
                 } else {
-                    AgentConfig::fixed(body.model, body.effort).with_model_mode(body.model_mode)
+                    AgentConfig::fixed(body.model, body.effort)
+                        .with_model_mode(body.model_mode)
+                        .with_output_reservation(body.max_output_tokens)
                 },
                 permission_profile: if body.read_only {
                     PermissionProfile::ReadOnly

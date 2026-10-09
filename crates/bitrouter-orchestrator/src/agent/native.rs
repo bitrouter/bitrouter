@@ -441,7 +441,7 @@ impl Agent {
                 text: text.into(),
                 model: self.config.model.clone(),
                 effort: self.config.effort.map(|effort| effort.to_string()),
-                max_output_tokens: None,
+                max_output_tokens: self.config.max_output_tokens,
                 context_limit_bytes: Some(self.config.max_context_bytes as u64),
                 routing: RoutingSettings {
                     model: self.config.model_mode,

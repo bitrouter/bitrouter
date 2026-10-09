@@ -167,6 +167,9 @@ struct CodeArgs {
     /// Allow the decision policy to choose a generation model for native BRO.
     #[arg(long, conflicts_with_all = ["agent", "thread_id"])]
     model_policy: bool,
+    /// Native per-step output reservation (default 4096); subscription routes need their model ceiling.
+    #[arg(long, conflicts_with_all = ["agent", "thread_id"], value_parser = clap::value_parser!(u32).range(1..))]
+    max_output_tokens: Option<u32>,
 }
 
 #[derive(Args)]
@@ -179,6 +182,9 @@ struct TaskRunArgs {
     /// Fixed reasoning effort for each model turn.
     #[arg(long)]
     effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    /// Per-step output reservation (default 4096); uncapped routes need their model ceiling.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    max_output_tokens: Option<u32>,
     /// Bounded project verification command. Without one, verification is not_requested.
     #[arg(long)]
     check: Option<String>,
@@ -200,9 +206,6 @@ struct ManagedTaskArgs {
     /// Durable native managed session name; reuse it to continue released work.
     #[arg(long)]
     session: Option<String>,
-    /// Per-step output reservation. Uncapped subscription routes need the model ceiling.
-    #[arg(long, default_value_t = 4096)]
-    max_output_tokens: u32,
 }
 
 #[derive(Subcommand)]
@@ -2016,7 +2019,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     workspace: task.workspace,
                     config: task.config,
                     session: args.session,
-                    max_output_tokens: args.max_output_tokens,
+                    max_output_tokens: task.max_output_tokens.unwrap_or(4096),
                 })
                 .await
             }
@@ -2576,6 +2579,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     read_only: false,
                     workspace: None,
                     model_policy: false,
+                    max_output_tokens: None,
                 },
                 None,
                 None,
@@ -2699,15 +2703,15 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
         None => std::env::current_dir()?,
     };
     let client = bitrouter::agent_local::ThreadClient::connect(&task_socket).await?;
+    let config = bitrouter_orchestrator::agent::AgentConfig::fixed(args.model, args.effort)
+        .with_output_reservation(args.max_output_tokens);
+    let config = if args.read_only {
+        config.read_only()
+    } else {
+        config
+    };
     let (thread, accepted) = client
-        .create_and_start(
-            workspace,
-            args.model,
-            args.effort,
-            args.read_only,
-            args.check,
-            args.prompt,
-        )
+        .create_and_start(workspace, config, args.check, args.prompt)
         .await?;
     emit_task_json(
         serde_json::json!({ "type": "accepted", "thread_id": thread.thread_id, "turn_id": accepted.turn_id, "host": "local", "server_instance_id": thread.server_instance_id, "workspace": thread.workspace, "permission_profile": thread.permission_profile, "cursor": thread.cursor }),
@@ -5947,6 +5951,7 @@ async fn run_code(
         read_only,
         workspace,
         model_policy,
+        max_output_tokens,
     } = options;
     if agent.is_none() && remote_context.is_none() {
         if socket.is_some()
@@ -5956,6 +5961,7 @@ async fn run_code(
             && !read_only
             && workspace.is_none()
             && !model_policy
+            && max_output_tokens.is_none()
         {
             return bitrouter::dashboard::run(None, config.as_deref(), socket.as_deref(), None)
                 .await;
@@ -5976,6 +5982,7 @@ async fn run_code(
             bitrouter::native_code::Options {
                 read_only,
                 model_policy,
+                max_output_tokens,
             },
             workspace,
         )
@@ -5986,8 +5993,9 @@ async fn run_code(
             && check.is_none()
             && !read_only
             && workspace.is_none()
-            && !model_policy,
-        "--thread-id, --check, --read-only, --workspace, and --model-policy apply only to local bare `bro code`"
+            && !model_policy
+            && max_output_tokens.is_none(),
+        "--thread-id, --check, --read-only, --workspace, --model-policy, and --max-output-tokens apply only to local bare `bro code`"
     );
     let initial_session = if let Some(agent) = agent {
         if remote_context.is_some() {

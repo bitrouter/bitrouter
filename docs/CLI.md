@@ -973,7 +973,7 @@ for migration. BitRouter keeps no session records.
 ### `bro code` — coding conversation
 
 ```bash
-bro code [--model <id>] [--model-policy|--thread-id <id>] [--check <command>|--read-only] [--workspace <path>] [-c <path>]
+bro code [--model <id>] [--model-policy|--thread-id <id>] [--max-output-tokens <n>] [--check <command>|--read-only] [--workspace <path>] [-c <path>]
 bro code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
 bro code --socket <path>
 bro --context <name> code
@@ -990,13 +990,14 @@ Thread state and the server queue; verification is shown in wider terminals.
 already-running local native server. Explicit remote contexts keep the
 operations view. See the native section above for recovery and draft behavior.
 
-`--model-policy` enables configured decision-model selection for a new native
-Thread. The selected `--model` or `chat.model` is its conservative fallback and
-must appear in `decision_model.policy.generation_models`. Without this flag the
-generation model stays fixed; manual effort remains binding in either mode.
-The flag cannot be combined with `--thread-id` or an ACP agent. See
-[decision-native configuration](../skills/bitrouter/references/decision-native.md)
-for backend configuration, model candidates and context-routing behavior.
+`--model-policy` lets the shared named policy select the generation model for a
+new native Thread. Use a configured router selector as `--model`; its version 4
+policy lock owns the model, effort and context action. Without this flag the
+model remains fixed. `--max-output-tokens` sets the per-step reservation (default
+4096), stored with the Thread for continuation. Both flags conflict with
+`--thread-id` and an ACP agent. Uncapped subscription routes require their known
+model output ceiling. See [decision-native configuration](../skills/bitrouter/references/decision-native.md)
+and [Codex subscription setup](../skills/bitrouter/references/harness-codex.md).
 
 The rest of this section describes explicit ACP `bro code <agent>` sessions.
 Those sessions preserve harness-native IDs and history.
