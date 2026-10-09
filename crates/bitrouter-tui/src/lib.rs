@@ -22,9 +22,9 @@
 //! nothing but two places to look.
 //!
 //! What is *not* retired is the reason genericity was chosen in the first
-//! place. Conforming to ACP is still how this renderer works at all, and a
-//! non-BitRouter agent still renders correctly — it simply lands in the
-//! honest-default branch of everything below.
+//! place. ACP sessions retain their protocol projection; native BRO sessions
+//! receive plain presentation data from the application. The shared writer,
+//! composer and menu do not own transport or execution.
 //!
 //! # Honesty
 //!
@@ -54,13 +54,16 @@
 //! action.
 
 pub mod agents;
+pub mod agents_menu;
 pub mod code;
+pub mod composer;
 pub mod cost;
 pub mod editor;
 pub mod journal;
 pub mod lifecycle;
 pub mod log_tail;
 pub mod machine;
+pub mod native_agent;
 pub mod permission;
 pub mod picker;
 pub mod plain;

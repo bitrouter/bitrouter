@@ -78,8 +78,8 @@ mod report_tests {
 
 use std::collections::BTreeSet;
 
-use crate::skills::format::{DiscoveredSkill, discover_all_skills};
 use crate::skills::root::SkillsRoot;
+use bitrouter_orchestrator::harness::skills::format::{DiscoveredSkill, discover_all_skills};
 
 /// Lists the skills installed under a set of roots.
 pub struct InstalledSkills {

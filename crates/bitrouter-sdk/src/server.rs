@@ -24,11 +24,12 @@ use axum::routing::{get, post};
 use axum::{Json, serve};
 use futures::StreamExt;
 
-use crate::app::App;
+use crate::app::{App, prepare_model_prompt};
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::Pipeline;
 use crate::language_model::stream::SseKeepaliveStream;
+
 use crate::language_model::types::{PipelineInput, PipelineRequest};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
@@ -1343,12 +1344,9 @@ async fn handle(
     };
     let (input, original_model) = if let Some(adapter) = &adapter {
         match adapter.parse_request(body).map_err(BitrouterError::from) {
-            Ok(mut prompt) => {
-                prompt.model = sanitize_model_name(&prompt.model);
-                let original_model = prompt.model.clone();
-                for transform in &state.prompt_transforms {
-                    transform.apply_with_headers(&mut prompt, &headers);
-                }
+            Ok(prompt) => {
+                let (prompt, original_model) =
+                    prepare_model_prompt(prompt, &headers, &state.prompt_transforms);
                 (PipelineInput::Generation(Box::new(prompt)), original_model)
             }
             Err(error) => return error.into_response(),
@@ -1793,7 +1791,10 @@ mod tests {
     use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
     use crate::language_model::routing::StaticRoutingTable;
     use crate::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
+    use crate::language_model::settlement::{SettlementContext, SettlementRecorder};
+
     use crate::language_model::types::{ExecutionResult, RoutingTarget};
+
     use crate::language_model::{
         HookDecision, PipelineBuilder, PipelineContext, PreRequestHook, StreamPartStream,
     };
@@ -1990,6 +1991,49 @@ mod tests {
 
     struct RecordModelIntent(Arc<std::sync::Mutex<Option<(String, String)>>>);
 
+    struct CountSettlements(Arc<AtomicUsize>);
+
+    type RecordedSettlement = (String, String, Option<String>, u64, u64);
+
+    struct RecordSettlement(Arc<std::sync::Mutex<Vec<RecordedSettlement>>>);
+
+    #[async_trait]
+    impl SettlementRecorder for RecordSettlement {
+        async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+            let entry = (
+                ctx.provider_id.clone(),
+                ctx.model_id.clone(),
+                ctx.reasoning_effort.map(|effort| effort.to_string()),
+                ctx.prompt_tokens,
+                ctx.completion_tokens,
+            );
+            match self.0.lock() {
+                Ok(mut entries) => entries.push(entry),
+                Err(poisoned) => poisoned.into_inner().push(entry),
+            }
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for CountSettlements {
+        async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct RejectNativeAndHttp;
+
+    #[async_trait]
+    impl PreRequestHook for RejectNativeAndHttp {
+        async fn check(&self, _ctx: &mut PipelineContext) -> Result<HookDecision> {
+            Ok(HookDecision::Deny(
+                crate::language_model::DenyReason::Unauthorized("blocked by policy".into()),
+            ))
+        }
+    }
+
     #[async_trait]
     impl PreRequestHook for RecordModelIntent {
         async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
@@ -2183,6 +2227,222 @@ mod tests {
             captured,
             Some(("caller-model".to_string(), "gpt-5.5".to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn native_and_http_turns_share_transform_policy_and_settlement()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_ai::types::{
+            Content, FinishReason, GenerateResult, Message, ReasoningEffort, Role, Usage,
+        };
+
+        let table = StaticRoutingTable::new();
+        table.insert(
+            "gpt-5.5",
+            vec![RoutingTarget {
+                provider_name: "test-provider".into(),
+                service_id: "gpt-5.5".into(),
+                api_base: "https://example.invalid".into(),
+                api_key: "test-key".into(),
+                api_protocol: ApiProtocol::ChatCompletions,
+                chat_token_limit_field: None,
+                chat_supports_store: None,
+                chat_supports_stream_options: None,
+                chat_google_extensions: false,
+                reasoning_effort: None,
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: AuthScheme::Bearer,
+                headers: Vec::new(),
+            }],
+        );
+        let result = GenerateResult {
+            content: vec![Content::Text {
+                text: "ok".into(),
+                provider_metadata: Default::default(),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                ..Default::default()
+            }),
+            finish_reason: Some(FinishReason::Stop),
+            response_id: None,
+            stop_details: None,
+            provider_metadata: Default::default(),
+        };
+        let expected_content = result.content.clone();
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let settlements = Arc::new(AtomicUsize::new(0));
+        let settled_routes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = Arc::new(std::sync::Mutex::new(None));
+        let app = App::builder()
+            .skip_auth(true)
+            .prompt_transform(Arc::new(RewriteModel("gpt-5.5")))
+            .language_model(|lm| {
+                lm.routing_table(Arc::new(table))
+                    .executor(Arc::new(CountingExecutor {
+                        calls: Arc::clone(&provider_calls),
+                        inner: MockExecutor::new(vec![
+                            MockResponse::Generate(result.clone()),
+                            MockResponse::Generate(result),
+                        ]),
+                    }))
+                    .pre_request_hook(RecordModelIntent(Arc::clone(&observed)))
+                    .settlement_recorder(CountSettlements(Arc::clone(&settlements)))
+                    .settlement_recorder(RecordSettlement(Arc::clone(&settled_routes)));
+            })
+            .build()?;
+        let state = AppState {
+            language_model: app
+                .language_model()
+                .cloned()
+                .ok_or_else(|| BitrouterError::internal("missing test pipeline"))?,
+            mcp: None,
+            skip_auth: app.skip_auth(),
+            metrics_renderer: None,
+            prompt_transforms: app.prompt_transforms().to_vec(),
+        };
+        let body = serde_json::json!({
+            "model": "caller-model",
+            "reasoning_effort": "low",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let native_prompt = Prompt {
+            model: "caller-model".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "hello")],
+            tools: Vec::new(),
+            params: bitrouter_ai::types::GenerationParams {
+                reasoning_effort: Some(ReasoningEffort::Low),
+                ..Default::default()
+            },
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let native = app
+            .execute_native(native_prompt, CallerContext::local())
+            .await?;
+        assert_eq!(
+            native
+                .result
+                .generation()
+                .ok_or("native result must be generation")?
+                .content,
+            expected_content
+        );
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(settlements.load(Ordering::SeqCst), 2);
+        let routes = match settled_routes.lock() {
+            Ok(entries) => entries.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(
+            routes,
+            vec![
+                (
+                    "test-provider".into(),
+                    "gpt-5.5".into(),
+                    Some("low".into()),
+                    10,
+                    5
+                ),
+                (
+                    "test-provider".into(),
+                    "gpt-5.5".into(),
+                    Some("low".into()),
+                    10,
+                    5
+                ),
+            ]
+        );
+        let captured = match observed.lock() {
+            Ok(slot) => slot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(
+            captured,
+            Some(("caller-model".to_string(), "gpt-5.5".to_string()))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejected_native_and_http_turns_do_not_call_provider()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_ai::types::{Message, Role};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let table = StaticRoutingTable::new();
+        let app = App::builder()
+            .skip_auth(true)
+            .language_model(|lm| {
+                lm.routing_table(Arc::new(table))
+                    .executor(Arc::new(CountingExecutor {
+                        calls: Arc::clone(&calls),
+                        inner: MockExecutor::always_text("should not run"),
+                    }))
+                    .pre_request_hook(RejectNativeAndHttp);
+            })
+            .build()?;
+        let state = AppState {
+            language_model: app
+                .language_model()
+                .cloned()
+                .ok_or_else(|| BitrouterError::internal("missing test pipeline"))?,
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: Vec::new(),
+        };
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "model": "blocked",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))?,
+            )
+            .await?;
+        assert!(!response.status().is_success());
+        let native_prompt = Prompt {
+            model: "blocked".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "hello")],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        assert!(
+            app.execute_native(native_prompt, CallerContext::local())
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        Ok(())
     }
 
     async fn models_json(user_agent: Option<&str>) -> serde_json::Value {

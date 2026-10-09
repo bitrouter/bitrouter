@@ -270,6 +270,22 @@ async fn serve_with_options(
             .await
             .with_context(|| format!("bind inference listener {listen}"))?;
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
+        let task_socket = crate::agent_local::socket_path(&socket_path);
+        let task_listener = daemon::transport::bind(&task_socket).await?;
+        let task_service = bitrouter_orchestrator::service::ThreadService::with_store(
+            app.clone(),
+            &cfg.agent_api.workspaces,
+            Arc::new(crate::agent_store::DatabaseExecutionStore::new(assembled.db.clone())),
+        )
+        .map_err(anyhow::Error::msg)?
+        .with_resources(native_harness_config(&cfg, home))
+        .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            !cfg.agent_api.enabled
+                || cfg.control.credentials.iter().all(|credential| credential.token_env != cfg.agent_api.token_env),
+            "agent API and control API must use distinct credential environment variables"
+        );
+        let agent_api = crate::agent_api::BoundAgentApi::bind(&cfg.agent_api, task_service.clone()).await?;
         let remote_control = match remote_control {
             Some(server) => Some(
                 server
@@ -288,6 +304,10 @@ async fn serve_with_options(
         let http_app = app.clone();
         let handoff_gate = crate::daemon_handoff::HandoffGate::default();
         let http_handoff_gate = handoff_gate.clone();
+        // Native requests and queue workers do not yet participate in an atomic
+        // handoff gate. Hold admission for the endpoint's whole lifetime so an
+        // idle ACP/inference projection cannot authorize stopping BRO work.
+        let native_admission = handoff_gate.admit().ok_or_else(|| anyhow::anyhow!("native runtime admission is closed"))?;
         // The ingress SERVER span is created from the exporter's own tracer — the
         // SDK installs no global `TracerProvider`, so there is nothing to reach
         // for implicitly. With OTel disabled there is no ingress span at all,
@@ -301,6 +321,8 @@ async fn serve_with_options(
         let http = async move {
             let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
             let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
+            let task_shutdown = tokio_util::sync::CancellationToken::new();
+            let task_shutdown_for_server = task_shutdown.clone();
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
             let otel_wrapper = move |router: axum::Router| {
@@ -360,8 +382,42 @@ async fn serve_with_options(
                     }
                 }
             };
+            let task = async move {
+                let _native_admission = native_admission;
+                if let Err(error) = task_service.initialize_execution().await {
+                    tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
+                }
+                let runtime = task_service.clone();
+                let runtime_shutdown = task_shutdown_for_server.clone();
+                let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; };
+                let local = crate::agent_local::serve(
+                    task_listener,
+                    task_service,
+                    task_shutdown_for_server.clone(),
+                );
+                let task_shutdown_for_cleanup = task_shutdown_for_server.clone();
+                let http = async move {
+                    match agent_api {
+                        Some(api) => api.serve(async move {
+                            task_shutdown_for_server.cancelled().await;
+                        }).await,
+                        None => {
+                            task_shutdown_for_server.cancelled().await;
+                            Ok(())
+                        }
+                    }
+                };
+                let serving = async {
+                    let result = tokio::try_join!(local, http).map(|_| ());
+                    task_shutdown_for_cleanup.cancel();
+                    result
+                };
+                let (result, ()) = tokio::join!(serving, cleanup);
+                result
+            };
             let mut inference = Box::pin(inference);
             let mut remote = Box::pin(remote);
+            let mut task = Box::pin(task);
             let mut shutdown = Box::pin(async move {
                 let _ = http_shutdown_rx.await;
             });
@@ -369,20 +425,34 @@ async fn serve_with_options(
             tokio::select! {
                 result = &mut inference => {
                     let _ = remote_shutdown_tx.send(());
+                    task_shutdown.cancel();
                     remote.await?;
+                    task.await?;
                     result
                 }
                 result = &mut remote => {
                     let _ = inference_shutdown_tx.send(());
+                    task_shutdown.cancel();
                     inference.await?;
+                    task.await?;
+                    result
+                }
+                result = &mut task => {
+                    let _ = inference_shutdown_tx.send(());
+                    let _ = remote_shutdown_tx.send(());
+                    let (inference_result, remote_result) = tokio::join!(inference, remote);
+                    inference_result?;
+                    remote_result?;
                     result
                 }
                 _ = &mut shutdown => {
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
-                    let (inference_result, remote_result) = tokio::join!(inference, remote);
+                    task_shutdown.cancel();
+                    let (inference_result, remote_result, task_result) = tokio::join!(inference, remote, task);
                     inference_result?;
-                    remote_result
+                    remote_result?;
+                    task_result
                 }
             }
         };
@@ -817,6 +887,44 @@ fn other_provider_env_var_hints() -> Vec<String> {
     vars.sort();
     vars.dedup();
     vars
+}
+
+/// Static daemon-owned resources; opening or browsing a Thread never connects.
+fn native_harness_config(
+    cfg: &bitrouter_sdk::config::Config,
+    home: &std::path::Path,
+) -> bitrouter_orchestrator::harness::HarnessConfig {
+    let mut servers: Vec<_> = cfg
+        .mcp_servers
+        .iter()
+        .map(|(name, config)| {
+            let mut selected = config.clone();
+            selected.name = name.clone();
+            selected
+        })
+        .collect();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    let user_home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from);
+    let mut skill_roots = user_home.map_or_else(Vec::new, |home| {
+        vec![
+            home.join(".agents/skills"),
+            home.join(".codex/skills"),
+            home.join(".claude/skills"),
+        ]
+    });
+    if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
+        skill_roots.push(std::path::PathBuf::from(codex_home).join("skills"));
+    }
+    bitrouter_orchestrator::harness::HarnessConfig {
+        servers,
+        protocol: bitrouter_sdk::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
+        skill_roots,
+        instructions: bitrouter_orchestrator::harness::instructions::InstructionConfig {
+            global_root: Some(home.to_path_buf()),
+            ..Default::default()
+        },
+    }
 }
 
 #[cfg(test)]

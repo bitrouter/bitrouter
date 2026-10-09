@@ -32,6 +32,7 @@ keyring = { version = "3", default-features = false, features = [
 # internal crates
 bitrouter-ai = { path = "crates/bitrouter-ai", version = "1.0.0-alpha.33" }
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.33", default-features = false }
+bitrouter-orchestrator = { path = "crates/bitrouter-orchestrator", version = "1.0.0-alpha.33" }
 bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-alpha.33" }
 # Optional telemetry egress. `default-features = false` keeps a consumer that
 # only wants the observability contract off the OpenTelemetry stack entirely.
@@ -40,6 +41,7 @@ bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-al
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.
 rustix = { version = "1", default-features = false }
+process-wrap = { version = "10", default-features = false }
 
 # ACP SDK crates. Development pins one reviewed Git revision, whose manifests
 # consume schema 1.7.0. The compatible major-version requirement is retained
@@ -225,6 +227,8 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
+globset = "0.4"
+ignore = "0.4"
 tempfile = "3"
 atomicwrites = "0.4.4"
 

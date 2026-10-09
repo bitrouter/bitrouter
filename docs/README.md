@@ -54,6 +54,34 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and identity migration sub-batch; not completion of the original M0–M1 batch.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
+
+## BRO current contracts and evidence
+
+Start with [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md).
+It incorporates implemented Thread/Turn behavior; historical documents do not
+supply additional overrides. Contract scope and acceptance scope are separate.
+
+| Subject | Document |
+| --- | --- |
+| Runtime identities, scheduling, context, durable commits, recovery and transport | [BRO_AGENT_RUNTIME_SPEC.md](BRO_AGENT_RUNTIME_SPEC.md) |
+| Six tool interfaces, filesystem bounds and interpreter rules | [BRO_BASE_TOOLS_SPEC.md](BRO_BASE_TOOLS_SPEC.md) |
+| AGENTS.md scopes and snapshots, native MCP and skills discovery | [BRO_HARNESS_RESOURCES.md](BRO_HARNESS_RESOURCES.md) |
+| Native Conversation and durable Thread navigation | [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md) |
+| Source-specific validation and historical checkpoints | [BRO_AGENT_RUNTIME_IMPLEMENTATION.md](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) |
+| Tool provider/platform experiments and reproduction | [BRO_BASE_TOOLS_ACCEPTANCE.md](BRO_BASE_TOOLS_ACCEPTANCE.md) |
+| Final Conversation/main fixture acceptance | [BRO_CONVERSATION_UI_IMPLEMENTATION.md](BRO_CONVERSATION_UI_IMPLEMENTATION.md) |
+| Raw exports, summaries and archive integrity | [Evidence README](evidence/bro-base-tools/README.md) |
+| Future core/harness separation, outside standalone acceptance | [BRO_AGENT_RUNTIME_HANDOFF.md](BRO_AGENT_RUNTIME_HANDOFF.md) |
+
+Old [native server](BRO_NATIVE_AGENT_SERVER_SPEC.md),
+[shared-session](BRO_SHARED_SESSION_SERVER_SPEC.md) and
+[Thread/Turn migration](BRO_THREAD_TURN_UNIFICATION_SPEC.md) pages are short
+historical pointers to immutable Git snapshots. Their implementation ledgers
+are indexed from current runtime acceptance. Explicit ACP sessions retain the
+separate ACP contracts below.
+
+## Other development contracts
+
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI, the ACP controller,
@@ -80,6 +108,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   Replaces the seven-view Code dashboard with a conversation, contextual
   pickers/inspectors, and agent/route/activity/attributed-cost status; defines
   shared interaction behavior, ACP boundaries, and acceptance criteria.
+- [`CODE_TUI_CODEX_NAVIGATION_SPEC.md`](CODE_TUI_CODEX_NAVIGATION_SPEC.md) —
+  **implemented; locally verified.** Codex-style conversation entry and explicit Left-arrow
+  navigation to a native-buffer Agents menu; first delivery covers the menu
+  skeleton and includes acceptance criteria and an implementation goal prompt.
+- [`CODE_TUI_CODEX_IMPLEMENTATION.md`](CODE_TUI_CODEX_IMPLEMENTATION.md) —
+  first-delivery changes, acceptance evidence and live PTY screenshots.
 - [`CODE_SLASH_COMMAND_UX_SPEC.md`](CODE_SLASH_COMMAND_UX_SPEC.md) — **implemented
   in #935.** Makes `/` the command input, preserves drafts on cancel,
   removes default action hotkeys, and adds configurable bindings under
@@ -168,3 +202,6 @@ The **product** documentation that used to live here now lives in the
 - [Real Codex subscription ACP pilot](ACP_SUBSCRIPTION_PILOT.md): controlled tasks, frozen evidence, model-reference comparisons and observed follow-up issues.
 - [Rubric v2 fresh-task comparison](ACP_RUBRIC_V2_HOLDOUT.md): four additional subscription task families, revised responsibility semantics, preserved unknown validation and version-compatibility checks.
 - [TS goal audit](ACP_TS_GOAL_AUDIT.md): requirement-level evidence for the controlled reward pilot, learner experiments and serving implementation; separate limits on natural-history and live-benefit claims.
+
+- [BRO Conversation and durable Threads navigation](BRO_CONVERSATION_UI_SPEC.md) — PR #952 UI integration into the native Thread client.
+- [BRO Conversation UI integration evidence](BRO_CONVERSATION_UI_IMPLEMENTATION.md) — delivered behavior, local gates and remaining verification boundaries.

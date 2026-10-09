@@ -2051,7 +2051,7 @@ fn code_agent_deck_expands_inline_and_preserves_multiline_foreground_draft() -> 
         .send(format!("\x1b[200~{draft}\x1b[201~").as_bytes())?;
     let _ = code.pty.wait_for_text("second line")?;
     let expansion = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/background agents\r")?;
+    code.pty.send(b"\x1b[1;5H/background run controls\r")?;
     let _ = code
         .pty
         .wait_for_text_since(&expansion, "Foreground draft preserved")?;
@@ -2526,19 +2526,18 @@ async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<(
         .get("agent_run_id")
         .and_then(serde_json::Value::as_str)
         .context("background dispatch omitted run ID")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&before_background, "1 ready")?;
     ensure!(
         !String::from_utf8_lossy(&code.pty.output[before_background.output_len..])
             .contains("BACKGROUND_PRIVATE_OUTPUT"),
         "background output leaked into the foreground document"
     );
     let expanded = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/background agents\r")?;
+    code.pty.send(b"\x1b[1;5H/background run controls\r")?;
     let _ = code
         .pty
         .wait_for_text_since(&expanded, "Foreground draft preserved")?;
+    // Wait for the asynchronously polled inventory, not just the opened controls.
+    let _ = code.pty.wait_for_text("1 ready")?;
     let attached = code.pty.checkpoint();
     code.pty.send(b"\r")?;
     let _ = code
@@ -2676,37 +2675,86 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
 }
 
 #[test]
-fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()> {
+fn code_bare_entry_opens_native_model_editor() -> Result<()> {
     let mut bare = CodeFixture::bare()?;
-    let selection = bare.pty.wait_for_text("claude-acp")?;
+    let view = bare.pty.wait_for_text("Enter a routed model ID")?;
     ensure!(
-        !selection.contains("Home")
-            && !selection.replace("/ Agents", "").contains("Agents")
-            && !selection.contains("Requests"),
-        "bare Code entry restored permanent navigation"
+        view.contains("BRO"),
+        "bare Code did not open BRO native view"
     );
-    bare.close_to_composer()?;
-    bare.pty.paste("draft before selection")?;
-    let submit_checkpoint = bare.pty.checkpoint();
-    bare.pty.send(b"\r")?;
-    let bare_output = bare
-        .pty
-        .wait_for_text("Choose an agent before sending this draft")?;
-    ensure!(
-        !bare_output.contains("Home") && !bare_output.replace("/ Agents", "").contains("Agents"),
-        "bare Code entry restored permanent navigation"
-    );
-    let _ = bare
-        .pty
-        .wait_for_text_since(&submit_checkpoint, "claude-acp")?;
-    bare.close_to_composer()?;
-    let clear_checkpoint = bare.pty.checkpoint();
-    bare.pty.send(b"\x03")?;
-    let _ = bare
-        .pty
-        .wait_for_text_since(&clear_checkpoint, "Draft cleared")?;
+    bare.pty.send(b"test-model\r")?;
+    let _ = bare.pty.wait_for_text("Model selected: test-model")?;
     bare.pty.send(b"\x04")?;
     bare.assert_terminal_restored()
+}
+
+#[test]
+fn code_agents_navigation_keeps_normal_buffer_and_defers_foreground_output() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::DelayedNormal)?;
+    code.pty.screen = vt100::Parser::new(CODE_ROWS, CODE_COLUMNS, 256);
+    code.wait_for_agent_ready()?;
+    for visit in 0..3 {
+        let opening = code.pty.checkpoint();
+        code.pty.send(b"\x1b[D")?;
+        let _ = code.pty.wait_for_text_since(&opening, "Esc conversation")?;
+        if visit == 2 {
+            let suspended = code.pty.checkpoint();
+            code.signal_child("TSTP")?;
+            let _ = code
+                .pty
+                .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
+            let resumed = code.pty.checkpoint();
+            code.signal_child("CONT")?;
+            let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
+            let _ = code.pty.wait_for_text_since(&resumed, "Esc conversation")?;
+        }
+        let returning = code.pty.checkpoint();
+        code.pty.send(b"\x1b")?;
+        let _ = code.pty.wait_for_text_since(&returning, "← agents")?;
+    }
+    code.pty.send(b"first\r")?;
+    let _ = code.pty.wait_for_text("FXW1")?;
+    let opened = code.pty.checkpoint();
+    code.pty.send(b"\x1b[D")?;
+    let _ = code.pty.wait_for_text_since(&opened, "Esc conversation")?;
+    code.mock.control("release")?;
+    // Permission requests follow the update on the same ACP stdout stream.
+    // Their visible attention proves the wire consumed that preceding update.
+    code.mock.control("permission")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&opened, "foreground permission(s) waiting")?;
+    let settled = code.pty.checkpoint();
+    code.pty.send(b"/")?;
+    let _ = code.pty.wait_for_text_since(&settled, "type to search")?;
+    ensure!(
+        !String::from_utf8_lossy(&code.pty.output[opened.output_len..]).contains("FXRL"),
+        "foreground output escaped into menu history"
+    );
+    code.pty.send(b"\x1b")?;
+    let _ = code.pty.wait_for_text("Esc conversation")?;
+    code.pty.resize(100, 30)?;
+    let returning = code.pty.checkpoint();
+    code.pty.send(b"\x1b")?;
+    let output = code.pty.wait_for_text_since(&returning, "FXRL")?;
+    ensure!(
+        output.matches("FXRL").count() == 1,
+        "foreground text replayed twice"
+    );
+    let raw = String::from_utf8_lossy(&code.pty.output);
+    ensure!(
+        !raw.contains(ENTER_ALTERNATE_SCREEN) && !raw.contains("\x1b[3J"),
+        "native navigation replaced or cleared scrollback"
+    );
+    code.pty.screen.set_scrollback(256);
+    let history = code.pty.screen.screen().contents();
+    ensure!(
+        !history.contains("Esc conversation") && !history.contains("Enter preview"),
+        "menu controls entered native transcript history"
+    );
+    code.pty.screen.set_scrollback(0);
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
 }
 
 #[test]
@@ -2766,16 +2814,13 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
 }
 
 #[test]
-fn code_hidden_tui_bare_alias_uses_the_shared_empty_composer() -> Result<()> {
+fn code_hidden_tui_bare_alias_uses_the_native_model_editor() -> Result<()> {
     let mut tui = CodeFixture::tui_bare()?;
-    let selection = tui.pty.wait_for_text("claude-acp")?;
+    let view = tui.pty.wait_for_text("Enter a routed model ID")?;
     ensure!(
-        !selection.contains("Home")
-            && !selection.replace("/ Agents", "").contains("Agents")
-            && !selection.contains("Requests"),
-        "hidden tui entry restored permanent navigation"
+        view.contains("BRO"),
+        "hidden tui alias did not open native view"
     );
-    tui.close_to_composer()?;
     tui.pty.send(b"\x04")?;
     tui.assert_terminal_restored()
 }
@@ -3270,9 +3315,10 @@ fn code_late_adapter_disconnect_preserves_terminal_cleanup() -> Result<()> {
     let _ = code.pty.wait_for_text("Turn completed")?;
     let disconnect_checkpoint = code.pty.checkpoint();
     code.mock.disconnect()?;
-    let disconnected = code
-        .pty
-        .wait_for_text_since(&disconnect_checkpoint, "activity: disconnected")?;
+    let disconnected = code.pty.wait_for_text_since(
+        &disconnect_checkpoint,
+        "disconnected · inspect supervised run",
+    )?;
     ensure!(
         disconnected.contains("FXRP1"),
         "late adapter disconnect discarded the completed transcript: {disconnected:?}"

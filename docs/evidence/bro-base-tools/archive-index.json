@@ -1,0 +1,55 @@
+{
+  "format_version": 1,
+  "source_snapshot": "65555b126e8d14982b2a7c977b618d545cd8f5b7",
+  "scope": "Byte-for-byte copies of committed exports; temporary databases and uncommitted logs are not included.",
+  "archives": [
+    {
+      "path": "archives/original-2026-10-01.tar.gz",
+      "bytes": 12190,
+      "sha256": "dd894441629938a93b8597300768f7df5616a9e3d0a99944c7c0676a27915813",
+      "files": [
+        {"path": "before-natural/NOTES.md", "bytes": 138, "sha256": "20393e38cb14d3749b6902332171e1937f33426ead20414a6a101a74d81606c0"},
+        {"path": "before-natural/calculator.py", "bytes": 40, "sha256": "859cb6b0c69f0e06bb5ae054c70fb7148c1955b918465157dbc4882c71830125"},
+        {"path": "before-natural/model-evidence.json", "bytes": 8636, "sha256": "78826276d59e58b606917ed69d59770ddb00012740f358b9cf85e4050189fdb5"},
+        {"path": "before-natural/stop.json", "bytes": 111, "sha256": "5e32d301313db956a336b56e6c2d20dbd155433621db662a6a834bfdd8c39cd1"},
+        {"path": "before-natural/test_calculator.py", "bytes": 265, "sha256": "bf999474de1f7b16a2bb5fce76b1e82ce09ae2c829e290d4294e19d75e30a4b1"},
+        {"path": "before-natural/tool-events.ndjson", "bytes": 6123, "sha256": "1c2382542b5b4ae2b6204bb61eb036741e07e401d8e7696fce81f96ce3248dab"},
+        {"path": "ci.json", "bytes": 17931, "sha256": "4c5e932233a3d0933dc7228a8a499dc38fb0af1641cfa73b5f8cf62a80975037"},
+        {"path": "coding/NOTES.md", "bytes": 186, "sha256": "47b610ebba66d8a67f0ef49c3300390dccc21c8a9e4786edc57751ac614bea84"},
+        {"path": "coding/calculator.py", "bytes": 40, "sha256": "859cb6b0c69f0e06bb5ae054c70fb7148c1955b918465157dbc4882c71830125"},
+        {"path": "coding/model-evidence.json", "bytes": 9854, "sha256": "c06296d555ffdb4f2c43aa6ea4f9ee2743123eb2cf7611bbe5aca2746f1d45e7"},
+        {"path": "coding/stop.json", "bytes": 111, "sha256": "5e32d301313db956a336b56e6c2d20dbd155433621db662a6a834bfdd8c39cd1"},
+        {"path": "coding/test_calculator.py", "bytes": 265, "sha256": "bf999474de1f7b16a2bb5fce76b1e82ce09ae2c829e290d4294e19d75e30a4b1"},
+        {"path": "coding/tool-events.ndjson", "bytes": 6931, "sha256": "a613dadf6d74470d97278ba875dc304c5b1f4899fa4f1da6982b3557495937e7"},
+        {"path": "manifest.json", "bytes": 1967, "sha256": "56637a18ddead8b26b5f886866644a690eb6ebeb2ab61c68b9bd2e96735c44e1"},
+        {"path": "natural/NOTES.md", "bytes": 155, "sha256": "7a1f370640f5eb64bd7d742a062bdffc38bd7152a874dae7e2f4b549d8d7be44"},
+        {"path": "natural/calculator.py", "bytes": 40, "sha256": "859cb6b0c69f0e06bb5ae054c70fb7148c1955b918465157dbc4882c71830125"},
+        {"path": "natural/model-evidence.json", "bytes": 8667, "sha256": "181a49e003dfe43b1f0f68a394e5ce3c6874e3678d0f8c9b4a7c52010c24c1c4"},
+        {"path": "natural/stop.json", "bytes": 111, "sha256": "5e32d301313db956a336b56e6c2d20dbd155433621db662a6a834bfdd8c39cd1"},
+        {"path": "natural/test_calculator.py", "bytes": 265, "sha256": "bf999474de1f7b16a2bb5fce76b1e82ce09ae2c829e290d4294e19d75e30a4b1"},
+        {"path": "natural/tool-events.ndjson", "bytes": 7179, "sha256": "6cbc7b85525ea44f0d64658851775e8be81bf22f6e3a40873146a0ee68636268"},
+        {"path": "readonly/calculator.py", "bytes": 44, "sha256": "27d2c8d7f040a691abb8f4839289197379f24b6babfdc0af52b4387e24971f54"},
+        {"path": "readonly/model-evidence.json", "bytes": 5290, "sha256": "bcae2a718c0a6c0ca5e0cfe70c823d60f19208f9b25f091d4059bfe7cf042306"},
+        {"path": "readonly/stop.json", "bytes": 111, "sha256": "5e32d301313db956a336b56e6c2d20dbd155433621db662a6a834bfdd8c39cd1"},
+        {"path": "readonly/test_calculator.py", "bytes": 265, "sha256": "bf999474de1f7b16a2bb5fce76b1e82ce09ae2c829e290d4294e19d75e30a4b1"},
+        {"path": "readonly/tool-events.ndjson", "bytes": 5705, "sha256": "92415c51016d757b7bc01dc4b1ad32c6e359aa765cddeb9e5eb5fceae765364f"},
+        {"path": "windows-ci-first.json", "bytes": 3580, "sha256": "8461240a7c63c7c1dd524c9793a23cf6ad9834b0353475e55c74b12aaa822934"}
+      ]
+    },
+    {
+      "path": "archives/integration-2026-10-04.tar.gz",
+      "bytes": 21280,
+      "sha256": "0540ac498c004d0b9dc2527f9a75fdba5914636627cedafaadf35d2005ac658e",
+      "files": [
+        {"path": "integrated-coding/events.ndjson", "bytes": 49940, "sha256": "98c5470d76d19f759c86425efc4311763669912efd02bf39175a62d5b686b0e2"},
+        {"path": "integrated-coding/execution-evidence.json", "bytes": 128231, "sha256": "e0f7090a973e023595ef0d3aa4f2a2a5cd22e4dc352b0c5b2838df342ad39731"},
+        {"path": "integrated-coding/stderr.txt", "bytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"path": "integrated-coding/stop.json", "bytes": 111, "sha256": "5e32d301313db956a336b56e6c2d20dbd155433621db662a6a834bfdd8c39cd1"},
+        {"path": "integrated-readonly/events.ndjson", "bytes": 105990, "sha256": "8cdca0016f687859807b0e8554b8e039e8d278781886f89c659224878745d695"},
+        {"path": "integrated-readonly/execution-evidence.json", "bytes": 62941, "sha256": "3136a237f01327f35bf792b572d5a5f4891f311f92fa98ee6a6c693420f53b13"},
+        {"path": "integrated-readonly/stderr.txt", "bytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"path": "integrated-readonly/stop.json", "bytes": 111, "sha256": "5e32d301313db956a336b56e6c2d20dbd155433621db662a6a834bfdd8c39cd1"}
+      ]
+    }
+  ]
+}

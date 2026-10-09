@@ -246,8 +246,15 @@ mod tests {
         };
         let path = home.path().join("bitrouter.db");
         let db = crate::db::connect(&format!("sqlite://{}?mode=rwc", path.display())).await?;
-        let before_last = u32::try_from(Migrator::migrations().len() - 1)?;
-        Migrator::up(&db, Some(before_last)).await?;
+        let before_router_identity = u32::try_from(
+            Migrator::migrations()
+                .iter()
+                .position(|migration| {
+                    migration.name() == "m20240101_000021_add_router_request_identity"
+                })
+                .context("router identity migration is missing")?,
+        )?;
+        Migrator::up(&db, Some(before_router_identity)).await?;
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "ALTER TABLE requests ADD COLUMN router_id TEXT".to_string(),
@@ -255,7 +262,11 @@ mod tests {
         .await?;
         let prior = applied(&db).await?;
         db.close().await?;
-        assert!(Preflight::check(&source).await.is_err());
+        let error = Preflight::check(&source)
+            .await
+            .err()
+            .context("preflight accepted a conflicting schema")?;
+        assert!(format!("{error:#}").contains("duplicate column name: router_id"));
         let live = read_only(&path).await?;
         assert_eq!(applied(&live).await?, prior);
         Ok(())

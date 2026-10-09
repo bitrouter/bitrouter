@@ -86,6 +86,8 @@ pub struct Config {
     pub server: ServerConfig,
     /// Opt-in, read-only operator control API settings.
     pub control: ControlConfig,
+    /// Opt-in privileged BRO coding task API, separate from inference and control.
+    pub agent_api: AgentApiConfig,
     /// The interactive session's own configuration.
     pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
@@ -153,6 +155,7 @@ impl Default for Config {
         Self {
             server: ServerConfig::default(),
             control: ControlConfig::default(),
+            agent_api: AgentApiConfig::default(),
             chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
@@ -329,6 +332,33 @@ impl Default for ControlConfig {
             enabled: false,
             listen: "127.0.0.1:4358".to_string(),
             credentials: Vec::new(),
+        }
+    }
+}
+
+/// Privileged HTTP access to the BRO task service. The app validates a
+/// loopback listener, nonempty token environment variable, and workspace
+/// allowlist before binding; `server.skip_auth` never grants this authority.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentApiConfig {
+    /// Whether to bind the task HTTP listener.
+    pub enabled: bool,
+    /// Loopback host and port, distinct from inference and control.
+    pub listen: String,
+    /// Environment variable containing the dedicated task bearer token.
+    pub token_env: String,
+    /// Exact server-owned workspace paths admitted for task submission.
+    pub workspaces: Vec<std::path::PathBuf>,
+}
+
+impl Default for AgentApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:4359".into(),
+            token_env: String::new(),
+            workspaces: Vec::new(),
         }
     }
 }

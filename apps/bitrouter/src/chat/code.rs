@@ -97,7 +97,13 @@ pub(crate) async fn run(
     services: Arc<CodeServices>,
     initial: Option<SessionRequest>,
 ) -> Result<()> {
-    let background = services.background_client().await?;
+    let (background, inventory_error) = match services.background_client().await {
+        Ok(background) => (background, None),
+        Err(error) => (
+            None,
+            Some(format!("Agent inventory unavailable: {error:#}")),
+        ),
+    };
     let status = CodeStatus {
         title: services.label.clone(),
         ..Default::default()
@@ -154,8 +160,12 @@ pub(crate) async fn run(
         runtime.start(request);
     } else if runtime.services.operations_only {
         runtime.report("status", Vec::new());
-    } else {
-        runtime.effects.push_back(CodeEffect::ChooseAgent);
+    }
+    if runtime.background.is_none() {
+        runtime.state.set_agent_inventory_error(Some(
+            inventory_error
+                .unwrap_or_else(|| "Agent inventory unavailable for this target".to_string()),
+        ));
     }
     let mut view = CodeView::open().context("opening Code terminal")?;
     let result = runtime.drive(&mut view).await;
@@ -354,6 +364,7 @@ impl Runtime {
                     self.background_poll = None;
                     match result {
                         Ok(result) => {
+                            self.state.set_agent_inventory_error(None);
                             if self.background_error.take().is_some() {
                                 self.state.set_notice("Background sessions reconnected");
                                 dirty = true;
@@ -364,6 +375,7 @@ impl Runtime {
                         }
                         Err(error) => {
                             let message = format!("Background sessions unavailable: {error:#}");
+                            self.state.set_agent_inventory_error(Some(message.clone()));
                             if self.background_error.as_ref() != Some(&message) {
                                 self.state.set_notice(message.clone());
                                 self.background_error = Some(message);
@@ -1270,7 +1282,7 @@ impl Runtime {
             let handle = self.wire.handle.as_ref();
             commands.push(Command::new(
                 "Choose agent",
-                "Open an ACP agent",
+                "Open an ACP agent (/agent)",
                 CommandOwner::BitRouter,
                 CommandTarget::ChooseAgent,
             ));

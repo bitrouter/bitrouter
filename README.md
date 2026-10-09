@@ -103,11 +103,12 @@ cargo install bitrouter
 
 `bro code` (aka. BitRouter Orchestrator) is BitRouter's CLI workspace for coding-agent conversations. On the
 first run, `bro` guides you through setup and opens the default agent. Use
-`bro code` directly when you want to choose an agent or resume a session.
+`bro code` directly for a BRO conversation or to reopen a durable Thread.
+Use `bro code <agent>` for an explicit ACP harness.
 
 ```bash
 bro                                  # first-run setup, then the default agent
-bro code                             # open a conversation and choose an agent
+bro code                             # BRO conversation; ← browses durable Threads
 bro code codex                       # start an interactive Codex ACP session
 bro code claude                      # start an interactive Claude ACP session
 bro run claude "summarize this repo" # run one headless agent turn

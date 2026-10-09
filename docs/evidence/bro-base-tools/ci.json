@@ -1,0 +1,32 @@
+{
+  "run_id": 36822925832,
+  "head_sha": "fa18a82ced09cd5f06fc39cddfeaeec759866cf5",
+  "url": "https://github.com/bitrouter/bitrouter/actions/runs/36822925832",
+  "conclusion": "success",
+  "windows_test_job": 110242200060,
+  "windows_log_sha256": "b6565bd90e2a04bd9c4a6d5d2edf255b5663cfca1d4261c3da22f0b57068e938",
+  "windows_result": {
+    "passed": 3487,
+    "skipped": 3,
+    "flaky": 0
+  },
+  "note": "All Windows tests passed on their first attempt, including the service verification fixture after its observation bound was adjusted to ten seconds.",
+  "jobs": {
+    "total": 22,
+    "successful": 22
+  },
+  "previous_result": {
+    "run_id": 36821538609,
+    "head_sha": "964addb5d846274bcd0fb7f9086ba57f33c7b02a",
+    "url": "https://github.com/bitrouter/bitrouter/actions/runs/36821538609",
+    "conclusion": "success",
+    "windows_result": {
+      "passed": 3487,
+      "skipped": 3,
+      "flaky": 1
+    },
+    "note": "All tool tests passed on their first attempt. The three-second service test wait elapsed, then passed on retry; a Windows-only ten-second observation bound follows."
+  },
+  "raw_archive": "archives/original-2026-10-01.tar.gz",
+  "evidence_scope": "Historical CI results at the named commits; not freshly verified by the documentation cleanup."
+}

@@ -2,6 +2,11 @@
 
 Status: **implemented and locally verified** · 2026-09-22
 
+The later standalone BRO integration conservatively holds admission while its
+native endpoint is resident. Automatic replacement is deferred until native
+admission, queue workers and recovery have an atomic handoff contract; explicit
+restart remains available. The original ACP/HTTP evidence below is historical.
+
 ## Decision
 
 When the installed `bro` binary needs capabilities the daemon serving its

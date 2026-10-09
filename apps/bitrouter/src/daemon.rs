@@ -1510,7 +1510,7 @@ pub async fn send_command(socket_path: &Path, command: &DaemonCommand) -> Result
 /// Unix transport: a `tokio::net::UnixListener` bound to the socket path,
 /// tightened to mode `0600`. The socket file is removed on teardown.
 #[cfg(unix)]
-mod transport {
+pub(crate) mod transport {
     use std::path::{Path, PathBuf};
 
     use anyhow::{Context, Result};
@@ -1644,7 +1644,7 @@ mod transport {
 /// and this crate is `#![forbid(unsafe_code)]`, so we rely on the default
 /// descriptor instead.
 #[cfg(windows)]
-mod transport {
+pub(crate) mod transport {
     use std::path::Path;
     use std::time::Duration;
 
@@ -2002,6 +2002,26 @@ pub async fn start_and_wait(
     timeout: std::time::Duration,
 ) -> Result<DaemonStartOutcome> {
     crate::paths::ensure_home_directory(source.home())?;
+    // Serialize local launchers across processes. Without this, two clients
+    // can both observe no socket, start two daemons, and race the same SQLite
+    // migrations before either control listener is available.
+    let lock_path = source.home().join("bitrouter.start.lock");
+    let startup_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("opening startup lock {}", lock_path.display()))?;
+    let _startup_lock = tokio::task::spawn_blocking(move || -> std::io::Result<std::fs::File> {
+        startup_lock.lock()?;
+        Ok(startup_lock)
+    })
+    .await??;
+    if let Some(socket) = socket
+        && let Some(info) = probe_status(socket).await?
+    {
+        return Ok(DaemonStartOutcome::Ready(info));
+    }
     let (mut child, log_size_before) = spawn_detached_serve(source, log_path)?;
 
     let deadline = std::time::Instant::now() + timeout;

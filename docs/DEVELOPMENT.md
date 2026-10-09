@@ -12,21 +12,27 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, staged AI executor integration, the ACP thin proxy (`acp` feature), config loading, the axum HTTP server, and the observability contract (`observe`) |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback; optional `sdk` retains legacy hooks |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
-| `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bro code [<agent>]`) — ACP transcript, multiline composer, temporary inspectors, and explicit permission choices |
+| `crates/bitrouter-orchestrator` | crate | Native model/tool loop, durable Thread/Turn facts and context, with instance-owned workers |
+| `crates/bitrouter-tui` | crate | Native-scrollback BRO and ACP Conversations, shared composer/writer and Agents navigation |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App` and owns the management commands |
 
 The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter_sdk::extension::ExtensionApi` inside `assemble::build_app_with_extensions`; the SDK also retains legacy `Plugin`/hook interfaces for host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
 
+For the native runtime module map, execution reading order and test layout, see
+the [orchestrator source guide](../crates/bitrouter-orchestrator/README.md).
+
 ### External interfaces
 
-Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from AI's three internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
+Clients reach BitRouter through its external **interfaces** — the ways *in*. These are distinct from AI's three internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
 
 | Interface                 | Where it lives                                                                                            | Entry point              |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bro serve`        |
 | **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
 | **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner, and Code session all consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve`; `bro run` |
-| **ACP (interactive)**     | `crates/bitrouter-tui/src/code.rs` owns conversation state and rendering; `apps/bitrouter/src/chat/code.rs` drives asynchronous effects and ACP turns, with injected services in `actions/code.rs` and the shared `SessionHost` in `acp_cli.rs`. | `bro code [<agent>]` |
+| **ACP (interactive)**     | `crates/bitrouter-tui/src/code.rs` owns conversation state and rendering; `apps/bitrouter/src/chat/code.rs` drives asynchronous effects and ACP turns, with injected services in `actions/code.rs` and the shared `SessionHost` in `acp_cli.rs`. | `bro code <agent>` |
+| **BRO native agent** | `bitrouter-orchestrator::service::ThreadService` owns one Thread/Turn execution path, durable context, FIFO/steering, owner/workspace fencing and bounded observation. App owns the database and transport adapters. Safe hot unload/reload and cold public queries share the same authority. | Bare `bro code` (`--thread-id`); `bro task run` (create/start client); local v15 native socket (including cold Thread directory); opt-in `/agent/v2` HTTP API |
+| **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,
@@ -97,7 +103,33 @@ over, and which runtime it has — so the pump stays in the app
 `bitrouter-tui` therefore depends on no async runtime at all, and
 `cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
 checked.
-| **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
+
+BRO native tools are `read`, `glob`, `grep`, `write`, `edit`, and `shell`.
+`read` dispatches known workspace paths to file lines or direct directory
+entries. The three inspection tools form the read-only profile. The server
+resolves one interpreter before a coding execution; model commands and
+verification share it. See [the six-tool contract](BRO_BASE_TOOLS_SPEC.md).
+
+The native BRO runtime has one `ThreadService` per serving instance. App-owned
+SQLite stores Thread/Turn facts, acceptance keys, public events and owner/version
+fences. Clients only project state; detaching does not cancel, approve or resume.
+Bounded tool workers, ordered exclusive effects, FIFO/steering, joined shutdown,
+workspace locks/markers and bounded startup discovery preserve execution barriers.
+Cold queries do not execute. Safe same-owner reload and explicit stopped-owner
+checkpoint recovery preserve identities and budgets without replaying completed
+effects; lost owners, unknown effects and uncertain accounting remain blocked.
+
+Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
+requirements, including root format 2 and local v15/HTTP v2. The
+[runtime acceptance index](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) separates local
+fixtures, historical provider/platform checks and remaining product gates.
+[Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and
+[six tools](BRO_BASE_TOOLS_SPEC.md) specialize that contract. Older phase ledgers
+are historical references, not competing descriptions of current behavior.
+Future [core/harness separation](BRO_AGENT_RUNTIME_HANDOFF.md) assigns live
+scheduling/checkpoint semantics to Core and durable storage/ACK authority to
+Harness; the standalone implementation does not prove that integration.
+Router metering and external ACP session ownership retain their own boundaries.
 
 The CLI is the **host** interface: it owns `main()` and mounts the other
 interfaces as subcommands. The SDK owns protocol interop such as the MCP
@@ -407,7 +439,7 @@ loopback exposure policy. It does not mount an MCP origin endpoint. See
 
 ## CLI Surface
 
-`bro <subcommand>` exposes lifecycle and reports plus four agent-facing entries: `launch <agent>` (native interface), `code [agent]` (BitRouter UI), `run <agent>` (headless turn), and `acp serve <agent>` (protocol-pure manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
+`bro <subcommand>` exposes lifecycle and reports plus agent-facing entries: `task run` (BRO headless), bare `code` (BRO interactive), `launch <agent>` (native interface), `code <agent>` (ACP UI), `run <agent>` (headless turn), and `acp serve <agent>` (protocol-pure manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
 
 ### Observability surface (`bro requests`)
 
@@ -506,3 +538,11 @@ activation and the acceptance ledger. The default host no longer links
 the matcher and rejects legacy `plugins.bitrouter-guardrails` configuration. See
 [GUARDRAILS_EXTENSION.md](GUARDRAILS_EXTENSION.md) for custom-host assembly,
 input-only scope, explicit migration blockers, and process-level verification.
+
+### Native harness resources
+
+`bitrouter-orchestrator::harness` owns direct MCP connections and local skills
+discovery. The app supplies daemon-owned transport configuration and global roots;
+active ThreadService Turns freeze inventories and execute MCP through existing
+durable approval/tool barriers. SDK gateway interop and routed provider generation
+retain their existing responsibilities. See [BRO harness resources](BRO_HARNESS_RESOURCES.md).

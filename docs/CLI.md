@@ -27,9 +27,179 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; foreground `run` streams NDJSON by default; `code`, `launch`, bare `agents`, and `agents attach` own the terminal; and `cloud api` streams the remote response body. `run --background` and `agents sessions|stop|remove` remain ordinary structured reports.
+> Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; foreground `run` and `task run` stream NDJSON; `code`, `launch`, bare `agents`, and `agents attach` own the terminal; and `cloud api` streams the remote response body. `run --background` and `agents sessions|stop|remove` remain ordinary structured reports.
 
-Per-provider credential commands are under `bro providers (login|logout)`; BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
+## BRO native coding conversations
+
+```console
+bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"
+bro task run "inspect this project" --model openai/gpt-5 --read-only
+bro code --model openai/gpt-5 --workspace /path/to/project
+bro code --thread-id THREAD_ID
+```
+
+`task run` starts or connects to the local `bro serve` process through its
+owner-restricted native socket. The client creates a Thread, starts one Turn,
+and waits for that Turn's result. Each call uses its own stable durable
+acceptance key. A lost reply is retried once with the original key and server
+instance; an unresolved outcome reports its identity for inspection.
+A known start rejection reports the created Thread ID; creating a Thread alone
+never executes a model or tool. There is no independent Task execution API.
+
+Standard output is NDJSON: `accepted` includes `thread_id` and `turn_id`,
+`snapshot` carries a Thread view, durable `event` records use Thread cursors,
+`live` carries bounded volatile output, and `terminal` includes status,
+verification, final answer, and cursor. Failed, cancelled, interrupted, or
+recovery-blocked Turns exit nonzero. This local headless client approves its
+own identified tool requests. `--check` supplies bounded workspace verification;
+without it verification is `not_requested`. `--read-only` forbids effectful
+tools and cannot be combined with `--check`. Explicit remote contexts fail
+without local fallback. `bro run <agent>` remains the separate ACP harness path.
+
+BRO coding Turns expose six tools: `read(path, offset?, limit?)`,
+`glob(pattern, path?, limit?)`, `grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)`,
+`write(path, content)`, `edit(path, edits[{oldText, newText}])`, and
+`shell(command, timeout?)`. Read-only Turns expose only `read`, `glob`, and `grep`.
+Unavailable tools and legacy `ls`, `find`, `bash`, and `powershell` names are
+rejected before approval or execution. File paths are relative to the workspace.
+
+`read` accepts UTF-8 files up to 2 MiB or one directory, including `path: "."`.
+One-based offsets count file lines or directory entries. Directory listings
+include hidden/ignored children and identify symlinks; complete pages fit in
+50 KiB and return the next offset when truncated. `glob` and `grep` respect
+project ignore rules, skip child symlinks, and return workspace-relative paths.
+Defaults are 500 directory entries, 1,000 glob results, and 100 grep matches;
+limits may be raised to 2,000. `write` creates parent directories and overwrites
+files. `edit` requires unique, nonoverlapping spans in the original file and
+preserves untouched text, BOM and line-ending style.
+
+Coding execution selects Bash then sh on Unix, or pwsh then powershell.exe on
+Windows, before model sampling. The declaration and shell result identify the
+selected executable/dialect; launch failure never retries another interpreter.
+Verification shares the Turn's selected executor. No supported interpreter
+fails coding admission; read-only execution needs none. Shell commands start in
+the workspace, default to 30 seconds, and allow at most 120 seconds. Workspace
+path checks are not an OS sandbox for commands. Read workers remain bounded;
+write, edit, shell and verification retain exclusive execution and durable
+intent/result commit boundaries. Historical names/IDs/results remain unchanged;
+unsettled legacy work never executes through aliases or reuses old approvals.
+
+The local native protocol is **v15**, bound to the negotiated server instance.
+Older daemons fail the handshake before submission. `command_id` correlates
+transport replies; durable `idempotency_key` identifies accepted operations.
+Every Thread operation checks its authenticated caller, stored permission
+profile, current workspace grant, and instance. Local and HTTP callers have
+distinct ownership. Knowing a Thread ID does not authorize access.
+
+Bare `bro code` keeps one Thread across prompts and inherits settled context.
+Enter starts a Turn when idle, and enqueues FIFO input while busy or paused.
+Ctrl-Enter explicitly steers the active Turn; Ctrl-R explicitly resumes a
+paused queue. `y`/`n` answers a pending identified approval only with an empty
+composer. Ctrl-C cancels the identified active Turn; Ctrl-D detaches. The draft
+clears only after acceptance. Same-instance reconnect uses the Thread cursor
+and preserves the in-process draft; instance loss never resubmits input.
+`--thread-id` reattaches stored configuration and permissions; `--task-id` has
+been removed. No draft persistence across process exit is provided.
+
+Conversation and Agents use the terminal's normal buffer and native scrollback.
+An empty composer permits plain Left to open the **BRO conversation directory**;
+a separate model editor is used when no model was supplied, retaining the draft.
+The directory shows authorized durable Threads, their current Turn state, queue,
+workspace, model and permission profile. It does not list ACP supervisor runs.
+Up/Down selects; Tab filters; `/` searches the current page; Enter previews;
+`o` in the preview explicitly opens the selected conversation; Esc returns.
+`r` refreshes directory membership; `n`/`p` change pages when available. A page
+scans at most 16 roots; unauthorized roots are omitted, so pages may be empty.
+The directory cutoff fixes membership, while status is refreshed every two seconds.
+Listing does not install model context, workers or observation subscriptions.
+Opening restores committed public history and subscribes to that Thread; it does
+not start a Turn, resume a queue, answer an approval, or replay tools. Pending
+acceptance must be resolved before switching. Recovery-blocked Threads remain
+inspectable without granting continuation. Client drafts are process-local and
+are not persisted on detach. Below 40×16, submission and approvals are disabled.
+
+The same Thread service can expose an optional HTTP listener:
+
+```yaml
+agent_api:
+  enabled: true
+  listen: 127.0.0.1:4359
+  token_env: BRO_AGENT_API_TOKEN
+  workspaces: [/absolute/server/project]
+```
+
+The token environment value must contain at least 24 bytes. The listener binds
+only to loopback and authorizes exact canonical workspaces. Every `/agent/v2`
+request requires `Authorization: Bearer <token>`. Read `/agent/v2/capabilities`
+first and send its `runtime.server_instance_id` as `X-Bro-Server-Instance` on
+all other operations. Every mutation requires `Idempotency-Key`.
+
+| Route under `/agent/v2` | Body or result |
+| --- | --- |
+| `POST /threads` | `workspace`, `model`, optional `effort`, `read_only`, `verification_command`; returns Thread |
+| `GET /threads/{id}` | Thread view, including latest Turn and queue |
+| `POST /threads/{id}/turns` | `prompt`, `mode: "start"` or `"enqueue"`; returns receipt |
+| `GET /threads/{id}/turns/{turn_id}` | Targeted stored Turn snapshot |
+| `POST /threads/{id}/turns/{turn_id}/cancel` | `mode: "active"` or `"queued"`; explicit scope remains stable on retry |
+| `POST /threads/{id}/steer` | `expected_turn_id`, `text` |
+| `POST /threads/{id}/inputs` | `turn_id`, `request_id`, `approved` |
+| `POST /threads/{id}/resume` | Explicit queue resumption; no body |
+| `GET /threads/{id}/history?after=N&cutoff=C&limit=L` | Bounded durable public history; cutoff and limit optional |
+| `GET /threads/{id}/observe?after=N` | SSE Thread snapshot/catchup, durable events and volatile live output |
+
+The old `/agent/v1/tasks` routes are removed. The listener is disabled by
+default and does not inherit inference `server.skip_auth` or read-only control
+credentials. Slow subscribers or unavailable hot cursors get a fresh snapshot
+with `resynchronized: true`. Catchup precedes the snapshot cutoff; do not apply
+it again to that snapshot. Live deltas do not advance durable cursors or enter
+settled model context. Complete assistant/tool results are projected from the
+same transaction that saves their canonical execution facts.
+
+The database retains Thread identities, context, history and acceptance keys.
+Idle or safely settled empty paused Threads can leave the hot cache. Pressure
+reclaims the oldest eligible hot Thread; active workers, queues, approvals,
+subscribers, commit references, recovery blockers and workspace leases prevent
+unload. Cold public reads do not install SDK context or run work. Clean
+same-instance reload preserves cursor/configuration/context without journal
+writes. Cross-instance inspection remains separate from explicit safe recovery;
+loading or reconnecting never resumes a stored queue. No operator recovery
+command is published.
+
+Defaults: 8 active Turns, 32 hot Threads, 32 queued inputs per Thread, 2 MiB
+context per Thread / 64 MiB hot context, and 32 settled Turn snapshots / 64 MiB
+for up to 30 minutes. Thread observation caches retain 256 events / 2 MiB,
+with 8 subscribers and 32 queued events per subscriber. Live snapshots retain
+at most 32 KiB. Evicting a snapshot or hot Thread does not remove durable keys
+or history. Local connections and HTTP handlers each admit at most 64 requests.
+All-ineligible capacity returns `overloaded`.
+
+Read batches use at most 4 workers per Turn and 16 globally. Write/edit/shell
+and verification preserve ordered workspace barriers. Requests, full responses,
+execution intents/results and settlement commit before dependent advancement.
+Verification asks for its own identified approval; denial reports `denied`.
+Cancellation joins started work before clean release. Storage failures and
+unknown effects retain workspace exclusion as `recovery_required`.
+
+Startup claims one database owner and completes bounded cold discovery before
+admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
+Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
+records per Thread. Capabilities expose aggregate progress, not root identities
+or prompts. New roots use runtime format 2. Migration adds metadata with
+**default 0** for old roots; unsupported formats fail before payload decoding
+or execution, with `recovery_required` / `unsupported_runtime_format`.
+They are not converted or marked safe.
+
+Normal shutdown joins execution and commits release/stopped evidence. An active
+lost owner, unsupported root, or unconfirmed effect remains blocked; PID loss
+and a new instance do not prove safe termination. Workspace coordination uses
+stable `.bro-workspace-<sha256(canonical UTF-8 path)>.lock` / `.json` sidecars
+in the writable parent, including across different databases. An unreleased
+marker remains blocked after process loss. Never delete owner records, database
+roots or markers to bypass this state. This cooperating runtime exclusion is
+not an OS sandbox or a power-loss guarantee.
+
+Per-provider credential commands are under `bro providers (login|logout)`;
+BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
 
 ## Logging (`RUST_LOG`)
 
@@ -237,6 +407,11 @@ and in-flight HTTP responses defer the handoff. A legacy daemon cannot prove
 it is idle; finish its work and run `bro restart` explicitly.
 Foreground `bro serve` remains under its external supervisor; the CLI does not
 take it over automatically.
+
+The standalone BRO runtime holds a daemon admission for its endpoint lifetime.
+Until native requests, queue runners and recovery participate in an atomic
+handoff, even an idle BRO daemon defers automatic replacement. Finish its work
+and use the explicit `bro restart` when changing binaries.
 
 `bro update` attempts the same safe handoff after a self-managed installation.
 Package-manager installs still delegate the binary update; the next
@@ -471,6 +646,10 @@ bro route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 
 Resolves a model or router selector using the running daemon when reachable, otherwise the local configuration. Fixed routes include the provider fallback chain. A policy-bound router reports its binding and routable candidates with `policy_decision_executed: false`: the preview does not execute its dynamic policy or predict the selected model.
 
+The config fallback probes `auto_discover: true` providers with no declared
+models, using the same bounded discovery as `bro models`. A model shown by the
+config listing can therefore be previewed by the config route check.
+
 `--prompt` supplies request text for the existing static policy-table preview on the local config path. It does not execute a router's dynamic policy; live previews do not use it.
 
 `bro route --json` returns the shared route action report:
@@ -582,7 +761,7 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 `bro mcp check [server] [--config PATH]` connects to one configured upstream
 MCP server, or all of them, and reports transport, reachability, latency,
 negotiated tools capability, and advertised tool names. BitRouter OSS is the
-MCP client/gateway on this path; it does not expose a first-party origin MCP
+MCP client on this path; it does not expose a first-party origin MCP
 server.
 
 ---
@@ -777,42 +956,50 @@ for migration. BitRouter keeps no session records.
 ### `bro code` — coding conversation
 
 ```bash
-bro code [-c <path>]
+bro code [--model <id>] [--thread-id <id>] [--check <command>|--read-only] [--workspace <path>] [-c <path>]
 bro code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
 bro code --socket <path>
 bro --context <name> code
 ```
 
-Bare local `code` opens an empty conversation and a searchable **Choose agent**
-picker. Explicit `code <agent>` connects directly. Dismissing a picker restores
-the draft and reading position. A draft written before connecting remains a
-draft after agent selection and needs an explicit send.
+Bare local `code` opens a native Thread conversation. It chooses a model from
+`--model` or `chat.model`, or asks in a separate model editor. Subsequent prompts reuse that
+Thread's settled context. Enter starts or enqueues; Ctrl-Enter steers; Ctrl-R
+resumes a paused queue. With an empty composer, `y`/`n` answers an identified
+approval. Ctrl-C cancels the active Turn and Ctrl-D detaches. `--thread-id`
+reattaches stored configuration without replaying effects. The footer shows
+Thread state and the server queue; verification is shown in wider terminals.
+`--socket` alone keeps the read-only operations view; native flags select an
+already-running local native server. Explicit remote contexts keep the
+operations view. See the native section above for recovery and draft behavior.
 
-The conversation remains in the normal terminal buffer and native scrollback.
-The multiline composer, **agent, route, activity, and attributed session
-cost**, plus a one- or two-line background-agent strip stay in the bounded
-bottom control deck. Background output is never appended to the foreground
-document plane. `/` opens the searchable command launcher and temporary
-inspectors; there are no
-permanent page tabs.
+The rest of this section describes explicit ACP `bro code <agent>` sessions.
+Those sessions preserve harness-native IDs and history.
 
-Every local Code controller is daemon-supervised from creation. Foreground and
-background are presentation states, not different process owners. The current
-foreground run therefore participates in canonical worktree claims. Clean
-Ctrl-C/Ctrl-D from Ready with an empty draft stops it; **Detach current session
-and exit** leaves it running as a background row; terminal loss detaches after
-lease expiry. An active turn is cancelled by Ctrl-C/Escape, while detach is the
-explicit way to leave it running.
+Conversation stays in the normal buffer and terminal-native scrollback. The
+composer has a distinct band and a compact footer with confirmed session facts
+and cost when available. There is no permanent background strip. `/` opens the
+searchable command launcher and existing explicit inspectors.
 
-Choose **Background agents** from `/` to expand or collapse the command center
-inside the normal-buffer dock. The whole
-expanded deck is capped at 40% of physical rows and replaces the editable
-foreground composer with a one-line draft-preserved summary. Selection, peek,
-target-bound background replies, bounded permission choices, cancel,
-mark-reviewed, and stop stay inside this surface. Retained history, search,
-long output/diffs, and complex permission review open an explicit
-alternate-screen inspector. Detach returns to the same row without replaying
-background history into native scrollback.
+With an empty composer and no pending permission/modal, plain Left (`← agents`)
+opens read-only **Agents** in the same normal-buffer dock, capped at 40% of
+terminal height. Up/Down selects, Tab/Shift-Tab filters, `/` searches, Enter
+previews supplied metadata, and Esc returns. Drafts, queues and focus are
+retained. Incoming foreground text is accumulated while this menu is open and
+appears once on return. Navigation never attaches, submits, answers permissions
+or stops another run. No task operation has been added to this menu.
+
+Every local Code controller remains daemon-supervised from creation. Foreground
+and background are presentation states, not different process owners. Clean
+Ctrl-C/Ctrl-D from Ready with an empty draft retains its explicit exit policy;
+**Detach current session and exit** leaves it running. An active turn is
+cancelled by Ctrl-C/Escape in Conversation; menu Esc only returns.
+
+Existing **Background run controls** remain an explicit command-launcher action
+for the legacy control surface. Replies, attachment, lease takeover and stop
+continue through their existing checks; complex retained-history/permission
+inspectors may use alternate screen. These controls are separate from the new
+read-only menu. Standalone `bro agents` commands are unchanged.
 
 Named remote contexts and explicit `--socket` operation targets open an
 operations-only status inspector. `/` exposes status, models, host requests,
@@ -1671,19 +1858,16 @@ Prints the skills under the project root, or under `~/.claude/` with `-g`. Each
 row carries the skill's `name`, `description`, its directory (`dir`) and its
 `skill_md`, plus `valid` and — when it is not — a `problem` saying why.
 
-Discovery covers all three conventional layouts of the chosen root:
-`<root>/SKILL.md`, `<root>/skills/<name>/`, and `<root>/.claude/skills/<name>/`.
-It used to read only the last, so a `./skills/foo` skill was invisible here while
-the agent could see it.
+Discovery covers `<root>/SKILL.md` and immediate skill directories under
+`<root>/`, `skills/`, `.claude/skills/`, `.agents/skills/` and `.codex/skills/`.
+Symlinks beneath the root are skipped; files over 256 KiB are reported as invalid.
+Malformed frontmatter, mismatched directory/name and invalid name/description
+are reported with `valid: false`. Listing does not activate skills or run scripts.
 
-A skill whose frontmatter does not parse, whose directory name does not match
-`frontmatter.name`, or whose name/description falls outside the Agent Skills
-bounds is listed with `valid: false` and the reason. It is *not* served over
-SEP-2640's `skills/list`, which requires an entry a host can verify — so this
-listing is where you find out why a skill you wrote is not loading.
-
-This is the same report the `skills_search` MCP tool returns, so
-`--json` here and that tool's structured content are the same bytes.
+The parser is shared with native BRO runtime discovery. Active native Turns also
+use daemon-selected global roots and retain versioned metadata; see
+[BRO harness resources](BRO_HARNESS_RESOURCES.md). There is no local origin
+`skills_search` or `skills/list` endpoint.
 
 ### `bro skills init <name>`
 
@@ -1968,3 +2152,13 @@ tracing provide content-free diagnostics; absence of telemetry is not proof that
 a check did not run. Existing `bro requests` remains the settled cost/usage
 interface. See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the execution
 and coverage contract.
+
+### Native BRO resource configuration
+
+Native coding Turns use `mcp_servers` from the daemon configuration through the
+orchestrator's direct MCP client. `mcp check` uses the same connection/discovery
+implementation and honors `mcp.upstream_protocol`. MCP calls follow the existing
+identified approval policy; `--read-only` does not connect to MCP. Configuration
+is fixed at daemon startup: restart to replace native MCP transport/credentials.
+Skills discovery supplies metadata and versions without prompt injection.
+See [BRO harness resources](BRO_HARNESS_RESOURCES.md).
