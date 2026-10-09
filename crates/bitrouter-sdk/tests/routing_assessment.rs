@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
+use bitrouter_ai::types::{Message, Prompt, Role};
 use bitrouter_sdk::decision_model::types::{Answer, DecisionResponse, DecisionUsage, Question};
-use bitrouter_sdk::language_model::{Message, Prompt, Role};
 use bitrouter_sdk::routing::{assessment, input::Input, signals::NextStepRole};
 
 fn prompt(messages: Vec<Message>) -> Prompt {

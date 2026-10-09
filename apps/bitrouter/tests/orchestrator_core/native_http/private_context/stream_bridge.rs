@@ -7,6 +7,7 @@ use super::*;
 #[path = "stream_bridge/failures.rs"]
 mod failures;
 use bitrouter::continuation::{ContinuationKeySource, native_context::PrivateContextPolicy};
+use bitrouter_ai::types::{ApiProtocol, FinishReason};
 use bitrouter_sdk::App;
 use bitrouter_sdk::language_model::executor::HttpExecutor;
 use bitrouter_sdk::language_model::native::InputTokenCounting;
@@ -16,7 +17,7 @@ use bitrouter_sdk::language_model::native_continuation::{
     REQUIRED_STATE_FIELD,
 };
 use bitrouter_sdk::language_model::routing::StaticRoutingTable;
-use bitrouter_sdk::language_model::types::{ApiProtocol, FinishReason, RoutingTarget};
+use bitrouter_sdk::language_model::types::RoutingTarget;
 
 fn bridge_prompt() -> Prompt {
     let mut value = prompt();
@@ -61,6 +62,7 @@ fn configured_app(
             api_base: upstream.into(),
             api_key: key.into(),
             api_protocol: ApiProtocol::Responses,
+            chat_google_extensions: false,
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
@@ -149,26 +151,27 @@ async fn native_stream_bridge_preserves_private_order_and_stored_suffix_count_af
         let first = app(home.path(), &upstream, "fixture-key", true)?
             .execute_native_controlled(bridge_prompt(), owner(), capture.clone())
             .await?;
-        assert_eq!(first.result.content.len(), 3);
+        assert_eq!(generation(&first.result)?.content.len(), 3);
         assert!(
-            matches!(&first.result.content[0], Content::Reasoning { text, .. } if text == "thought before")
+            matches!(&generation(&first.result)?.content[0], Content::Reasoning { text, .. } if text == "thought before")
         );
-        assert!(matches!(&first.result.content[1], Content::Text { text, .. } if text == "answer"));
         assert!(
-            matches!(&first.result.content[2], Content::Reasoning { text, .. } if text == "thought after")
+            matches!(&generation(&first.result)?.content[1], Content::Text { text, .. } if text == "answer")
+        );
+        assert!(
+            matches!(&generation(&first.result)?.content[2], Content::Reasoning { text, .. } if text == "thought after")
         );
         assert_eq!(
-            metadata(&first.result.content[0])["openai"]["reasoningItem"],
+            serde_json::to_value(generation(&first.result)?.content[0].clone())?["native"]["item"],
             reasoning("rs_first", "thought before")
         );
         assert_eq!(
-            metadata(&first.result.content[2])["openai"]["reasoningItem"],
+            serde_json::to_value(generation(&first.result)?.content[2].clone())?["native"]["item"],
             reasoning("rs_second", "thought after")
         );
-        assert!(first.result.response_id.is_none());
+        assert!(generation(&first.result)?.response_id.is_none());
         assert_eq!(
-            first
-                .result
+            generation(&first.result)?
                 .usage
                 .as_ref()
                 .context("usage")?
@@ -191,7 +194,7 @@ async fn native_stream_bridge_preserves_private_order_and_stored_suffix_count_af
             );
             assert!(!serde_json::to_string(&reports[0])?.contains("resp_stream_private"));
         }
-        let next = bridge_followup(first.result.content);
+        let next = bridge_followup(generation(&first.result)?.content);
         app(home.path(), &upstream, "fixture-key", true)?
             .execute_native_controlled(next.clone(), owner(), capture.clone())
             .await?;
@@ -263,24 +266,26 @@ async fn native_stream_bridge_retains_unknown_state_and_incomplete_usage() -> Re
         let first = app
             .execute_native_controlled(bridge_prompt(), owner(), capture.clone())
             .await?;
-        assert_eq!(first.result.finish_reason, Some(FinishReason::Length));
         assert_eq!(
-            first
-                .result
+            generation(&first.result)?.finish_reason,
+            Some(FinishReason::Length)
+        );
+        assert_eq!(
+            generation(&first.result)?
                 .usage
                 .as_ref()
                 .context("usage")?
                 .completion_tokens,
             6
         );
-        assert!(first.result.content.iter().any(|part| {
+        assert!(generation(&first.result)?.content.iter().any(|part| {
             metadata(part)
                 .get(ORIGIN_NAMESPACE)
                 .is_some_and(|fields| fields.get(REQUIRED_STATE_FIELD).is_some())
         }));
         let next = app
             .execute_native_controlled(
-                bridge_followup(first.result.content),
+                bridge_followup(generation(&first.result)?.content),
                 owner(),
                 capture.clone(),
             )
@@ -361,10 +366,14 @@ async fn native_stream_bridge_outbound_no_store_and_missing_terminal_output_rema
             .execute_native_controlled(input.clone(), owner(), capture.clone())
             .await?;
         assert!(
-            matches!(&result.result.content[0], Content::Text { text, .. } if text == "answer")
+            matches!(&generation(&result.result)?.content[0], Content::Text { text, .. } if text == "answer")
         );
         assert_eq!(
-            result.result.usage.as_ref().context("usage")?.prompt_tokens,
+            generation(&result.result)?
+                .usage
+                .as_ref()
+                .context("usage")?
+                .prompt_tokens,
             20
         );
         assert_eq!(
@@ -378,11 +387,11 @@ async fn native_stream_bridge_outbound_no_store_and_missing_terminal_output_rema
             }
         );
         assert!(
-            metadata(&result.result.content[0])
+            metadata(&generation(&result.result)?.content[0])
                 .get(ORIGIN_NAMESPACE)
                 .is_none_or(|fields| fields.get(CONTINUATION_FIELD).is_none())
         );
-        let has_required = result.result.content.iter().any(|part| {
+        let has_required = generation(&result.result)?.content.iter().any(|part| {
             metadata(part)
                 .get(ORIGIN_NAMESPACE)
                 .is_some_and(|fields| fields.get(REQUIRED_STATE_FIELD).is_some())
@@ -390,7 +399,7 @@ async fn native_stream_bridge_outbound_no_store_and_missing_terminal_output_rema
         assert_eq!(has_required, missing_output);
         input.messages.push(Message {
             role: Role::Assistant,
-            content: result.result.content,
+            content: generation(&result.result)?.content,
         });
         input.messages.push(Message::text(Role::User, "continue"));
         let next = app.execute_native_controlled(input, owner(), capture).await;
@@ -538,8 +547,7 @@ async fn native_stream_bridge_cannot_certify_delta_only_private_state() -> Resul
             .execute_native_controlled(bridge_prompt(), owner(), capture.clone())
             .await?;
         assert_eq!(
-            first
-                .result
+            generation(&first.result)?
                 .usage
                 .as_ref()
                 .context("usage")?
@@ -547,7 +555,7 @@ async fn native_stream_bridge_cannot_certify_delta_only_private_state() -> Resul
             6
         );
         assert!(
-            matches!(&first.result.content[0], Content::Reasoning { text, .. } if text == "private summary")
+            matches!(&generation(&first.result)?.content[0], Content::Reasoning { text, .. } if text == "private summary")
         );
         assert_eq!(
             capture.reports.lock().await[0].continuation.output,
@@ -559,7 +567,7 @@ async fn native_stream_bridge_cannot_certify_delta_only_private_state() -> Resul
             capture.reports.lock().await[0].private_context.output,
             PrivateContextEvidence::Unverified { .. }
         ));
-        for part in &first.result.content {
+        for part in &generation(&first.result)?.content {
             assert!(
                 !metadata(part)
                     .get(ORIGIN_NAMESPACE)
@@ -568,7 +576,11 @@ async fn native_stream_bridge_cannot_certify_delta_only_private_state() -> Resul
             );
         }
         let next = app
-            .execute_native_controlled(bridge_followup(first.result.content), owner(), capture)
+            .execute_native_controlled(
+                bridge_followup(generation(&first.result)?.content),
+                owner(),
+                capture,
+            )
             .await;
         assert!(next.is_err());
         assert_eq!(

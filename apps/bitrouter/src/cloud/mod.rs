@@ -7,15 +7,16 @@
 //!   zero-config `providers:` map when the user has signed in via
 //!   `bro cloud login` (an `account-credentials.json` file is present
 //!   at the default path). The env-var path (`$BITROUTER_API_KEY`) is
-//!   already covered by [`bitrouter_providers::zero_config`].
+//!   already covered by [`crate::providers::apply::zero_config`].
 //! - [`register_if_configured`] — register the hosted provider applier.
 //!
-//! These are kept here rather than inside `bitrouter-providers` so that
-//! the providers crate stays focused on reusable hosted authentication.
+//! The account module owns product persistence/settings and assembles the AI
+//! hosted session shared by model, Cloud management and telemetry consumers.
 //!
 //! The [`cli`] sub-module owns the `bro cloud` subcommand surface
 //! — typed wrappers around the application-owned management client.
 
+pub mod account;
 pub mod api;
 pub mod api_client;
 pub mod auth;
@@ -25,12 +26,13 @@ pub mod settlement;
 
 use std::sync::Arc;
 
+use crate::cloud::account::credentials::default_credentials_path;
+use crate::cloud::account::manager::CredentialManager;
 use anyhow::{Context, Result};
-use bitrouter_providers::hosted::account::credentials::default_credentials_path;
-use bitrouter_providers::hosted::account::manager::CredentialManager;
-use bitrouter_providers::hosted::applier::{BitrouterAuthApplier, PROVIDER_ID};
+use bitrouter_ai::auth::AuthAppliers;
+use bitrouter_ai::providers::hosted::PROVIDER_ID;
+use bitrouter_ai::providers::hosted::applier::BitrouterAuthApplier;
 use bitrouter_sdk::config::{Config, ProviderConfig};
-use bitrouter_sdk::language_model::auth::AuthAppliers;
 use bitrouter_telemetry::otel::TelemetryBearer;
 
 const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
@@ -40,7 +42,7 @@ const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
 /// has run `bro cloud login` (i.e. the credentials file exists at the
 /// default path) and the entry is not already present.
 ///
-/// No-op when the credentials file is absent — `bitrouter_providers::zero_config`
+/// No-op when the credentials file is absent — `crate::providers::apply::zero_config`
 /// already handles the `$BITROUTER_API_KEY` env-var path. Together the two
 /// paths give a signed-in user the cloud provider on every fresh
 /// `bro serve` regardless of which credential source they chose.
@@ -127,7 +129,13 @@ pub fn register_if_configured(
     if !config.providers.contains_key(PROVIDER_ID) {
         return Ok(());
     }
-    appliers.register(PROVIDER_ID, Arc::new(BitrouterAuthApplier::new(manager)));
+    appliers.register(
+        PROVIDER_ID,
+        Arc::new(BitrouterAuthApplier::new(
+            manager.session().clone(),
+            onboarding_hint(),
+        )),
+    );
     Ok(())
 }
 
@@ -160,6 +168,7 @@ impl std::fmt::Debug for CloudBearer {
 impl TelemetryBearer for CloudBearer {
     async fn bearer(&self) -> Option<String> {
         self.manager
+            .session()
             .resolve_bearer(None, Some(&self.expected_origin))
             .await
             .map(|credential| credential.secret().to_owned())
@@ -217,6 +226,7 @@ pub async fn cloud_bearer_for_base_url_with_manager(
     target_base_url: &str,
 ) -> Option<String> {
     manager
+        .session()
         .resolve_bearer(None, Some(target_base_url))
         .await
         .map(|credential| credential.secret().to_owned())
@@ -229,20 +239,28 @@ pub async fn cloud_bearer_for_base_url_with_manager(
 pub async fn cloud_api_key_for_base_url(target_base_url: &str) -> Option<String> {
     let manager = default_manager().ok()?;
     manager
+        .session()
         .resolve_api_key(None, Some(target_base_url))
         .await
         .map(|credential| credential.secret().to_owned())
         .ok()
 }
 
+fn onboarding_hint() -> String {
+    format!(
+        "no BitRouter Cloud credential — run `{} cloud login` or set BITROUTER_API_KEY=brk_…",
+        bitrouter_sdk::invocation::name()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_providers::hosted::account::credentials::{Credentials, StoredCredential};
-    use bitrouter_providers::hosted::account::manager::CredentialManager;
-    use bitrouter_providers::hosted::applier::BitrouterAuthApplier;
-    use bitrouter_sdk::language_model::AuthApplier;
-    use bitrouter_sdk::language_model::types::{ApiProtocol, RoutingTarget};
+    use crate::cloud::account::manager::CredentialManager;
+    use bitrouter_ai::auth::AuthApplier;
+    use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+    use bitrouter_ai::types::ApiProtocol;
+    use bitrouter_sdk::language_model::types::RoutingTarget;
     use chrono::{Duration, Utc};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path as wm_path};
@@ -260,7 +278,7 @@ mod tests {
 
     fn target_for_origin(origin: &str) -> RoutingTarget {
         RoutingTarget {
-            provider_name: bitrouter_providers::hosted::applier::PROVIDER_ID.to_owned(),
+            provider_name: bitrouter_ai::providers::hosted::PROVIDER_ID.to_owned(),
             service_id: "gpt-4o".to_owned(),
             api_base: origin.to_owned(),
             api_key: String::new(),
@@ -268,6 +286,7 @@ mod tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             model_constraints: Default::default(),
             account_label: None,
@@ -279,7 +298,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_manager_single_flights_oauth_refresh_for_auth_and_telemetry()
+    async fn configured_inference_key_bypasses_saved_cloud_credentials() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        for credential in [
+            Some(StoredCredential::api_key(
+                "brk_saved.secret".to_owned(),
+                server.uri(),
+            )),
+            Some(StoredCredential::from(Credentials {
+                access_token: "expired-access".to_owned(),
+                refresh_token: Some("saved-refresh".to_owned()),
+                expires_at: Utc::now() - Duration::hours(1),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".to_owned(),
+                scope: "inference:invoke".to_owned(),
+                client_id: "bitrouter-cli".to_owned(),
+                authorization_server: server.uri(),
+                namespace_id: Some("saved-namespace".to_owned()),
+                subject: None,
+            })),
+            None,
+        ] {
+            let (_directory, path) = fresh_tmp_creds_path("configured-key")?;
+            let manager = Arc::new(CredentialManager::with_client(
+                path.clone(),
+                reqwest::Client::new(),
+            ));
+            if let Some(credential) = credential {
+                manager.save(credential).await?;
+            } else {
+                std::fs::write(&path, "corrupt credentials")?;
+            }
+            let saved = std::fs::read(&path)?;
+            let applier = BitrouterAuthApplier::new(manager.session().clone(), onboarding_hint());
+            let mut target = target_for_origin(&server.uri());
+            // Configured and environment keys arrive here without a per-request override.
+            target.api_key = "brk_configured.secret".to_owned();
+            let request = reqwest::Client::new().post(server.uri()).build()?;
+            let applied = applier.apply(request, &target.model_target()).await?;
+            assert_eq!(
+                applied.headers()[reqwest::header::AUTHORIZATION],
+                "Bearer brk_configured.secret"
+            );
+            assert_eq!(std::fs::read(&path)?, saved);
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("wiremock did not record requests"))?
+                .is_empty(),
+            "configured inference keys must not trigger stored OAuth discovery or refresh"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_manager_single_flights_refresh_for_model_management_and_telemetry()
     -> anyhow::Result<()> {
         let server = MockServer::start().await;
         let origin = server.uri();
@@ -312,8 +387,8 @@ mod tests {
         ));
         manager
             .save(
-                bitrouter_providers::hosted::account::credentials::StoredCredential::from(
-                    bitrouter_providers::hosted::account::credentials::Credentials {
+                bitrouter_ai::providers::hosted::credentials::StoredCredential::from(
+                    bitrouter_ai::providers::hosted::credentials::Credentials {
                         access_token: "stale-access".to_owned(),
                         refresh_token: Some("original-refresh".to_owned()),
                         expires_at: Utc::now() + Duration::seconds(10),
@@ -329,19 +404,36 @@ mod tests {
             )
             .await?;
 
-        let applier = BitrouterAuthApplier::new(Arc::clone(&manager));
+        Mock::given(method("GET"))
+            .and(wm_path("/v1/namespaces/ns-test/keys"))
+            .and(wiremock::matchers::header(
+                "authorization",
+                "Bearer rotated-access",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let management = management::ManagementClient::from_manager(Arc::clone(&manager)).await?;
+        let applier = BitrouterAuthApplier::new(manager.session().clone(), onboarding_hint());
         let telemetry = CloudBearer {
             manager: Arc::clone(&manager),
             expected_origin: origin.clone(),
         };
         let request = reqwest::Client::new().post(&origin).build()?;
         let target = target_for_origin(&origin);
-        let (applied, bearer) = tokio::join!(applier.apply(request, &target), telemetry.bearer(),);
+        let auth_target = target.model_target();
+        let (applied, bearer, keys) = tokio::join!(
+            applier.apply(request, &auth_target),
+            telemetry.bearer(),
+            management.list_keys(),
+        );
         assert_eq!(
             applied?.headers()[reqwest::header::AUTHORIZATION],
             "Bearer rotated-access"
         );
         assert_eq!(bearer.as_deref(), Some("rotated-access"));
+        assert!(keys?.data.is_empty());
         let current = manager
             .current()
             .await?
@@ -539,6 +631,7 @@ mod tests {
             .await?;
         assert!(
             oauth
+                .session()
                 .resolve_api_key(None, Some("https://api.bitrouter.ai"))
                 .await
                 .is_err()
@@ -555,6 +648,7 @@ mod tests {
             ))
             .await?;
         let resolved = api_key
+            .session()
             .resolve_api_key(None, Some("https://api.bitrouter.ai/v1"))
             .await?;
         assert_eq!(resolved.secret(), "brk_gateway.secret");

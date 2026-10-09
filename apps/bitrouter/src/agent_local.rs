@@ -4,11 +4,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_orchestrator::agent::AgentConfig;
 use bitrouter_orchestrator::service::{ErrorCode, RuntimeCapabilities, ThreadService};
 use bitrouter_orchestrator::turn::TurnSnapshot;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;

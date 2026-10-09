@@ -439,7 +439,7 @@ This is not a restriction on the management story — it is how the management
 story gets to be good. `bro providers login <id>` already **is** the
 credential editor, with per-provider methods auto-derived from the catalog
 (Claude Code session adoption, ChatGPT PKCE, GitHub device flow, API-key paste),
-writing to `bitrouter_providers::oauth::credential_store::Credential` — **not**
+writing to `bitrouter_ai::auth::credentials::Credential` — **not**
 to `bitrouter.yaml`. `providers logout` exists alongside it.
 
 So v2's providers view gets `l`/`L` and a full credential manager with **zero

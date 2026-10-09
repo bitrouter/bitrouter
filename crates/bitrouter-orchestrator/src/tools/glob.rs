@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use bitrouter_sdk::language_model::ToolResultOutput;
+use bitrouter_ai::types::ToolResultOutput;
 use globset::Glob;
 use tokio_util::sync::CancellationToken;
 

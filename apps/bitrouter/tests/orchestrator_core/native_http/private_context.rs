@@ -9,10 +9,10 @@ use super::*;
 mod continuation;
 #[path = "private_context/stream_bridge.rs"]
 mod stream_bridge;
+use bitrouter_ai::types::{Content, ToolResultOutput};
 use bitrouter_sdk::language_model::native_context::{
     ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextEvidence, is_private, metadata_mut,
 };
-use bitrouter_sdk::language_model::types::{Content, ToolResultOutput};
 
 struct PrivateFixture {
     app: bitrouter::assemble::Assembled,
@@ -52,19 +52,7 @@ impl PrivateFixture {
                 }),
             )
         } else {
-            (
-                "/models/served:generateContent",
-                json!({
-                    "candidates":[{"content":{"role":"model", "parts":[
-                        {"text":"readable thought", "thought":true, "thoughtSignature":"signed-fixture"},
-                        {"functionCall":{"name":"inspect", "args":{"path":"fixture"}}, "thoughtSignature":"tool-signature-fixture"},
-                    {"text":"final text", "thoughtSignature":"text-signature-fixture"},
-                    {"inlineData":{"mimeType":"image/png", "data":"AQID"}, "thought":true, "thoughtSignature":"inline-signature-fixture"},
-                    {"fileData":{"mimeType":"image/png", "fileUri":"https://example.invalid/fixture.png"}, "thought":true, "thoughtSignature":"file-signature-fixture"}
-                    ]}, "finishReason":"STOP"}],
-                    "usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5,"totalTokenCount":17}
-                }),
-            )
+            anyhow::bail!("unsupported private fixture protocol");
         };
         Mock::given(method("POST"))
             .and(path(path_))
@@ -240,7 +228,7 @@ async fn responses_reasoning_http_blocks_unprojected_fields_and_preserves_contin
     let fixture = PrivateFixture::new("responses").await?;
     let gateway = gateway(&fixture)?;
     let malicious = json!({"model":"bitrouter/private", "input":[
-        {"type":"reasoning", "id":"rs_x", "summary":[], "content":[{"type":"reasoning_text", "text":"unchecked sentinel"}]}
+        {"type":"reasoning", "id":"rs_x", "summary":[], "content":[{"type":"reasoning_text", "text":"unchecked sentinel", "hidden":"unchecked"}]}
     ]});
     let rejected = gateway.post("/v1/responses").json(&malicious).await;
     assert_eq!(rejected.status_code().as_u16(), 400, "{}", rejected.text());
@@ -248,10 +236,12 @@ async fn responses_reasoning_http_blocks_unprojected_fields_and_preserves_contin
     // independently validate retained metadata before invoking any extension.
     for part in [
         Content::Reasoning {
+            native: None,
             text: String::new(),
             provider_metadata: [("openai".into(), json!({"reasoningItem":malicious["input"][0]}))].into(),
         },
         Content::Reasoning {
+            native: None,
             text: "unchecked sentinel".into(),
             provider_metadata: [
                 ("openai".into(), json!({"reasoningItem":{"type":"reasoning", "id":"rs_x", "summary":[{"type":"summary_text", "text":"unchecked sentinel"}]}})),
@@ -321,7 +311,7 @@ async fn responses_reasoning_http_blocks_unprojected_fields_and_preserves_contin
 
 #[tokio::test]
 async fn private_history_roundtrip_preserves_parts_ids_receipts_and_checker_scope() -> Result<()> {
-    for protocol in ["messages", "generate_content", "responses"] {
+    for protocol in ["messages", "responses"] {
         let fixture = PrivateFixture::new(protocol).await?;
         let capture = Arc::new(Capture::default());
         let first = fixture
@@ -330,23 +320,24 @@ async fn private_history_roundtrip_preserves_parts_ids_receipts_and_checker_scop
             .execute_native_controlled(prompt(), owner(), capture.clone())
             .await?;
         let first_report = capture.reports.lock().await[0].clone();
-        assert_eq!(first_report.result.as_ref(), Some(&first.result));
+        assert_eq!(
+            first_report.result.as_ref(),
+            Some(&generation(&first.result)?)
+        );
         assert_eq!(
             first_report.private_context.input,
             PrivateContextEvidence::NotPresent
         );
         assert_eq!(
             first_report.private_context.output,
-            PrivateContextEvidence::Verified {
-                parts: if protocol == "generate_content" { 5 } else { 2 }
-            }
+            PrivateContextEvidence::Verified { parts: 2 }
         );
-        for part in &first.result.content {
+        for part in &generation(&first.result)?.content {
             if let Content::ToolCall { id, .. } = part {
                 assert!(!id.is_empty());
             }
         }
-        let continuation = followup(first.result.content.clone());
+        let continuation = followup(generation(&first.result)?.content.clone());
         fixture
             .app
             .app
@@ -355,9 +346,7 @@ async fn private_history_roundtrip_preserves_parts_ids_receipts_and_checker_scop
         let second = capture.reports.lock().await[1].clone();
         assert_eq!(
             second.private_context.input,
-            PrivateContextEvidence::Verified {
-                parts: if protocol == "generate_content" { 5 } else { 2 }
-            }
+            PrivateContextEvidence::Verified { parts: 2 }
         );
         let requests = fixture
             .upstream
@@ -408,13 +397,6 @@ async fn private_history_roundtrip_preserves_parts_ids_receipts_and_checker_scop
             assert_eq!(input[5]["output"], "observed");
             assert!(body.get("previous_response_id").is_none());
             assert_eq!(requests[1].headers["authorization"], "Bearer fixture-key");
-        } else {
-            for signature in ["tool", "text", "inline", "file"] {
-                assert!(wire.contains(&format!("{signature}-signature-fixture")));
-            }
-            assert_eq!(body["contents"][1]["parts"][3]["thought"], true);
-            assert_eq!(body["contents"][1]["parts"][4]["thought"], true);
-            assert_eq!(requests[1].headers["x-goog-api-key"], "fixture-key");
         }
         let checks = fixture.checks()?;
         assert_eq!(checks.len(), 2);
@@ -440,14 +422,14 @@ async fn private_history_roundtrip_preserves_parts_ids_receipts_and_checker_scop
 #[tokio::test]
 async fn private_history_tampering_and_owner_switch_stop_before_checkers_or_provider() -> Result<()>
 {
-    for protocol in ["messages", "generate_content", "responses"] {
+    for protocol in ["messages", "responses"] {
         let fixture = PrivateFixture::new(protocol).await?;
         let first = fixture
             .app
             .app
             .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
             .await?;
-        let original = followup(first.result.content);
+        let original = followup(generation(&first.result)?.content);
         for case in [
             "proof",
             "payload",
@@ -478,20 +460,18 @@ async fn private_history_tampering_and_owner_switch_stop_before_checkers_or_prov
                     }
                 }
                 "private_payload" => {
-                    let meta = metadata_mut(&mut content[0]);
-                    match protocol {
-                        "messages" => {
-                            meta.get_mut("anthropic").context("metadata")?["signature"] =
-                                json!("forged")
+                    if protocol == "responses" {
+                        if let Content::Reasoning {
+                            native: Some(bitrouter_ai::types::NativeReasoning::Responses(item)),
+                            ..
+                        } = &mut content[0]
+                        {
+                            item["encrypted_content"] = json!("forged");
                         }
-                        "responses" => {
-                            meta.get_mut("openai").context("metadata")?["reasoningItem"]["encrypted_content"] =
-                                json!("forged")
-                        }
-                        _ => {
-                            meta.get_mut("google").context("metadata")?["thoughtSignature"] =
-                                json!("forged")
-                        }
+                    } else {
+                        metadata_mut(&mut content[0])
+                            .get_mut("anthropic")
+                            .context("metadata")?["signature"] = json!("forged");
                     }
                 }
                 "public_payload" => {
@@ -505,6 +485,9 @@ async fn private_history_tampering_and_owner_switch_stop_before_checkers_or_prov
                 }
                 "declassified" => {
                     for part in content {
+                        if let Content::Reasoning { native, .. } = part {
+                            *native = None;
+                        }
                         metadata_mut(part).remove(if protocol == "messages" {
                             "anthropic"
                         } else if protocol == "responses" {
@@ -549,14 +532,14 @@ async fn private_history_tampering_and_owner_switch_stop_before_checkers_or_prov
 
 #[tokio::test]
 async fn private_history_model_key_and_installation_switch_never_send_generation() -> Result<()> {
-    for protocol in ["messages", "generate_content", "responses"] {
+    for protocol in ["messages", "responses"] {
         let fixture = PrivateFixture::new(protocol).await?;
         let first = fixture
             .app
             .app
             .execute_native_controlled(prompt(), owner(), Arc::new(Capture::default()))
             .await?;
-        let continuation = followup(first.result.content);
+        let continuation = followup(generation(&first.result)?.content);
         let mut changed_model = continuation.clone();
         changed_model.model = "fixture:changed".into();
         let capture = Arc::new(Capture::default());
@@ -639,7 +622,11 @@ async fn private_history_redirect_is_not_followed_or_claimed_as_success() -> Res
         fixture
             .app
             .app
-            .execute_native_controlled(followup(first.result.content), owner(), capture.clone())
+            .execute_native_controlled(
+                followup(generation(&first.result)?.content),
+                owner(),
+                capture.clone()
+            )
             .await
             .is_err()
     );
@@ -810,7 +797,14 @@ async fn private_history_core_changes_model_only_after_authorized_whole_message_
                 .received_requests()
                 .await
                 .context("wire requests")?;
-            assert_eq!(requests.len(), if discard { 2 } else { 1 });
+            assert_eq!(
+                requests.len(),
+                if discard { 2 } else { 1 },
+                "protocol={protocol} discard={discard}: {:?}",
+                second
+                    .root_turn()
+                    .and_then(|turn| turn.terminal_reason.as_ref())
+            );
             let turn = second.root_turn().context("second turn")?;
             assert!(turn.steps[0].attempts.is_empty());
             if discard {
@@ -858,19 +852,20 @@ async fn private_history_seal_failure_retains_real_output_usage_and_settlement()
         .app
         .execute_native_controlled(prompt(), owner(), capture.clone())
         .await?;
-    let usage = response.result.usage.as_ref().context("missing usage")?;
+    let usage = generation(&response.result)?
+        .usage
+        .context("missing usage")?;
     assert_eq!(usage.prompt_tokens, 12);
     assert_eq!(usage.completion_tokens, 5);
-    assert_eq!(response.result.content.len(), 3);
+    assert_eq!(generation(&response.result)?.content.len(), 3);
     assert!(
-        response
-            .result
+        generation(&response.result)?
             .content
             .iter()
             .all(|part| !metadata(part).contains_key(ORIGIN_NAMESPACE))
     );
     let report = capture.reports.lock().await[0].clone();
-    assert_eq!(report.result.as_ref(), Some(&response.result));
+    assert_eq!(report.result.as_ref(), Some(&generation(&response.result)?));
     assert_eq!(
         report.private_context.output,
         PrivateContextEvidence::Unverified {
@@ -893,7 +888,7 @@ async fn private_history_seal_failure_retains_real_output_usage_and_settlement()
             .app
             .app
             .execute_native_controlled(
-                followup(response.result.content),
+                followup(generation(&response.result)?.content),
                 owner(),
                 Arc::new(Capture::default())
             )

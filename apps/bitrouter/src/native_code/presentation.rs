@@ -1,6 +1,6 @@
 //! Human-readable projection of native tool facts; no execution authority.
+use bitrouter_ai::types::{Content, Message, ToolResultOutput};
 use bitrouter_orchestrator::store::EffectStatus;
-use bitrouter_sdk::language_model::{Content, Message, ToolResultOutput};
 use bitrouter_tui::native_agent::{NativeEntryKind, NativeState, ToolStatus};
 
 pub(super) fn tool_title(name: &str, arguments: &str) -> String {
@@ -100,7 +100,7 @@ pub(super) fn tool_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::language_model::Role;
+    use bitrouter_ai::types::Role;
     use serde_json::json;
 
     #[test]

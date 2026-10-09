@@ -17,6 +17,22 @@ mock-provider demonstration does not establish production integration.
   dependency branches or treat their historical validation as this change's
   evidence.
 
+## Current model integration boundary
+
+The stack now integrates main `f252013c`, including `bitrouter-ai` and the
+first-class Decisions operation. Canonical generation/auth/protocol types live
+in `bitrouter-ai`; the SDK retains routing, bounded native execution and durable
+provider-work accounting. Managed Responses and ordinary Decisions keep separate
+operation contracts and authentication/settlement paths.
+
+Managed reasoning replay requires host-validated history, target and credential
+bindings. Ordinary conversion retains its strict admission rules. Failed native
+tool results use an explicit model-facing JSON error envelope before prompt
+commitment and counting; the journal retains the original typed result.
+Context reconstruction revalidates the frozen route's tariff snapshots without
+refreshing prices. Native cost evidence uses the actual admitted protocol and
+endpoint snapshot rather than a later provider/model-only lookup.
+
 ## Work plan
 
 | Stage | Work | Status / evidence |
@@ -4058,3 +4074,19 @@ seconds of active time, runs a thirty-second command and retains a fifteen-secon
 outer guard. A start marker additionally proves the command ran; the original
 unknown-effect, terminal-state, no-late-write and call/result assertions remain.
 This changes only test timing, not product budgets or cancellation behavior.
+
+
+## Unified routing after the model-core migration
+
+Generation requests retain the shared semantic assessment, policy action and
+owner-admitted context plan after canonical model types move to `bitrouter-ai`.
+The provider-facing Decisions operation bypasses generation context preparation
+and retains its operation-scoped hooks. Final route and context-revalidation hooks
+cannot rewrite the committed generation prompt.
+
+Native streaming uses the same frozen protocol/endpoint pricing snapshot as
+ordinary streaming, including an explicitly unknown rate. Responses reasoning
+summary/text lanes retain their canonical ordering and must match retained native
+state. A stream policy changing actionable text or tool calls cannot be undone
+by restoring the provider's terminal output. Raw tool failures remain typed in
+the journal; provider-facing prompts carry an explicit error envelope.

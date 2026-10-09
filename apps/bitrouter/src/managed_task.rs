@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
+use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_orchestrator::agent::ToolMode;
 use bitrouter_orchestrator::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
 use bitrouter_orchestrator::core::session::RunStatus;
 use bitrouter_orchestrator::harness::managed::session::{NativeApproval, NativeSession};
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::ReasoningEffort;
 use tokio_util::sync::CancellationToken;
 
 pub struct Options {

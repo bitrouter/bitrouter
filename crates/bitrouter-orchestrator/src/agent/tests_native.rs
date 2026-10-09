@@ -1,10 +1,11 @@
 use super::*;
+use bitrouter_ai::types::Prompt;
 use bitrouter_sdk::decision_model::DecisionRuntime;
 use bitrouter_sdk::decision_model::policy::DecisionPolicy;
 use bitrouter_sdk::decision_model::typesafe::TypeSafeExecutor;
+use bitrouter_sdk::language_model::ExecutionResult;
 use bitrouter_sdk::language_model::context::PipelineContext;
 use bitrouter_sdk::language_model::executor::{Executor, StreamPartStream};
-use bitrouter_sdk::language_model::{ExecutionResult, Prompt};
 use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -291,7 +292,7 @@ async fn native_subscription_reservation_survives_configuration_restore()
 #[tokio::test]
 async fn native_output_budget_follows_the_effort_eligible_route()
 -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_sdk::language_model::types::{ReasoningEffort, ReasoningEffortConfig};
+    use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortConfig};
     for (ineligible, eligible) in [(128_000, 32_000), (32_000, 128_000)] {
         let workspace = TempDir::new()?;
         let executor = Arc::new(Recording {

@@ -3599,8 +3599,9 @@ fn spawn_tool_spans(
 mod standalone_cloud_credentials_tests {
     use std::sync::Arc;
 
-    use bitrouter_providers::hosted::account::credentials::{Credentials, StoredCredential};
-    use bitrouter_providers::hosted::account::manager::CredentialManager;
+    use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+
+    use crate::cloud::account::manager::CredentialManager;
     use chrono::{Duration, Utc};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};

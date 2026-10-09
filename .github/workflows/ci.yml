@@ -149,7 +149,7 @@ jobs:
             retries: "0"
             targets: >-
               --test acp --test acp_checkpoints --test cloud_api --test daemon --test e2e
-              --test full_stack --test configuration_state --test extension_host
+              --test full_stack --test configuration_state --test extension_host --test subscription
               --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
           - shard: observability
             retries: "0"
@@ -262,6 +262,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo check -p bitrouter-ai --no-default-features
+      - run: cargo test -p bitrouter-ai --no-default-features
+      - run: cargo test -p bitrouter-ai --no-default-features --features pkce
+      - run: cargo test -p bitrouter-ai --no-default-features --features hosted-login
+      - run: cargo test -p bitrouter-ai --no-default-features --features file-store
+      - name: model integration stays independent of gateway and agent runtime
+        shell: bash
+        run: |
+          cargo tree --locked -p bitrouter-ai --all-features -e normal,build --prefix none > ai-tree.txt
+          if grep -Eq '^(bitrouter(-sdk|-providers|-core|-orchestrator(-core)?)?|axum|agent-client-protocol(-[^ ]*)?|rmcp) v' ai-tree.txt; then
+            echo '::error::model integration pulls gateway or agent runtime dependencies'; exit 1
+          fi
       - run: cargo check -p bitrouter-sdk --no-default-features
       - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
       - run: cargo check -p bitrouter-guardrails
@@ -373,7 +385,7 @@ jobs:
           if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i opentelemetry >/dev/null 2>&1; then
             echo "::error::opentelemetry resolves in no tree at all — misspelled?"; exit 1
           fi
-          for crate in bitrouter-sdk bitrouter-guardrails bitrouter-providers dist-helper; do
+          for crate in bitrouter-ai bitrouter-sdk bitrouter-guardrails dist-helper; do
             # `cargo tree -p` ignores an unknown spec and exits 0 (see the job
             # comment), so prove membership before trusting anything below.
             if ! cargo metadata --no-deps --format-version 1 \

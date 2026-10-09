@@ -187,15 +187,22 @@ impl Executor for RebuildExecutor {
     }
 }
 
-fn rebuild_request() -> PipelineRequest {
+fn rebuild_request() -> Result<PipelineRequest> {
     let mut req = request_for_model("@adaptive:preferred");
-    req.prompt.params.reasoning_effort = Some(ReasoningEffort::High);
-    req.prompt.messages = vec![
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| BitrouterError::internal("generation fixture"))?
+        .params
+        .reasoning_effort = Some(ReasoningEffort::High);
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| BitrouterError::internal("generation fixture"))?
+        .messages = vec![
         Message::text(Role::User, "original"),
         Message::text(Role::Assistant, "approved"),
         Message::text(Role::User, "current"),
     ];
-    req
+    Ok(req)
 }
 
 #[tokio::test]
@@ -210,6 +217,12 @@ async fn managed_rebuild_rechecks_frozen_binding_before_any_new_egress() -> Resu
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(Arc::new(RebuildTable(resolutions.clone())))
+            // These hooks reject revalidation by default but never admitted
+            // this generation request, so they cannot block its rebuild.
+            .pre_resolution_hook_for(AllowHook, operations::OperationScope::Decisions)
+            .router_preparation_hook_for(AllowHook, operations::OperationScope::Decisions)
+            .pre_request_hook_for(AllowHook, operations::OperationScope::Decisions)
+            .route_hook_for(EmitRouteHook, operations::OperationScope::Decisions)
             .executor(executor.clone())
             .model_selector(Arc::new(ModelAndEffortSelector(selections.clone())))
             .route_hook(ReadOnlyGuard {
@@ -223,7 +236,7 @@ async fn managed_rebuild_rechecks_frozen_binding_before_any_new_egress() -> Resu
         let pipeline = Arc::new(builder.build()?);
         let result = pipeline
             .clone()
-            .execute_native_controlled(rebuild_request(), control.clone())
+            .execute_native_controlled(rebuild_request()?, control.clone())
             .await;
         assert_eq!(resolutions.load(Ordering::SeqCst), 1);
         assert_eq!(selections.load(Ordering::SeqCst), 1);
@@ -278,7 +291,7 @@ async fn managed_rebuild_cannot_rewrite_or_reorder_prepared_messages() -> Result
             .executor(executor.clone());
         assert!(
             Arc::new(builder.build()?)
-                .execute_native_controlled(rebuild_request(), control.clone())
+                .execute_native_controlled(rebuild_request()?, control.clone())
                 .await
                 .is_err()
         );
@@ -305,7 +318,7 @@ async fn managed_rebuild_cannot_repeat_or_bypass_mutable_hooks_and_continuation(
         builder
             .routing_table(Arc::new(PresetAwareRoutingTable))
             .executor(executor.clone());
-        let mut req = rebuild_request();
+        let mut req = rebuild_request()?;
         match restriction {
             "pre-resolution" => {
                 builder.pre_resolution_hook(AllowHook);
@@ -320,7 +333,9 @@ async fn managed_rebuild_cannot_repeat_or_bypass_mutable_hooks_and_continuation(
                 builder.route_hook(EmitRouteHook);
             }
             "previous_response_id" | "conversation" => {
-                req.prompt
+                req.input
+                    .generation_prompt_mut()
+                    .ok_or_else(|| BitrouterError::internal("generation fixture"))?
                     .params
                     .extra
                     .insert(restriction.into(), serde_json::json!("private-state"));
@@ -367,10 +382,10 @@ impl PreRequestHook for ReadOnlyGuard {
         self.revalidated.fetch_add(1, Ordering::SeqCst);
         assert_eq!(ctx.model(), "economy-model");
         assert_eq!(
-            ctx.prompt().params.reasoning_effort,
+            ctx.require_generation_prompt()?.params.reasoning_effort,
             Some(ReasoningEffort::High)
         );
-        assert_eq!(ctx.prompt().messages.len(), 2);
+        assert_eq!(ctx.require_generation_prompt()?.messages.len(), 2);
         Ok(HookDecision::Allow)
     }
 }
@@ -421,7 +436,7 @@ async fn read_only_guards_recheck_frozen_selection_with_a_live_gate_before_each_
         let pipeline = Arc::new(builder.build()?);
         let result = pipeline
             .clone()
-            .execute_native_controlled(rebuild_request(), control.clone())
+            .execute_native_controlled(rebuild_request()?, control.clone())
             .await;
         assert_eq!(prepared.load(Ordering::SeqCst), 4);
         assert_eq!(selections.load(Ordering::SeqCst), 1);
@@ -498,7 +513,11 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
             .build()?;
         let result = app
             .execute_native_controlled(
-                rebuild_request().prompt,
+                rebuild_request()?
+                    .input
+                    .generation_prompt_mut()
+                    .ok_or_else(|| BitrouterError::internal("generation fixture"))?
+                    .clone(),
                 CallerContext::local(),
                 control.clone(),
             )

@@ -51,14 +51,7 @@ are not served through this surface.
 
 ## C) Google Vertex AI
 
-**Claude-on-Vertex is not covered.** The registry-backed `vertex` provider runs in
-Vertex AI **Express Mode** (`VERTEX_EXPRESS_API_KEY`), which serves **Gemini
-models only** — it does not serve Anthropic Claude (or Llama/Mistral) on Vertex.
-Those partner models are present but **commented out** in the `vertex` registry
-entry, pending service-account OAuth support. Those partner models live on Vertex's regional
-endpoints and require a short-lived Google OAuth access token (minted per hour
-from a service-account key), which needs provider-specific code BitRouter does
-not ship today.
+The built-in Vertex Express integration is retired with native Gemini protocol support. BitRouter does not ship service-account OAuth support for Claude-on-Vertex.
 
 So for this Anthropic-shaped migration: if your Claude traffic runs through
 Vertex, there's no drop-in registry provider yet — use Anthropic's own API (`anthropic`)
@@ -76,7 +69,7 @@ providers:
   internal-claude:
     api_base: "https://claude.internal.example.com"
     api_key: "${INTERNAL_CLAUDE_KEY}"
-    api_protocol: { "*": anthropic }
+    api_protocol: [{ "*": messages }]
     models:
       - { id: "claude-sonnet-4-5" }
       - { id: "claude-haiku-4-5" }

@@ -13,7 +13,7 @@ use super::declarations::{SUBAGENT_TOOL, ServerToolDeclarations, forwarded_tools
 use super::nested::{NestedRequest, NestedRunner};
 use crate::error::Result;
 use crate::language_model::server_tools::toolset::{RouterToolset, ToolContext};
-use crate::language_model::types::{ProviderMetadata, Tool, ToolResultOutput};
+use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// A [`RouterToolset`] exposing the `subagent` server tool.
 pub struct SubAgentToolset {

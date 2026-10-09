@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::native::NativeAttemptReport;
-use super::types::{ApiProtocol, NormalizedUsage, Usage, UsageOrigin};
+use bitrouter_ai::types::{ApiProtocol, NormalizedUsage, Usage, UsageOrigin};
 
 /// Distinct observations of the same bill; never add these bases together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,6 +184,18 @@ impl Default for NativeTokenCost {
 pub trait NativeCostEstimator: Send + Sync {
     /// Estimate token cost from this attempt's serving identity and evidence.
     fn estimate(&self, report: &NativeAttemptReport) -> NativeTokenCost;
+
+    /// Use the exact admitted route and request-owned tariff evidence when the
+    /// host binds prices to protocol and endpoint. Custom estimators may retain
+    /// their existing report-only implementation.
+    fn estimate_for_attempt(
+        &self,
+        report: &NativeAttemptReport,
+        _ctx: &super::context::PipelineContext,
+        _target: &super::types::RoutingTarget,
+    ) -> NativeTokenCost {
+        self.estimate(report)
+    }
 }
 
 /// Cache counters explicitly present in the serving protocol's raw usage.
@@ -252,9 +264,6 @@ impl NativeCacheObservation {
                 Some("/cache_creation_input_tokens"),
                 "messages_usage",
             ),
-            ApiProtocol::GenerateContent => {
-                ("/cachedContentTokenCount", None, "generate_content_usage")
-            }
             _ => return Self::unknown("unsupported_cache_usage_protocol"),
         };
         let read = usage_field(protocol, raw, read_path);
@@ -370,13 +379,6 @@ pub fn validated_provider_usage(
             Some("/cache_creation_input_tokens"),
             None,
         ),
-        ApiProtocol::GenerateContent => (
-            "/promptTokenCount",
-            "/candidatesTokenCount",
-            "/cachedContentTokenCount",
-            None,
-            Some("/thoughtsTokenCount"),
-        ),
         _ => return Err("unsupported_usage_protocol"),
     };
     let required = |path| {
@@ -414,13 +416,6 @@ pub fn validated_provider_usage(
             .ok_or("raw_usage_counter_overflow")?
     } else {
         input
-    };
-    let output = if *protocol == ApiProtocol::GenerateContent {
-        output
-            .checked_add(reasoning)
-            .ok_or("raw_usage_counter_overflow")?
-    } else {
-        output
     };
     if input != usage.prompt_tokens
         || output != usage.completion_tokens
@@ -470,12 +465,6 @@ mod tests {
                 json!({"input_tokens":5,"output_tokens":5,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}),
                 2,
                 0,
-            ),
-            (
-                ApiProtocol::GenerateContent,
-                json!({"promptTokenCount":10,"candidatesTokenCount":3,"thoughtsTokenCount":2,"cachedContentTokenCount":3}),
-                0,
-                2,
             ),
         ] {
             let mut input = usage(raw);
@@ -577,16 +566,6 @@ mod tests {
         input.prompt_tokens = u64::MAX;
         assert_eq!(
             validated_provider_usage(&ApiProtocol::Messages, &input),
-            Err("raw_usage_counter_overflow")
-        );
-        input.cache_write_tokens = 0;
-        input.completion_tokens = u64::MAX;
-        input.reasoning_tokens = 1;
-        input.raw = Some(Box::new(
-            json!({"promptTokenCount":u64::MAX,"candidatesTokenCount":u64::MAX,"thoughtsTokenCount":1,"cachedContentTokenCount":3}),
-        ));
-        assert_eq!(
-            validated_provider_usage(&ApiProtocol::GenerateContent, &input),
             Err("raw_usage_counter_overflow")
         );
     }

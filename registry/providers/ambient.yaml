@@ -46,15 +46,6 @@ models:
       - reasoning
       - tools
       - structured_outputs
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: moonshotai/kimi-k2.6
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-        cache_read: 0.2
-        cache_write: 0
-      output_tokens:
-        text: 4
   - id: z-ai/glm-5.2
     provider_model_id: z-ai/glm-5.2
     pricing:
@@ -92,15 +83,6 @@ models:
         cache_write: 0
       output_tokens:
         text: 2
-  - id: qwen/qwen3.6-27b
-    provider_model_id: qwen/qwen3.6-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.32
-        cache_read: 0.16
-        cache_write: 0
-      output_tokens:
-        text: 3.2
   - id: qwen/qwen3.8-27b
     provider_model_id: qwen/qwen3.8-27b
     pricing:

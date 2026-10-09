@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::Engine;
-use bitrouter_sdk::language_model::StreamPart;
+use bitrouter_ai::types::StreamPart;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 

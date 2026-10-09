@@ -36,8 +36,7 @@ fn native() -> Prompt {
 // https://developers.openai.com/api/reference/resources/responses/methods/create
 // https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
 // https://platform.claude.com/docs/en/api/messages
-// https://ai.google.dev/api/generate-content
-fn inbound_requests() -> [(&'static str, Value); 4] {
+fn inbound_requests() -> [(&'static str, Value); 3] {
     [
         (
             "/v1/responses",
@@ -66,20 +65,10 @@ fn inbound_requests() -> [(&'static str, Value); 4] {
                 "tool_choice":{"type":"auto"}, "stream":false
             }),
         ),
-        (
-            "/v1beta/models/fixture:served-model:generateContent",
-            json!({
-                "systemInstruction":{"parts":[{"text":"matrix-system"}]},
-                "contents":[{"role":"user", "parts":[{"text":"matrix-task"}]}],
-                "generationConfig":{"temperature":0.7, "topP":0.9, "maxOutputTokens":128},
-                "tools":[{"functionDeclarations":[{"name":"inspect", "description":"Inspect evidence", "parameters":tool_schema()}]}],
-                "toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}
-            }),
-        ),
     ]
 }
 
-fn upstreams() -> [(&'static str, &'static str, Value); 4] {
+fn upstreams() -> [(&'static str, &'static str, Value); 3] {
     [
         (
             "responses",
@@ -109,18 +98,10 @@ fn upstreams() -> [(&'static str, &'static str, Value); 4] {
                 "usage":{"input_tokens":10, "output_tokens":3}
             }),
         ),
-        (
-            "generate_content",
-            "/models/served-model:generateContent",
-            json!({
-                "candidates":[{"content":{"role":"model", "parts":[{"text":"matrix-done"}]}, "finishReason":"STOP"}],
-                "usageMetadata":{"promptTokenCount":10, "candidatesTokenCount":3, "totalTokenCount":13}
-            }),
-        ),
     ]
 }
 
-fn assert_preserved(body: &Value, protocol: &str) {
+fn assert_preserved(body: &Value, protocol: &str) -> Result<()> {
     let inbound = inbound_requests();
     let (expected_tools, expected_messages) = match protocol {
         "responses" => (
@@ -132,20 +113,15 @@ fn assert_preserved(body: &Value, protocol: &str) {
             &inbound[2].1["tools"],
             json!([{"role":"user", "content":[{"type":"text", "text":"matrix-task"}]}]),
         ),
-        _ => (&inbound[3].1["tools"], inbound[3].1["contents"].clone()),
+        _ => anyhow::bail!("unsupported protocol: {protocol}"),
     };
     assert_eq!(&body["tools"], expected_tools);
     let message_key = match protocol {
         "responses" => "input",
-        "generate_content" => "contents",
         _ => "messages",
     };
     assert_eq!(body[message_key], expected_messages);
-    if protocol == "generate_content" {
-        assert_eq!(body["systemInstruction"], inbound[3].1["systemInstruction"]);
-    } else {
-        assert_eq!(body["stream"], false);
-    }
+    assert_eq!(body["stream"], false);
     let (params, token_key, top_p_key, system, user, tool, schema_key, choice) = match protocol {
         "responses" => (
             body,
@@ -196,12 +172,9 @@ fn assert_preserved(body: &Value, protocol: &str) {
     assert_eq!(tool["name"], "inspect");
     assert_eq!(tool["description"], "Inspect evidence");
     assert_eq!(tool[schema_key], tool_schema());
-    if protocol == "generate_content" {
-        assert_eq!(body["toolConfig"], choice);
-    } else {
-        assert_eq!(body["model"], "served-model");
-        assert_eq!(body["tool_choice"], choice);
-    }
+    assert_eq!(body["model"], "served-model");
+    assert_eq!(body["tool_choice"], choice);
+    Ok(())
 }
 
 fn assert_response(body: &Value, path: &str) {
@@ -233,7 +206,7 @@ fn assert_response(body: &Value, path: &str) {
 }
 
 #[tokio::test]
-async fn common_native_constraints_and_accounting_match_four_by_four_http_protocols() -> Result<()>
+async fn common_native_constraints_and_accounting_match_three_by_three_http_protocols() -> Result<()>
 {
     assert_no_runtime_state_in_repository();
     for (outbound, upstream_path, output) in upstreams() {
@@ -301,8 +274,8 @@ providers:
             );
             assert_response(&http.json(), inbound);
             assert_eq!(
-                native.result.content,
-                vec![bitrouter_sdk::language_model::types::Content::Text {
+                generation(&native.result)?.content,
+                vec![bitrouter_ai::types::Content::Text {
                     text: "matrix-done".into(),
                     provider_metadata: Default::default(),
                 }]
@@ -320,7 +293,7 @@ providers:
             assert_eq!(native_body, http_body, "{inbound} -> {outbound}");
             assert_eq!(pair[0].url.path(), upstream_path);
             assert_eq!(pair[1].url.path(), upstream_path);
-            assert_preserved(&native_body, outbound);
+            assert_preserved(&native_body, outbound)?;
             let reports = capture.reports.lock().await;
             assert_eq!(reports.len(), 1);
             let report = &reports[0];
@@ -372,7 +345,7 @@ providers:
                 assert_eq!(&evidence.pricing_version, pricing_version);
             }
         }
-        assert_eq!(requests::Entity::find().all(&assembled.db).await?.len(), 8);
+        assert_eq!(requests::Entity::find().all(&assembled.db).await?.len(), 6);
     }
     assert_no_runtime_state_in_repository();
     Ok(())

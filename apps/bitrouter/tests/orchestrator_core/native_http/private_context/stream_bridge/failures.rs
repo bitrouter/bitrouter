@@ -1,10 +1,8 @@
 //! Post-terminal transport failure and final retry identity regressions.
 
 use super::*;
-use bitrouter_sdk::language_model::auth::{
-    AppliedAuth, AuthApplier, AuthAppliers, CredentialAuthority,
-};
-use bitrouter_sdk::language_model::executor::HttpTimeouts;
+use bitrouter_ai::auth::{AppliedAuth, AuthApplier, AuthAppliers, CredentialAuthority};
+use bitrouter_ai::client::HttpTimeouts;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use wiremock::matchers::header;
@@ -96,15 +94,15 @@ struct RefreshIdentity {
 
 #[async_trait]
 impl AuthApplier for RefreshIdentity {
-    fn output_token_limit_support(&self, _: &RoutingTarget) -> Option<bool> {
+    fn output_token_limit_support(&self, _: &bitrouter_ai::target::ModelTarget) -> Option<bool> {
         Some(true)
     }
 
     async fn apply(
         &self,
         request: reqwest::Request,
-        target: &RoutingTarget,
-    ) -> bitrouter_sdk::Result<reqwest::Request> {
+        target: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         Ok(self
             .apply_with_authority(request, target)
             .await?
@@ -114,8 +112,8 @@ impl AuthApplier for RefreshIdentity {
     async fn apply_with_authority(
         &self,
         mut request: reqwest::Request,
-        _: &RoutingTarget,
-    ) -> bitrouter_sdk::Result<AppliedAuth> {
+        _: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<AppliedAuth> {
         let refreshed = self.refreshed.load(Ordering::SeqCst);
         let token = if refreshed {
             "Bearer refreshed-fixture"
@@ -141,9 +139,9 @@ impl AuthApplier for RefreshIdentity {
 
     async fn refresh_after_unauthorized(
         &self,
-        _: &RoutingTarget,
+        _: &bitrouter_ai::target::ModelTarget,
         _: Option<&reqwest::header::HeaderValue>,
-    ) -> bitrouter_sdk::Result<bool> {
+    ) -> bitrouter_ai::error::Result<bool> {
         self.refreshed.store(true, Ordering::SeqCst);
         Ok(true)
     }
@@ -197,7 +195,7 @@ async fn native_stream_bridge_seals_only_final_successful_retry_identity() -> Re
             .len(),
         2
     );
-    let next = bridge_followup(first.result.content);
+    let next = bridge_followup(generation(&first.result)?.content);
     auth.refreshed.store(false, Ordering::SeqCst);
     assert!(
         app.execute_native_controlled(next.clone(), owner(), Arc::new(Capture::default()))

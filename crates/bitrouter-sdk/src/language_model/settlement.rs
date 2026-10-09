@@ -14,17 +14,20 @@ use crate::caller::CallerContext;
 use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
-use crate::language_model::auth::ContinuationAuthority;
-use crate::language_model::protocol::responses::CausalPrefixCommitment;
 use crate::language_model::timing::FirstTokenKind;
-use crate::language_model::types::{
-    ApiProtocol, FinishReason, ReasoningEffort, RoutingTarget, UsageOrigin,
+use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::auth::ContinuationAuthority;
+use bitrouter_ai::protocol::responses::CausalPrefixCommitment;
+use bitrouter_ai::types::{
+    ApiProtocol, FinishReason, ModelOperation, ReasoningEffort, UsageOrigin,
 };
 
 /// Success-only lifecycle data supplied to required finalizers before a
 /// response is allowed to advertise successful completion.
 #[derive(Clone)]
 pub struct RequiredFinalizationContext {
+    /// Actual operation derived from the typed input.
+    pub operation: ModelOperation,
     /// Stable gateway request and public Responses continuation identity.
     pub request_id: String,
     /// Process-unique request attempt used to own provisional finalizer state.
@@ -289,6 +292,8 @@ pub trait RequiredFinalizer: Send + Sync {
 /// that need those compute them inside their own [`SettlementRecorder`]
 /// impls.
 pub struct SettlementContext {
+    /// Actual operation derived from the typed input.
+    pub operation: ModelOperation,
     /// The request id.
     pub request_id: String,
     /// The caller.
@@ -332,7 +337,7 @@ pub struct SettlementContext {
     /// Media content blocks in the response.
     pub media_output_count: u64,
     /// Server-tool calls observed (router + provider). Observability only.
-    pub server_tool_calls: Vec<crate::language_model::types::ServerToolCall>,
+    pub server_tool_calls: Vec<bitrouter_ai::types::ServerToolCall>,
     /// Whether the request was streamed.
     pub streamed: bool,
     /// End-to-end request duration in milliseconds.
@@ -403,7 +408,7 @@ mod tests {
     use super::*;
     use crate::caller::CallerContext;
     use crate::event::EventBus;
-    use crate::language_model::types::{ServerToolCall, ServerToolKind, ServerToolStatus};
+    use bitrouter_ai::types::{ServerToolCall, ServerToolKind, ServerToolStatus};
 
     fn assert_send_sync<T: Send + Sync>() {}
 
@@ -419,6 +424,7 @@ mod tests {
 
     fn make_settlement_context() -> SettlementContext {
         SettlementContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: "test-req".into(),
             caller: CallerContext::local(),
             target: None,

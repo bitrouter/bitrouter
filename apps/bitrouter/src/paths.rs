@@ -19,7 +19,7 @@
 //! The two outcomes are surfaced as [`ConfigSource`] variants
 //! ([`ConfigSource::File`] / [`ConfigSource::Default`]) so each
 //! subcommand can decide whether to load from disk or build from
-//! [`bitrouter_providers::zero_config`].
+//! [`crate::providers::apply::zero_config`].
 //!
 //! On Windows `$HOME` is usually unset, so step 4/5 fall back to
 //! `%USERPROFILE%` (→ `C:\Users\<name>\.bitrouter`). With neither set,
@@ -44,7 +44,7 @@ const CONFIG_FILENAME: &str = "bitrouter.yaml";
 /// - [`ConfigSource::File`] — a real `bitrouter.yaml` exists. Load it
 ///   via `config::load`.
 /// - [`ConfigSource::Default`] — no file found. Build an in-memory
-///   `Config` via [`bitrouter_providers::zero_config`]. The associated
+///   `Config` via [`crate::providers::apply::zero_config`]. The associated
 ///   `home` is the directory where the daemon should place its
 ///   runtime artefacts (socket / pid / log / db).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,7 +199,7 @@ pub fn resolve_config_with(
 /// Load a [`bitrouter_sdk::config::Config`] from a [`ConfigSource`].
 /// `ConfigSource::File` reads from disk via the SDK's loader;
 /// `ConfigSource::Default` builds the zero-config in-memory default
-/// from [`bitrouter_providers::zero_config`].
+/// from [`crate::providers::apply::zero_config`].
 ///
 /// This is the one place `serve` / `start` / `models` / `route` etc.
 /// reach for a `Config` — every call site goes through here so the
@@ -210,7 +210,7 @@ pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config:
             .await
             .with_context(|| format!("loading {}", path.display())),
         ConfigSource::Default { .. } => {
-            let mut cfg = bitrouter_providers::zero_config();
+            let mut cfg = crate::providers::apply::zero_config();
             // Layered on top of the env-var-driven auto-enable: a signed-in
             // user (credentials file present) gets the `bitrouter` provider
             // even without `$BITROUTER_API_KEY` in their shell.

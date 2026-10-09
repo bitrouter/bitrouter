@@ -233,7 +233,7 @@ async fn steering_settles_dispatched_effects_skips_later_calls_and_applies_input
     assert_eq!(serialized.matches("second correction").count(), 1);
     assert!(serialized.find("first correction") < serialized.find("second correction"));
     assert!(history.iter().flat_map(|message| &message.content).any(|part| matches!(part,
-        bitrouter_sdk::language_model::Content::ToolResult { call_id, output, .. } if call_id == "stale-write" && output.is_error())));
+        bitrouter_ai::types::Content::ToolResult { call_id, output: bitrouter_ai::types::ToolResultOutput::Json { value }, .. } if call_id == "stale-write" && value["status"] == "error" && value["output"]["type"] == "error_json")));
     let saved = store
         .load(&thread.thread_id)
         .await?

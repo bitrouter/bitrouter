@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use bitrouter_sdk::language_model::{Content, Message, Role, ToolResultOutput};
+use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput};
 
 use crate::agent::RunEvent;
 use crate::core::session::SessionSnapshot;

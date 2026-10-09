@@ -18,7 +18,7 @@ use super::toolset::ToolContext;
 use crate::error::Result;
 use crate::language_model::executor::StreamPartStream;
 use crate::language_model::stream::UsageAccumulator;
-use crate::language_model::types::{
+use bitrouter_ai::types::{
     Content, FinishReason, Message, Prompt, ProviderMetadata, Role, StreamPart, Usage,
 };
 
@@ -306,7 +306,7 @@ mod tests {
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::config::ServerToolLoopConfig;
     use crate::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
-    use crate::language_model::types::{ApiProtocol, Tool, ToolResultOutput};
+    use bitrouter_ai::types::{ApiProtocol, Tool, ToolResultOutput};
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -429,7 +429,7 @@ mod tests {
     #[tokio::test]
     async fn no_tool_choice_hands_back_streamed_calls_without_a_second_turn() -> Result<()> {
         let mut prompt = base_prompt();
-        prompt.tool_choice = Some(crate::language_model::types::ToolChoice::None);
+        prompt.tool_choice = Some(bitrouter_ai::types::ToolChoice::None);
         let upstream = Arc::new(FailingSecondTurnStream {
             calls: AtomicUsize::new(0),
         });

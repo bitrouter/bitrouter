@@ -1,7 +1,7 @@
 use super::*;
 use crate::language_model::native::NativeProtocolValidation;
-use crate::language_model::protocol::OutboundDispatch;
-use crate::language_model::types::{DataContent, ToolResultContentPart, ToolResultOutput};
+use bitrouter_ai::protocol::OutboundDispatch;
+use bitrouter_ai::types::{DataContent, ToolResultContentPart, ToolResultOutput};
 use serde_json::json;
 
 fn tool_result(output: ToolResultOutput) -> Content {
@@ -24,14 +24,13 @@ fn validate(protocol: ApiProtocol, prompt: &Prompt) -> std::result::Result<(), &
 
 #[test]
 fn managed_protocol_checks_nested_tool_media_and_shared_capabilities() {
-    let mut prompt = request().prompt;
-    for (part, capability, responses, chat, messages, gemini) in [
+    let mut prompt = prompt();
+    for (part, capability, responses, chat, messages) in [
         (
             ToolResultContentPart::Text {
                 text: "required".into(),
             },
             None,
-            true,
             true,
             true,
             true,
@@ -47,7 +46,6 @@ fn managed_protocol_checks_nested_tool_media_and_shared_capabilities() {
             true,
             true,
             true,
-            false,
         ),
         (
             ToolResultContentPart::Media {
@@ -60,7 +58,6 @@ fn managed_protocol_checks_nested_tool_media_and_shared_capabilities() {
             true,
             true,
             false,
-            false,
         ),
         (
             ToolResultContentPart::FileId {
@@ -69,7 +66,6 @@ fn managed_protocol_checks_nested_tool_media_and_shared_capabilities() {
             },
             Some(Capability::FileInput),
             true,
-            false,
             false,
             false,
         ),
@@ -81,7 +77,6 @@ fn managed_protocol_checks_nested_tool_media_and_shared_capabilities() {
             (ApiProtocol::Responses, responses),
             (ApiProtocol::ChatCompletions, chat),
             (ApiProtocol::Messages, messages),
-            (ApiProtocol::GenerateContent, gemini),
         ] {
             assert_eq!(
                 validate(protocol.clone(), &prompt).is_ok(),
@@ -97,7 +92,7 @@ fn managed_protocol_checks_nested_tool_media_and_shared_capabilities() {
 
 #[test]
 fn managed_protocol_rejects_lost_history_but_preserves_native_custom_calls() -> Result<()> {
-    let mut prompt = request().prompt;
+    let mut prompt = prompt();
     let mut message = Message::text(Role::Tool, "required artifact");
     message.content.push(tool_result(ToolResultOutput::Text {
         value: "result".into(),
@@ -125,6 +120,7 @@ fn managed_protocol_rejects_lost_history_but_preserves_native_custom_calls() -> 
     assert_eq!(body["input"][0]["type"], "custom_tool_call");
     assert_eq!(body["input"][0]["input"], "ls -la");
     prompt.messages[0].content = vec![Content::Reasoning {
+        native: None,
         text: "required prior reasoning".into(),
         provider_metadata: Default::default(),
     }];
@@ -135,29 +131,6 @@ fn managed_protocol_rejects_lost_history_but_preserves_native_custom_calls() -> 
         );
     }
     Ok(())
-}
-
-#[test]
-fn managed_protocol_rejects_tool_constraints_lost_in_gemini_schema_conversion() {
-    let mut prompt = request().prompt;
-    for parameters in [
-        json!({"type":"object","additionalProperties":false}),
-        json!({"type":"object","properties":{"x":{"$ref":"#/$defs/x"}},"$defs":{"x":{"type":"string"}}}),
-        json!({"type":["string","integer"]}),
-    ] {
-        prompt.tools = vec![Tool::Function {
-            name: "read".into(),
-            description: None,
-            parameters,
-            strict: None,
-            provider_metadata: Default::default(),
-        }];
-        assert_eq!(
-            validate(ApiProtocol::GenerateContent, &prompt),
-            Err("tool_schema_conversion_requires_validation")
-        );
-        assert_eq!(validate(ApiProtocol::Responses, &prompt), Ok(()));
-    }
 }
 
 #[test]
@@ -191,10 +164,15 @@ fn managed_protocol_checks_preflight_controls_without_input_counting() -> Result
         ),
     ] {
         let mut req = request();
-        req.prompt.params.extra.insert(field.into(), value);
+        req.input
+            .generation_prompt_mut()
+            .ok_or_else(|| BitrouterError::internal("generation fixture"))?
+            .params
+            .extra
+            .insert(field.into(), value);
         let ctx = PipelineContext::new(req);
         assert_eq!(
-            executor.native_protocol_validation(&target, ctx.prompt(), &ctx),
+            executor.native_protocol_validation(&target, ctx.require_generation_prompt()?, &ctx),
             NativeProtocolValidation::Rejected {
                 reason: reason.into()
             }
@@ -202,22 +180,8 @@ fn managed_protocol_checks_preflight_controls_without_input_counting() -> Result
     }
     let ctx = PipelineContext::new(request());
     assert_eq!(
-        executor.native_protocol_validation(&target, ctx.prompt(), &ctx),
+        executor.native_protocol_validation(&target, ctx.require_generation_prompt()?, &ctx),
         NativeProtocolValidation::Compatible
-    );
-    let mut req = request();
-    req.prompt.params.extra.insert(
-        "__google_top_level__".into(),
-        json!({"cachedContent":"cachedContents/private"}),
-    );
-    let ctx = PipelineContext::new(req);
-    let mut target = target;
-    target.api_protocol = ApiProtocol::GenerateContent;
-    assert_eq!(
-        executor.native_protocol_validation(&target, ctx.prompt(), &ctx),
-        NativeProtocolValidation::Rejected {
-            reason: "unmanaged_provider_context_forbidden".into()
-        }
     );
     Ok(())
 }
@@ -225,7 +189,9 @@ fn managed_protocol_checks_preflight_controls_without_input_counting() -> Result
 #[tokio::test]
 async fn managed_control_cannot_admit_an_incompatible_http_route() -> Result<()> {
     let mut req = request();
-    req.prompt
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| BitrouterError::internal("generation fixture"))?
         .params
         .extra
         .insert("truncation".into(), json!("auto"));
@@ -254,22 +220,26 @@ async fn managed_control_cannot_admit_an_incompatible_http_route() -> Result<()>
 fn managed_protocol_rejects_render_errors_and_lost_tool_identities() -> Result<()> {
     let executor = executor::HttpExecutor::with_defaults()?;
     let mut req = request();
-    req.prompt.params.store = Some(true);
+    req.input
+        .generation_prompt_mut()
+        .ok_or_else(|| BitrouterError::internal("generation fixture"))?
+        .params
+        .store = Some(true);
     let ctx = PipelineContext::new(req);
     let mut route = target("fixture");
     route.api_protocol = ApiProtocol::Messages;
     assert_eq!(
-        executor.native_protocol_validation(&route, ctx.prompt(), &ctx),
+        executor.native_protocol_validation(&route, ctx.require_generation_prompt()?, &ctx),
         NativeProtocolValidation::Rejected {
             reason: "protocol_render_failed".into()
         }
     );
     route.api_protocol = ApiProtocol::Responses;
     assert_eq!(
-        executor.native_protocol_validation(&route, ctx.prompt(), &ctx),
+        executor.native_protocol_validation(&route, ctx.require_generation_prompt()?, &ctx),
         NativeProtocolValidation::Compatible
     );
-    let mut prompt = request().prompt;
+    let mut prompt = prompt();
     for (content, reason) in [
         (
             json!({"type":"tool_call","id":"call_1","name":"read","arguments":"{}","provider_metadata":{"openai":{"namespace":"workspace"}}}),
@@ -293,11 +263,7 @@ fn managed_protocol_rejects_render_errors_and_lost_tool_identities() -> Result<(
         message.content = vec![content];
         prompt.messages = vec![message];
         assert_eq!(validate(ApiProtocol::Responses, &prompt), Ok(()));
-        for protocol in [
-            ApiProtocol::ChatCompletions,
-            ApiProtocol::Messages,
-            ApiProtocol::GenerateContent,
-        ] {
+        for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::Messages] {
             assert_eq!(validate(protocol, &prompt), Err(reason));
         }
     }
@@ -308,7 +274,7 @@ fn managed_protocol_rejects_render_errors_and_lost_tool_identities() -> Result<(
         provider_metadata, ..
     } = &mut content
     {
-        crate::language_model::types::set_provider_metadata(
+        bitrouter_ai::types::set_provider_metadata(
             provider_metadata,
             "openai",
             "approvalId",

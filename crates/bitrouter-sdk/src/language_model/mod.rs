@@ -1,8 +1,9 @@
 //! The `language_model` pipeline — LLM chat / completion routing.
 //!
 //! This is the main BitRouter pipeline. Inbound requests on any of four wire
-//! protocols ([`ApiProtocol`]) are parsed into a canonical [`Prompt`] by the
-//! adapters in [`protocol`], run through the flight pipeline plus an
+//! protocols ([`ApiProtocol`](bitrouter_ai::types::ApiProtocol)) are parsed into
+//! a canonical [`Prompt`](bitrouter_ai::types::Prompt) by the adapters in
+//! [`bitrouter_ai::protocol`], run through the flight pipeline plus an
 //! interleaved stream stage, and rendered back in the inbound protocol.
 //!
 //! ## Pipeline stages
@@ -23,7 +24,8 @@
 //!    failure (5xx, timeout, 408/429) the [`FallbackPolicy`] advances to the
 //!    next target. Every [`ExecutionHook`] runs on success and failure.
 //! 4. **Stream stage** (interleaved when the response is streaming) —
-//!    each [`StreamHook`] sees every canonical [`StreamPart`] and can
+//!    each [`StreamHook`] sees every canonical
+//!    [`StreamPart`](bitrouter_ai::types::StreamPart) and can
 //!    [`Pass`](StreamAction::Pass), [`Replace`](StreamAction::Replace), or
 //!    [`Abort`](StreamAction::Abort) it.
 //! 5. **Settle** — every registered [`SettlementRecorder`] runs in
@@ -61,13 +63,13 @@
 //! (compile-time error). Cross-cutting reuse goes through crate-root library
 //! code, never a shared trait.
 
-pub mod auth;
 pub mod builder;
 pub mod context;
 pub mod executor;
 pub mod hooks;
 pub mod native;
 pub mod native_accounting;
+pub mod native_auth;
 mod native_auxiliary;
 pub mod native_context;
 pub mod native_continuation;
@@ -76,8 +78,8 @@ pub mod native_preparation;
 mod native_report;
 mod native_stream;
 pub mod native_work;
+pub mod operations;
 pub mod pipeline;
-pub mod protocol;
 pub mod request_checks;
 pub mod routing;
 pub mod server_tools;
@@ -91,36 +93,24 @@ mod tests;
 
 // ===== canonical re-exports — `language_model::Pipeline`, etc. =====
 
-pub use auth::{AuthApplier, AuthAppliers};
 pub use builder::PipelineBuilder;
 pub use context::{PipelineContext, StreamContext};
 pub use executor::{
-    DispatchExecutor, Executor, HttpExecutor, HttpTimeouts, MockExecutor, MockResponse,
-    StreamPartStream,
+    DispatchExecutor, Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
 };
 pub use hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
     PreRequestHook, RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
 pub use pipeline::{DEFAULT_KEEPALIVE, Pipeline};
-pub use protocol::{
-    InboundAdapter, OutboundAdapter, OutboundDispatch, SseEvent, StreamDecoder, StreamEncoder,
-    Transport, inbound_adapter_for, sanitize_model_name,
-};
 pub use routing::{
     DefaultFallbackPolicy, FallbackPolicy, ModelInfo, ModelResolution, ModelSelector, RoutingPrefs,
     RoutingTable, SortOrder, StaticRoutingTable,
 };
 pub use settlement::{SettlementContext, SettlementRecorder};
 pub use stream::{
-    STREAM_USAGE_ESTIMATOR_CHARS_PER_TOKEN, STREAM_USAGE_ESTIMATOR_VERSION, SseFrame,
-    SseKeepaliveStream, StreamAction, StreamInterest, StreamOutcome, StreamProcessor,
-    UsageAccumulator, UsagePricing, UsagePricingBracket, UsagePricingTier,
+    STREAM_USAGE_ESTIMATOR_CHARS_PER_TOKEN, STREAM_USAGE_ESTIMATOR_VERSION, SseKeepaliveStream,
+    StreamAction, StreamInterest, StreamOutcome, StreamProcessor, UsageAccumulator, UsagePricing,
+    UsagePricingBracket, UsagePricingTier,
 };
-pub use types::{
-    ApiProtocol, Capability, Content, DataContent, ExecutionResult, FinishReason, GenerateResult,
-    GenerationParams, Message, NormalizedUsage, PipelineRequest, PipelineResponse, Prompt,
-    ProviderMetadata, Role, RoutingTarget, ServerToolCall, ServerToolKind, ServerToolStatus,
-    Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
-    UsageNormalizationError, UsageOrigin,
-};
+pub use types::{ExecutionResult, PipelineRequest, PipelineResponse, RoutingTarget};

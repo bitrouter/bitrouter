@@ -1,7 +1,7 @@
 //! Task-scoped, lossless tool bodies with bounded UTF-8 page reads.
 
 use base64::Engine;
-use bitrouter_sdk::language_model::ToolResultOutput;
+use bitrouter_ai::types::ToolResultOutput;
 use serde::Deserialize;
 use serde_json::json;
 

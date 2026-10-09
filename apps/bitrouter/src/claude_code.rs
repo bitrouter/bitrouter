@@ -12,19 +12,21 @@
 //!   in-memory `providers:` map when the OAuth credential store holds a
 //!   `claude-code` credential (mirrors [`crate::cloud::enable_in_zero_config`]).
 //!
-//! These live in the app layer (not `bitrouter-providers`) because the routing
+//! These live in the app layer because the routing
 //! decision needs the ingress request (the parsed [`Prompt`] plus the inbound
 //! headers), which only exists above the SDK ingress seam, and because the
 //! enable step mutates the assembled [`Config`].
 
-use bitrouter_providers::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL};
+use bitrouter_ai::auth::credentials::Credential;
+use bitrouter_ai::auth::file::snapshot::CredentialStore;
+use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
+use bitrouter_ai::types::Prompt;
 use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ProviderConfig};
-use bitrouter_sdk::language_model::types::Prompt;
 
 /// Provider id of the Claude Pro/Max subscription provider. Must match the id
-/// the [`bitrouter_providers::claude_code::ClaudeCodeAuthApplier`] is registered
+/// the [`bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier`] is registered
 /// under and the id used in the explicit-provider route prefix below.
 const PROVIDER_ID: &str = "claude-code";
 
@@ -103,7 +105,7 @@ fn headers_indicate_claude_code(headers: &HeaderMap) -> bool {
 /// The inserted entry is an empty [`ProviderConfig::default()`]; the registry
 /// merge fills its `api_base` / `api_protocol` / auth from the fetched
 /// `claude-code` registry entry, the
-/// [`bitrouter_providers::claude_code::ClaudeCodeAuthApplier`] authenticates it,
+/// [`bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier`] authenticates it,
 /// and `claude-code`'s `access: local_oauth` keeps it active even though it
 /// declares no canonical models.
 ///
@@ -115,8 +117,8 @@ pub fn enable_if_logged_in(config: &mut Config) {
     // before reading the store, so a running daemon picks up the move to
     // `claude-code` on a serve / reload config-build pass.
     migrate_legacy_anthropic_marker_default();
-    let env_oauth_token_present = bitrouter_providers::claude_code::oauth_token_env_present();
-    let Ok(store) = CredentialStore::default_path() else {
+    let env_oauth_token_present = crate::providers::claude_code::oauth_token_env_present();
+    let Ok(store) = crate::provider_credentials::load_default() else {
         enable_if_logged_in_with_sources(config, None, env_oauth_token_present);
         return;
     };
@@ -134,7 +136,7 @@ const LEGACY_PROVIDER_ID: &str = "anthropic";
 /// default credential-store path. Best-effort: an unresolvable / unreadable
 /// store is a silent no-op. See [`migrate_legacy_anthropic_marker`].
 pub fn migrate_legacy_anthropic_marker_default() {
-    let Ok(store) = CredentialStore::default_path() else {
+    let Ok(store) = crate::provider_credentials::load_default() else {
         return;
     };
     let _ = migrate_legacy_anthropic_marker(store.path().to_path_buf());
@@ -209,7 +211,8 @@ fn enable_if_logged_in_with_sources(
     let logged_in = env_oauth_token_present
         || store
             .map(|s| {
-                !s.labels(PROVIDER_ID).is_empty() || s.get_any(PROVIDER_ID, DEFAULT_LABEL).is_some()
+                !s.labels(PROVIDER_ID).is_empty()
+                    || s.get_any(PROVIDER_ID, DEFAULT_ACCOUNT).is_some()
             })
             .unwrap_or(false);
     if !logged_in {
@@ -223,8 +226,8 @@ fn enable_if_logged_in_with_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_providers::oauth::credential_store::Credential;
-    use bitrouter_sdk::language_model::types::{GenerationParams, ProviderMetadata};
+    use bitrouter_ai::auth::credentials::Credential;
+    use bitrouter_ai::types::{GenerationParams, ProviderMetadata};
 
     /// A representative `anthropic-beta` value as genuine Claude Code sends it:
     /// the agent-profile beta first, then feature betas.
@@ -328,7 +331,7 @@ mod tests {
     fn enable_inserts_when_marker_present() {
         let mut store = fresh_tmp_store();
         store
-            .set(PROVIDER_ID, DEFAULT_LABEL, Credential::ClaudeCodeCli)
+            .set(PROVIDER_ID, DEFAULT_ACCOUNT, Credential::ClaudeCodeCli)
             .unwrap();
         let mut config = Config::default();
         enable_if_logged_in_with_sources(&mut config, Some(&store), false);
@@ -367,7 +370,11 @@ mod tests {
         // A pre-split (#590) user: the subscription marker lives under
         // `anthropic`, and `claude-code` has nothing yet.
         store
-            .set(LEGACY_PROVIDER_ID, DEFAULT_LABEL, Credential::ClaudeCodeCli)
+            .set(
+                LEGACY_PROVIDER_ID,
+                DEFAULT_ACCOUNT,
+                Credential::ClaudeCodeCli,
+            )
             .unwrap();
         drop(store);
 
@@ -376,14 +383,14 @@ mod tests {
         let reloaded = CredentialStore::load(&path).unwrap();
         assert!(
             matches!(
-                reloaded.get_any(PROVIDER_ID, DEFAULT_LABEL),
+                reloaded.get_any(PROVIDER_ID, DEFAULT_ACCOUNT),
                 Some(Credential::ClaudeCodeCli)
             ),
             "the marker must now live under `claude-code`"
         );
         assert!(
             reloaded
-                .get_any(LEGACY_PROVIDER_ID, DEFAULT_LABEL)
+                .get_any(LEGACY_PROVIDER_ID, DEFAULT_ACCOUNT)
                 .is_none(),
             "the legacy `anthropic` marker must be removed"
         );
@@ -398,7 +405,7 @@ mod tests {
         store
             .set(
                 LEGACY_PROVIDER_ID,
-                DEFAULT_LABEL,
+                DEFAULT_ACCOUNT,
                 Credential::api_key("sk-ant-api03-platform"),
             )
             .unwrap();
@@ -409,13 +416,13 @@ mod tests {
         let reloaded = CredentialStore::load(&path).unwrap();
         assert_eq!(
             reloaded
-                .get_any(LEGACY_PROVIDER_ID, DEFAULT_LABEL)
+                .get_any(LEGACY_PROVIDER_ID, DEFAULT_ACCOUNT)
                 .and_then(Credential::as_api_key),
             Some("sk-ant-api03-platform"),
             "the anthropic platform API key must be left in place"
         );
         assert!(
-            reloaded.get_any(PROVIDER_ID, DEFAULT_LABEL).is_none(),
+            reloaded.get_any(PROVIDER_ID, DEFAULT_ACCOUNT).is_none(),
             "no claude-code credential should be created for an API key"
         );
     }
@@ -428,12 +435,16 @@ mod tests {
         // already logged in to `claude-code`). The legacy entry must be left
         // as-is rather than overwriting the existing `claude-code` credential.
         store
-            .set(LEGACY_PROVIDER_ID, DEFAULT_LABEL, Credential::ClaudeCodeCli)
+            .set(
+                LEGACY_PROVIDER_ID,
+                DEFAULT_ACCOUNT,
+                Credential::ClaudeCodeCli,
+            )
             .unwrap();
         store
             .set(
                 PROVIDER_ID,
-                DEFAULT_LABEL,
+                DEFAULT_ACCOUNT,
                 Credential::api_key("sk-ant-oat-existing"),
             )
             .unwrap();
@@ -444,14 +455,14 @@ mod tests {
         let reloaded = CredentialStore::load(&path).unwrap();
         assert!(
             matches!(
-                reloaded.get_any(LEGACY_PROVIDER_ID, DEFAULT_LABEL),
+                reloaded.get_any(LEGACY_PROVIDER_ID, DEFAULT_ACCOUNT),
                 Some(Credential::ClaudeCodeCli)
             ),
             "the anthropic marker must be left as-is when claude-code already has a credential"
         );
         assert_eq!(
             reloaded
-                .get_any(PROVIDER_ID, DEFAULT_LABEL)
+                .get_any(PROVIDER_ID, DEFAULT_ACCOUNT)
                 .and_then(Credential::as_api_key),
             Some("sk-ant-oat-existing"),
             "the pre-existing claude-code credential must not be clobbered"
@@ -474,7 +485,7 @@ mod tests {
     fn enable_noop_when_already_present() {
         let mut store = fresh_tmp_store();
         store
-            .set(PROVIDER_ID, DEFAULT_LABEL, Credential::ClaudeCodeCli)
+            .set(PROVIDER_ID, DEFAULT_ACCOUNT, Credential::ClaudeCodeCli)
             .unwrap();
         let mut config = Config::default();
         // Pre-populate with a sentinel `api_base` to prove the existing entry

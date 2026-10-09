@@ -1,6 +1,7 @@
 # Router & Extension Spec
 
-状态：**v0.7，Beta 编译式扩展与共享前台宿主；实现与本地验证结果见验收记录，尚不表示已发布。**
+状态：**v0.7，Beta 编译式扩展与共享前台宿主；#923 已合并，并随 v1.0.0-alpha.33 预发布。**
+实现与本地验证结果见[验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
 
 本版替代 v0.5 的 Native/HTTP 双交付设计。Beta 的可执行 extension 统一编译进自定义宿主，
 启动时注册能力，router 显式绑定。删除 HTTP checker 服务、wire crate 和连通 probe；

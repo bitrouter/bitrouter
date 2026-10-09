@@ -2,9 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use bitrouter_ai::types::{Message, Prompt, Role};
 use bitrouter_sdk::decision_model::policy::DecisionPolicy;
 use bitrouter_sdk::decision_model::types::{Answer, DecisionRequest, DecisionResponse, Question};
-use bitrouter_sdk::language_model::types::{Message, Prompt, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

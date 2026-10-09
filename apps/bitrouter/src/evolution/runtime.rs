@@ -5,13 +5,14 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
+use bitrouter_ai::types::StreamPart;
 use bitrouter_sdk::config::ConfigRoutingTable;
+use bitrouter_sdk::language_model::StreamContext;
 use bitrouter_sdk::language_model::hooks::{HopOutcome, ObserveHook, Phase, RequestOutcome};
 use bitrouter_sdk::language_model::{
     HookDecision, PipelineContext, PreRequestHook, RouteHook, RoutingTarget, SettlementContext,
     SettlementRecorder,
 };
-use bitrouter_sdk::language_model::{StreamContext, StreamPart};
 use bitrouter_sdk::{BitrouterError, PipelineEvent};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -458,7 +459,9 @@ impl EvolutionRuntime {
                 ctx.request_id(),
                 DecisionContext {
                     selector: ctx.model().to_owned(),
-                    fingerprint: crate::policy_table_router::PolicyTable::fingerprint(ctx.prompt()),
+                    fingerprint: crate::policy_table_router::PolicyTable::fingerprint(
+                        ctx.require_generation_prompt()?,
+                    ),
                 },
                 &dependencies,
                 bypass,
@@ -688,7 +691,7 @@ impl SettlementRecorder for EvolutionRuntime {
         let total_cost = if hops.is_empty() && ctx.error.is_some() {
             Some(0)
         } else if hops.len() == 1
-            && ctx.usage_origin == bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+            && ctx.usage_origin == bitrouter_ai::types::UsageOrigin::ProviderReported
         {
             final_cost
         } else {

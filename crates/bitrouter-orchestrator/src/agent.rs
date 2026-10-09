@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bitrouter_ai::types::ReasoningEffort;
+use bitrouter_ai::types::{Message, Role, ToolResultOutput, Usage};
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::ReasoningEffort;
-use bitrouter_sdk::language_model::{Message, Role, ToolResultOutput, Usage};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -265,7 +265,7 @@ impl Agent {
         self
     }
 
-    fn declarations(&self) -> Vec<bitrouter_sdk::language_model::Tool> {
+    fn declarations(&self) -> Vec<bitrouter_ai::types::Tool> {
         let mut tools = self.tools.declarations();
         if let Some(resources) = &self.resources {
             tools.extend(

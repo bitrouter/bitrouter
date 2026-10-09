@@ -53,6 +53,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use bitrouter_ai::types::{
+    ApiProtocol, AuthScheme, Content, FinishReason, GenerateResult, Prompt, StreamPart, ToolChoice,
+    Usage,
+};
 use bitrouter_orchestrator::core::checkpoint::{
     CheckpointAck, CheckpointBatch, DurableHead, sha256,
 };
@@ -72,10 +76,7 @@ use bitrouter_sdk::language_model::executor::{
 use bitrouter_sdk::language_model::hooks::{ObserveHook, Phase, RequestOutcome};
 use bitrouter_sdk::language_model::routing::StaticRoutingTable;
 use bitrouter_sdk::language_model::settlement::{SettlementContext, SettlementRecorder};
-use bitrouter_sdk::language_model::types::{
-    ApiProtocol, AuthScheme, Content, ExecutionResult, FinishReason, GenerateResult, Prompt,
-    RoutingTarget, StreamPart, ToolChoice, Usage,
-};
+use bitrouter_sdk::language_model::types::{ExecutionResult, RoutingTarget};
 use serde_json::json;
 use support::DurableHarness;
 use tokio::sync::{Mutex, Semaphore};
@@ -530,7 +531,7 @@ impl Executor for CollaborationExecutor {
             if prompt
                 .messages
                 .iter()
-                .any(|message| message.role == bitrouter_sdk::language_model::types::Role::Tool)
+                .any(|message| message.role == bitrouter_ai::types::Role::Tool)
             {
                 vec![text("child tool completed")]
             } else {
@@ -546,8 +547,7 @@ impl Executor for CollaborationExecutor {
                     let mut ids = Vec::new();
                     for part in prompt.messages.iter().flat_map(|message| &message.content) {
                         if let Content::ToolResult {
-                            output:
-                                bitrouter_sdk::language_model::types::ToolResultOutput::Text { value },
+                            output: bitrouter_ai::types::ToolResultOutput::Text { value },
                             ..
                         } = part
                             && let Ok(value) = serde_json::from_str::<serde_json::Value>(value)
@@ -699,17 +699,17 @@ impl bitrouter_sdk::app::PromptTransform for ChangeOutputReservation {
 struct NoOutputLimitAuth(Arc<AtomicUsize>);
 
 #[async_trait]
-impl bitrouter_sdk::language_model::auth::AuthApplier for NoOutputLimitAuth {
-    fn output_token_limit_support(&self, _: &RoutingTarget) -> Option<bool> {
+impl bitrouter_ai::auth::AuthApplier for NoOutputLimitAuth {
+    fn output_token_limit_support(&self, _: &bitrouter_ai::target::ModelTarget) -> Option<bool> {
         Some(false)
     }
     async fn apply(
         &self,
         _: reqwest::Request,
-        _: &RoutingTarget,
-    ) -> bitrouter_sdk::Result<reqwest::Request> {
+        _: &bitrouter_ai::target::ModelTarget,
+    ) -> bitrouter_ai::error::Result<reqwest::Request> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(bitrouter_sdk::BitrouterError::internal(
+        Err(bitrouter_ai::error::ModelError::invalid_request(
             "infeasible route must not authenticate",
         ))
     }
@@ -717,9 +717,9 @@ impl bitrouter_sdk::language_model::auth::AuthApplier for NoOutputLimitAuth {
 
 #[tokio::test]
 async fn unsupported_output_reservation_rejects_before_authentication_or_attempt() -> TestResult {
-    use bitrouter_sdk::language_model::auth::AuthAppliers;
+    use bitrouter_ai::auth::AuthAppliers;
+    use bitrouter_ai::protocol::OutboundDispatch;
     use bitrouter_sdk::language_model::executor::HttpExecutor;
-    use bitrouter_sdk::language_model::protocol::OutboundDispatch;
     let calls = Arc::new(AtomicUsize::new(0));
     let executor = HttpExecutor::with_dispatch_and_auth(
         Default::default(),
@@ -756,9 +756,9 @@ async fn unsupported_output_reservation_rejects_before_authentication_or_attempt
 
 #[tokio::test]
 async fn model_ceiling_reserves_uncapped_output_before_authentication() -> TestResult {
-    use bitrouter_sdk::language_model::auth::AuthAppliers;
+    use bitrouter_ai::auth::AuthAppliers;
+    use bitrouter_ai::protocol::OutboundDispatch;
     use bitrouter_sdk::language_model::executor::HttpExecutor;
-    use bitrouter_sdk::language_model::protocol::OutboundDispatch;
     for ceiling in [None, Some(0), Some(127), Some(128), Some(129)] {
         let calls = Arc::new(AtomicUsize::new(0));
         let executor = HttpExecutor::with_dispatch_and_auth(
@@ -1208,6 +1208,7 @@ fn grant() -> OwnershipGrant {
 
 fn target(provider: &str) -> RoutingTarget {
     RoutingTarget {
+        chat_google_extensions: false,
         provider_name: provider.into(),
         service_id: "fixture-model".into(),
         api_base: "https://example.invalid".into(),
@@ -2013,6 +2014,26 @@ async fn permission_update_preserves_frozen_calls_but_denies_unstarted_tools() -
             Some(ToolOutcome::Denied)
         );
         assert!(turn.invocations[0].consumed);
+        let prompts = executor.prompts.lock().await;
+        assert!(prompts[1].messages.iter().flat_map(|message| &message.content).any(|part| {
+            matches!(part, Content::ToolResult { output: bitrouter_ai::types::ToolResultOutput::Json { value }, .. }
+                if value["status"] == "error" && value["output"]["type"] == "error_text")
+        }));
+        assert!(
+            done.agents[&done.agent_id]
+                .history
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|part| {
+                    matches!(
+                        part,
+                        Content::ToolResult {
+                            output: bitrouter_ai::types::ToolResultOutput::ErrorText { .. },
+                            ..
+                        }
+                    )
+                })
+        );
     }
     Ok(())
 }

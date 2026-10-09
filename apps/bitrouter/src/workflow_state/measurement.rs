@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use bitrouter_sdk::language_model::types::ReasoningEffort;
+use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
 use crate::eval::types::{

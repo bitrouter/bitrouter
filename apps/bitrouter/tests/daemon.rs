@@ -12,9 +12,10 @@ use bitrouter::build_app_with_path;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, NoopObserveStatus, NoopReloader};
 use bitrouter::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use bitrouter::session_identity::{RequestOrigin, SessionIdentityObserved};
+use bitrouter_ai::types::UsageOrigin;
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
+use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 
 /// A reloader that re-reads only the routing table. Used by the reload test —
 /// production callers use the AppReloader in main.rs which also reloads the
@@ -626,7 +627,7 @@ providers:
 /// fetched registry, not a compiled-in snapshot.) If the reload path swapped in
 /// a bare file re-read (skipping `apply_builtin_defaults`), the provider would
 /// come back with an empty `api_base`. The SDK's own `RoutingTable::reload`
-/// cannot fix this — it sits below `bitrouter-providers` — so the reloader
+/// cannot fix this — it has no application provider bridge — so the reloader
 /// rebuilds the config in the app layer.
 #[tokio::test]
 async fn reload_re_applies_builtin_provider_catalog() -> anyhow::Result<()> {
@@ -932,12 +933,33 @@ async fn client_fails_clearly_when_no_daemon_is_listening() {
 async fn settle_attributed_request(metering: MeteringStore, controller: &str, root: &str) {
     let mut pricing = PricingTable::new();
     pricing.insert("openai", "gpt-5", ModelPricing::new(2.0, 10.0));
+    let target = bitrouter_sdk::language_model::types::RoutingTarget {
+        model_constraints: Default::default(),
+        provider_name: "openai".into(),
+        service_id: "gpt-5".into(),
+        api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,
+        api_base: "https://fixture.invalid/v1".into(),
+        api_key: String::new(),
+        api_key_override: None,
+        api_base_override: None,
+        account_label: None,
+        auth_scheme: Default::default(),
+        headers: Vec::new(),
+        reasoning_effort: None,
+        chat_token_limit_field: None,
+        chat_supports_store: None,
+        chat_supports_stream_options: None,
+        chat_google_extensions: false,
+    };
+    pricing.configure_endpoint("openai", None, &target.api_base);
+    let tariff = pricing.snapshot(&target);
     let recorder = MeteringRecorder::new(metering, Arc::new(pricing));
     let request_id = format!("spend-{controller}-{root}");
     let mut settled = SettlementContext {
+        operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: request_id.clone(),
         caller: CallerContext::local(),
-        target: None,
+        target: Some(target),
         model_id: "gpt-5".into(),
         reasoning_effort: None,
         provider_id: "openai".into(),
@@ -963,6 +985,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         error: None,
         events: bitrouter_sdk::EventBus::new(),
     };
+    settled.emit(tariff);
     settled.emit(SessionIdentityObserved {
         router_request_id: request_id,
         origin: RequestOrigin::AcpHarnessRequest,

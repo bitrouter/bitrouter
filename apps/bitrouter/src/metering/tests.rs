@@ -30,10 +30,28 @@ async fn pool() -> DatabaseConnection {
 }
 
 fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
-    SettlementContext {
+    let mut context = SettlementContext {
+        operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: format!("r-{api_key}-{prompt}-{completion}"),
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
-        target: None,
+        target: Some(bitrouter_sdk::language_model::types::RoutingTarget {
+            model_constraints: Default::default(),
+            provider_name: "openai".into(),
+            service_id: "gpt-5".into(),
+            api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,
+            api_base: "https://fixture.invalid/v1".into(),
+            api_key: String::new(),
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            chat_google_extensions: false,
+            reasoning_effort: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+            headers: Vec::new(),
+        }),
         model_id: "gpt-5".into(),
         reasoning_effort: None,
         provider_id: "openai".into(),
@@ -43,7 +61,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         reasoning_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
-        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
         raw_usage: None,
         web_search_count: 0,
         media_input_count: 0,
@@ -58,6 +76,16 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         finish_reason: None,
         error: None,
         events: bitrouter_sdk::EventBus::new(),
+    };
+    freeze_tariff(&mut context, &pricing());
+    context
+}
+
+fn freeze_tariff(context: &mut SettlementContext, pricing: &PricingTable) {
+    if let Some(target) = &context.target {
+        let mut anchored = pricing.clone();
+        anchored.configure_endpoint(&target.provider_name, None, &target.api_base);
+        context.emit(anchored.snapshot(target));
     }
 }
 
@@ -292,9 +320,10 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
     let store = MeteringStore::new(pool);
     let recorder = MeteringRecorder::new(store.clone(), Arc::new(PricingTable::new()));
     let mut settlement = ctx("unknown", 0, 0);
+    settlement.target = None;
     settlement.provider_id.clear();
     settlement.model_id.clear();
-    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.error = Some(bitrouter_sdk::BitrouterError::NotFound(
         "no active provider declares the selected model".into(),
     ));
@@ -308,7 +337,7 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
     assert_eq!(event.model_id, "");
     assert_eq!(
         event.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::Unknown
+        bitrouter_ai::types::UsageOrigin::Unknown
     );
     assert_eq!(event.prompt_tokens, None);
     assert_eq!(event.completion_tokens, None);
@@ -323,7 +352,7 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
     let record = records.first().expect("one routing failure row");
     assert_eq!(
         record.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::Unknown
+        bitrouter_ai::types::UsageOrigin::Unknown
     );
     assert_eq!(record.raw_usage, None);
     assert_eq!(record.charge_status, super::ChargeStatus::Unknown);
@@ -381,7 +410,7 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
         "gpt-5",
         ModelPricing::cache_aware(Some(2.0), Some(0.2), Some(2.5), Some(10.0)),
     );
-    let recorder = MeteringRecorder::new(store.clone(), Arc::new(table));
+    let recorder = MeteringRecorder::new(store.clone(), Arc::new(table.clone()));
     let raw = serde_json::json!({
         "prompt_tokens": 100,
         "completion_tokens": 30,
@@ -389,6 +418,7 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
         "cache_write_tokens": 20
     });
     let mut settlement = ctx("cache", 100, 30);
+    freeze_tariff(&mut settlement, &table);
     settlement.reasoning_tokens = 10;
     settlement.cache_read_tokens = 40;
     settlement.cache_write_tokens = 20;
@@ -423,8 +453,10 @@ async fn recorder_marks_charge_unknown_when_pricing_is_missing() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
     let empty = Arc::new(PricingTable::new());
-    let recorder = MeteringRecorder::new(store.clone(), empty);
-    recorder.record(&mut ctx("k1", 10, 5)).await?;
+    let recorder = MeteringRecorder::new(store.clone(), empty.clone());
+    let mut settlement = ctx("k1", 10, 5);
+    freeze_tariff(&mut settlement, &empty);
+    recorder.record(&mut settlement).await?;
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 0);
     // The row was still written — count is 1.
@@ -502,7 +534,7 @@ async fn computed_receipt_replaces_local_usage_only_when_charge_matches() -> Res
     assert_eq!(record.charge_status, super::ChargeStatus::Computed);
     assert_eq!(
         record.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::AuthoritativeReceipt
+        bitrouter_ai::types::UsageOrigin::AuthoritativeReceipt
     );
     assert!(record.authoritative_receipt.is_some());
     Ok(())
@@ -977,7 +1009,7 @@ async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> 
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("unknown", 0, 0);
-    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
 
     recorder.record(&mut settlement).await?;
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
@@ -1000,7 +1032,7 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("policy", 0, 0);
-    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.raw_usage = None;
     settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation {
         message: "provider detail must not persist".to_string(),
@@ -1012,7 +1044,7 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
 
     assert_eq!(
         record.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+        bitrouter_ai::types::UsageOrigin::ProviderReported
     );
     assert_eq!(
         record.raw_usage.as_ref(),
@@ -1032,7 +1064,7 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
         .expect("metering settlement event");
     assert_eq!(
         event.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::Unknown
+        bitrouter_ai::types::UsageOrigin::Unknown
     );
     assert_eq!(event.total_tokens, None);
     assert_eq!(event.cost_micro_usd, None);
@@ -1045,7 +1077,7 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("rate-limited", 0, 0);
-    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.raw_usage = None;
     settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited {
         retry_after: None,
@@ -1062,7 +1094,7 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
 
     assert_eq!(
         record.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+        bitrouter_ai::types::UsageOrigin::ProviderReported
     );
     assert_eq!(
         record.raw_usage.as_ref(),
@@ -1083,7 +1115,7 @@ async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("legacy-rate-limit", 0, 0);
-    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited {
         retry_after: None,
         detail: None,
@@ -1112,7 +1144,7 @@ async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<
 
     assert_eq!(
         record.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+        bitrouter_ai::types::UsageOrigin::ProviderReported
     );
     assert_eq!(record.error_code.as_deref(), Some("upstream_rate_limited"));
     assert_eq!(record.final_charge_micro_usd, Some(0));
@@ -1126,7 +1158,7 @@ async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> R
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("legacy-policy", 0, 0);
-    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation {
         message: "legacy provider detail".to_string(),
     });
@@ -1148,7 +1180,7 @@ async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> R
 
     assert_eq!(
         record.usage_origin,
-        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+        bitrouter_ai::types::UsageOrigin::ProviderReported
     );
     assert_eq!(
         record.error_code.as_deref(),
@@ -1340,7 +1372,7 @@ fn usage_price_override_imputes_missing_charges() {
         model_id: "gpt-5.5".to_string(),
         prompt_tokens: 21,
         completion_tokens: 17,
-        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
         raw_usage: Some(serde_json::json!({
             "input_tokens": 21,
             "output_tokens": 17
@@ -1372,7 +1404,7 @@ fn usage_price_override_refuses_unknown_usage() {
         provider_id: "openai-codex".to_string(),
         model_id: "gpt-5.5".to_string(),
         status: Some("failed".to_string()),
-        usage_origin: bitrouter_sdk::language_model::UsageOrigin::Unknown,
+        usage_origin: bitrouter_ai::types::UsageOrigin::Unknown,
         raw_usage: None,
         ..Default::default()
     }];
@@ -1425,7 +1457,7 @@ fn four_rate_override_prices_cache_buckets() {
         reasoning_tokens: 10,
         cache_read_tokens: 40,
         cache_write_tokens: 20,
-        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
         raw_usage: Some(serde_json::json!({
             "input_tokens": 100,
             "output_tokens": 30,
@@ -1453,7 +1485,7 @@ fn legacy_two_rate_override_refuses_cached_usage() {
         prompt_tokens: 100,
         completion_tokens: 30,
         cache_read_tokens: 40,
-        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
         raw_usage: Some(serde_json::json!({
             "input_tokens": 100,
             "output_tokens": 30,

@@ -1,7 +1,7 @@
 //! Model-facing evidence operations. Authority is checked against the task's
 //! admitted evidence inventory, independently of semantic decisions.
 
-use bitrouter_sdk::language_model::types::Tool;
+use bitrouter_ai::types::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

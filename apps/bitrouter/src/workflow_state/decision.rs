@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use bitrouter_sdk::language_model::types::ReasoningEffort;
+use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_sdk::{BitrouterError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

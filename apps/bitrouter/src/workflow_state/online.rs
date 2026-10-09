@@ -1,5 +1,5 @@
+use bitrouter_ai::types::Prompt;
 use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::language_model::types::Prompt;
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::extractors::{
@@ -262,10 +262,10 @@ fn parse_protocol(value: &str) -> Option<ProtocolKind> {
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::language_model::types::{
+    use bitrouter_ai::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
     };
+    use bitrouter_sdk::HeaderMap;
     use http::HeaderValue;
 
     use crate::workflow_state::ir::{HarnessId, ProtocolKind};

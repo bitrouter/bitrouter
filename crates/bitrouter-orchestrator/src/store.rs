@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use bitrouter_sdk::language_model::{Message, Prompt, Usage};
+use bitrouter_ai::types::{Message, Prompt, Usage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 

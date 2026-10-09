@@ -580,9 +580,8 @@ struct RaceHook(Arc<BudgetRace>);
 impl RaceHook {
     async fn is_root(&self, ctx: &PipelineContext) -> bool {
         let root = self.0.root_id.lock().await;
-        ctx.prompt()
-            .system
-            .as_ref()
+        ctx.generation_prompt()
+            .and_then(|prompt| prompt.system.as_ref())
             .is_some_and(|system| system.starts_with(&format!("You are agent {root} ")))
     }
 }

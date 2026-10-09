@@ -1,7 +1,7 @@
 use super::*;
+use bitrouter_ai::types::Role;
 use bitrouter_orchestrator::core::protocol::{ContextMode, DiscardableHistory};
 use bitrouter_sdk::language_model::native::{InputTokenCounting, NativeInputCount};
-use bitrouter_sdk::language_model::types::Role;
 
 struct RebuildExecutor {
     mock: MockExecutor,
@@ -55,12 +55,10 @@ struct ReferToPriorPlan;
 
 impl bitrouter_sdk::app::PromptTransform for ReferToPriorPlan {
     fn apply(&self, prompt: &mut Prompt) {
-        prompt
-            .messages
-            .push(bitrouter_sdk::language_model::types::Message::text(
-                Role::User,
-                "Follow the prior assistant plan and use the artifact from the old tool result.",
-            ));
+        prompt.messages.push(bitrouter_ai::types::Message::text(
+            Role::User,
+            "Follow the prior assistant plan and use the artifact from the old tool result.",
+        ));
     }
 }
 

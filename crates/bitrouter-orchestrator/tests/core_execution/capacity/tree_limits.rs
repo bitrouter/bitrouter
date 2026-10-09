@@ -473,7 +473,7 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
         assert_eq!(call.result.as_ref(), Some(outcome));
         assert!(call.consumed);
         let paired = agent.history.iter().flat_map(|message| &message.content).filter(|part| {
-            matches!(part, Content::ToolResult { call_id, tool_name, output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value }, .. } if call_id == &call.provider_call_id && tool_name.as_deref() == Some(command.tool.as_str()) && value == &outcome.output)
+            matches!(part, Content::ToolResult { call_id, tool_name, output: bitrouter_ai::types::ToolResultOutput::Text { value }, .. } if call_id == &call.provider_call_id && tool_name.as_deref() == Some(command.tool.as_str()) && value == &outcome.output)
         }).count();
         assert_eq!(paired, 1);
     }
@@ -516,8 +516,7 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
                 done.agents[agent]
                     .history
                     .iter()
-                    .filter(|message| message.role
-                        == bitrouter_sdk::language_model::types::Role::Assistant)
+                    .filter(|message| message.role == bitrouter_ai::types::Role::Assistant)
                     .flat_map(|message| &message.content)
                     .any(|part| matches!(part, Content::Text { text, .. } if text == &answer)),
                 "answer attribution missing for {agent}"

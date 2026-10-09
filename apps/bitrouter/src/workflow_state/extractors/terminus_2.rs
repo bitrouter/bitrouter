@@ -6,7 +6,7 @@
 //! Official implementation and prompt contract:
 //! <https://github.com/harbor-framework/harbor/tree/main/src/harbor/agents/terminus_2>
 
-use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
+use bitrouter_ai::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::{
     GenericPromptExtractor, apply_trajectory_pressure, plain_output_reports_failure,
@@ -288,9 +288,7 @@ fn latest_assistant_action(prompt: &Prompt) -> Option<ParsedAction> {
         .and_then(parse_assistant_action)
 }
 
-fn parse_assistant_action(
-    message: &bitrouter_sdk::language_model::types::Message,
-) -> Option<ParsedAction> {
+fn parse_assistant_action(message: &bitrouter_ai::types::Message) -> Option<ParsedAction> {
     message
         .content
         .iter()
@@ -303,9 +301,7 @@ fn parse_assistant_action(
         })
 }
 
-pub(crate) fn assistant_action_executes_commands(
-    message: &bitrouter_sdk::language_model::types::Message,
-) -> bool {
+pub(crate) fn assistant_action_executes_commands(message: &bitrouter_ai::types::Message) -> bool {
     message.role == Role::Assistant
         && parse_assistant_action(message).is_some_and(|action| action.executes_commands())
 }
@@ -370,7 +366,7 @@ pub(crate) fn normalized_action_history_from(
     action_seen.then_some(history)
 }
 
-fn plain_message_text(message: &bitrouter_sdk::language_model::types::Message) -> Option<String> {
+fn plain_message_text(message: &bitrouter_ai::types::Message) -> Option<String> {
     let text = message
         .content
         .iter()

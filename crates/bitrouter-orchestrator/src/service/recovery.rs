@@ -8,8 +8,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use bitrouter_ai::types::{Content, Message, Role};
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{Content, Message, Role};
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;

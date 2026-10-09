@@ -569,8 +569,8 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use bitrouter_ai::types::ReasoningEffort;
     use bitrouter_sdk::config::{AdequacyConfig, PolicyModelTarget};
-    use bitrouter_sdk::language_model::types::ReasoningEffort;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::types::{

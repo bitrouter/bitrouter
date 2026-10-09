@@ -393,3 +393,12 @@ The native managed CLI publishes skill metadata and optional MCP instruction
 references, but does not automatically select these optional materials for model
 context. Library callers can select their IDs through `TaskInput.required_materials`;
 AGENTS.md is always required. Automatic skill selection remains follow-up work.
+
+### Model integration boundary
+
+Managed Responses runs through the generation pipeline. The ordinary native
+Decisions API remains a separate operation; it is not the managed agent channel.
+Core prepares failed tool results as explicit JSON error envelopes for models
+whose wire lacks a tool-error flag, while durable history retains typed outcomes.
+Context rebuild keeps the admitted route and price snapshot and rechecks
+credentials and required context before another provider call.

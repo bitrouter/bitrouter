@@ -3,7 +3,7 @@
 # the `claude-code` / `openai-codex` subscription pattern: flat-rate (no
 # per-token pricing), activated by importing the official Grok CLI's session.
 #
-# The `supergrok` handler is implemented in bitrouter_providers::supergrok: it
+# The `supergrok` handler is implemented in bitrouter_ai::providers::supergrok: it
 # adopts the Grok CLI's OIDC session (`~/.grok/auth.json`) via
 # `bro providers login supergrok`, sets `Authorization: Bearer <jwt>`
 # against `api.x.ai/v1`, and refreshes via the public OIDC client below. The

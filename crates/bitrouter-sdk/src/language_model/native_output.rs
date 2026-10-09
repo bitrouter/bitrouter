@@ -2,7 +2,7 @@
 //! allocations and the original settlement evidence retain their own lifetimes.
 
 use super::native::{NativeOutputRejection, NativeOutputUsage};
-use super::types::GenerateResult;
+use bitrouter_ai::types::GenerateResult;
 
 pub(super) fn fits(result: &impl serde::Serialize, limit: u64) -> bool {
     serde_json::to_writer(BoundedCounter(limit), result).is_ok()

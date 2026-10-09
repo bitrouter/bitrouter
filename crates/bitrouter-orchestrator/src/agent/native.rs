@@ -11,7 +11,7 @@ mod tools;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bitrouter_sdk::language_model::{Message, Role, Tool};
+use bitrouter_ai::types::{Message, Role, Tool};
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

@@ -45,9 +45,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::cloud::account::manager::CredentialManager;
 use anyhow::Context;
-use bitrouter_providers::hosted::account::credentials::CredentialKind;
-use bitrouter_providers::hosted::account::manager::CredentialManager;
+use bitrouter_ai::providers::hosted::credentials::CredentialKind;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
@@ -163,6 +163,7 @@ impl ManagementClient {
     /// Fetch a fresh bearer confined to the management client's origin.
     async fn bearer(&self) -> Result<String> {
         self.manager
+            .session()
             .resolve_bearer(None, Some(&self.base_url))
             .await
             .map(|credential| credential.secret().to_owned())

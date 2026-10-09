@@ -2,7 +2,8 @@
 //! switching decisions are deterministic. Prices and byte/token conversion
 //! are local planning assumptions, never observed billing or cache evidence.
 
-use crate::language_model::{Prompt, native::NativePlan};
+use crate::language_model::native::NativePlan;
+use bitrouter_ai::types::Prompt;
 use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeSet;

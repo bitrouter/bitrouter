@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use super::backend::{SearchOptions, WebSearchBackend, WebSearchResults};
 use crate::language_model::server_tools::nested::{NestedRequest, NestedRunner};
 use crate::language_model::server_tools::toolset::ToolContext;
-use crate::language_model::types::Tool;
+use bitrouter_ai::types::Tool;
 
 /// Nudges the nested model to actually search and attribute its answer.
 const SEARCH_SYSTEM: &str = "You are a web-search assistant. Use web search to answer the user's query \
@@ -151,7 +151,7 @@ mod tests {
             id: "anthropic.web_search_20250305".into(),
             name: "web_search".into(),
             args: serde_json::json!({}),
-            provider_metadata: crate::language_model::types::ProviderMetadata::new(),
+            provider_metadata: bitrouter_ai::types::ProviderMetadata::new(),
         };
         let backend = NestedSearchBackend::new(
             "native".into(),

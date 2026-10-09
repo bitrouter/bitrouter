@@ -203,15 +203,15 @@ pub enum ThreadChange {
         item_id: String,
         request_id: String,
         requested_model: String,
-        usage: Option<bitrouter_sdk::language_model::Usage>,
-        message: bitrouter_sdk::language_model::Message,
+        usage: Option<bitrouter_ai::types::Usage>,
+        message: bitrouter_ai::types::Message,
         calls: Vec<CallRecord>,
     },
     AssistantInterrupted {
         turn_id: String,
         step_id: String,
         item_id: String,
-        partial: bitrouter_sdk::language_model::Message,
+        partial: bitrouter_ai::types::Message,
         detail: String,
     },
     ToolIntent {
@@ -223,7 +223,7 @@ pub enum ThreadChange {
         turn_id: String,
         step_id: String,
         item_id: String,
-        message: bitrouter_sdk::language_model::Message,
+        message: bitrouter_ai::types::Message,
         effect: EffectStatus,
     },
     VerificationResult {

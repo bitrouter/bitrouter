@@ -886,7 +886,7 @@ fn print_onboarding_hint() {
 /// `BITROUTER_API_KEY` (rendered separately as step 2). Used by the
 /// onboarding hint.
 fn other_provider_env_var_hints() -> Vec<String> {
-    let mut vars: Vec<String> = bitrouter_providers::zero_config_env_var_providers()
+    let mut vars: Vec<String> = crate::catalog::credential_env_var_providers()
         .into_iter()
         .map(|(_, env)| env)
         .filter(|v| v != "BITROUTER_API_KEY")

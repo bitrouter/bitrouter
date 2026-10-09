@@ -258,7 +258,7 @@ async fn cleanup_capacity_survives_saturation_full_tool_outcomes_and_release() -
             assert_eq!(retained.result.as_ref(), Some(&definite));
             assert!(retained.consumed);
             assert_eq!(retained.prior_uncertain_result.is_some(), unknown);
-            assert!(done.agents[&done.agent_id].history.iter().flat_map(|message| &message.content).any(|content| matches!(content, Content::ToolResult { output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value }, .. } if value == &definite.output)));
+            assert!(done.agents[&done.agent_id].history.iter().flat_map(|message| &message.content).any(|content| matches!(content, Content::ToolResult { output: bitrouter_ai::types::ToolResultOutput::Text { value }, .. } if value == &definite.output)));
             assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
             session
                 .release(&"z".repeat(128), session.head().await.state_revision)
@@ -508,7 +508,7 @@ async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_los
                 Some(outcome)
             );
             assert!(agent.history.iter().flat_map(|message| &message.content).any(|part| {
-                matches!(part, Content::ToolResult { output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value }, .. } if value == &outcome.output)
+                matches!(part, Content::ToolResult { output: bitrouter_ai::types::ToolResultOutput::Text { value }, .. } if value == &outcome.output)
             }));
             assert!(before.agents[&command.agent_id].mailbox.iter().all(|mail| {
                 agent.mailbox.iter().any(|retained| {

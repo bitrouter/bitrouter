@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use bitrouter_sdk::language_model::protocol::InboundAdapter;
-use bitrouter_sdk::language_model::protocol::chat_completions::ChatCompletionsAdapter;
-use bitrouter_sdk::language_model::protocol::messages::MessagesAdapter;
-use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
-use bitrouter_sdk::language_model::types::Prompt;
+use bitrouter_ai::protocol::InboundAdapter;
+use bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter;
+use bitrouter_ai::protocol::messages::MessagesAdapter;
+use bitrouter_ai::protocol::responses::ResponsesAdapter;
+use bitrouter_ai::types::Prompt;
 use bitrouter_sdk::{BitrouterError, HeaderMap, Result};
 use http::{HeaderName, HeaderValue};
 
@@ -167,16 +167,26 @@ pub(crate) fn parse_prompt(
     canonical_prompt: Option<serde_json::Value>,
 ) -> Result<Prompt> {
     match protocol {
-        ProtocolKind::ChatCompletions => ChatCompletionsAdapter.parse_request(body),
-        ProtocolKind::Messages => MessagesAdapter.parse_request(body),
-        ProtocolKind::Responses => ResponsesAdapter.parse_request(body),
+        ProtocolKind::ChatCompletions => ChatCompletionsAdapter
+            .parse_request(body)
+            .map_err(BitrouterError::from),
+        ProtocolKind::Messages => MessagesAdapter
+            .parse_request(body)
+            .map_err(BitrouterError::from),
+        ProtocolKind::Responses => ResponsesAdapter
+            .parse_request(body)
+            .map_err(BitrouterError::from),
         ProtocolKind::OpenClawRuntime | ProtocolKind::Unknown => canonical_prompt.map_or_else(
             || {
                 Err(BitrouterError::bad_request(
                     "workflow fixture protocol cannot be parsed into a canonical Prompt yet",
                 ))
             },
-            |prompt_body| ChatCompletionsAdapter.parse_request(prompt_body),
+            |prompt_body| {
+                ChatCompletionsAdapter
+                    .parse_request(prompt_body)
+                    .map_err(BitrouterError::from)
+            },
         ),
     }
 }

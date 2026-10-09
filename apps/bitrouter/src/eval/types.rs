@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use bitrouter_sdk::language_model::types::ReasoningEffort;
+use bitrouter_ai::types::ReasoningEffort;
 
 pub const EVAL_SCHEMA_VERSION: u32 = 1;
 pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 2;

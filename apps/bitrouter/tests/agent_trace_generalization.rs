@@ -118,10 +118,6 @@ fn requests() -> Vec<(&'static str, Value)> {
             "/v1/messages",
             json!({"model":"bitrouter/auto","max_tokens":128,"messages":[{"role":"user","content":"fix the failing parser"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"read_file","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"parser source"}]}]}),
         ),
-        (
-            "/v1beta/models/bitrouter/auto:generateContent",
-            json!({"contents":[{"role":"user","parts":[{"text":"fix the failing parser"}]},{"role":"model","parts":[{"functionCall":{"name":"read_file","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"name":"read_file","response":{"output":"parser source"}}}]}]}),
-        ),
     ]
 }
 

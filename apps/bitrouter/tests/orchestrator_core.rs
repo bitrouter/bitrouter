@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use bitrouter_ai::types::Role;
 use bitrouter_orchestrator::core::checkpoint::{
     CheckpointAck, CheckpointBatch, DurableHead, sha256,
 };
@@ -14,7 +15,6 @@ use bitrouter_orchestrator::core::protocol::{
 };
 use bitrouter_orchestrator::core::session::{CoreSession, HarnessPort, RunStatus};
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::Role;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
@@ -273,7 +273,11 @@ models:
     let final_state = session.drive().await?;
     assert_eq!(
         final_state.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
+        Some(RunStatus::Completed),
+        "{:?}",
+        final_state
+            .root_turn()
+            .and_then(|turn| turn.terminal_reason.as_ref())
     );
     let turn = final_state.root_turn().context("missing final turn")?;
     assert_eq!(turn.steps.len(), 2);
