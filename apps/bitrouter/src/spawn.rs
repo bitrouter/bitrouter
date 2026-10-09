@@ -404,7 +404,11 @@ pub async fn prepare<'a>(
         Vec::new()
     };
     let state_dir = launch_state_dir()?;
-    let gateways = launch_gateways(cfg, &base_url);
+    let gateways = launch_gateways(
+        cfg,
+        &base_url,
+        opts.base_url.is_none() && listen_is_local(&cfg.server.listen),
+    );
     let overlay = harness
         .launch_overlay(
             &base_url,
@@ -629,17 +633,18 @@ async fn print_exit_summary(
 fn launch_gateways(
     cfg: &bitrouter_sdk::config::Config,
     base_url: &str,
+    owns_local_daemon: bool,
 ) -> Vec<crate::harness::McpServer> {
     let auth = crate::harness::resolve_gateway_auth(
         std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
         false,
     )
     .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
-    let aggregate_route = cfg
-        .mcp
-        .aggregate
-        .enabled
-        .then(|| cfg.mcp.aggregate.route.clone());
+    // Local assembly mounts MCP only when upstreams are configured. External
+    // targets own their upstream inventory; preserve their configured route.
+    let aggregate_route = (cfg.mcp.aggregate.enabled
+        && (!owns_local_daemon || !cfg.mcp_servers.is_empty()))
+    .then(|| cfg.mcp.aggregate.route.clone());
     crate::gateways::gateway_servers(base_url, &auth, aggregate_route.as_deref())
 }
 
@@ -794,7 +799,17 @@ pub async fn check(
 
         checks.push(match &model {
             Some(model) => {
-                codex_route_check(model, crate::commands::resolve_route(cfg, model).await)
+                // Resolve the same registry and stored-login activation as daemon
+                // startup before applying Codex's native-name qualification.
+                let mut resolved = cfg.clone();
+                crate::assemble::merge_registry_into(&mut resolved).await;
+                let resolved = crate::commands::resolve_static(resolved);
+                let route = crate::codex_router::subscription_route(&resolved, model);
+                codex_route_check(
+                    model,
+                    crate::commands::resolve_route(&resolved, route.as_deref().unwrap_or(model))
+                        .await,
+                )
             }
             None => SpawnCheckRow {
                 name: "codex model route".to_string(),
@@ -1495,10 +1510,10 @@ mod tests {
     }
 
     #[test]
-    fn startup_line_states_routing_and_tool_availability() {
+    fn startup_line_states_routing_and_tool_availability() -> anyhow::Result<()> {
         let p = Palette::none();
-        let cfg = bitrouter_sdk::config::Config::default();
-        let gateways = launch_gateways(&cfg, "http://127.0.0.1:4356");
+        let cfg = config_with_mcp_upstream()?;
+        let gateways = launch_gateways(&cfg, "http://127.0.0.1:4356", true);
         let line = |id: &str| {
             startup_line(
                 crate::harness::by_id(id).expect("catalog"),
@@ -1521,6 +1536,7 @@ mod tests {
         assert!(pi.contains("no MCP mechanism"), "{pi}");
 
         // Own-auth: degrade honestly rather than showing blanks.
+        Ok(())
     }
 
     #[test]
@@ -1537,10 +1553,21 @@ mod tests {
         assert!(line.contains("tools ✗"), "{line}");
     }
 
+    fn config_with_mcp_upstream() -> anyhow::Result<bitrouter_sdk::config::Config> {
+        let mut cfg = bitrouter_sdk::config::Config::default();
+        cfg.mcp_servers.insert(
+            "fixture".into(),
+            serde_json::from_value(serde_json::json!({
+                "name":"fixture", "transport":{"type":"http", "url":"http://127.0.0.1:4357/mcp"}
+            }))?,
+        );
+        Ok(cfg)
+    }
+
     #[test]
-    fn launch_wires_the_tools_gateway_into_the_overlay() {
-        let cfg = bitrouter_sdk::config::Config::default();
-        let servers = launch_gateways(&cfg, "http://127.0.0.1:4356");
+    fn launch_wires_the_tools_gateway_into_the_overlay() -> anyhow::Result<()> {
+        let cfg = config_with_mcp_upstream()?;
+        let servers = launch_gateways(&cfg, "http://127.0.0.1:4356", true);
         let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["bitrouter_tools"]);
         // The fleet bridge is gone: `launch` must never inject it.
@@ -1585,15 +1612,34 @@ mod tests {
             );
             assert!(!rendered.contains("bitrouter_skills"));
         }
+        Ok(())
     }
 
     #[test]
     fn launch_gateways_drops_tools_when_the_aggregate_is_disabled() {
         let mut cfg = bitrouter_sdk::config::Config::default();
         cfg.mcp.aggregate.enabled = false;
-        let servers = launch_gateways(&cfg, "http://127.0.0.1:4356");
+        let servers = launch_gateways(&cfg, "http://127.0.0.1:4356", true);
         let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn launch_without_mcp_upstreams_does_not_advertise_an_unmounted_gateway() {
+        let cfg = bitrouter_sdk::config::Config::default();
+        assert!(cfg.mcp_servers.is_empty());
+        assert!(launch_gateways(&cfg, "http://127.0.0.1:4356", true).is_empty());
+    }
+
+    #[test]
+    fn external_launch_keeps_mcp_gateway_without_local_upstreams() {
+        let mut cfg = bitrouter_sdk::config::Config::default();
+        assert!(cfg.mcp_servers.is_empty());
+        let servers = launch_gateways(&cfg, "https://router.example", false);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "bitrouter_tools");
+        cfg.mcp.aggregate.enabled = false;
+        assert!(launch_gateways(&cfg, "https://router.example", false).is_empty());
     }
 
     #[test]
@@ -1851,6 +1897,44 @@ mod tests {
         let check = codex_route_check("gpt-5.5", Ok(route));
         assert_eq!(check.status, SpawnCheckStatus::Pass);
         assert!(check.message.contains("openai"));
+    }
+
+    #[tokio::test]
+    async fn codex_preflight_resolves_native_subscription_model() -> anyhow::Result<()> {
+        let cfg = bitrouter_sdk::config::parse_with(
+            r#"
+inherit_defaults: false
+providers:
+  openai-codex:
+    class: first-party-subscription
+    models:
+      - id: openai/gpt-native
+        provider_model_id: gpt-native
+        api_protocol: responses
+"#,
+            |_| None,
+        )?;
+        let report = check(
+            &cfg,
+            &SpawnOptions {
+                agent: crate::harness::by_id("codex-acp").context("Codex harness missing")?,
+                model: Some("gpt-native".into()),
+                agent_args: Vec::new(),
+                base_url: Some("http://127.0.0.1:0".into()),
+                no_install: true,
+                no_start: true,
+                check: true,
+            },
+        )
+        .await?;
+        let route = report
+            .checks
+            .iter()
+            .find(|row| row.name == "codex model route")
+            .context("model route check missing")?;
+        assert_eq!(route.status, SpawnCheckStatus::Pass, "{}", route.message);
+        assert!(route.message.contains("openai-codex:gpt-native"));
+        Ok(())
     }
 
     #[test]

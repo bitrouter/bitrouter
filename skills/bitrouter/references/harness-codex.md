@@ -44,7 +44,7 @@ for one session. No vendor CLI config file is rewritten.
 
 ```bash
 bro codex
-bro codex -- --model openai/gpt-5-codex
+bro codex --model gpt-6.1-sol
 ```
 
 The native launcher supplies a `bitrouter` model provider for
@@ -53,6 +53,18 @@ arguments; it does not edit `~/.codex/config.toml`. `BITROUTER_API_KEY` is used
 when set, otherwise the launcher supplies the placeholder accepted by the
 `skip_auth: true` local default. Everything after `--` is forwarded verbatim,
 and a missing local daemon is auto-started unless `--no-start` is set.
+
+Like the ACP facet, the native launcher identifies Codex requests at gateway
+ingress. Declared native model names such as `gpt-6.1-sol` remain available for
+Codex model metadata and resolve through the active
+`openai-codex` subscription provider.
+Explicit routes and user-defined virtual models keep their normal semantics.
+For its own local daemon, the launcher adds the aggregate MCP gateway only
+when it is enabled and has configured MCP upstreams. External daemon targets
+keep the configured gateway route because their upstreams are managed remotely.
+Codex can still warn and use fallback model metadata
+if its own catalog does not recognize the selected model; that warning does not
+indicate a failed BitRouter route.
 
 Existing Codex processes must be restarted before changed provider routing
 takes effect. Inspect routed traffic with `bro requests`; ACP session
