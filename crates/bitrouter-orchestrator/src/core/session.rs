@@ -4978,7 +4978,7 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
             ))
             .collect(),
         params: GenerationParams {
-            max_tokens: Some(turn.input.max_output_tokens.unwrap_or(4096)),
+            max_tokens: turn.input.max_output_tokens,
             reasoning_effort: parse_effort(turn.input.effort.as_deref())?,
             ..Default::default()
         },

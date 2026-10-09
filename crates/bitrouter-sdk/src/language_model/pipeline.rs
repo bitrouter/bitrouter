@@ -1737,11 +1737,49 @@ impl Pipeline {
             ctx.preserve_caller_effort(effort);
         }
 
+        // Supply actual prompt requirements to the shared routing table. The
+        // configured catalog carries positive observations; omitted declarations
+        // alone do not establish incompatibility or remove a provider.
+        let mut prefs = resolution.prefs;
+        prefs.require_capabilities = ctx.prompt().required_capabilities();
+        // Carry the inbound protocol so the table can prefer a native,
+        // same-protocol upstream for each chosen target.
+        prefs.inbound_protocol = ctx.inbound_protocol();
+        let mut chain = observe_pipeline(
+            preparation_runtime(ctx),
+            ctx.request_id().into(),
+            NativePreparationWorkKind::RouterLookup,
+            self.routing_table
+                .route_resolved(ctx.model(), &prefs, ctx.caller()),
+        )
+        .await?;
+        filter_reasoning_effort_targets(&mut chain, ctx.prompt())?;
+        // A native caller may leave the output budget to the selected model.
+        // Resolve it before committing the exact prompt and before token counts.
+        // Explicit caller/router limits retain their existing admission checks.
+        let output_reservation = match (selection, ctx.prompt().params.max_tokens) {
+            (Some(_), None) => Some(
+                match chain
+                    .first()
+                    .and_then(|target| target.model_constraints.token_limits.max_output_tokens)
+                {
+                    Some(limit) => u32::try_from(limit).map_err(|_| {
+                        BitrouterError::bad_request(
+                            "model output capacity exceeds supported reservation",
+                        )
+                    })?,
+                    None => 4096,
+                },
+            ),
+            (_, requested) => requested,
+        };
+
         let prepared = ctx
             .extension::<crate::routing::preparation::Prepared>()
             .ok_or_else(|| BitrouterError::internal("routing preparation vanished"))?;
         let mut views = prepared.views.clone();
         for view in &mut views {
+            view.prompt.params.max_tokens = output_reservation;
             view.prompt.params.reasoning_effort = ctx.prompt().params.reasoning_effort;
             view.prompt.params.reasoning_effort_source =
                 ctx.prompt().params.reasoning_effort_source;
@@ -1786,22 +1824,6 @@ impl Pipeline {
         ctx.emit(plan.selection.clone());
         ctx.insert_extension(Arc::new(plan.selection));
 
-        // Supply actual prompt requirements to the shared routing table. The
-        // configured catalog carries positive observations; omitted declarations
-        // alone do not establish incompatibility or remove a provider.
-        let mut prefs = resolution.prefs;
-        prefs.require_capabilities = ctx.prompt().required_capabilities();
-        // Carry the inbound protocol so the table can prefer a native,
-        // same-protocol upstream for each chosen target.
-        prefs.inbound_protocol = ctx.inbound_protocol();
-        let mut chain = observe_pipeline(
-            preparation_runtime(ctx),
-            ctx.request_id().into(),
-            NativePreparationWorkKind::RouterLookup,
-            self.routing_table
-                .route_resolved(ctx.model(), &prefs, ctx.caller()),
-        )
-        .await?;
         let fixed_routes = (selection == Some(NativeModelSelection::Fixed)).then(|| {
             chain
                 .iter()

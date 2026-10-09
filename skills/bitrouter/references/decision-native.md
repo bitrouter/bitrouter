@@ -27,9 +27,12 @@ Credentials are excluded from execution checkpoints.
 Native `bro code` and `bro task run` use the Core execution adapter. Without a
 decision backend, the same compiler retains complete conservative context.
 Their selected generation model still writes responses,
-code, task descriptions and evidence summaries. Native `--model` is fixed unless
-`bro code --model-policy` explicitly enables model selection; effort remains
-binding in both modes. The decision backend selects bounded evidence
+code, task descriptions and evidence summaries. Native commands default to
+`bitrouter/auto` when `chat.model` is unset, using the read-only policy shipped
+with the binary. This native fallback does not set the model for an external
+ACP harness.
+Named policy selectors enable model routing automatically; explicit physical
+model overrides remain fixed. Effort remains binding in both modes. The decision backend selects bounded evidence
 representations; code retains control of permissions, required instructions,
 tool pairing, budgets, approvals and dispatch.
 
@@ -79,11 +82,15 @@ estimates and stop new model work when completed work cannot be estimated.
 Set explicit prices when using a spend limit with the decision backend.
 
 Model selection uses the version 4 named policy lock, shared with HTTP requests.
-Configure `policy.path` and a router whose `policy` names a lock entry. Each tier
+The bundled policy uses the shipped strong default and has no pretrained routes
+or progress guard. To customize it, configure `policy.path` and a router whose
+`policy` names a lock entry. An existing adjacent `policy-lock.yaml` takes
+precedence; an unavailable explicit path is an error. Bundled policies cannot
+be published over: initialize a file-backed policy first.
+`inherit_defaults: false` disables the bundled defaults. Each tier
 is an object with `model`, optional `effort`, and `context: preserve` or `evidence`.
-Use that router selector with `bro code --model-policy --model SELECTOR`.
-Without `--model-policy`, native generation stays fixed. Create-Thread HTTP/local
-requests expose the same opt-in as `model_mode: policy`.
+Use that router selector with `bro code --model SELECTOR`.
+Create-Thread HTTP/local requests expose the same mode as `model_mode: policy`.
 
 The named policy selects the generation model. The shared planner then chooses
 among context views admitted by their owner; it does not optimize a separate
@@ -91,9 +98,13 @@ model catalog. `decision_model.policy.generation_models`, global `policy_table`,
 scalar tiers and lockfile versions 1–3 are rejected. See the version 4 starter
 lock in `templates/auto-router/policy-lock.yaml`.
 
-Native `bro code` and `bro task run` accept `--max-output-tokens` (default 4096).
-The value is stored with the Thread and used by later Turns and child agents.
-Reattaching with `--thread-id` uses that stored value. Native HTTP/local
+Native `bro code`, `bro task run` and `bro task managed` accept an optional
+`--max-output-tokens` override. When omitted, each step resolves the selected
+model's declared output capacity before committing the prompt. Registry canonical
+capacities fill missing provider limits; explicit provider values win. Unknown
+capacities fall back to 4096, while uncappable providers still require a known
+ceiling. The optional override is stored with the Thread and inherited by later
+Turns and child agents; `--thread-id` retains it. Native HTTP/local
 Create-Thread requests accept the same optional `max_output_tokens` field.
 A provider that cannot enforce a request output cap requires a reservation
 covering its known model output ceiling; a smaller or unknown bound is rejected.

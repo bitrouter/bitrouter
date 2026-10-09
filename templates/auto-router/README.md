@@ -1,5 +1,11 @@
 # Unified `bitrouter/auto` routing
 
+Native `bro code` already defaults to `bitrouter/auto` using the policy bundled
+with the binary. That default shares this template's tiers and empty routes,
+without the progress guard that requires trajectory configuration. No policy
+file or model/output-token flag is needed. This directory demonstrates an
+explicit file-backed policy with trajectory protection enabled.
+
 Start this directory with `bro serve --config bitrouter.yaml` and request
 `bitrouter/auto`. The named router binds one version 4 policy for model, optional
 reasoning effort, and context treatment. API requests and Core sessions share

@@ -167,7 +167,7 @@ struct CodeArgs {
     /// Allow the decision policy to choose a generation model for native BRO.
     #[arg(long, conflicts_with_all = ["agent", "thread_id"])]
     model_policy: bool,
-    /// Native per-step output reservation (default 4096); subscription routes need their model ceiling.
+    /// Override the native output reservation; omitted follows the selected model.
     #[arg(long, conflicts_with_all = ["agent", "thread_id"], value_parser = clap::value_parser!(u32).range(1..))]
     max_output_tokens: Option<u32>,
 }
@@ -176,13 +176,13 @@ struct CodeArgs {
 struct TaskRunArgs {
     /// Coding task to submit to the local BRO server.
     prompt: String,
-    /// Fixed model or routed model selector for the native agent.
+    /// Model override; omitted uses chat.model or the bundled automatic router.
     #[arg(long)]
-    model: String,
+    model: Option<String>,
     /// Fixed reasoning effort for each model turn.
     #[arg(long)]
     effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    /// Per-step output reservation (default 4096); uncapped routes need their model ceiling.
+    /// Override the output reservation; omitted follows the selected model.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     max_output_tokens: Option<u32>,
     /// Bounded project verification command. Without one, verification is not_requested.
@@ -2019,7 +2019,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     workspace: task.workspace,
                     config: task.config,
                     session: args.session,
-                    max_output_tokens: task.max_output_tokens.unwrap_or(4096),
+                    max_output_tokens: task.max_output_tokens,
                 })
                 .await
             }
@@ -2703,7 +2703,13 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
         None => std::env::current_dir()?,
     };
     let client = bitrouter::agent_local::ThreadClient::connect(&task_socket).await?;
-    let config = bitrouter_orchestrator::agent::AgentConfig::fixed(args.model, args.effort)
+    let model = args
+        .model
+        .or_else(|| bitrouter::policy_lock::native_default_model(&cfg).map(str::to_owned))
+        .context("no native model configured; pass --model or enable defaults")?;
+    let model_mode = bitrouter::policy_lock::native_model_mode(&cfg, &model)?;
+    let config = bitrouter_orchestrator::agent::AgentConfig::fixed(model, args.effort)
+        .with_model_mode(model_mode)
         .with_output_reservation(args.max_output_tokens);
     let config = if args.read_only {
         config.read_only()
@@ -4567,16 +4573,16 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-            let history_dir = bitrouter::policy_lock::default_history_dir(&loaded.path);
+            let history_dir = bitrouter::policy_lock::default_history_dir(loaded.file_path()?);
             let record = bitrouter::policy_lock::rollback_to_digest(
-                &loaded.path,
+                loaded.file_path()?,
                 &loaded.digest,
                 &digest,
                 &history_dir,
             )?;
             if let Err(error) = reload_policy_if_reachable(&source, socket.as_deref()).await {
                 bitrouter::policy_lock::rollback_to_digest(
-                    &loaded.path,
+                    loaded.file_path()?,
                     &record.child_digest,
                     &record.parent_digest,
                     &history_dir,
@@ -5374,7 +5380,8 @@ async fn routing_policy_report(
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let cfg = config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let mut cfg = config::parse(&raw).context("parsing bitrouter.yaml")?;
+    bitrouter::policy_lock::apply_defaults(&mut cfg, Some(config_path));
     let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path)).await?;
     let policy = match show {
         Some(name) => {
@@ -5394,10 +5401,7 @@ async fn routing_policy_report(
         .router_policy_bindings()
         .map(|(name, policy, _)| (name.to_owned(), policy.to_owned()))
         .collect();
-    let path = loaded
-        .as_ref()
-        .map(|lock| lock.path.clone())
-        .or_else(|| bitrouter::policy_lock::resolve_path(&cfg, Some(config_path)));
+    let path = loaded.as_ref().and_then(|lock| lock.path.clone());
     let policies = loaded
         .as_ref()
         .map(|lock| lock.document.policies.keys().cloned().collect())
@@ -5407,7 +5411,14 @@ async fn routing_policy_report(
         path: path.map(|path| path.display().to_string()),
         candidate_path: None,
         digest: loaded.as_ref().map(|lock| lock.digest.clone()),
-        source: matches!(action, "status" | "show").then(|| "disk".to_string()),
+        source: matches!(action, "status" | "show").then(|| {
+            if loaded.as_ref().is_some_and(|lock| lock.path.is_none()) {
+                "bundled"
+            } else {
+                "disk"
+            }
+            .to_string()
+        }),
         mode: match cfg.policy.mode {
             config::PolicyRuntimeMode::Frozen => "frozen",
             config::PolicyRuntimeMode::Adaptive => "adaptive",
@@ -9220,6 +9231,6 @@ mod tests {
         let report = validate_config(&source).await.unwrap();
 
         assert!(!report.valid);
-        assert!(report.errors[0].contains("policy lock"));
+        assert!(report.errors[0].contains("missing policy"));
     }
 }

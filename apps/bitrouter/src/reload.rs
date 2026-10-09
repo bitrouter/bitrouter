@@ -1371,12 +1371,14 @@ async fn load_configuration_baseline_at(
                     guardrails_migration_required: false,
                 }
             })?;
-            let config = bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
-                .map_err(|error| ConfigurationLoadError {
-                    saved: SavedConfigState::Invalid,
-                    error: anyhow::Error::new(error),
-                    guardrails_migration_required: false,
-                })?;
+            let mut config =
+                bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
+                    .map_err(|error| ConfigurationLoadError {
+                        saved: SavedConfigState::Invalid,
+                        error: anyhow::Error::new(error),
+                        guardrails_migration_required: false,
+                    })?;
+            crate::policy_lock::apply_defaults(&mut config, Some(path));
             let guardrails_migration_required = config.plugins.contains_key("bitrouter-guardrails");
             crate::assemble::validate_host_configuration(&config).map_err(|error| {
                 ConfigurationLoadError {
@@ -1420,6 +1422,7 @@ async fn load_configuration_baseline_at(
         crate::paths::ConfigSource::Default { .. } => {
             let mut config = bitrouter_providers::zero_config();
             crate::cloud::enable_in_zero_config(&mut config);
+            crate::policy_lock::apply_defaults(&mut config, None);
             Ok(ConfigurationBaseline {
                 source: source.clone(),
                 loaded_source: effective_source.clone(),

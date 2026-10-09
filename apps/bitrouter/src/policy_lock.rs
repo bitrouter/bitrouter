@@ -43,6 +43,62 @@ use crate::workflow_state::predictive::{
 };
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
+pub const DEFAULT_NATIVE_MODEL: &str = "bitrouter/auto";
+const BUNDLED_POLICY: &str = include_str!("../policy/default.yaml");
+
+/// Product defaults stay in the host; SDK embedders keep explicit routing.
+pub fn apply_defaults(config: &mut Config, config_path: Option<&Path>) {
+    if !config.inherit_defaults {
+        return;
+    }
+    if !config.routers.contains_key("auto")
+        && !config.presets.contains_key("auto")
+        && config.policy.path.is_none()
+        && !resolve_path(config, config_path).is_some_and(|path| path.exists())
+        && bound_policy_names(config).is_empty()
+    {
+        config.routers.insert(
+            "auto".into(),
+            bitrouter_sdk::config::router::RouterConfig {
+                selection: bitrouter_sdk::config::router::RouterSelection::Policy {
+                    policy: "auto".into(),
+                    base_model: "openai-codex:gpt-5.6-sol".into(),
+                    routing: Default::default(),
+                },
+                defaults: Default::default(),
+                checks: Default::default(),
+            },
+        );
+    }
+}
+
+/// Native startup defaults do not override an external harness's model choice.
+pub fn native_default_model(config: &Config) -> Option<&str> {
+    config.chat.model.as_deref().or_else(|| {
+        if config
+            .router_policy_bindings()
+            .any(|(name, _, _)| name == "auto")
+        {
+            Some(DEFAULT_NATIVE_MODEL)
+        } else if config.routers.contains_key("auto") || config.presets.contains_key("auto") {
+            Some("@auto")
+        } else {
+            None
+        }
+    })
+}
+
+/// Named policy selectors opt into policy routing; physical model pins stay fixed.
+pub fn native_model_mode(
+    config: &Config,
+    model: &str,
+) -> Result<bitrouter_orchestrator::core::protocol::ModelMode> {
+    Ok(if config.resolve_router(model)?.policy.is_some() {
+        bitrouter_orchestrator::core::protocol::ModelMode::Policy
+    } else {
+        bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+    })
+}
 pub const POLICY_LOCKFILE_VERSION: u32 = 4;
 pub const POLICY_COMPILER_ID: &str = "bitrouter-policy-compiler";
 pub const POLICY_COMPILER_VERSION: u32 = 2;
@@ -296,9 +352,18 @@ impl PolicyDefinition {
 /// Parsed lock plus its runtime-computed identity.
 #[derive(Debug, Clone)]
 pub struct LoadedPolicyLock {
-    pub path: PathBuf,
+    /// None identifies the immutable policy bundled with the binary.
+    pub path: Option<PathBuf>,
     pub digest: String,
     pub document: PolicyLock,
+}
+
+impl LoadedPolicyLock {
+    pub fn file_path(&self) -> Result<&Path> {
+        self.path.as_deref().context(
+            "the bundled policy is read-only; initialize a policy-lock.yaml before publication",
+        )
+    }
 }
 
 /// Resolve a configured policy path against the file that supplied the config.
@@ -322,32 +387,46 @@ pub fn bound_policy_names(config: &Config) -> BTreeSet<String> {
         .collect()
 }
 
-/// Load and cross-validate the lock used by `config`. A missing default lock is
-/// a no-op when no preset binds a policy; an explicit path or binding makes it
-/// required.
+/// Load an operator lock first, otherwise the read-only bundled defaults.
+/// An explicit path never falls back when unavailable.
 pub async fn load_for_config(
     config: &Config,
     config_path: Option<&Path>,
 ) -> Result<Option<LoadedPolicyLock>> {
     let required = bound_policy_names(config);
-    let explicit_path = config.policy.path.is_some();
-    let Some(path) = resolve_path(config, config_path) else {
-        if required.is_empty() {
-            return Ok(None);
+    let path = resolve_path(config, config_path);
+    if let Some(path) = &path {
+        match tokio::fs::metadata(path).await {
+            Ok(_) => {
+                let loaded = load(path).await?;
+                validate_for_config(config, &loaded.document)?;
+                return Ok(Some(loaded));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading policy lock {}", path.display()));
+            }
         }
-        anyhow::bail!(
-            "preset policy bindings require a file-backed bitrouter.yaml and policy-lock.yaml"
-        );
-    };
-    if !path.is_file() {
-        if required.is_empty() && !explicit_path {
-            return Ok(None);
-        }
-        anyhow::bail!("policy lock '{}' does not exist", path.display());
     }
-    let loaded = load(&path).await?;
-    validate_for_config(config, &loaded.document)?;
-    Ok(Some(loaded))
+    if config.policy.path.is_some() {
+        anyhow::bail!(
+            "explicit policy lock is unavailable; check policy.path and its configuration directory"
+        );
+    }
+    if config.inherit_defaults {
+        let document: PolicyLock = serde_saphyr::from_str(BUNDLED_POLICY)?;
+        validate_for_config(config, &document)?;
+        return Ok(Some(LoadedPolicyLock {
+            path: None,
+            digest: semantic_digest(&document)?,
+            document,
+        }));
+    }
+    if required.is_empty() {
+        return Ok(None);
+    }
+    anyhow::bail!("policy bindings require an available policy-lock.yaml")
 }
 
 pub async fn load(path: &Path) -> Result<LoadedPolicyLock> {
@@ -359,7 +438,7 @@ pub async fn load(path: &Path) -> Result<LoadedPolicyLock> {
     validate_document(&document)?;
     let digest = semantic_digest(&document)?;
     Ok(LoadedPolicyLock {
-        path: path.to_path_buf(),
+        path: Some(path.to_path_buf()),
         digest,
         document,
     })
@@ -2286,7 +2365,7 @@ pub async fn compile_files_with_eval(
         })
         .collect();
     Ok(PolicyFileUpdate {
-        path: loaded.path,
+        path: loaded.file_path()?.to_path_buf(),
         digest,
         document: compiled.document,
         changes,
@@ -2356,24 +2435,24 @@ async fn publish_candidate_file_inner(
         anyhow::bail!("compiled candidate contains blocked route conflicts");
     }
     let differences = diff_explanations(&active.document, &candidate.document);
-    let history_dir = default_history_dir(&active.path);
+    let history_dir = default_history_dir(active.file_path()?);
     let record = if lock_held {
         publish_candidate_unlocked(
-            &active.path,
+            active.file_path()?,
             parent_digest,
             &candidate.document,
             &history_dir,
         )?
     } else {
         publish_candidate(
-            &active.path,
+            active.file_path()?,
             parent_digest,
             &candidate.document,
             &history_dir,
         )?
     };
     Ok(PolicyFileUpdate {
-        path: active.path,
+        path: active.file_path()?.to_path_buf(),
         digest: record.child_digest,
         document: candidate.document,
         changes: differences,
@@ -2492,8 +2571,13 @@ pub async fn evolve_files(config_path: &Path, apply: bool) -> Result<PolicyFileU
             .await?
             .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
         if loaded.digest != update.digest {
-            let history_dir = default_history_dir(&loaded.path);
-            publish_candidate(&loaded.path, &loaded.digest, &update.document, &history_dir)?;
+            let history_dir = default_history_dir(loaded.file_path()?);
+            publish_candidate(
+                loaded.file_path()?,
+                &loaded.digest,
+                &update.document,
+                &history_dir,
+            )?;
         }
     }
     Ok(update)
@@ -3068,7 +3152,7 @@ impl PolicyRuntime {
             }
         }
         Ok(PreparedPolicySnapshot(Arc::new(PolicySnapshot {
-            path: loaded.as_ref().map(|lock| lock.path.clone()),
+            path: loaded.as_ref().and_then(|lock| lock.path.clone()),
             digest: loaded.as_ref().map(|lock| lock.digest.clone()),
             document: loaded.as_ref().map(|lock| lock.document.clone()),
             routers,
@@ -3406,6 +3490,88 @@ pub struct PolicyRuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_defaults_load_without_configuration_and_preserve_overrides() -> Result<()> {
+        let mut config = Config::default();
+        apply_defaults(&mut config, None);
+        assert!(
+            config.chat.model.is_none(),
+            "external harness defaults must stay unset"
+        );
+        assert_eq!(native_default_model(&config), Some(DEFAULT_NATIVE_MODEL));
+        assert_eq!(
+            native_model_mode(&config, DEFAULT_NATIVE_MODEL)?,
+            bitrouter_orchestrator::core::protocol::ModelMode::Policy
+        );
+        assert_eq!(
+            native_model_mode(&config, "provider:model")?,
+            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+        );
+        let loaded = load_for_config(&config, None)
+            .await?
+            .context("missing bundled policy")?;
+        assert!(loaded.path.is_none());
+        assert!(loaded.file_path().is_err());
+        assert!(!config.trajectory.enabled);
+        let mut template: PolicyLock = serde_saphyr::from_str(include_str!(
+            "../../../templates/auto-router/policy-lock.yaml"
+        ))?;
+        for policy in template.policies.values_mut() {
+            policy.progress_guard = None;
+        }
+        assert_eq!(loaded.document, template);
+        config.chat.model = Some("provider:model".into());
+        apply_defaults(&mut config, None);
+        assert_eq!(native_default_model(&config), Some("provider:model"));
+        config.policy.path = Some("missing.yaml".into());
+        assert!(load_for_config(&config, None).await.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn native_default_preserves_fixed_auto_and_explicit_external_model() -> Result<()> {
+        let mut config =
+            bitrouter_sdk::config::parse("presets:\n  auto:\n    model: fixture:model\n")?;
+        apply_defaults(&mut config, None);
+        assert!(config.chat.model.is_none());
+        assert_eq!(native_default_model(&config), Some("@auto"));
+        assert_eq!(
+            native_model_mode(&config, "@auto")?,
+            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+        );
+        config.chat.model = Some("external-default".into());
+        apply_defaults(&mut config, None);
+        assert_eq!(native_default_model(&config), Some("external-default"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_defaults_preserve_existing_implicit_policy_and_opt_out() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config_path = directory.path().join("bitrouter.yaml");
+        let policy_path = directory.path().join(DEFAULT_POLICY_LOCK_FILENAME);
+        let mut document: PolicyLock = serde_saphyr::from_str(BUNDLED_POLICY)?;
+        let policy = document.policies.remove("auto").context("missing auto")?;
+        document.policies.insert("coding".into(), policy);
+        tokio::fs::write(&policy_path, serde_saphyr::to_string(&document)?).await?;
+        let mut config = Config::default();
+        apply_defaults(&mut config, Some(&config_path));
+        assert!(!config.routers.contains_key("auto"));
+        let loaded = load_for_config(&config, Some(&config_path))
+            .await?
+            .context("missing file")?;
+        assert_eq!(loaded.file_path()?, policy_path);
+        assert_eq!(loaded.document, document);
+        let mut opted_out = Config {
+            inherit_defaults: false,
+            ..Default::default()
+        };
+        apply_defaults(&mut opted_out, None);
+        assert!(native_default_model(&opted_out).is_none());
+        assert!(load_for_config(&opted_out, None).await?.is_none());
+        Ok(())
+    }
 
     #[test]
     fn policy_optimization_state_rejects_malformed_signed_metadata() {

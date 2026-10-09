@@ -329,10 +329,10 @@ with no new message or smaller legacy reply allowance. Ordinary checkpoint JSON
 keeps omitted optional fields intact during historical receipt validation.
 
 For subscription transports such as `openai-codex` that cannot accept a
-request-level output cap, set `max_output_tokens` to the configured model's
-positive maximum output allowance. Smaller reservations and unknown ceilings
-are rejected before dispatch; the default 4096 reservation is not automatically
-raised. The SDK still verifies the final wire request. The managed Codex profile
+request-level output cap, an omitted `max_output_tokens` follows the selected
+model's declared positive output ceiling. Explicit smaller reservations and
+unknown ceilings are rejected before dispatch. Models that can enforce a cap
+use 4096 only when no model capacity is declared. The SDK still verifies the final wire request. The managed Codex profile
 supports separate instructions and ordinary function tools; controls that its
 subscription transport would discard are rejected. Subscription usage does not
 establish a per-token monetary charge.
@@ -340,7 +340,7 @@ establish a per-token monetary charge.
 
 ## Native managed tasks
 
-`bro task managed PROMPT --model PROVIDER/MODEL --workspace PATH --session NAME`
+`bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 uses CoreSession for routing and child-agent scheduling, and native BRO tools
 for workspace execution. It opens no listener. The configured database stores
 exact checkpoints, ACKs, artifacts, start fences and outcomes atomically through
@@ -350,7 +350,7 @@ revision checks. Omit `--session` for a fresh UUID. Output is NDJSON with
 `--read-only` omits writes, shell and MCP connections. Coding mode approves its
 own headless requests. `--check COMMAND` requests shell verification and conflicts
 with read-only mode. `--effort`, `--config`, `--workspace` and required `--model`
-match `task run`. `--max-output-tokens` defaults to 4096 and must be positive.
+match `task run`. `--max-output-tokens` is an optional positive override; omission follows the selected model.
 For an uncapped subscription route, set it to the known model output ceiling;
 smaller reservations fail before dispatch. Pin Codex explicitly with
 `--model openai-codex:openai/gpt-6.1-sol --max-output-tokens 128000`.

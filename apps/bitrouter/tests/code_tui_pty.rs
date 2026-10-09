@@ -1420,7 +1420,15 @@ impl CodeFixture {
     }
 
     fn bare() -> Result<Self> {
+        Self::bare_with_defaults(true)
+    }
+
+    fn bare_with_defaults(inherit: bool) -> Result<Self> {
         let mock = MockAcp::new(MockScenario::Minimal)?;
+        if !inherit {
+            let raw = std::fs::read_to_string(&mock.config_path)?;
+            std::fs::write(&mock.config_path, format!("inherit_defaults: false\n{raw}"))?;
+        }
         let child_pid_path = mock._directory.path().join("code-child.pid");
         let mut command = shell_command(&mock, None)?;
         command.arg("code");
@@ -2680,13 +2688,25 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
 }
 
 #[test]
-fn code_bare_entry_opens_native_model_editor() -> Result<()> {
+fn code_bare_entry_uses_bundled_native_model() -> Result<()> {
     let mut bare = CodeFixture::bare()?;
-    let view = bare.pty.wait_for_text("Enter a routed model ID")?;
+    let view = bare.pty.wait_for_text("bitrouter/auto")?;
     ensure!(
         view.contains("BRO"),
         "bare Code did not open BRO native view"
     );
+    ensure!(
+        !view.contains("Enter a routed model ID"),
+        "default startup asked for a model"
+    );
+    bare.pty.send(b"\x04")?;
+    bare.assert_terminal_restored()
+}
+
+#[test]
+fn code_without_defaults_keeps_native_model_editor() -> Result<()> {
+    let mut bare = CodeFixture::bare_with_defaults(false)?;
+    let _ = bare.pty.wait_for_text("Enter a routed model ID")?;
     bare.pty.send(b"test-model\r")?;
     let _ = bare.pty.wait_for_text("Model selected: test-model")?;
     bare.pty.send(b"\x04")?;
@@ -2819,9 +2839,9 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
 }
 
 #[test]
-fn code_hidden_tui_bare_alias_uses_the_native_model_editor() -> Result<()> {
+fn code_hidden_tui_bare_alias_uses_bundled_native_model() -> Result<()> {
     let mut tui = CodeFixture::tui_bare()?;
-    let view = tui.pty.wait_for_text("Enter a routed model ID")?;
+    let view = tui.pty.wait_for_text("bitrouter/auto")?;
     ensure!(
         view.contains("BRO"),
         "hidden tui alias did not open native view"

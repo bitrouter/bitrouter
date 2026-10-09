@@ -250,7 +250,7 @@ pub(in crate::language_model) fn validate_reasoning_projection(
         fields.keys().all(|key| {
             matches!(
                 key.as_str(),
-                "type" | "id" | "summary" | "status" | "encrypted_content"
+                "type" | "id" | "summary" | "status" | "encrypted_content" | "content"
             )
         })
     }) && item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning")
@@ -271,6 +271,12 @@ pub(in crate::language_model) fn validate_reasoning_projection(
                         })
                 })
             })
+        // The official wire model permits an optional content array. An empty
+        // array carries no unprojected text and can be replayed verbatim.
+        // https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_reasoning_item.py
+        && item.get("content").is_none_or(|value| {
+            value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+        })
         && item.get("encrypted_content").is_none_or(|value| {
             value.is_null() || value.as_str().is_some_and(|value| !value.is_empty())
         })

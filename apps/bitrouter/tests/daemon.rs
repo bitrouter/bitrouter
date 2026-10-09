@@ -303,7 +303,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     match status {
         DaemonResponse::Status { listen, models, .. } => {
             assert_eq!(listen, "127.0.0.1:1234");
-            assert_eq!(models, 2, "gpt-5 + shared");
+            assert_eq!(models, 3, "gpt-5 + shared + bundled auto");
         }
         other => panic!("expected Status, got {other:?}"),
     }
@@ -537,7 +537,7 @@ async fn probe_status_reports_ready_when_daemon_is_up() {
         .unwrap()
         .expect("probe should see the running daemon");
     assert_eq!(info.listen, "127.0.0.1:1234");
-    assert_eq!(info.models, 2, "gpt-5 + shared");
+    assert_eq!(info.models, 3, "gpt-5 + shared + bundled auto");
 
     let stop = daemon::send_command(&socket, &DaemonCommand::Stop)
         .await

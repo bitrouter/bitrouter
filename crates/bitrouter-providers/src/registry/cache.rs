@@ -184,6 +184,7 @@ mod tests {
             }],
             canonical: vec![CanonicalModel {
                 id: "deepseek/deepseek-v3.2".into(),
+                ..Default::default()
             }],
         }
     }

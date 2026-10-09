@@ -416,13 +416,20 @@ pub struct RegistryRateLimits {
     pub tokens_per_minute: Option<u32>,
 }
 
-/// One entry from `models.json` (the model view). bitrouter consumes only the
-/// `id` (the authoritative model vocabulary); the descriptive metadata and the
-/// `providers[]` reverse index are ignored here.
-#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+/// Canonical model identity and independently declared token capacities.
+#[derive(Debug, Default, Clone, serde::Serialize, Deserialize)]
 pub struct CanonicalModel {
     /// Canonical model id (`<org>/<model>`).
     pub id: String,
+    /// Maximum input tokens declared by the canonical model catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u64>,
+    /// Maximum generated tokens declared by the canonical model catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    /// Combined input/output capacity, never inferred from the input limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[cfg(test)]

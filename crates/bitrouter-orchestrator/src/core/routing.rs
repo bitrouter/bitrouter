@@ -75,7 +75,7 @@ impl ContextManifest {
     /// reorder committed instructions and history. Validate the whole result
     /// too, so an added unmatched call/result cannot cross the model boundary.
     pub fn validate_prepared(&self, prompt: &Prompt) -> Result<(), CoreError> {
-        if self.output_allowance != prompt.params.max_tokens {
+        if self.output_allowance.is_some() && self.output_allowance != prompt.params.max_tokens {
             return Err(invalid("model preparation changed the output reservation"));
         }
         if commitment(&prompt.system)? != self.system_sha256 {

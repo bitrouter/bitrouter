@@ -288,7 +288,7 @@ metering/configuration data and unresolved execution evidence.
 
 ## Client and transport boundary
 
-Local protocol is **v15**; reject mismatches without fallback/resubmit. HTTP uses
+Local protocol is **v17**; reject mismatches without fallback/resubmit. HTTP uses
 **`/agent/v2`**, loopback, a dedicated bearer credential, workspace allowlist and
 body/admission bounds. See [agent_api.rs](../apps/bitrouter/src/agent_api.rs) for
 routes: create/read Thread, start/enqueue/read/cancel Turn, steer, approve, resume,

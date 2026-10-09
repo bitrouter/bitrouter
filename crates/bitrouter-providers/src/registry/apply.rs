@@ -104,6 +104,28 @@ pub fn apply_registry(config: &mut Config, data: &RegistryData) {
         }
         merge_provider(config, provider);
     }
+    // The model view owns canonical capacities. Fill only absent values on
+    // known provider mappings; explicit per-provider limits remain authoritative.
+    for (provider_id, provider) in &mut config.providers {
+        for model in &mut provider.models {
+            let canonical_id =
+                data.providers
+                    .iter()
+                    .find(|entry| entry.name == *provider_id)
+                    .and_then(|entry| {
+                        entry.models.iter().find(|entry| {
+                            entry.id == model.id || entry.provider_model_id == model.id
+                        })
+                    })
+                    .map_or(model.id.as_str(), |entry| entry.id.as_str());
+            if let Some(metadata) = data.canonical.iter().find(|entry| entry.id == canonical_id) {
+                let limits = &mut model.token_limits;
+                limits.max_input_tokens = limits.max_input_tokens.or(metadata.max_input_tokens);
+                limits.max_output_tokens = limits.max_output_tokens.or(metadata.max_output_tokens);
+                limits.context_window = limits.context_window.or(metadata.context_window);
+            }
+        }
+    }
 }
 
 /// Resolve `${VAR}` / `${VAR:-default}` references in a registry `api_base`
@@ -382,6 +404,42 @@ mod tests {
     }
 
     #[test]
+    fn canonical_capacities_fill_aliases_without_overwriting_provider_limits() -> anyhow::Result<()>
+    {
+        let entry = provider("capacity-fixture");
+        let mut config = Config::default();
+        let mut models = build_models(&entry);
+        models[0].id = entry.models[0].provider_model_id.clone();
+        models[0].token_limits.max_output_tokens = Some(42);
+        config.providers.insert(
+            entry.name.clone(),
+            ProviderConfig {
+                models,
+                ..Default::default()
+            },
+        );
+        let data = RegistryData {
+            canonical: vec![CanonicalModel {
+                id: entry.models[0].id.clone(),
+                max_input_tokens: Some(1000),
+                max_output_tokens: Some(500),
+                context_window: None,
+            }],
+            providers: vec![entry],
+        };
+        apply_registry(&mut config, &data);
+        let model = &config
+            .providers
+            .get("capacity-fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing provider"))?
+            .models[0];
+        assert_eq!(model.token_limits.max_input_tokens, Some(1000));
+        assert_eq!(model.token_limits.max_output_tokens, Some(42));
+        assert_eq!(model.token_limits.context_window, None);
+        Ok(())
+    }
+
+    #[test]
     fn model_capabilities_and_compatibility_reach_provider_model() {
         let mut registry_provider = provider("regtestprov");
         registry_provider.models[0].capabilities = vec![
@@ -447,7 +505,10 @@ mod tests {
             providers,
             canonical: canonical
                 .into_iter()
-                .map(|id| CanonicalModel { id: id.to_string() })
+                .map(|id| CanonicalModel {
+                    id: id.to_string(),
+                    ..Default::default()
+                })
                 .collect(),
         }
     }

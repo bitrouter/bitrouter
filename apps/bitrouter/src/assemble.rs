@@ -415,6 +415,9 @@ async fn assemble_app(
         bitrouter_sdk::extension::request_check::Registration,
     >,
 ) -> Result<Assembled> {
+    let mut effective_config = config.clone();
+    crate::policy_lock::apply_defaults(&mut effective_config, config_path);
+    let config = &effective_config;
     validate_host_configuration(config)?;
     config.validate_router_config()?;
     let decision_runtime = config

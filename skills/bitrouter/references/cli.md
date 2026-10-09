@@ -2,12 +2,12 @@
 
 ## Native tasks through the managed core
 
-`bro task managed PROMPT --model PROVIDER/MODEL --workspace PATH --session NAME`
+`bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 connects native tools, AGENTS.md, skills and MCP resources to an in-process
 CoreSession. The core owns routing and sub-agent scheduling; the native harness
 owns workspace execution and durable checkpoint/ACK storage. It accepts
 `--config`, `--effort`, `--read-only`, `--check`, and `--max-output-tokens`
-(default 4096). Read-only mode conflicts with verification. Coding mode approves
+(omitted: selected model output capacity). Read-only mode conflicts with verification. Coding mode approves
 its own headless tools. Explicit remote contexts are rejected.
 
 Output is NDJSON (`managed_session`, then `terminal`), with nonzero exit for an
@@ -20,9 +20,9 @@ subscription output reservations and storage bounds.
 ## BRO native coding conversations
 
 ```console
-bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"
-bro task run "inspect this project" --model openai/gpt-5 --read-only
-bro code --model openai/gpt-5 --workspace /path/to/project
+bro task run "fix the failing test" --check "cargo test"
+bro task run "inspect this project" --read-only
+bro code --workspace /path/to/project
 bro code --thread-id THREAD_ID
 ```
 
@@ -44,7 +44,7 @@ without it verification is `not_requested`. `--read-only` forbids effectful
 tools and cannot be combined with `--check`. Explicit remote contexts fail
 without local fallback. `bro run <agent>` remains the separate ACP harness path.
 
-The local native protocol is **v15**, bound to the negotiated server instance.
+The local native protocol is **v17**, bound to the negotiated server instance.
 Older daemons fail the handshake before submission. `command_id` correlates
 transport replies; durable `idempotency_key` identifies accepted operations.
 Every Thread operation checks its authenticated caller, stored permission
@@ -60,13 +60,16 @@ clears only after acceptance. Same-instance reconnect uses the Thread cursor
 and preserves the in-process draft; instance loss never resubmits input.
 `--thread-id` reattaches stored configuration and permissions; `--task-id` has
 been removed. No draft persistence across process exit is provided.
-For new native Threads, `--model-policy` permits the configured decision backend
-to use the version 4 named policy selected by the `--model` router selector.
-Without this flag the model remains fixed. See [decision-native.md](decision-native.md)
+New native Threads default to `chat.model: bitrouter/auto` and the read-only
+policy bundled with the binary. No config file or `--model-policy` is needed.
+Named policy selectors automatically enable policy routing; an explicit physical
+`--model` pins generation. Existing `chat.model` and operator policy files win. See [decision-native.md](decision-native.md)
 for bounded model/context planning and its explicit price assumptions.
-Native `code` and `task run` accept `--max-output-tokens` (default 4096), retained
-with the Thread. Subscription routes need a reservation covering their known
-model ceiling; `--thread-id` reuses the stored reservation.
+Native `code` and `task run` accept an optional `--max-output-tokens` override.
+When omitted, each generation step reserves the selected model's declared output
+capacity. Both the omission and explicit overrides survive Thread continuation.
+Models without declared capacity use 4096; uncappable providers still require a
+known ceiling. See [decision-native.md](decision-native.md) for admission details.
 
 Conversation and Agents use the terminal's normal buffer and native scrollback.
 An empty composer permits plain Left to open the **BRO conversation directory**;
@@ -413,7 +416,7 @@ result and verification identify the same selected interpreter. Missing shells
 fail coding before sampling; read-only needs none. Loss after selection returns
 an error without retry under another interpreter. Old tool names have no aliases.
 Bounded read workers, exclusive effects and recovery blocking remain in force.
-Local protocol is v15; opt-in HTTP uses `/agent/v2`. Old execution-root formats
+Local protocol is v17; opt-in HTTP uses `/agent/v2`. Old execution-root formats
 are rejected rather than rewritten or replayed.
 
 Explicit local `bro code <agent>` opens an ACP conversation.

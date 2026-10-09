@@ -87,7 +87,13 @@ fn supplement(
         }
     }
     for model in defaults.canonical {
-        if !data.canonical.iter().any(|m| m.id == model.id) {
+        if let Some(published) = data.canonical.iter_mut().find(|m| m.id == model.id) {
+            // Older caches retained only identity. Restore missing capacities
+            // offline while keeping every explicit value from the remote catalog.
+            published.max_input_tokens = published.max_input_tokens.or(model.max_input_tokens);
+            published.max_output_tokens = published.max_output_tokens.or(model.max_output_tokens);
+            published.context_window = published.context_window.or(model.context_window);
+        } else {
             data.canonical.push(model);
         }
     }
@@ -190,6 +196,48 @@ mod tests {
         assert_eq!(
             serde_json::to_value(twice)?,
             serde_json::to_value(Some(once))?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn old_identity_only_cache_recovers_bundled_capacities() -> Result<()> {
+        let defaults = bundled()?;
+        let metadata = defaults
+            .canonical
+            .iter()
+            .find(|model| model.max_output_tokens.is_some())
+            .context("no output capacity")?;
+        let mut old = defaults.clone();
+        for model in &mut old.canonical {
+            model.max_input_tokens = None;
+            model.max_output_tokens = None;
+            model.context_window = None;
+        }
+        let repaired = supplement(&RegistryConfig::default(), Some(old))?.context("no registry")?;
+        let model = repaired
+            .canonical
+            .iter()
+            .find(|model| model.id == metadata.id)
+            .context("lost model")?;
+        assert_eq!(model.max_output_tokens, metadata.max_output_tokens);
+        let mut remote = repaired;
+        let model = remote
+            .canonical
+            .iter_mut()
+            .find(|model| model.id == metadata.id)
+            .context("lost model")?;
+        model.max_output_tokens = Some(12345);
+        let retained =
+            supplement(&RegistryConfig::default(), Some(remote))?.context("no registry")?;
+        assert_eq!(
+            retained
+                .canonical
+                .iter()
+                .find(|model| model.id == metadata.id)
+                .context("lost model")?
+                .max_output_tokens,
+            Some(12345)
         );
         Ok(())
     }

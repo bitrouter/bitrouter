@@ -73,31 +73,28 @@ diagnostics live under the BitRouter home in `logs/session-*.log`.
 ## BRO native tools with a Codex subscription
 
 `bro code` (without an agent ID) and `bro task run` use BRO's native harness.
-Use an explicit subscription route and its known output ceiling, for example:
-
-```yaml
-inherit_defaults: true
-registry:
-  enabled: true
-providers:
-  openai-codex:
-    active: true
-    models:
-      - id: openai/gpt-6.1-sol
-        provider_model_id: gpt-6.1-sol
-        api_protocol: responses
-        token_limits:
-          max_output_tokens: 128000
-```
+After importing an existing subscription login, the shortest startup is:
 
 ```bash
 bro providers login openai-codex --import-existing
-bro code --model openai-codex:openai/gpt-6.1-sol --max-output-tokens 128000 --workspace PATH -c bitrouter.yaml
-bro task run "Inspect this workspace" --read-only --model openai-codex:openai/gpt-6.1-sol --max-output-tokens 128000 --workspace PATH -c bitrouter.yaml
+bro code
 ```
 
-The reservation is persisted with the Thread. It bounds admission; it does not
-promise a provider-enforced cap or establish a monetary subscription cost.
-The registry currently omits runtime token limits, so the example declares the
-ceiling explicitly. Use metadata for the selected model; do not lower a model's
-declared ceiling to make a smaller reservation pass.
+The native default is `bitrouter/auto`, using the policy shipped with the binary.
+No `chat.model`, policy file or output-token flag is needed. The current policy
+uses its strong default and contains no pretrained routes. Model capacities
+come from the registry, with an offline bundled fallback, and the reservation
+follows the selected model. A decision backend is optional; see
+[decision-native.md](decision-native.md) for typed decision configuration.
+
+To pin a model or run a headless task:
+
+```bash
+bro code --model openai-codex:openai/gpt-6.1-sol --workspace PATH
+bro task run "Inspect this workspace" --read-only --workspace PATH
+```
+
+An explicit `--max-output-tokens` is retained with the Thread. It bounds
+admission; it does not promise a provider-enforced cap or establish a monetary
+subscription cost. Uncappable routes require their declared output ceiling;
+do not lower that ceiling to make a smaller reservation pass.

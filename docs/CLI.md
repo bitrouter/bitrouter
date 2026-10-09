@@ -31,12 +31,12 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 ## Native tasks through the managed core
 
-`bro task managed PROMPT --model PROVIDER/MODEL --workspace PATH --session NAME`
+`bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 connects native tools, AGENTS.md, skills and MCP resources to an in-process
 CoreSession. The core owns routing and sub-agent scheduling; the native harness
 owns workspace execution and durable checkpoint/ACK storage. It accepts
 `--config`, `--effort`, `--read-only`, `--check`, and `--max-output-tokens`
-(default 4096). Read-only mode conflicts with verification. Coding mode approves
+(omitted: selected model output capacity). Read-only mode conflicts with verification. Coding mode approves
 its own headless tools. Explicit remote contexts are rejected.
 
 Output is NDJSON (`managed_session`, then `terminal`), with nonzero exit for an
@@ -49,9 +49,9 @@ subscription output reservations and storage bounds.
 ## BRO native coding conversations
 
 ```console
-bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"
-bro task run "inspect this project" --model openai/gpt-5 --read-only
-bro code --model openai/gpt-5 --workspace /path/to/project
+bro task run "fix the failing test" --check "cargo test"
+bro task run "inspect this project" --read-only
+bro code --workspace /path/to/project
 bro code --thread-id THREAD_ID
 ```
 
@@ -101,7 +101,7 @@ write, edit, shell and verification retain exclusive execution and durable
 intent/result commit boundaries. Historical names/IDs/results remain unchanged;
 unsettled legacy work never executes through aliases or reuses old approvals.
 
-The local native protocol is **v15**, bound to the negotiated server instance.
+The local native protocol is **v17**, bound to the negotiated server instance.
 Older daemons fail the handshake before submission. `command_id` correlates
 transport replies; durable `idempotency_key` identifies accepted operations.
 Every Thread operation checks its authenticated caller, stored permission
@@ -980,7 +980,8 @@ bro --context <name> code
 ```
 
 Bare local `code` opens a native Thread conversation. It chooses a model from
-`--model` or `chat.model`, or asks in a separate model editor. Subsequent prompts reuse that
+`--model` or `chat.model`, which defaults to `bitrouter/auto` with the bundled
+policy. With defaults disabled and no model configured, it opens a model editor. Subsequent prompts reuse that
 Thread's settled context. Enter starts or enqueues; Ctrl-Enter steers; Ctrl-R
 resumes a paused queue. With an empty composer, `y`/`n` answers an identified
 approval. Ctrl-C cancels the active Turn and Ctrl-D detaches. `--thread-id`
@@ -990,12 +991,12 @@ Thread state and the server queue; verification is shown in wider terminals.
 already-running local native server. Explicit remote contexts keep the
 operations view. See the native section above for recovery and draft behavior.
 
-`--model-policy` lets the shared named policy select the generation model for a
-new native Thread. Use a configured router selector as `--model`; its version 4
-policy lock owns the model, effort and context action. Without this flag the
-model remains fixed. `--max-output-tokens` sets the per-step reservation (default
-4096), stored with the Thread for continuation. Both flags conflict with
-`--thread-id` and an ACP agent. Uncapped subscription routes require their known
+Named policy selectors automatically select policy mode; `--model-policy` remains
+a compatible explicit opt-in. Physical model overrides remain fixed.
+`--max-output-tokens` overrides the per-step reservation; when omitted, it follows
+the selected model's declared output capacity (4096 for unknown capacity).
+The optional override is stored with the Thread for continuation. These flags
+conflict with `--thread-id` and an ACP agent. Uncapped subscription routes require their known
 model output ceiling. See [decision-native configuration](../skills/bitrouter/references/decision-native.md)
 and [Codex subscription setup](../skills/bitrouter/references/harness-codex.md).
 

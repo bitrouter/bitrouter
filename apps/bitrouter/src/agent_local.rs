@@ -23,7 +23,7 @@ use bitrouter_orchestrator::turn::{
     ApprovalAnswer, CancelTurnRequest, SteeringReceipt, SteeringRequest, TurnReceipt, TurnRequest,
 };
 
-pub const CONTRACT_VERSION: u32 = 16;
+pub const CONTRACT_VERSION: u32 = 17;
 const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 const MAX_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 

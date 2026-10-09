@@ -933,8 +933,10 @@ async fn all_infeasible_capacity_candidates_are_durably_rejected() -> TestResult
         vec![output(vec![text("must not run")])],
     )
     .await?;
+    let mut task = input();
+    task.max_output_tokens = Some(4096);
     session
-        .start("input", session.head().await.state_revision, input())
+        .start("input", session.head().await.state_revision, task)
         .await?;
     let state = session.drive().await?;
     assert_eq!(

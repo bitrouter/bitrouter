@@ -768,7 +768,7 @@ pub async fn prepare_files(
         step,
         treatment,
         config_path: config_path.to_path_buf(),
-        policy_path: active.path,
+        policy_path: active.file_path()?.to_path_buf(),
         parent_policy_digest: active.digest,
         config_before,
         policy_mode: config.policy.mode,
@@ -860,7 +860,7 @@ where
     let active = crate::policy_lock::load_for_config(&parsed, Some(&config_path))
         .await?
         .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-    if active.path != policy_path || active.digest != parent_policy_digest {
+    if active.file_path()? != policy_path || active.digest != parent_policy_digest {
         anyhow::bail!(
             "policy lock changed since it was loaded (expected {}, found {}); refusing to overwrite",
             parent_policy_digest,

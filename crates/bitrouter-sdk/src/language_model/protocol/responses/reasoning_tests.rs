@@ -150,3 +150,24 @@ fn codex_message_phase_survives_stateless_replay() -> Result<()> {
     assert_eq!(adapter.render_request(&inbound)?["input"], output);
     Ok(())
 }
+
+#[test]
+fn empty_reasoning_content_remains_replayable_without_stored_state() -> Result<()> {
+    for content in [Value::Null, json!([])] {
+        let item = json!({"type":"reasoning", "id":"rs_empty", "summary":[], "content":content, "encrypted_content":"opaque"});
+        let response = json!({"output":[item.clone()]});
+        assert!(output_replayable(&response));
+        let result = ResponsesAdapter.parse_response(response)?;
+        let mut prompt =
+            ResponsesAdapter.parse_request(json!({"model":"served", "input":"task"}))?;
+        prompt.messages.push(Message {
+            role: Role::Assistant,
+            content: result.content,
+        });
+        ResponsesAdapter
+            .validate_managed_prompt(&prompt)
+            .map_err(BitrouterError::bad_request)?;
+        assert_eq!(ResponsesAdapter.render_request(&prompt)?["input"][1], item);
+    }
+    Ok(())
+}

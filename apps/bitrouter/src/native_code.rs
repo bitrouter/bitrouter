@@ -31,6 +31,7 @@ enum SubmissionMode {
 struct Session {
     model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
     max_output_tokens: Option<u32>,
+    model_config: Option<bitrouter_sdk::config::Config>,
     thread_id: Option<String>,
     create_key: String,
     create_uncertain: bool,
@@ -173,7 +174,9 @@ pub async fn run(
     let client = ThreadClient::connect(&socket).await?;
     let workspace = workspace_override.unwrap_or(std::env::current_dir()?);
     let mut state = NativeState {
-        model: model_override.or(cfg.chat.model).unwrap_or_default(),
+        model: model_override
+            .or_else(|| crate::policy_lock::native_default_model(&cfg).map(str::to_owned))
+            .unwrap_or_default(),
         workspace: workspace.display().to_string(),
         status: "idle".into(),
         verification: "unavailable".into(),
@@ -183,9 +186,12 @@ pub async fn run(
         max_output_tokens: options.max_output_tokens,
         model_mode: if options.model_policy {
             bitrouter_orchestrator::core::protocol::ModelMode::Policy
-        } else {
+        } else if state.model.is_empty() || reattach.is_some() {
             bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+        } else {
+            crate::policy_lock::native_model_mode(&cfg, &state.model)?
         },
+        model_config: Some(cfg),
         thread_id: reattach,
         create_key: uuid::Uuid::new_v4().to_string(),
         pending: None,
@@ -437,7 +443,19 @@ async fn handle_event(
         if bitrouter_tui::native_agent::edit(editor, event) == Edit::Submitted
             && !editor.text().trim().is_empty()
         {
-            state.model = editor.text().trim().to_owned();
+            let model = editor.text().trim().to_owned();
+            if session.model_mode == bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+                && let Some(config) = &session.model_config
+            {
+                match crate::policy_lock::native_model_mode(config, &model) {
+                    Ok(mode) => session.model_mode = mode,
+                    Err(error) => {
+                        state.push(error.to_string());
+                        return Ok(false);
+                    }
+                }
+            }
+            state.model = model;
             state.model_editor = None;
             state.push(format!("Model selected: {}", state.model));
         }

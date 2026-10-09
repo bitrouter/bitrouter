@@ -240,7 +240,13 @@ fn app_with_policy(
 #[tokio::test]
 async fn native_subscription_reservation_survives_configuration_restore()
 -> Result<(), Box<dyn std::error::Error>> {
-    for reservation in [None, Some(128_000)] {
+    for (capacity, reservation, admitted) in [
+        (Some(128_000), None, true),
+        (Some(32_000), None, true),
+        (Some(128_000), Some(128_000), true),
+        (Some(128_000), Some(4096), false),
+        (None, None, false),
+    ] {
         let workspace = TempDir::new()?;
         let executor = Arc::new(Recording {
             mock: MockExecutor::new(vec![mock_stream(turn(vec![text("completed")]))]),
@@ -249,7 +255,7 @@ async fn native_subscription_reservation_survives_configuration_restore()
         });
         let table = StaticRoutingTable::new();
         let mut route = target();
-        route.model_constraints.token_limits.max_output_tokens = Some(128_000);
+        route.model_constraints.token_limits.max_output_tokens = capacity;
         table.insert("subscription-model", vec![route]);
         let app = Arc::new(
             App::builder()
@@ -267,10 +273,10 @@ async fn native_subscription_reservation_survives_configuration_restore()
             .run("Reply briefly", CancellationToken::new(), None)
             .await;
         let prompts = executor.prompts.lock().await;
-        if reservation.is_some() {
+        if admitted {
             assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
             assert_eq!(prompts.len(), 1);
-            assert_eq!(prompts[0].params.max_tokens, reservation);
+            assert_eq!(prompts[0].params.max_tokens.map(u64::from), capacity);
         } else {
             assert_eq!(report.status, RunStatus::Failed);
             assert!(
@@ -278,6 +284,57 @@ async fn native_subscription_reservation_survives_configuration_restore()
                 "an insufficient reservation must not dispatch"
             );
         }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_output_budget_follows_the_effort_eligible_route()
+-> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_sdk::language_model::types::{ReasoningEffort, ReasoningEffortConfig};
+    for (ineligible, eligible) in [(128_000, 32_000), (32_000, 128_000)] {
+        let workspace = TempDir::new()?;
+        let executor = Arc::new(Recording {
+            mock: MockExecutor::new(vec![mock_stream(turn(vec![text("completed")]))]),
+            prompts: Mutex::new(Vec::new()),
+            output_limit_support: Some(false),
+        });
+        let mut routes = Vec::new();
+        for (capacity, effort) in [
+            (ineligible, ReasoningEffort::Low),
+            (eligible, ReasoningEffort::High),
+        ] {
+            let mut route = target();
+            route.reasoning_effort = Some(ReasoningEffortConfig {
+                levels: vec![effort],
+                default: None,
+            });
+            route.model_constraints.token_limits.max_output_tokens = Some(capacity);
+            routes.push(route);
+        }
+        let table = StaticRoutingTable::new();
+        table.insert("subscription-model", routes);
+        let app = Arc::new(
+            App::builder()
+                .language_model(|builder| {
+                    builder
+                        .routing_table(Arc::new(table))
+                        .executor(executor.clone());
+                })
+                .build()?,
+        );
+        let report = Agent::new(
+            app,
+            CallerContext::local(),
+            workspace.path(),
+            AgentConfig::fixed("subscription-model", Some(ReasoningEffort::High)),
+        )?
+        .run("Reply briefly", CancellationToken::new(), None)
+        .await;
+        assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
+        let prompts = executor.prompts.lock().await;
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].params.max_tokens.map(u64::from), Some(eligible));
     }
     Ok(())
 }
