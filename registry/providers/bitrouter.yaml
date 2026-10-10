@@ -473,6 +473,15 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 10
+  - id: anthropic/claude-haiku-5.5
+    provider_model_id: anthropic/claude-haiku-5.5
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+        cache_write: 0.125
+      output_tokens:
+        text: 0.5
 status: active
 weight: 1
 community: false

@@ -86,6 +86,62 @@ models:
         cache_read: 0.3
       output_tokens:
         text: 15
+  - id: deepseek/deepseek-v4-pro-0813
+    provider_model_id: deepseek/deepseek-v4-pro-0813
+    pricing:
+      input_tokens:
+        no_cache: 1.32
+        cache_read: 0.044
+      output_tokens:
+        text: 3.96
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek/deepseek-v4.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.006
+      output_tokens:
+        text: 1.2
+  - id: minimax/minimax-m3
+    provider_model_id: minimax/minimax-m3
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+  - id: qwen/qwen3.8-2.4t-a95b
+    provider_model_id: qwen/qwen3.8-2.4t-a95b
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.25
+      output_tokens:
+        text: 6.0
+  - id: qwen/qwen3.8-27b
+    provider_model_id: qwen/qwen3.8-27b
+    pricing:
+      input_tokens:
+        no_cache: 0.42
+        cache_read: 0.085
+      output_tokens:
+        text: 3.0
+  - id: qwen/qwen3.8-flash
+    provider_model_id: qwen/qwen3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.016
+      output_tokens:
+        text: 0.47
+  - id: qwen/qwen3.8-max
+    provider_model_id: qwen/qwen3.8-max
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.25
+      output_tokens:
+        text: 6.0
 status: active
 weight: 1
 submitted_at: 2026-07-07
