@@ -94,7 +94,7 @@ async fn background_permissions_default_to_ask_and_explicit_modes_win() -> Resul
     })
     .await?;
     assert_eq!(run.attention, bitrouter::supervisor::AttentionState::Result);
-    let outcomes = denied.wait_for_permission_outcomes()?;
+    let outcomes = denied.wait_for_permission_outcomes(2)?;
     ensure!(
         outcomes
             .iter()
@@ -108,7 +108,7 @@ async fn background_permissions_default_to_ask_and_explicit_modes_win() -> Resul
         run.turn == bitrouter::supervisor::TurnState::Idle
     })
     .await?;
-    let outcomes = reads.wait_for_permission_outcomes()?;
+    let outcomes = reads.wait_for_permission_outcomes(2)?;
     ensure!(
         outcomes
             .iter()
@@ -146,7 +146,8 @@ async fn background_permissions_default_to_ask_and_explicit_modes_win() -> Resul
             .collect::<Vec<_>>(),
         ["Allow fixture 2", "Deny fixture 2"]
     );
-    let outcomes = mixed.captured_permission_outcomes()?;
+    // Supervisor state can advance before the agent captures the automatic reply.
+    let outcomes = mixed.wait_for_permission_outcomes(1)?;
     ensure!(
         outcomes.len() == 1 && selected_option(&outcomes[0].1) == Some("allow-1"),
         "policy match did not approve exactly the named request: {outcomes:?}"
