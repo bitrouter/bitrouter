@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.34](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.33...v1.0.0-alpha.34)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- Update Cargo.lock dependencies - ([0000000](https://github.com/bitrouter/bitrouter/commit/0000000))
+
+
 ### Changed
 
 - **Breaking:** remove native Gemini Generate Content HTTP endpoints, upstream codec, and Rust protocol variant. Metered `google` now uses the official Chat Completions endpoint with bearer `GEMINI_API_KEY`.
