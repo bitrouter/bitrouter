@@ -679,3 +679,112 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -> TestResult {
+    use bitrouter_orchestrator::core::context_router::inspection::{Inspection, RoutingPhase};
+    use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+    let server = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &Request| {
+        let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else { return ResponseTemplate::new(400) };
+        let Some(questions) = body["questions"].as_object() else { return ResponseTemplate::new(400) };
+        let answers = questions.iter().map(|(id, question)| {
+            let selected = match id.as_str() {
+                "routing_task_family" => "code:frontend_ui",
+                "routing_next_role" => "implement",
+                "routing_progress" => "progressing",
+                _ => "full",
+            };
+            let probabilities = question["criteria"].as_object().into_iter().flat_map(|criteria| criteria.keys())
+                .map(|label| (label.clone(), json!(if label == selected { 1.0 } else { 0.0 }))).collect::<serde_json::Map<_, _>>();
+            (id.clone(), json!({"type":"choice","choice":selected,"confidence":0.99,"probabilities":probabilities}))
+        }).collect::<serde_json::Map<_, _>>();
+        ResponseTemplate::new(200).set_delay(Duration::from_millis(500)).set_body_json(json!({"model":"classifier", "answers":answers,"usage":{"input_tokens":10,"output_tokens":3}}))
+    }).mount(&server).await;
+    let (session, _) = setup_decision(
+        &server,
+        Arc::new(Harness::new(None, None)),
+        vec![output(vec![text("done")])],
+    )
+    .await?;
+    let mut task = input();
+    task.routing.model = bitrouter_orchestrator::core::protocol::ModelMode::Policy;
+    task.routing.context = ContextMode::Auto;
+    session
+        .start("work", session.head().await.state_revision, task)
+        .await?;
+    let driving = {
+        let session = session.clone();
+        tokio::spawn(async move { session.drive().await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(inspection) = Inspection::capture(&session.snapshot().await)
+                && let Some(routing) = inspection
+                    .tasks
+                    .first()
+                    .and_then(|task| task.routing.as_ref())
+                && routing.phase == RoutingPhase::Classifying
+            {
+                assert!(routing.workflow.is_none() && routing.model.is_none());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    driving.await??;
+    let mut state = session.snapshot().await;
+    let inspection = Inspection::capture(&state).ok_or("inspection missing")?;
+    let routing = inspection
+        .tasks
+        .first()
+        .and_then(|task| task.routing.as_ref())
+        .ok_or("routing missing")?;
+    assert_eq!(routing.phase, RoutingPhase::Finished);
+    let workflow = routing.workflow.as_ref().ok_or("workflow missing")?;
+    assert_eq!(workflow.task_family, TaskFamily::CodeFrontendUi);
+    assert_eq!(workflow.next_step_role, NextStepRole::Implement);
+    assert_eq!(workflow.progress_state, ProgressState::Progressing);
+    assert_eq!(routing.model.as_deref(), Some("first:fixture-model"));
+    let root_id = state.agent_id.clone();
+    let turn = state
+        .agents
+        .get_mut(&root_id)
+        .and_then(|agent| agent.turn.as_mut())
+        .ok_or("root missing")?;
+    turn.status = bitrouter_orchestrator::core::session::AgentStatus::Runnable;
+    turn.final_answer = None;
+    let preparing = Inspection::capture(&state).ok_or("preparation inspection missing")?;
+    let routing = preparing
+        .tasks
+        .first()
+        .and_then(|task| task.routing.as_ref())
+        .ok_or("preparation routing missing")?;
+    assert_eq!(routing.phase, RoutingPhase::Preparing);
+    assert!(routing.workflow.is_none() && routing.model.is_none());
+    // The same runnable boundary waits for dependencies when a final answer
+    // exists and a child has unfinished work.
+    let mut child = state.agents.get(&root_id).ok_or("root missing")?.clone();
+    child.agent_id = "waiting-child".into();
+    child.parent_id = Some(root_id.clone());
+    child.turn.as_mut().ok_or("child turn missing")?.status =
+        bitrouter_orchestrator::core::session::AgentStatus::Runnable;
+    state.agents.insert(child.agent_id.clone(), child);
+    state
+        .agents
+        .get_mut(&root_id)
+        .and_then(|agent| agent.turn.as_mut())
+        .ok_or("root missing")?
+        .final_answer = Some("waiting for child".into());
+    let waiting = Inspection::capture(&state).ok_or("waiting inspection missing")?;
+    let routing = waiting
+        .tasks
+        .first()
+        .and_then(|task| task.routing.as_ref())
+        .ok_or("waiting routing missing")?;
+    assert_eq!(routing.phase, RoutingPhase::Waiting);
+    assert!(routing.model.is_some());
+    session.disconnect().await;
+    Ok(())
+}

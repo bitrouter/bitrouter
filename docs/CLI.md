@@ -108,6 +108,16 @@ Every Thread operation checks its authenticated caller, stored permission
 profile, current workspace grant, and instance. Local and HTTP callers have
 distinct ownership. Knowing a Thread ID does not authorize access.
 
+The native conversation has a segmented status bar. Active classification,
+routing, generation and tool work show an animated spinner; approval, terminal,
+disconnected and recovery states stop it. Workflow labels show the router's
+accepted task family, next-step role and progress, or explicit unknown/default
+values. The model segment shows the current serving attempt or selected plan;
+while selection is pending, it labels the configured selector as `route`.
+Narrow terminals retain the activity, workflow and model with Unicode-safe
+clipping. New steps clear the previous judgment; parents awaiting descendants
+show `AGENTS`. Status updates stay in the dock and do not append transcript rows.
+
 Bare `bro code` keeps one Thread across prompts and inherits settled context.
 Enter starts a Turn when idle, and enqueues FIFO input while busy or paused.
 Ctrl-Enter explicitly steers the active Turn; Ctrl-R explicitly resumes a

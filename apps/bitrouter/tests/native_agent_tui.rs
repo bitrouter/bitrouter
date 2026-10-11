@@ -36,6 +36,16 @@ impl TerminalClient {
         execution: &Execution,
         control: Option<&std::path::Path>,
     ) -> Result<Self> {
+        Self::open_with_policy(binary, config, execution, control, false)
+    }
+
+    fn open_with_policy(
+        binary: &str,
+        config: &std::path::Path,
+        execution: &Execution,
+        control: Option<&std::path::Path>,
+        policy: bool,
+    ) -> Result<Self> {
         let pty = native_pty_system().openpty(PtySize {
             rows: 24,
             cols: 100,
@@ -55,6 +65,16 @@ impl TerminalClient {
         if let Some(control) = control {
             command.arg("--socket");
             command.arg(control);
+        }
+        if policy {
+            command.arg("--model-policy");
+            command.arg("--read-only");
+            command.arg("--workspace");
+            command.arg(
+                config
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("fixture config has no parent"))?,
+            );
         }
         let child = pty.slave.spawn_command(command)?;
         let writer = pty.master.take_writer()?;
@@ -136,6 +156,37 @@ impl TerminalClient {
             let bytes = self
                 .output
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+            self.raw.extend_from_slice(&bytes);
+            self.screen.process(&bytes);
+        }
+    }
+
+    fn wait_for_spinner_change(&mut self, phase: &str) -> Result<()> {
+        let glyphs = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let current = |screen: &vt100::Parser| {
+            screen
+                .screen()
+                .contents()
+                .lines()
+                .find(|line| line.contains(phase))
+                .and_then(|line| glyphs.iter().find(|glyph| line.contains(**glyph)).copied())
+        };
+        let first = current(&self.screen)
+            .ok_or_else(|| anyhow::anyhow!("{phase} has no visible spinner"))?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if current(&self.screen).is_some_and(|glyph| glyph != first) {
+                return Ok(());
+            }
+            let bytes = self
+                .output
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "{phase} spinner did not change: {error}; screen: {:?}",
+                        self.screen.screen().contents()
+                    )
+                })?;
             self.raw.extend_from_slice(&bytes);
             self.screen.process(&bytes);
         }
@@ -313,7 +364,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     reconnecting.wait_for("draft y n retained")?;
     blocked.store(true, std::sync::atomic::Ordering::SeqCst);
     disconnect.send(1)?;
-    reconnecting.wait_for("status: disconnected")?;
+    reconnecting.wait_for("OFFLINE")?;
     reconnecting.wait_for("draft y n retained")?;
     let pending = wait_status(&socket, &turn_id, TurnStatus::WaitingForInput).await?;
     ensure!(
@@ -321,7 +372,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
         "typing draft answered approval"
     );
     blocked.store(false, std::sync::atomic::Ordering::SeqCst);
-    reconnecting.wait_for("status: waiting_for_input")?;
+    reconnecting.wait_for("APPROVAL")?;
     reconnecting.wait_for("draft y n retained")?;
     reconnecting.close()?;
     let ReplyResult::View { view } = local
@@ -379,7 +430,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     ensure!(completed.verification == VerificationStatus::Passed);
     ensure!(std::fs::read_to_string(workspace.join("note.txt"))? == "after\n");
     tui.wait_for("Done in the TUI.")?;
-    tui.wait_for("status: completed")?;
+    tui.wait_for("DONE")?;
     ensure!(!tui.screen.screen().contents().contains("ToolResult {"));
     ensure!(
         tui.screen
@@ -413,7 +464,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    tui.wait_for("status: waiting_for_input")?;
+    tui.wait_for("APPROVAL")?;
     tui.send(b"y")?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -458,7 +509,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     tui.close()?;
 
     let mut tui = TerminalClient::open(binary, &config, &turn_id)?;
-    tui.wait_for("status: completed")?;
+    tui.wait_for("DONE")?;
     tui.close()?;
 
     std::fs::write(workspace.join("note.txt"), "before\n")?;
@@ -708,7 +759,7 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
     );
     tui.send(b"o")?;
     tui.wait_for(&format!(
-        "thread: {}",
+        "{} q:0",
         second
             .thread_id
             .get(..8)
@@ -775,5 +826,112 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
         .output()
         .await;
     let _ = server.wait().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_status_bar_shows_classifier_workflow_model_and_live_spinner() -> Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &Request| {
+        let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else { return ResponseTemplate::new(400) };
+        let Some(questions) = body["questions"].as_object() else { return ResponseTemplate::new(400) };
+        let answers = questions.iter().map(|(id, question)| {
+            let choice = match id.as_str() { "routing_task_family" => "code:frontend_ui", "routing_next_role" => "implement", "routing_progress" => "progressing", _ => "full" };
+            let probabilities = question["criteria"].as_object().into_iter().flat_map(|criteria| criteria.keys()).map(|key| (key.clone(), json!(if key == choice {1.0} else {0.0}))).collect::<serde_json::Map<_,_>>();
+            (id.clone(), json!({"type":"choice","choice":choice,"confidence":0.99,"probabilities":probabilities}))
+        }).collect::<serde_json::Map<_,_>>();
+        ResponseTemplate::new(200).set_delay(Duration::from_secs(2)).set_body_json(json!({"model":"ui-classifier", "answers":answers,"usage":{"input_tokens":12,"output_tokens":3}}))
+    }).mount(&upstream).await;
+    Mock::given(method("POST")).and(path("/chat/completions")).respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)).set_body_raw(
+        format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", json!({"id":"ui-generation","object":"chat.completion.chunk","model":"test-model","choices":[{"index":0,"delta":{"content":"Status bar complete."},"finish_reason":null}]}), json!({"id":"ui-generation","object":"chat.completion.chunk","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}})), "text/event-stream")).mount(&upstream).await;
+    let home = tempfile::tempdir()?;
+    let config = home.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "inherit_defaults: false\nserver: {{listen: '127.0.0.1:0', skip_auth: true}}\ndatabase: {{url: 'sqlite://{}?mode=rwc'}}\nproviders:\n  mock:\n    api_base: {}\n    api_key: fixture\n    api_protocol: [{{'*': chat_completions}}]\n    models: [{{id: test-model}}]\ndecision_model:\n  model: ui-classifier\n  base_url: {}\n  api_key_env: BRO_UI_TEST_DECISION_KEY\n",
+            home.path().join("state.db").display(),
+            upstream.uri(),
+            upstream.uri()
+        ),
+    )?;
+    let binary = env!("CARGO_BIN_EXE_bro");
+    let mut server = Command::new(binary)
+        .arg("serve")
+        .arg("--config")
+        .arg(&config)
+        .env("BRO_UI_TEST_DECISION_KEY", "fixture")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket =
+        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if matches!(
+            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            Ok(ReplyResult::Capabilities { .. })
+        ) {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "server did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let mut client = TerminalClient::open_with_policy(
+        binary,
+        &config,
+        &Execution {
+            thread_id: String::new(),
+            turn_id: String::new(),
+        },
+        Some(&bitrouter::daemon::socket_path_for(&source, &cfg)),
+        true,
+    )?;
+    client.wait_for("← agents")?;
+    client
+        .writer
+        .write_all(b"Improve the frontend UI. Reply briefly without tools.\r")?;
+    client.writer.flush()?;
+    client.wait_for("CLASSIFYING")?;
+    client.wait_for_spinner_change("CLASSIFYING")?;
+    client.wait_for("GENERATING")?;
+    client.wait_for("frontend/implement")?;
+    client.wait_for("mock:test-model")?;
+    if let Some(path) = std::env::var_os("BRO_UI_CAPTURE") {
+        let mut cells = Vec::new();
+        for row in 0..24 {
+            for column in 0..100 {
+                if let Some(cell) = client.screen.screen().cell(row, column) {
+                    cells.push(json!({"row":row,"column":column,"text":cell.contents(),"foreground":format!("{:?}",cell.fgcolor()),"background":format!("{:?}",cell.bgcolor()),"bold":cell.bold()}));
+                }
+            }
+        }
+        std::fs::write(
+            path,
+            serde_json::to_vec(&json!({"columns":100,"rows":24,"cells":cells}))?,
+        )?;
+    }
+    client.wait_for_spinner_change("GENERATING")?;
+    client.wait_for("Status bar complete.")?;
+    client.wait_for("DONE")?;
+    ensure!(
+        client
+            .screen
+            .screen()
+            .contents()
+            .contains("frontend/implement"),
+        "final workflow lost"
+    );
+    client.writer.write_all(b"\x04")?;
+    client.writer.flush()?;
+    client.child.wait()?;
+    server.start_kill()?;
+    server.wait().await?;
     Ok(())
 }
