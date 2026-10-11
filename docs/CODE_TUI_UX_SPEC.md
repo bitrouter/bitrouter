@@ -2,6 +2,10 @@
 
 Status: **implemented** · Date: 2026-09-09
 
+Current entry/navigation: [Codex-style navigation spec](CODE_TUI_CODEX_NAVIGATION_SPEC.md)
+defines the native-scrollback conversation entry and explicitly opened Agents
+menu. Historical rendering and verification evidence below is retained.
+
 Baseline: `65891881` (`main`, PR #900 merged after #899 and #901)
 
 Supersedes the rendering decision in PR #900's conversation-first Code spec.

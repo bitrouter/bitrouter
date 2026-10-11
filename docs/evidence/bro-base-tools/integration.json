@@ -1,0 +1,37 @@
+{
+  "baseline": "e2453004734b1a2723b5f7e54087e21f3e64a315",
+  "date": "2026-10-04",
+  "source_sha256": {
+    "crates/bitrouter-orchestrator/src/tools.rs": "37e7de70a3b6d61bdddb8eef2f8305a448b05b4d5166f3a7debf85679e2a0616",
+    "crates/bitrouter-orchestrator/src/agent.rs": "aa59c3542aafafcbdf12e32a4d56e6b72ce6ce8b4b2171baea53363f46d91d2d",
+    "crates/bitrouter-orchestrator/src/service.rs": "5022f23ab811c52e6a4907b8b4db806c221a0da2dd590da8e7ee69f77d1e537d",
+    "crates/bitrouter-orchestrator/src/service/threads.rs": "adbde4d7e25715f714515c92bbb7d4244b51f8ab638f5210d53a657034e566aa",
+    "crates/bitrouter-orchestrator/src/service/recovery.rs": "5b1a1eb386d3f5ffc8b0e84dda738d778e18a4272a49b99aad7a8e22c0c301be",
+    "crates/bitrouter-orchestrator/src/service/thread_tests.rs": "7f913991b948179cdfe954eccc4f34e79d86838234ee69e76112989cf691271a",
+    "apps/bitrouter/tests/native_agent_process.rs": "76ca4631288645b3668552e4de1816332955105b1f355489114ccceec053f3ca",
+    "apps/bitrouter/tests/native_agent_tui.rs": "57a3a40242d8dfac166e63a5ad6b517e2838577e8c65db75ca8875a2cedd1bc0",
+    "scripts/probe-bro-base-tools.py": "3d93c19e6a0cf02685a23929c42cc9fc13942caa74e70f327380b0ee2d9ab955"
+  },
+  "live_evidence": [
+    "integrated-coding/summary.json",
+    "integrated-readonly/summary.json"
+  ],
+  "local_validation": {
+    "workspace_nextest": {
+      "passed": 3698,
+      "skipped": 22,
+      "failed": 0,
+      "leaky": 0
+    },
+    "clippy": "workspace all-features all-targets -D warnings passed",
+    "fmt": "passed",
+    "doctest": {
+      "passed": 5,
+      "ignored": 1
+    },
+    "rustdoc": "all-features -D warnings passed",
+    "dist_check": "passed",
+    "process_fixtures": 5,
+    "hosted_ci": "tracked on PR #951"
+  }
+}

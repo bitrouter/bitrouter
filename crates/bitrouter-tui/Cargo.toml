@@ -12,7 +12,7 @@ rust-version.workspace = true
 
 # NOTE: this crate must never depend on `bitrouter` (the application). That
 # absence is the boundary — see the module docs in src/lib.rs. Everything it
-# renders arrives over ACP; anything it cannot learn that way is passed in by
+# renders arrives over ACP or plain native presentation data supplied by
 # the caller.
 [dependencies]
 agent-client-protocol-schema.workspace = true

@@ -1,41 +1,17 @@
-//! `SKILL.md` format support and the `bro skills …` CLI.
+//! CLI inspection and scaffolding for installed Agent Skills.
 //!
-//! ## What this is, and what it deliberately is not
-//!
-//! BitRouter's local skill support is a CLI inspection/scaffolding surface.
-//! The independent MCP gateway can relay skills from configured upstream MCP
-//! servers, but the OSS daemon does not originate installed local skills. It
-//! is not a skills **host** (it never decides what enters a model's context)
-//! and, as of the package-manager cut, it is not a skills **installer** either.
-//!
-//! Getting a skill onto disk is the ecosystem's job — `npx skills add`, Claude
-//! Code's and Codex's plugin marketplaces. BitRouter's CLI reads the directory
-//! those tools populate.
-//!
-//! The former `bitrouter-skills` crate held both halves. Its package-manager
-//! half (git clone, source resolution, install-to-disk, registry client) was
-//! removed along with the `add` / `remove` / `find` / `update` verbs; its
-//! format half moved here, where its only consumers live.
-//!
-//! - [`mod@format`] — `SKILL.md` frontmatter parsing and discovery.
-//! - [`root`] — which `.claude/skills` directory to read, and what is in it.
-//! - [`cli`] — the surviving `skills list` / `skills init` verbs.
-//!
-//! Consumers: [`crate::actions::skills`] and [`cli`].
+//! The shared format parser and discovery rules are owned by
+//! `bitrouter_orchestrator::harness::skills`. This module selects CLI roots and
+//! renders reports; installing skills remains the ecosystem's responsibility.
+//! The managed harness publishes metadata and returns versioned materials to
+//! Core. Ordinary `bro skills list` does not activate a skill or execute scripts.
 
 pub mod cli;
-pub mod format;
 pub mod root;
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// A `SKILL.md` was missing its YAML frontmatter block.
-    #[error("SKILL.md has no YAML frontmatter block")]
-    MissingFrontmatter,
-    /// The YAML frontmatter failed to deserialize.
-    #[error("frontmatter parse error: {0}")]
-    Frontmatter(String),
     /// A skill name failed the Agent Skills format rules.
     #[error(
         "invalid skill name {0:?}: use 1-64 lowercase ASCII letters, digits, or single hyphens; hyphens may not lead, trail, or repeat"
@@ -49,30 +25,10 @@ pub enum Error {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Whether `name` satisfies the Agent Skills name grammar.
-pub(crate) fn is_valid_skill_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && name
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("--")
-}
-
-/// Whether `description` satisfies the Agent Skills length rule.
-pub(crate) fn is_valid_skill_description(description: &str) -> bool {
-    (1..=1024).contains(&description.chars().count())
-}
-
-/// Reject a name that the Agent Skills format, and therefore the SEP catalog,
-/// cannot publish. Keeping the CLI and catalog on this one validator prevents
-/// `skills init` from scaffolding a skill the server later skips.
+/// Validate with the same rules used by the production harness.
 pub fn validate_skill_name(name: &str) -> Result<()> {
-    if !is_valid_skill_name(name) {
-        return Err(Error::InvalidSkillName(name.to_string()));
-    }
-    Ok(())
+    bitrouter_orchestrator::harness::skills::validate_skill_name(name)
+        .map_err(|_| Error::InvalidSkillName(name.to_string()))
 }
 
 #[cfg(test)]

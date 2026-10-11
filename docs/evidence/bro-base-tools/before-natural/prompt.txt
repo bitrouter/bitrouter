@@ -1,0 +1,1 @@
+Fix the bug in total() so the Python unit tests pass. Inspect the project first, make the smallest code change, write NOTES.md describing the fix, and run python3 -m unittest -v. Keep your final answer brief and state the actual test outcome.

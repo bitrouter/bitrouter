@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-01",
+  "platform": "aarch64-apple-darwin",
+  "baseline_snapshot": "55dad4a706905ac3cfef2b41e277daf8e0a69522",
+  "model": "bitrouter:openai/gpt-5.4-mini",
+  "runs": {
+    "coding": {
+      "task_id": "07703f22-e144-43fe-94c0-905b946dd5d6",
+      "binary_sha256": "574b3b838a29f4ef0cbc574d916687e8118e54b3d20e504aa78272b01c230847",
+      "prompt_sha256": "78b42f005cd0993ff22007f2bbbbbe65df4f617338d8a455a69b913783f5b315"
+    },
+    "readonly": {
+      "task_id": "f2ad1e21-300d-4af6-909b-2b1fefd49a84",
+      "binary_sha256": "574b3b838a29f4ef0cbc574d916687e8118e54b3d20e504aa78272b01c230847",
+      "prompt_sha256": "44f0f180ee6428ebdb23d41089eca7cd654bf2ab980767187df47b594580d5be"
+    },
+    "natural": {
+      "task_id": "7833f0cc-d6d4-479f-b21c-21f7f9e0d0fe",
+      "binary_sha256": "574b3b838a29f4ef0cbc574d916687e8118e54b3d20e504aa78272b01c230847",
+      "prompt_sha256": "d1a7a9b653c990fba6cfbe6923f9d7c16a943393e93cbfe2ca5ef4d6664a69a7"
+    },
+    "before-natural": {
+      "task_id": "5ec8bf09-34b2-4835-9a44-406f6f71e439",
+      "binary_sha256": "c413e2a7fd59c1c6d22c068be73dece0bda42d5249fb26eadca563b8b9f495fa",
+      "prompt_sha256": "d1a7a9b653c990fba6cfbe6923f9d7c16a943393e93cbfe2ca5ef4d6664a69a7"
+    }
+  },
+  "source_sha256": {
+    "crates/bitrouter-orchestrator/src/tools.rs": "f66080c5530685ee0a8eb530c2a0f3618db5994cf255bfc9a21ac7fdc97de300",
+    "crates/bitrouter-orchestrator/src/agent.rs": "e03cb7e231fada715cac76136846d723e7c6788379a2a5b14b7d98a99731e86d",
+    "crates/bitrouter-orchestrator/src/service.rs": "7377eab815ec89563522c1fccf3fb3ce5c3e67673bf406da54236f43f6fc9905",
+    "apps/bitrouter/tests/native_agent_process.rs": "2e3dd362bff63d9eebe026ba25c8bbdcc04dfd5be229612f01593815bbb05699"
+  },
+  "evidence_scope": "Original six-tool experiment; not acceptance of the later integrated runtime.",
+  "raw_archive": "archives/original-2026-10-01.tar.gz",
+  "archive_index": "archive-index.json"
+}

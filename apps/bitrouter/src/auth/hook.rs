@@ -142,6 +142,26 @@ pub(crate) fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        // The native App entry has no HTTP headers and receives a caller only
+        // after the embedding task adapter established its own authority.
+        // HTTP ingress instead starts anonymous or local, and ordinary MCP
+        // requests still pass through `authenticate` below.
+        if ctx.headers().is_empty() && !ctx.caller().is_anonymous() && !ctx.caller().is_local() {
+            let caller = ctx.caller().clone();
+            ctx.set_metadata(
+                &plugin_id(),
+                serde_json::json!({"api_key_id": caller.api_key_id(), "user_id": caller.user_id(), "policy_id": null}),
+            );
+            ctx.emit(Authenticated {
+                api_key_id: caller.api_key_id().to_string(),
+                user_id: caller.user_id().to_string(),
+                policy_id: None,
+            });
+            ctx.emit(ApiPrincipalEstablished {
+                route_scope_id: format!("native:{}", caller.api_key_id()),
+            });
+            return Ok(HookDecision::Allow);
+        }
         match self.authenticate(ctx.headers(), ctx.caller()).await? {
             Authentication::Local => Ok(HookDecision::Allow),
             Authentication::Denied(message) => {

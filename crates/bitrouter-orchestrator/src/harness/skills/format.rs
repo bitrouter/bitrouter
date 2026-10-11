@@ -1,22 +1,4 @@
-//! The `SKILL.md` format: YAML frontmatter parsing, skill-name rules, and
-//! discovery of skills under a directory tree.
-//!
-//! Moved here from the former `bitrouter-skills` crate when the skills
-//! *package manager* (`add` / `remove` / `find` / `update`) was cut. What
-//! remains is format support, and its consumers are the app-owned skills
-//! report ([`crate::actions::skills`]) and the `skills list` / `skills init`
-//! CLI verbs.
-//!
-//! A `SKILL.md` opens with a YAML frontmatter block fenced by `---` lines:
-//!
-//! ```text
-//! ---
-//! name: my-skill
-//! description: What this skill does.
-//! ---
-//!
-//! # My Skill
-//! ```
+//! Shared Agent Skills frontmatter, validation and local discovery.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -36,8 +18,8 @@ pub struct SkillFrontmatter {
     #[serde(default)]
     pub metadata: BTreeMap<String, serde_json::Value>,
     /// The complete YAML mapping rendered as JSON, including fields this
-    /// version of BitRouter does not model. The SEP catalog publishes this
-    /// verbatim; typed fields above remain available to CLI/report consumers.
+    /// version of BitRouter does not model. Typed fields above remain available
+    /// to CLI/report consumers.
     #[serde(skip)]
     pub raw: serde_json::Map<String, serde_json::Value>,
 }
@@ -108,12 +90,14 @@ pub fn parse_frontmatter(content: &str) -> Result<SkillFrontmatter> {
 
 /// The candidate directories searched for a `SKILL.md`, relative to a fetched
 /// source root. Mirrors the conventional layout used by the wider skills
-/// ecosystem (root, then `skills/`, then `.claude/skills/`).
+/// ecosystem (root, `skills/`, `.claude/skills/`, `.agents/skills/`, `.codex/skills/`).
 fn skill_search_roots(root: &Path) -> Vec<PathBuf> {
     vec![
         root.to_path_buf(),
         root.join("skills"),
         root.join(".claude").join("skills"),
+        root.join(".agents").join("skills"),
+        root.join(".codex").join("skills"),
     ]
 }
 
@@ -125,7 +109,7 @@ fn skill_search_roots(root: &Path) -> Vec<PathBuf> {
 /// be a real directory/file: otherwise discovery could read a `SKILL.md`
 /// outside the configured workspace before the catalog has a chance to reject
 /// it.
-pub(crate) fn is_safe_installed_path(root: &Path, candidate: &Path) -> bool {
+pub(super) fn is_safe_installed_path(root: &Path, candidate: &Path) -> bool {
     let Ok(relative) = candidate.strip_prefix(root) else {
         return false;
     };
@@ -197,13 +181,10 @@ impl DiscoveredSkill {
 
     /// Why this skill cannot be served, or `None` when it can.
     ///
-    /// **The one validation policy.** Every surface asks this function and none
-    /// re-derives it: the SEP-2640 catalog skips a skill with a problem (it has
-    /// no conforming entry to publish), while `bro skills list` and
-    /// `skills_search` show it marked with the string this returns.
+    /// Shared validation policy: the managed harness excludes unusable skills,
+    /// while `bro skills list` reports the problem alongside the directory.
     ///
-    /// The rules are the Agent Skills format's, which SEP-2640 delegates to
-    /// wholesale: parseable frontmatter, a directory name equal to
+    /// The rules are the Agent Skills format's: parseable frontmatter, a directory name equal to
     /// `frontmatter.name`, and a name and description inside the format's
     /// bounds.
     pub fn problem(&self) -> Option<String> {
@@ -232,33 +213,43 @@ impl DiscoveredSkill {
 
 /// Discover every `SKILL.md` reachable under `root`: a `SKILL.md` directly in
 /// `root`, or one in any immediate subdirectory of the conventional skills
-/// directories (`<root>`, `<root>/skills`, `<root>/.claude/skills`).
+/// directories (`<root>`, `<root>/skills`, `<root>/.claude/skills`,
+/// `<root>/.agents/skills`, `<root>/.codex/skills`).
 ///
-/// **The one discovery function.** `list_installed`'s single `read_dir` of
-/// `<root>/.claude/skills` was the second one, and it is now a call to this;
-/// the SEP catalog's extra validation was the third, and it is now
-/// [`DiscoveredSkill::problem`].
+/// CLI inspection uses this discovery implementation; managed inventories use
+/// its bounded variant and the same [`DiscoveredSkill::problem`] validation.
 ///
 /// A path that escapes `root` or traverses a symlink beneath it is skipped
 /// silently — that containment is a security property, not a user-visible
 /// problem to report back.
 pub fn discover_all_skills(root: &Path) -> Vec<DiscoveredSkill> {
+    discover(root, usize::MAX, usize::MAX).unwrap_or_default()
+}
+
+pub(super) fn discover_bounded(root: &Path) -> Result<Vec<DiscoveredSkill>> {
+    discover(root, 4096, super::MAX_SKILLS)
+}
+
+fn discover(root: &Path, entry_limit: usize, skill_limit: usize) -> Result<Vec<DiscoveredSkill>> {
     let mut found = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    let mut push = |path: PathBuf, found: &mut Vec<DiscoveredSkill>| {
-        if !is_safe_installed_path(root, &path) {
-            return;
+    let mut push = |path: PathBuf, found: &mut Vec<DiscoveredSkill>| -> Result<()> {
+        if !path.is_file() || !is_safe_installed_path(root, &path) {
+            return Ok(());
         }
         // The conventional search roots overlap (e.g. `<root>/skills/SKILL.md`
         // is both a child of `<root>` and the direct file of `<root>/skills`);
         // dedup by path so a skill is never discovered twice.
         if !seen.insert(path.clone()) {
-            return;
+            return Ok(());
         }
         let Some(dir) = path.parent().map(Path::to_path_buf) else {
-            return;
+            return Ok(());
         };
-        let frontmatter = match std::fs::read_to_string(&path) {
+        if found.len() >= skill_limit {
+            return Err(Error::Io("skills discovery exceeds its entry limit".into()));
+        }
+        let frontmatter = match super::read_skill(&path) {
             Ok(content) => parse_frontmatter(&content),
             // Unreadable is a problem worth reporting, not an absence: the
             // directory has a SKILL.md and the user cannot use it.
@@ -269,42 +260,62 @@ pub fn discover_all_skills(root: &Path) -> Vec<DiscoveredSkill> {
             skill_md: path,
             frontmatter,
         });
+        Ok(())
     };
+    let mut entries_seen = 0usize;
     for base in skill_search_roots(root) {
         if !is_safe_installed_path(root, &base) {
             continue;
         }
         // A SKILL.md directly inside this base directory.
-        push(base.join("SKILL.md"), &mut found);
+        push(base.join("SKILL.md"), &mut found)?;
         // A SKILL.md one level down: base/<child>/SKILL.md.
-        let Ok(entries) = std::fs::read_dir(&base) else {
-            continue;
+        let entries = match std::fs::read_dir(&base) {
+            Ok(entries) => entries,
+            Err(error) if entry_limit != usize::MAX => return Err(Error::Io(error.to_string())),
+            Err(_) => continue,
         };
-        for entry in entries.flatten() {
-            push(entry.path().join("SKILL.md"), &mut found);
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if entry_limit != usize::MAX => {
+                    return Err(Error::Io(error.to_string()));
+                }
+                Err(_) => continue,
+            };
+            entries_seen += 1;
+            if entries_seen > entry_limit {
+                return Err(Error::Io(
+                    "skills discovery exceeds 4096 directory entries".into(),
+                ));
+            }
+            push(entry.path().join("SKILL.md"), &mut found)?;
         }
     }
     found.sort_by(|a, b| a.skill_md.cmp(&b.skill_md));
-    found
+    Ok(found)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
     #[test]
-    fn parses_name_and_description() {
+    fn parses_name_and_description() -> TestResult {
         let content = "---\nname: my-skill\ndescription: Does a thing.\n---\n\n# Body\n";
-        let fm = parse_frontmatter(content).expect("should parse");
+        let fm = parse_frontmatter(content)?;
         assert_eq!(fm.name, "my-skill");
         assert_eq!(fm.description, "Does a thing.");
         assert!(fm.metadata.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn parses_metadata_map() {
+    fn parses_metadata_map() -> TestResult {
         let content = "---\nname: s\ndescription: d\nmetadata:\n  version: \"1.2.0\"\n  internal: true\n---\nbody";
-        let fm = parse_frontmatter(content).expect("should parse");
+        let fm = parse_frontmatter(content)?;
         assert_eq!(
             fm.metadata.get("version"),
             Some(&serde_json::Value::String("1.2.0".to_string()))
@@ -313,87 +324,106 @@ mod tests {
             fm.metadata.get("internal"),
             Some(&serde_json::Value::Bool(true))
         );
+        Ok(())
     }
 
     #[test]
-    fn four_dash_line_is_not_a_closing_fence() {
+    fn four_dash_line_is_not_a_closing_fence() -> TestResult {
         // A `----` divider must not be mistaken for the `---` closing fence;
         // with no exact `---` closer the frontmatter is malformed.
         let content = "---\nname: s\ndescription: d\n----\nmore\n";
-        let err = parse_frontmatter(content).expect_err("no exact --- fence");
+        let err = parse_frontmatter(content)
+            .err()
+            .ok_or("no exact --- fence")?;
         assert!(matches!(err, Error::MissingFrontmatter));
+        Ok(())
     }
 
     #[test]
-    fn inner_dashes_do_not_truncate_block() {
+    fn inner_dashes_do_not_truncate_block() -> TestResult {
         // A `----` value before the real fence must not cut the block short.
         let content = "---\nname: s\ndescription: d\nnote: \"----\"\n---\nbody\n";
-        let fm = parse_frontmatter(content).expect("parses to the real fence");
+        let fm = parse_frontmatter(content)?;
         assert_eq!(fm.name, "s");
         assert_eq!(fm.description, "d");
+        Ok(())
     }
 
     #[test]
-    fn missing_frontmatter_is_an_error() {
-        let err = parse_frontmatter("# Just a heading\n").expect_err("no fence");
+    fn missing_frontmatter_is_an_error() -> TestResult {
+        let err = parse_frontmatter("# Just a heading\n")
+            .err()
+            .ok_or("no fence")?;
         assert!(matches!(err, Error::MissingFrontmatter));
+        Ok(())
     }
 
     #[test]
-    fn unterminated_frontmatter_is_missing() {
-        let err = parse_frontmatter("---\nname: s\n").expect_err("no closing fence");
+    fn unterminated_frontmatter_is_missing() -> TestResult {
+        let err = parse_frontmatter("---\nname: s\n")
+            .err()
+            .ok_or("no closing fence")?;
         assert!(matches!(err, Error::MissingFrontmatter));
+        Ok(())
     }
 
     #[test]
-    fn malformed_yaml_is_a_parse_error() {
+    fn malformed_yaml_is_a_parse_error() -> TestResult {
         // Missing the required `description` field.
-        let err = parse_frontmatter("---\nname: s\n---\n").expect_err("incomplete");
+        let err = parse_frontmatter("---\nname: s\n---\n")
+            .err()
+            .ok_or("incomplete")?;
         assert!(matches!(err, Error::Frontmatter(_)));
+        Ok(())
     }
 
     #[test]
-    fn discovers_skill_in_root() {
-        let dir = tempdir("discover-root");
+    fn discovers_skill_in_root() -> TestResult {
+        let dir = tempdir("discover-root")?;
         std::fs::write(
             dir.join("SKILL.md"),
             "---\nname: root-skill\ndescription: d\n---\n",
-        )
-        .unwrap();
-        let found = discover_all_skills(&dir).into_iter().next().expect("found");
+        )?;
+        let found = discover_all_skills(&dir)
+            .into_iter()
+            .next()
+            .ok_or("found")?;
         assert_eq!(found.name(), "root-skill");
         assert!(found.skill_md.ends_with("SKILL.md"));
         assert_eq!(found.dir, dir);
         cleanup(&dir);
+        Ok(())
     }
 
     #[test]
-    fn discovers_skill_in_skills_subdir() {
-        let dir = tempdir("discover-subdir");
+    fn discovers_skill_in_skills_subdir() -> TestResult {
+        let dir = tempdir("discover-subdir")?;
         let nested = dir.join("skills").join("alpha");
-        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(&nested)?;
         std::fs::write(
             nested.join("SKILL.md"),
             "---\nname: alpha\ndescription: d\n---\n",
-        )
-        .unwrap();
-        let found = discover_all_skills(&dir).into_iter().next().expect("found");
+        )?;
+        let found = discover_all_skills(&dir)
+            .into_iter()
+            .next()
+            .ok_or("found")?;
         assert_eq!(found.name(), "alpha");
         cleanup(&dir);
+        Ok(())
     }
 
     #[test]
-    fn discover_all_finds_multiple() {
-        let dir = tempdir("discover-all");
+    fn discover_all_finds_multiple() -> TestResult {
+        let dir = tempdir("discover-all")?;
         let skills = dir.join("skills");
         for name in ["one", "two"] {
             let nested = skills.join(name);
-            std::fs::create_dir_all(&nested).unwrap();
+            std::fs::create_dir_all(&nested)?;
             std::fs::write(
                 nested.join("SKILL.md"),
                 format!("---\nname: {name}\ndescription: d\n---\n"),
-            )
-            .unwrap();
+            )?;
         }
         let all = discover_all_skills(&dir);
         let mut names: Vec<_> = all.iter().map(DiscoveredSkill::name).collect();
@@ -401,19 +431,23 @@ mod tests {
         assert_eq!(names, vec!["one".to_string(), "two".to_string()]);
         assert!(all.iter().all(|s| s.problem().is_none()));
         cleanup(&dir);
+        Ok(())
     }
 
     /// The half of the drift that used to make a skill invisible to the agent:
     /// broken YAML was dropped by discovery, so only the CLI (which never
     /// parsed frontmatter) listed it. It is now discovered *and* marked.
     #[test]
-    fn a_skill_with_broken_frontmatter_is_discovered_and_carries_a_problem() {
-        let dir = tempdir("discover-broken");
+    fn a_skill_with_broken_frontmatter_is_discovered_and_carries_a_problem() -> TestResult {
+        let dir = tempdir("discover-broken")?;
         let nested = dir.join(".claude").join("skills").join("broken");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("SKILL.md"), "---\nname: broken\n---\n").unwrap();
+        std::fs::create_dir_all(&nested)?;
+        std::fs::write(nested.join("SKILL.md"), "---\nname: broken\n---\n")?;
 
-        let found = discover_all_skills(&dir).into_iter().next().expect("found");
+        let found = discover_all_skills(&dir)
+            .into_iter()
+            .next()
+            .ok_or("found")?;
         assert_eq!(found.name(), "broken", "falls back to the directory name");
         assert_eq!(found.description(), "");
         assert!(
@@ -422,34 +456,38 @@ mod tests {
             found.problem()
         );
         cleanup(&dir);
+        Ok(())
     }
 
     /// The SEP catalog's rule, now the shared one: a directory whose name does
     /// not equal `frontmatter.name` cannot be published, and both surfaces say
     /// so instead of one dropping it silently.
     #[test]
-    fn a_directory_name_mismatch_is_a_problem_not_a_disappearance() {
-        let dir = tempdir("discover-mismatch");
+    fn a_directory_name_mismatch_is_a_problem_not_a_disappearance() -> TestResult {
+        let dir = tempdir("discover-mismatch")?;
         let nested = dir.join(".claude").join("skills").join("on-disk");
-        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(&nested)?;
         std::fs::write(
             nested.join("SKILL.md"),
             "---\nname: in-frontmatter\ndescription: d\n---\n",
-        )
-        .unwrap();
+        )?;
 
-        let found = discover_all_skills(&dir).into_iter().next().expect("found");
+        let found = discover_all_skills(&dir)
+            .into_iter()
+            .next()
+            .ok_or("found")?;
         assert_eq!(found.name(), "in-frontmatter");
-        let problem = found.problem().expect("mismatch is a problem");
+        let problem = found.problem().ok_or("mismatch is a problem")?;
         assert!(
             problem.contains("on-disk") && problem.contains("in-frontmatter"),
             "{problem}"
         );
         cleanup(&dir);
+        Ok(())
     }
 
     #[test]
-    fn body_starts_after_the_frontmatter_fence() {
+    fn body_starts_after_the_frontmatter_fence() -> TestResult {
         assert_eq!(
             skill_body("---\nname: s\ndescription: d\n---\n\n# Alpha\n\nRun it.\n"),
             "# Alpha\n\nRun it.\n"
@@ -462,20 +500,22 @@ mod tests {
         // No recognizable frontmatter: the whole file, rather than nothing.
         assert_eq!(skill_body("# Just a heading\n"), "# Just a heading\n");
         assert_eq!(skill_body("---\nname: s\n"), "---\nname: s\n");
+        Ok(())
     }
 
     #[test]
-    fn discover_finds_nothing_when_empty() {
-        let dir = tempdir("discover-empty");
+    fn discover_finds_nothing_when_empty() -> TestResult {
+        let dir = tempdir("discover-empty")?;
         assert!(discover_all_skills(&dir).is_empty());
         cleanup(&dir);
+        Ok(())
     }
 
-    fn tempdir(label: &str) -> PathBuf {
+    fn tempdir(label: &str) -> std::result::Result<PathBuf, Box<dyn std::error::Error>> {
         let dir = std::env::temp_dir().join(format!("brskills-fm-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 
     fn cleanup(dir: &Path) {

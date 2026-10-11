@@ -1111,7 +1111,7 @@ mod skills_init_tests {
 
         assert!(output.is_file());
         assert_eq!(report.path, output.display().to_string());
-        let parsed = crate::skills::format::parse_frontmatter(
+        let parsed = bitrouter_orchestrator::harness::skills::format::parse_frontmatter(
             &std::fs::read_to_string(output).expect("read scaffold"),
         )
         .expect("valid frontmatter");

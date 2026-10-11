@@ -66,7 +66,7 @@ use std::io::Write as _;
 use ratatui::backend::{Backend, ClearType};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget as _;
 use unicode_width::UnicodeWidthStr as _;
 
@@ -106,6 +106,21 @@ impl SyncSink for ratatui::backend::TestBackend {
     fn synchronized(&mut self, _begin: bool) -> io::Result<()> {
         Ok(())
     }
+}
+
+pub fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
+    (buffer.area.top()..buffer.area.bottom())
+        .map(|y| {
+            let mut spans = Vec::new();
+            let mut x = buffer.area.left();
+            while x < buffer.area.right() {
+                let cell = &buffer[(x, y)];
+                spans.push(Span::styled(cell.symbol().to_string(), cell.style()));
+                x = x.saturating_add(u16::try_from(cell.symbol().width()).unwrap_or(1).max(1));
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// Paints a document of rows into a terminal, one difference at a time.

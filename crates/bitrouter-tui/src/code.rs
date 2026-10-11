@@ -14,7 +14,6 @@ use crossterm::cursor::Hide;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use ratatui::backend::{CrosstermBackend, TestBackend};
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -27,13 +26,15 @@ use crate::agents::{
     AgentAction, AgentDeckCommand, AgentDeckSnapshot, AgentDeckState, AgentEffect,
     AgentHistoryEvent, AgentHistorySnapshot, NewAgentRunChoices,
 };
+use crate::agents_menu::AgentsMenu;
+use crate::composer::layout as composer_layout;
 use crate::cost;
 use crate::editor::{Edit, Editor};
 use crate::journal::{Entry, EntryId, Journal, Voice};
 use crate::permission::Prompt;
 use crate::render::{self, Registry, ToolContext};
 use crate::wrap::wrap;
-use crate::writer::Writer;
+use crate::writer::{Writer, buffer_lines};
 
 /// The four persistent conversation facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +55,7 @@ impl Default for CodeStatus {
             title: "bro code".to_string(),
             agent: "choose an agent".to_string(),
             route: "unreported".to_string(),
-            activity: "choosing agent".to_string(),
+            activity: "ready".to_string(),
         }
     }
 }
@@ -695,6 +696,7 @@ pub struct CodeState {
     operations_root: Option<Inspector>,
     viewport: Size,
     agents: AgentDeckState,
+    agents_menu: AgentsMenu,
 }
 
 impl Default for CodeState {
@@ -739,6 +741,7 @@ impl CodeState {
             operations_root: None,
             viewport: Size::new(80, 24),
             agents: AgentDeckState::default(),
+            agents_menu: AgentsMenu::default(),
         }
     }
 
@@ -748,11 +751,31 @@ impl CodeState {
     }
 
     /// Replace application-mapped supervisor rows. Returns whether the
-    /// collapsed strip changed meaningfully.
+    /// visible inventory or ambient attention changed meaningfully.
     pub fn replace_agent_snapshot(&mut self, snapshot: AgentDeckSnapshot) -> bool {
+        let menu_status_changed = self.agents_menu.receive_snapshot(&snapshot);
+        let inventory_changed = self.agents.snapshot() != &snapshot;
         let changed = self.agents.replace_snapshot(snapshot);
         self.refresh_open_palettes();
-        changed
+        changed || (self.agents_menu.is_open() && (inventory_changed || menu_status_changed))
+    }
+
+    /// Report inventory availability without opening a destination.
+    pub fn set_agent_inventory_error(&mut self, message: Option<String>) {
+        self.agents_menu.set_error(message);
+    }
+
+    fn can_open_agents(&self) -> bool {
+        !self.operations_only
+            && matches!(self.surface, Surface::Conversation)
+            && !self.agents.is_expanded()
+            && !self.agents.is_inspector()
+            && !self.agents_menu.is_open()
+            && self.editor.is_empty()
+            && self.permissions.is_empty()
+            && !self.hotkeys.iter().any(|binding| {
+                binding.key.code == KeyCode::Left && binding.key.modifiers.is_empty()
+            })
     }
 
     /// Bind agent effects to the authenticated supervisor client identity.
@@ -1253,6 +1276,31 @@ impl CodeState {
     fn event(&mut self, event: &Event) -> Vec<CodeEffect> {
         if let Event::Resize(width, height) = event {
             self.viewport = Size::new(*width, *height);
+            return Vec::new();
+        }
+        if self.agents_menu.is_open() {
+            if crate::editor::is_redraw(event) {
+                return vec![CodeEffect::Redraw];
+            }
+            if let Some(key) = pressed(event)
+                && (control(key, 'c') || control(key, 'd'))
+            {
+                return self.conversation_event(event);
+            }
+            let page_size = usize::from(self.viewport.height.saturating_mul(2) / 5)
+                .saturating_sub(3)
+                .max(1);
+            self.agents_menu
+                .event(event, self.agents.snapshot(), page_size);
+            return Vec::new();
+        }
+        if let Event::Key(key) = event
+            && key.kind == KeyEventKind::Press
+            && key.code == KeyCode::Left
+            && key.modifiers.is_empty()
+            && self.can_open_agents()
+        {
+            self.agents_menu.open(self.agents.snapshot());
             return Vec::new();
         }
         if let Some(key) = pressed(event)
@@ -1781,12 +1829,8 @@ impl CodeState {
                 if matches!(self.surface, Surface::Permission) {
                     self.permission_selected = None;
                     self.surface = Surface::Conversation;
-                    self.notice = Some(
-                        "Foreground permission waiting · background actions are read-only"
-                            .to_string(),
-                    );
                 }
-                self.agents.toggle();
+                self.agents_menu.open(self.agents.snapshot());
                 Vec::new()
             }
             CommandTarget::AgentDeck { action, run_id } => {
@@ -2210,6 +2254,10 @@ impl CodeState {
                 return self.begin_prompt(prompt, false);
             }
             return self.effect_for_target(target);
+        }
+        if text.trim() == "/agent" {
+            self.editor.clear();
+            return vec![CodeEffect::ChooseAgent];
         }
         if !self.typed_commands.is_empty() {
             match crate::machine::resolve(&self.typed_commands, &self.prompt_commands, &text) {
@@ -2745,9 +2793,18 @@ impl CodeState {
         if !self.operations_only {
             commands.push(self.command_with_local_availability(Command::new(
                 "Background agents",
-                "Expand the supervised background-agent command center",
+                "Open read-only Agents navigation",
                 CommandOwner::BitRouter,
                 CommandTarget::BackgroundAgents,
+            )));
+            commands.push(self.command_with_local_availability(Command::new(
+                "Background run controls",
+                "Existing explicit supervisor controls; separate from read-only Agents",
+                CommandOwner::BitRouter,
+                CommandTarget::AgentDeck {
+                    action: AgentDeckCommand::Open,
+                    run_id: None,
+                },
             )));
             commands.push(self.command_with_local_availability(Command::new(
                 "Detach current session and exit",
@@ -2863,7 +2920,12 @@ impl CodeState {
                 || !self.permissions.is_empty())
             .then_some("Editor is available only at idle without a pending permission".to_string()),
             CommandTarget::Hotkeys => None,
-            CommandTarget::BackgroundAgents => None,
+            CommandTarget::BackgroundAgents => (matches!(source_surface, Surface::Inspector(_))
+                || self.agents.is_expanded()
+                || self.agents.is_inspector())
+            .then_some(
+                "Close the current inspector or run controls before opening Agents".to_string(),
+            ),
             CommandTarget::AgentDeck { action, .. } => self
                 .agents
                 .command_unavailable(*action, !self.permissions.is_empty())
@@ -3461,6 +3523,7 @@ pub struct CodeView {
     detached: Option<Terminal<CrosstermBackend<std::io::Stdout>>>,
     registry: Registry,
     document: DocumentCache,
+    projected_document: Vec<Line<'static>>,
     finished: bool,
     suspended: bool,
 }
@@ -3494,6 +3557,7 @@ impl CodeView {
             detached: None,
             registry: Registry::default(),
             document: DocumentCache::default(),
+            projected_document: Vec::new(),
             finished: false,
             suspended: false,
         })
@@ -3583,7 +3647,10 @@ impl CodeView {
         if !supported_viewport(size) {
             self.writer.claim_full_height()?;
         }
-        let transcript = normal_document(state, &self.registry, &mut self.document, size);
+        if !state.agents_menu.is_open() || self.projected_document.is_empty() {
+            self.projected_document =
+                normal_document(state, &self.registry, &mut self.document, size);
+        }
         let dock_height = dock_height(state, size);
         let mut dock = Terminal::new(TestBackend::new(size.width.max(1), dock_height.max(1)))?;
         let mut cursor = None;
@@ -3591,7 +3658,8 @@ impl CodeView {
             cursor = render_dock(frame, state, size);
         })?;
         let footer = buffer_lines(frame.buffer);
-        self.writer.docked_frame(&transcript, &footer)?;
+        self.writer
+            .docked_frame(&self.projected_document, &footer)?;
         let cursor = cursor.map(|position| {
             Position::new(
                 position.x,
@@ -3673,8 +3741,12 @@ fn normal_document(
     document.refresh(state, size.width.max(1), size.height.max(1), registry);
     let mut lines = vec![
         Line::styled(
-            sanitize(&state.status.title),
+            format!(">_ BitRouter ({})", env!("CARGO_PKG_VERSION")),
             Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(
+            format!("   {}", sanitize(&state.status.title)),
+            Style::default().fg(Color::DarkGray),
         ),
         Line::default(),
     ];
@@ -3685,6 +3757,9 @@ fn normal_document(
 fn dock_height(state: &CodeState, size: Size) -> u16 {
     if size.width < 40 || size.height < 16 {
         return size.height.max(1);
+    }
+    if state.agents_menu.is_open() {
+        return size.height.saturating_mul(2).saturating_div(5).max(1);
     }
     let transient_budget = size.height.saturating_mul(2).saturating_div(5).clamp(5, 12);
     if state.agents.is_expanded() && matches!(state.surface, Surface::Conversation) {
@@ -3703,7 +3778,13 @@ fn dock_height(state: &CodeState, size: Size) -> u16 {
             transient_budget.saturating_add(1).min(size.height)
         };
     }
-    let status: u16 = if size.width < 68 { 4 } else { 2 };
+    let status: u16 = if matches!(state.surface, Surface::Conversation) {
+        1
+    } else if size.width < 68 {
+        4
+    } else {
+        2
+    };
     let hint: u16 = 1;
     let content = match &state.surface {
         Surface::Conversation => {
@@ -3732,7 +3813,7 @@ fn dock_height(state: &CodeState, size: Size) -> u16 {
         }
         _ => transient_budget,
     };
-    let agent_strip = u16::from(state.agents.is_collapsed());
+    let agent_strip = 0;
     status
         .saturating_add(content)
         .saturating_add(agent_strip)
@@ -3746,8 +3827,11 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
     if !supported_viewport(terminal_size) {
         let message = state.permissions.front().map_or_else(
             || {
-                "Resize terminal to at least 40×16. Conversation, draft, queue, and selections are retained. Enter is disabled."
-                    .to_string()
+                if state.agents_menu.is_open() {
+                    "Resize terminal to at least 40×16. Esc returns to Conversation. Runs and drafts are retained.".to_string()
+                } else {
+                    "Resize terminal to at least 40×16. Conversation, draft, queue, and selections are retained. Enter is disabled.".to_string()
+                }
             },
             |pending| {
                 format!(
@@ -3765,14 +3849,84 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
         );
         return None;
     }
-    if matches!(state.surface, Surface::Permission) {
-        let strip_height = u16::from(state.agents.has_background_runs());
-        let [permission, agent_strip] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(strip_height)]).areas(area);
-        render_permission(frame, permission, state);
-        if strip_height > 0 {
-            state.agents.render_collapsed(frame, agent_strip);
+    if state.agents_menu.is_open() {
+        state.agents_menu.render(
+            frame,
+            area,
+            state.agents.snapshot(),
+            state.permissions.len(),
+        );
+        return None;
+    }
+    if matches!(state.surface, Surface::Conversation)
+        && !state.operations_only
+        && !state.agents.is_expanded()
+    {
+        let queue_height = if state.queued_preview_len() == 0 {
+            0
+        } else {
+            u16::try_from(state.queued_preview_len().min(2))
+                .unwrap_or(u16::MAX)
+                .saturating_add(2)
+        };
+        let notice_height = u16::from(state.notice.is_some());
+        let [queue, notice, composer, footer] = Layout::vertical([
+            Constraint::Length(queue_height),
+            Constraint::Length(notice_height),
+            Constraint::Min(2),
+            Constraint::Length(2),
+        ])
+        .areas(area);
+        if queue_height > 0 {
+            render_queue_summary(frame, queue, state);
         }
+        if let Some(text) = &state.notice {
+            render_notice(frame, notice, text);
+        }
+        render_composer(frame, composer, state);
+        let mut context = if state.session_active {
+            format!(
+                "{} · {} · {}",
+                safe_one_line(&state.status.agent),
+                safe_one_line(&state.status.route),
+                state.effective_activity()
+            )
+        } else if state.status.activity != "ready" {
+            format!(
+                "{} · Choose an agent with /agent",
+                safe_one_line(&state.status.activity)
+            )
+        } else {
+            "Choose an agent with /agent or send a draft".to_string()
+        };
+        if let Some(cost) = state.journal.usage().and_then(cost::from_usage) {
+            context.push_str(&format!(" · {}", line_text(&cost.render())));
+        }
+        let agents_hint = if state.can_open_agents() {
+            " · ← agents"
+        } else {
+            ""
+        };
+        let context = truncate_cells(
+            &context,
+            usize::from(footer.width).saturating_sub(agents_hint.width()),
+        );
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(format!("{context}{agents_hint}")),
+                Line::from(hint(state)),
+            ])
+            .style(Style::default().fg(Color::DarkGray)),
+            footer,
+        );
+        let cursor = composer_cursor_position(composer, state);
+        if let Some(position) = cursor {
+            frame.set_cursor_position(position);
+        }
+        return cursor;
+    }
+    if matches!(state.surface, Surface::Permission) {
+        render_permission(frame, area, state);
         return None;
     }
     if state.agents.is_expanded() && matches!(state.surface, Surface::Conversation) {
@@ -3817,11 +3971,9 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
     }
 
     let status_height = if area.width < 68 { 4 } else { 2 };
-    let strip_height = u16::from(state.agents.is_collapsed());
-    let [status, content, agent_strip, hint_area] = Layout::vertical([
+    let [status, content, hint_area] = Layout::vertical([
         Constraint::Length(status_height.min(area.height.saturating_sub(1))),
         Constraint::Min(1),
-        Constraint::Length(strip_height),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -3875,9 +4027,6 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
         Surface::Queue { selected } => render_queue_editor(frame, content, state, *selected),
         Surface::Recovery { selected } => render_recovery_editor(frame, content, state, *selected),
         Surface::Inspector(_) => {}
-    }
-    if state.agents.is_collapsed() {
-        state.agents.render_collapsed(frame, agent_strip);
     }
     frame.render_widget(
         Paragraph::new(hint(state)).style(Style::default().fg(Color::DarkGray)),
@@ -3940,21 +4089,6 @@ fn render_detached_frame(frame: &mut Frame<'_>, state: &CodeState) {
             );
         }
     }
-}
-
-fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
-    (buffer.area.top()..buffer.area.bottom())
-        .map(|y| {
-            let mut spans = Vec::new();
-            let mut x = buffer.area.left();
-            while x < buffer.area.right() {
-                let cell = &buffer[(x, y)];
-                spans.push(Span::styled(cell.symbol().to_string(), cell.style()));
-                x = x.saturating_add(u16::try_from(cell.symbol().width()).unwrap_or(1).max(1));
-            }
-            Line::from(spans)
-        })
-        .collect()
 }
 
 #[derive(Clone)]
@@ -4414,6 +4548,8 @@ fn composer_height(state: &CodeState, width: u16) -> u16 {
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
+    let band = Style::default().bg(Color::Rgb(48, 48, 48)).fg(Color::White);
+    frame.render_widget(Block::default().style(band), area);
     let rail = composer_rail(state);
     let [label, inner] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
     frame.render_widget(
@@ -4443,7 +4579,15 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
         .take(usize::from(inner.height))
         .cloned()
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines), inner);
+    if state.editor.is_empty() {
+        frame.render_widget(
+            Paragraph::new(format!("{rail} Ask BitRouter to do anything"))
+                .style(band.fg(Color::Gray)),
+            inner,
+        );
+    } else {
+        frame.render_widget(Paragraph::new(lines).style(band), inner);
+    }
 }
 
 fn composer_title(state: &CodeState) -> &'static str {
@@ -4510,148 +4654,6 @@ fn composer_cursor_position(area: Rect, state: &CodeState) -> Option<Position> {
         .saturating_add(y_offset)
         .min(inner.bottom().saturating_sub(1));
     Some(Position::new(x, y))
-}
-
-#[derive(Clone)]
-struct ComposerLayout {
-    rows: Vec<Line<'static>>,
-    cursor_row: usize,
-    cursor_column: u16,
-}
-
-#[derive(Clone, Copy)]
-struct ComposerFormat {
-    cursor: usize,
-    content_width: u16,
-    rail: &'static str,
-    rail_style: Style,
-}
-
-fn composer_layout(
-    text: &str,
-    cursor: usize,
-    content_width: u16,
-    rail: &'static str,
-    rail_style: Style,
-) -> ComposerLayout {
-    let mut rows = Vec::new();
-    let mut cursor_position = None;
-    let format = ComposerFormat {
-        cursor,
-        content_width,
-        rail,
-        rail_style,
-    };
-    let mut start = 0_usize;
-    let bytes = text.as_bytes();
-    let mut index = 0_usize;
-
-    while index < bytes.len() {
-        let newline = matches!(bytes[index], b'\n' | b'\r');
-        if !newline {
-            index = index.saturating_add(1);
-            continue;
-        }
-        append_composer_line(
-            &mut rows,
-            &mut cursor_position,
-            &text[start..index],
-            start,
-            &format,
-        );
-        let mut next = index.saturating_add(1);
-        if bytes[index] == b'\r' && bytes.get(next) == Some(&b'\n') {
-            next = next.saturating_add(1);
-        }
-        if cursor > index && cursor < next {
-            cursor_position = rows.last().map(|line| {
-                (
-                    rows.len().saturating_sub(1),
-                    u16::try_from(line_width(line)).unwrap_or(u16::MAX),
-                )
-            });
-        }
-        start = next;
-        index = next;
-    }
-    append_composer_line(
-        &mut rows,
-        &mut cursor_position,
-        &text[start..],
-        start,
-        &format,
-    );
-    let (cursor_row, cursor_column) = cursor_position.unwrap_or_else(|| {
-        let row = rows.len().saturating_sub(1);
-        let column = rows
-            .last()
-            .map(|line| u16::try_from(line_width(line)).unwrap_or(u16::MAX))
-            .unwrap_or(2);
-        (row, column)
-    });
-    ComposerLayout {
-        rows,
-        cursor_row,
-        cursor_column,
-    }
-}
-
-fn append_composer_line(
-    rows: &mut Vec<Line<'static>>,
-    cursor_position: &mut Option<(usize, u16)>,
-    text: &str,
-    start: usize,
-    format: &ComposerFormat,
-) {
-    let mut content = String::new();
-    let mut cells = 0_u16;
-    let width = format.content_width.max(1);
-    let mut row_start = start;
-
-    for (offset, grapheme) in text.grapheme_indices(true) {
-        let position = start.saturating_add(offset);
-        if cursor_position.is_none() && format.cursor == position {
-            *cursor_position = Some((
-                rows.len(),
-                u16::try_from(2_usize.saturating_add(usize::from(cells))).unwrap_or(u16::MAX),
-            ));
-        }
-        let rendered = sanitize(grapheme);
-        let grapheme_cells = u16::try_from(rendered.width()).unwrap_or(u16::MAX);
-        if !content.is_empty() && cells.saturating_add(grapheme_cells) > width {
-            rows.push(composer_row(
-                std::mem::take(&mut content),
-                format.rail,
-                format.rail_style,
-            ));
-            row_start = position;
-            cells = 0;
-        }
-        if cursor_position.is_none() && format.cursor == row_start {
-            *cursor_position = Some((rows.len(), 2));
-        }
-        content.push_str(&rendered);
-        cells = cells.saturating_add(grapheme_cells);
-    }
-    let end = start.saturating_add(text.len());
-    if cursor_position.is_none() && format.cursor == end {
-        *cursor_position = Some((
-            rows.len(),
-            u16::try_from(2_usize.saturating_add(usize::from(cells))).unwrap_or(u16::MAX),
-        ));
-    }
-    rows.push(composer_row(content, format.rail, format.rail_style));
-}
-
-fn composer_row(content: String, rail: &'static str, rail_style: Style) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{rail} "), rail_style),
-        Span::raw(content),
-    ])
-}
-
-fn line_width(line: &Line<'_>) -> usize {
-    line.spans.iter().map(|span| span.content.width()).sum()
 }
 
 fn hint(state: &CodeState) -> String {
@@ -6065,7 +6067,7 @@ mod tests {
         let chooser = prompt.step(press(KeyCode::Enter));
         assert!(matches!(&chooser[..], [CodeEffect::ChooseAgent]));
         assert_eq!(prompt.editor().text(), "ordinary draft before connection");
-        assert_eq!(prompt.effective_activity(), "choosing agent");
+        assert_eq!(prompt.effective_activity(), "ready");
     }
 
     #[test]
@@ -7102,7 +7104,58 @@ mod tests {
     }
 
     #[test]
-    fn expanded_agents_keep_the_entire_dock_within_forty_percent() -> io::Result<()> {
+    fn left_navigation_respects_drafts_permissions_repeat_and_hotkeys() -> Result<(), String> {
+        let mut state = active_state();
+        let repeat = Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Left,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        ));
+        let _ = state.step(CodeAction::Event(repeat));
+        assert!(!state.agents_menu.is_open());
+        let _ = state.step(paste("界\n🙂"));
+        let _ = state
+            .editor
+            .apply(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+        let _ = state.step(press(KeyCode::Left));
+        assert!(!state.agents_menu.is_open());
+        assert_eq!(state.editor.text(), "界\n🙂");
+        state.editor.clear();
+        let binding = CodeHotkey {
+            key: KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            action: "choose_agent".to_string(),
+            chord: "Left".to_string(),
+        };
+        state.set_commands(vec![Command::new(
+            "Choose agent",
+            "picker",
+            CommandOwner::BitRouter,
+            CommandTarget::ChooseAgent,
+        )]);
+        state.set_hotkeys("test", vec![binding])?;
+        assert!(!state.can_open_agents());
+        assert!(matches!(
+            state.step(press(KeyCode::Left)).as_slice(),
+            [CodeEffect::ChooseAgent]
+        ));
+        state.set_hotkeys("test", Vec::new())?;
+        let _ = state.receive_permission(question("one"));
+        let _ = state.step(press(KeyCode::Left));
+        assert!(!state.agents_menu.is_open());
+        state.permissions.clear();
+        let _ = state.step(press(KeyCode::Left));
+        assert!(state.agents_menu.is_open());
+        let _ = state.receive_permission(question("late"));
+        assert!(state.agents_menu.is_open());
+        assert!(state.permission_selected.is_none());
+        let _ = state.step(press(KeyCode::Esc));
+        assert!(!state.agents_menu.is_open());
+        assert_eq!(state.permissions.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn agents_menu_preserves_the_draft_and_forty_percent_budget() -> io::Result<()> {
         let size = Size::new(40, 16);
         let mut state = active_state();
         state.viewport = size;
@@ -7147,7 +7200,7 @@ mod tests {
         collapsed.draw(|frame| {
             let _ = render_dock(frame, &state, size);
         })?;
-        assert!(grid(collapsed.backend()).contains("BG"));
+        assert!(!grid(collapsed.backend()).contains("BG"));
 
         let _ = state.step(press(KeyCode::F(5)));
         let expanded_height = dock_height(&state, size);
@@ -7161,17 +7214,14 @@ mod tests {
             let _ = render_dock(frame, &state, size);
         })?;
         let rendered = grid(expanded.backend());
-        assert!(
-            rendered.contains("Foreground draft preserved"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("Agents"), "{rendered}");
+        assert!(state.agents_menu.is_open());
         assert!(rendered.contains("auth-review"), "{rendered}");
         Ok(())
     }
 
     #[test]
-    fn foreground_permission_keeps_background_strip_and_f5_opens_read_only_deck() -> io::Result<()>
-    {
+    fn foreground_permission_and_explicit_agents_menu_remain_read_only() -> io::Result<()> {
         let size = Size::new(40, 16);
         let mut state = active_state();
         state.viewport = size;
@@ -7205,14 +7255,14 @@ mod tests {
         })?;
         let rendered = grid(terminal.backend());
         assert!(rendered.contains("Permission"), "{rendered}");
-        assert!(rendered.contains("BG"), "{rendered}");
-        assert!(rendered.contains("●1"), "{rendered}");
+        assert!(!rendered.contains("BG"), "{rendered}");
 
         let _ = state.step(press(KeyCode::Char('1')));
         assert!(state.permission_selected.is_some());
         let _ = state.step(press(KeyCode::F(5)));
         assert!(matches!(state.surface, Surface::Conversation));
-        assert!(state.agents.is_expanded());
+        assert!(state.agents_menu.is_open());
+        assert!(!state.agents.is_expanded());
         assert!(state.permission_selected.is_none());
         assert!(!state.permissions.is_empty());
         Ok(())

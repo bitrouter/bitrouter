@@ -1688,7 +1688,7 @@ mod tests {
             KeyCode::Char('/'),
             KeyModifiers::NONE,
         ))));
-        for character in "background agents".chars() {
+        for character in "background run controls".chars() {
             let _ = state.step(CodeAction::Event(Event::Key(KeyEvent::new(
                 KeyCode::Char(character),
                 KeyModifiers::NONE,
