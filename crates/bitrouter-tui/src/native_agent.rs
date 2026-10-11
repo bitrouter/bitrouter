@@ -6,21 +6,38 @@ use std::io::{self, IsTerminal};
 use crossterm::event::Event;
 use ratatui::Terminal;
 use ratatui::backend::{CrosstermBackend, TestBackend};
-use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_segmentation::UnicodeSegmentation as _;
+use unicode_width::UnicodeWidthStr as _;
 
 use crate::agents_menu::{AgentsMenu, MenuEntry};
 use crate::editor::{Edit, Editor};
 use crate::wrap::wrap;
 use crate::writer::{Writer, buffer_lines};
 
-#[derive(Clone, Copy)]
 pub enum NativeEntryKind {
     User,
     Assistant,
     Detail,
+    Tool { status: ToolStatus, detail: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Denied,
+    Unknown,
+}
+
+pub struct NativeLive {
+    pub item_id: Option<String>,
+    pub text: String,
+    pub truncated: bool,
 }
 
 pub struct NativeEntry {
@@ -38,7 +55,7 @@ pub struct NativeState {
     pub status: String,
     pub verification: String,
     pub entries: Vec<NativeEntry>,
-    pub live: Option<String>,
+    pub live: Option<NativeLive>,
     pub pending_input_id: Option<String>,
     pub pending_input_detail: Option<String>,
     pub queued: usize,
@@ -58,6 +75,13 @@ impl NativeState {
 
     /// Replace a committed entity while preserving its first-seen position.
     pub fn upsert(&mut self, id: String, text: String, kind: NativeEntryKind) {
+        if self
+            .live
+            .as_ref()
+            .is_some_and(|live| live.item_id.as_deref() == Some(&id))
+        {
+            self.live = None;
+        }
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) {
             entry.text = text;
             entry.kind = kind;
@@ -112,7 +136,10 @@ impl NativeView {
             crate::lifecycle::restore();
             return Err(error);
         }
-        match Writer::new(CrosstermBackend::new(io::stdout())) {
+        match Writer::new(CrosstermBackend::new(io::stdout())).and_then(|mut writer| {
+            writer.claim_full_height()?;
+            Ok(writer)
+        }) {
             Ok(writer) => Ok(Self {
                 writer,
                 document: Vec::new(),
@@ -147,18 +174,20 @@ impl NativeView {
             // Creating the first Thread keeps the entry header in place.
             if self.thread_id.is_some() {
                 self.writer.new_document()?;
+                self.writer.claim_full_height()?;
             }
             self.thread_id = state.thread_id.clone();
             self.document.clear();
         }
         let size = self.writer.size();
+        let resized = state.viewport != Some(size);
         state.viewport = Some(size);
-        if !state.menu.is_open() || self.document.is_empty() {
+        if !state.menu.is_open() || self.document.is_empty() || resized {
             self.document = document(state, size.width);
         }
         let menu_height = size.height.saturating_mul(2) / 5;
         let editor = state.model_editor.as_ref().unwrap_or(&state.editor);
-        let editor_rows = composer_rows(editor, size.width.saturating_sub(2).max(1));
+        let editor_rows = composer_rows(editor, size.width.saturating_sub(4).max(1));
         let height = if state.menu.is_open() {
             menu_height.max(6)
         } else {
@@ -166,7 +195,7 @@ impl NativeView {
                 .unwrap_or(u16::MAX)
                 .min(6)
                 .saturating_add(
-                    4 + u16::from(state.notice.is_some())
+                    5 + u16::from(state.notice.is_some())
                         + u16::from(state.pending_input_detail.is_some()),
                 )
         }
@@ -174,29 +203,24 @@ impl NativeView {
         let mut dock = Terminal::new(TestBackend::new(size.width.max(1), height.max(1)))?;
         let frame = dock.draw(|frame| render_dock(frame, state))?;
         let footer = buffer_lines(frame.buffer);
-        let rows = self
-            .document
-            .iter()
-            .flat_map(|line| wrap(line, size.width))
-            .collect::<Vec<_>>();
-        self.writer.docked_frame(&rows, &footer)?;
+        self.writer.docked_frame(&self.document, &footer)?;
         let cursor = if state.menu.is_open() {
             None
         } else {
             let (_, position) = editor_rows;
             let visible = height
                 .saturating_sub(
-                    4 + u16::from(state.notice.is_some())
+                    5 + u16::from(state.notice.is_some())
                         + u16::from(state.pending_input_detail.is_some()),
                 )
                 .max(1);
             let first = position.y.saturating_sub(visible.saturating_sub(1));
             Some(Position::new(
-                position.x,
+                position.x.saturating_add(2),
                 size.height
                     .saturating_sub(height)
                     .saturating_add(
-                        1 + u16::from(state.notice.is_some())
+                        2 + u16::from(state.notice.is_some())
                             + u16::from(state.pending_input_detail.is_some()),
                     )
                     .saturating_add(position.y.saturating_sub(first)),
@@ -225,40 +249,122 @@ fn safe(text: &str) -> String {
         .collect()
 }
 
+/// Clip a status row by terminal cells, keeping Unicode graphemes intact.
+fn compact(text: &str, width: u16) -> String {
+    let text = safe(text).split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.width() <= usize::from(width) {
+        return text;
+    }
+    let mut result = String::new();
+    let mut cells = 0;
+    for grapheme in text.graphemes(true) {
+        if cells + grapheme.width() > usize::from(width.saturating_sub(1)) {
+            break;
+        }
+        result.push_str(grapheme);
+        cells += grapheme.width();
+    }
+    if width > 0 {
+        result.push('…');
+    }
+    result
+}
+
 fn document(state: &NativeState, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(4).max(1);
+    let muted = Style::default().fg(Color::DarkGray);
     let mut lines = vec![
-        Line::styled(
-            format!(">_ BRO · BitRouter ({})", env!("CARGO_PKG_VERSION")),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Line::styled(safe(&state.workspace), Style::default().fg(Color::DarkGray)),
+        Line::default(),
+        Line::from(vec![
+            Span::styled(
+                ">_ BRO",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("  BitRouter v{}", env!("CARGO_PKG_VERSION")), muted),
+        ]),
+        Line::from("Your coding workspace, ready."),
+        Line::styled(compact(&state.workspace, inner), muted),
         Line::default(),
     ];
+    let mut previous_tool = false;
     for entry in &state.entries {
         let text = safe(&entry.text);
         if text.is_empty() {
             continue;
         }
-        match entry.kind {
-            NativeEntryKind::Assistant => {
-                lines.extend(crate::render::markdown::render(&text, width))
+        let tool = matches!(entry.kind, NativeEntryKind::Tool { .. });
+        if !tool || !previous_tool {
+            lines.push(Line::default());
+        }
+        match &entry.kind {
+            NativeEntryKind::Assistant => assistant_lines(&mut lines, &text, inner, false),
+            NativeEntryKind::User => {
+                lines.push(Line::styled(
+                    "› You",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                lines.extend(text.lines().map(|line| Line::from(line.to_string())));
             }
-            NativeEntryKind::User => lines.extend(
+            NativeEntryKind::Detail => lines.extend(
                 text.lines()
-                    .map(|line| Line::styled(line.to_owned(), Style::default().fg(Color::Cyan))),
+                    .map(|line| Line::styled(line.to_string(), muted)),
             ),
-            NativeEntryKind::Detail => {
-                lines.extend(text.lines().map(|line| {
-                    Line::styled(line.to_owned(), Style::default().fg(Color::DarkGray))
-                }))
+            NativeEntryKind::Tool { status, detail } => {
+                let (label, color) = match status {
+                    ToolStatus::Running => ("◌ running", Color::Yellow),
+                    ToolStatus::Succeeded => ("✓ done", Color::Green),
+                    ToolStatus::Failed => ("× failed", Color::Red),
+                    ToolStatus::Denied => ("− denied", Color::Yellow),
+                    ToolStatus::Unknown => ("? unknown", Color::Yellow),
+                };
+                let body = if detail.is_empty() {
+                    text
+                } else {
+                    format!("{text} · {detail}")
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{label}  "), Style::default().fg(color)),
+                    Span::raw(compact(
+                        &body,
+                        inner.saturating_sub(label.width() as u16 + 2),
+                    )),
+                ]));
             }
         }
-        lines.push(Line::default());
+        previous_tool = tool;
     }
     if let Some(live) = &state.live {
-        lines.extend(safe(live).lines().map(|line| Line::from(line.to_owned())));
+        lines.push(Line::default());
+        assistant_lines(&mut lines, &safe(&live.text), inner, live.truncated);
     }
+    lines.push(Line::default());
+    // Wrap before adding margins so every continuation row keeps its padding.
     lines
+        .into_iter()
+        .flat_map(|line| wrap(&line, inner))
+        .map(|mut line| {
+            line.spans.insert(0, Span::raw("  "));
+            line
+        })
+        .collect()
+}
+
+fn assistant_lines(lines: &mut Vec<Line<'static>>, text: &str, width: u16, truncated: bool) {
+    lines.push(Line::styled(
+        "● BRO",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    if truncated {
+        lines.push(Line::styled(
+            "Earlier streaming output omitted",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    lines.extend(crate::render::markdown::render(text, width));
 }
 
 fn composer_rows(editor: &Editor, width: u16) -> (Vec<Line<'static>>, Position) {
@@ -301,11 +407,23 @@ fn render_dock(frame: &mut ratatui::Frame<'_>, state: &NativeState) {
         }
         return;
     }
-    let [notice, approval, label, composer, context, help] = Layout::vertical([
+    let area = area.inner(Margin::new(2, 0));
+    let [
+        notice,
+        approval,
+        label,
+        top_padding,
+        composer,
+        bottom_padding,
+        context,
+        help,
+    ] = Layout::vertical([
         Constraint::Length(u16::from(state.notice.is_some())),
         Constraint::Length(u16::from(state.pending_input_detail.is_some())),
         Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Min(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
@@ -323,13 +441,16 @@ fn render_dock(frame: &mut ratatui::Frame<'_>, state: &NativeState) {
     let caption = if state.model_editor.is_some() {
         "Enter a routed model ID"
     } else {
-        "Conversation"
+        "─ Message ─"
     };
     frame.render_widget(
         Paragraph::new(caption).style(Style::default().fg(Color::DarkGray)),
         label,
     );
-    let (rows, position) = composer_rows(editor, composer.width.saturating_sub(2).max(1));
+    let input_style = Style::default().bg(Color::Indexed(236)).fg(Color::White);
+    frame.render_widget(Paragraph::new("").style(input_style), top_padding);
+    frame.render_widget(Paragraph::new("").style(input_style), bottom_padding);
+    let (rows, position) = composer_rows(editor, composer.width.max(1));
     let first =
         usize::from(position.y).saturating_sub(usize::from(composer.height.saturating_sub(1)));
     let lines = rows.into_iter().skip(first).collect::<Vec<_>>();
@@ -339,7 +460,7 @@ fn render_dock(frame: &mut ratatui::Frame<'_>, state: &NativeState) {
         } else {
             lines
         })
-        .style(Style::default().bg(Color::Indexed(236)).fg(Color::White)),
+        .style(input_style),
         composer,
     );
     let hint = if state.can_open_agents() {
@@ -395,6 +516,70 @@ mod tests {
         assert_eq!(state.entries.len(), 2);
         assert_eq!(state.entries[0].text, "completed");
         assert_eq!(state.entries[1].id, "answer-b");
+    }
+
+    #[test]
+    fn tool_rows_are_single_line_with_unicode_and_control_safe_summaries() {
+        let mut state = NativeState::default();
+        for (id, status) in [("one", ToolStatus::Running), ("two", ToolStatus::Failed)] {
+            state.upsert(
+                id.into(),
+                format!("shell {}\nsecond line\x1b[2J", "你好👩‍💻 ".repeat(30)),
+                NativeEntryKind::Tool {
+                    status,
+                    detail: "Exit 1".into(),
+                },
+            );
+        }
+        let rows = document(&state, 40);
+        let tools = rows
+            .iter()
+            .filter(|row| row.to_string().contains("shell"))
+            .collect::<Vec<_>>();
+        assert_eq!(tools.len(), 2);
+        assert!(
+            tools
+                .iter()
+                .all(|line| line.width() <= 38 && line.to_string().ends_with('…'))
+        );
+        assert!(rows.iter().all(|line| !line.to_string().contains('\x1b')));
+        let first = rows
+            .iter()
+            .position(|row| row.to_string().contains("running"));
+        let second = rows
+            .iter()
+            .position(|row| row.to_string().contains("failed"));
+        assert_eq!(first.map(|index| index + 1), second);
+    }
+
+    #[test]
+    fn streaming_and_committed_markdown_share_one_message_and_keep_padding() {
+        let mut state = NativeState {
+            live: Some(NativeLive {
+                item_id: Some("answer".into()),
+                text: "**Ready**\n\n```sh\necho hi\n```".into(),
+                truncated: false,
+            }),
+            ..Default::default()
+        };
+        let before = document(&state, 60);
+        state.upsert(
+            "answer".into(),
+            "**Ready**\n\n```sh\necho hi\n```".into(),
+            NativeEntryKind::Assistant,
+        );
+        let after = document(&state, 60);
+        assert!(state.live.is_none());
+        assert_eq!(before, after);
+        let output = after
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(output.matches("● BRO").count(), 1);
+        assert!(!output.contains("**Ready**") && !output.contains("```"));
+        assert!(output.contains("echo hi"));
+        assert!(after.iter().all(|line| line.to_string().starts_with("  ")));
     }
 
     #[test]

@@ -695,6 +695,16 @@ bodies or MCP instructions into the prompt, install skills or execute scripts.
 
 `bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
 
+### Native conversation presentation
+
+Bare `bro code` opens with a BRO banner at the top of the visible terminal.
+Conversation rows grow below it into native scrollback; the padded composer and
+status stay at the bottom. Each native tool occupies one compact row with its
+name, target or command, and running/done/failed/denied/unknown status. Long
+summaries are ellipsized, and error results include a short reason. Detailed results remain in Thread history and retained artifacts.
+Assistant text uses Markdown during
+streaming and after completion, with committed item IDs replacing live previews.
+
 ### Native model history across protocol boundaries
 
 Native tool errors and execution denials remain typed in the durable journal.

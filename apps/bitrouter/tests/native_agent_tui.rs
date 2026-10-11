@@ -46,8 +46,10 @@ impl TerminalClient {
         command.arg("code");
         command.arg("--model");
         command.arg("test-model");
-        command.arg("--thread-id");
-        command.arg(&execution.thread_id);
+        if !execution.thread_id.is_empty() {
+            command.arg("--thread-id");
+            command.arg(&execution.thread_id);
+        }
         command.arg("--config");
         command.arg(config);
         if let Some(control) = control {
@@ -240,6 +242,39 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    let mut fresh = TerminalClient::open(
+        binary,
+        &config,
+        &Execution {
+            thread_id: String::new(),
+            turn_id: String::new(),
+        },
+    )?;
+    fresh.wait_for("Ctrl-D detach")?;
+    fresh.wait_for_frame_since(0)?;
+    let initial = fresh.screen.screen().contents();
+    ensure!(
+        initial
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("  >_ BRO")),
+        "banner did not start at the top: {initial:?}"
+    );
+    ensure!(
+        initial
+            .lines()
+            .nth(20)
+            .is_some_and(|line| line.starts_with("  › Ask")),
+        "composer was not docked: {initial:?}"
+    );
+    ensure!(!fresh.screen.screen().alternate_screen());
+    fresh.send("中文 draft".as_bytes())?;
+    fresh.wait_for("中文 draft")?;
+    fresh.resize(20, 60)?;
+    fresh.send(b"\x0c")?;
+    fresh.wait_for("中文 draft")?;
+    fresh.send(b"\x15")?;
+    fresh.close()?;
     let turn_id = submit(
         &socket,
         &workspace,
@@ -345,6 +380,15 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     ensure!(std::fs::read_to_string(workspace.join("note.txt"))? == "after\n");
     tui.wait_for("Done in the TUI.")?;
     tui.wait_for("status: completed")?;
+    ensure!(!tui.screen.screen().contents().contains("ToolResult {"));
+    ensure!(
+        tui.screen
+            .screen()
+            .contents()
+            .matches("Done in the TUI.")
+            .count()
+            == 1
+    );
     tui.send(b"Remember prior answer\r")?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {

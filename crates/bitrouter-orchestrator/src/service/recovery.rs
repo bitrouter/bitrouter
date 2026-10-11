@@ -359,20 +359,27 @@ impl ThreadService {
                 .threads
                 .get(&target.thread_id)
                 .ok_or_else(threads::unknown_thread)?;
-            let replacement = context_bytes.saturating_mul(2).saturating_add(
-                thread
-                    .queued
-                    .iter()
-                    .map(|entry| entry.prompt.len().saturating_mul(2))
-                    .sum::<usize>(),
-            );
+            let replacement = context_bytes
+                .saturating_mul(2)
+                .saturating_add(
+                    serde_json::to_vec(&thread.instructions)
+                        .map_err(storage)?
+                        .len(),
+                )
+                .saturating_add(
+                    thread
+                        .queued
+                        .iter()
+                        .map(|entry| entry.prompt.len().saturating_mul(2))
+                        .sum::<usize>(),
+                );
             if replacement > self.inner.limits.context_bytes_per_thread
                 || state
                     .threads
                     .values()
                     .map(state::ThreadRecord::bytes)
                     .sum::<usize>()
-                    .saturating_sub(thread.bytes())
+                    .saturating_sub(thread.context_bytes())
                     .saturating_add(replacement)
                     > self.inner.limits.hot_context_bytes
             {

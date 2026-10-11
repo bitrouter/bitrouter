@@ -77,6 +77,53 @@ impl Journal {
             )
     }
 
+    /// Only a settled run may receive a larger host checkpoint envelope. Run
+    /// limits and acknowledged bytes remain unchanged until the next run.
+    pub(super) fn upgrade_capacity(&mut self, limits: &Limits) -> Result<(), CoreError> {
+        if self.limits == *limits {
+            return Ok(());
+        }
+        let mut permitted = self.limits.clone();
+        permitted.checkpoint_bytes = permitted.checkpoint_bytes.max(limits.checkpoint_bytes);
+        permitted.unacknowledged_bytes = permitted
+            .unacknowledged_bytes
+            .max(limits.unacknowledged_bytes);
+        limits.validate()?;
+        let settled = self
+            .checkpoint
+            .as_ref()
+            .map(|batch| {
+                let payload = batch.decode(&self.limits)?;
+                let state: crate::core::session::SessionSnapshot =
+                    serde_json::from_value(payload.checkpoint.state).map_err(|_| {
+                        CoreError::rejected(
+                            ErrorCode::CheckpointConflict,
+                            "invalid native checkpoint",
+                        )
+                    })?;
+                Ok::<_, CoreError>(
+                    state.run.as_ref().is_none_or(|run| {
+                        matches!(
+                            run.status,
+                            crate::core::session::RunStatus::Completed
+                                | crate::core::session::RunStatus::Cancelled
+                                | crate::core::session::RunStatus::Failed
+                        )
+                    }) && quiescent(&state),
+                )
+            })
+            .transpose()?
+            .unwrap_or(true);
+        if permitted != *limits || !settled {
+            return Err(CoreError::rejected(
+                ErrorCode::CheckpointConflict,
+                "native capacity may only increase between settled runs",
+            ));
+        }
+        self.limits = limits.clone();
+        Ok(())
+    }
+
     pub(super) fn restore(
         &mut self,
         instance_id: &str,

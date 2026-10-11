@@ -609,7 +609,8 @@ async fn native_checkpoint_capacity_failure_reports_the_resource_cause()
         })
         .collect::<Vec<_>>();
     responses.push(turn(vec![text("done")]));
-    let agent = super::agent(&workspace, responses, |_| {})?;
+    let mut agent = super::agent(&workspace, responses, |_| {})?;
+    agent.native_checkpoint_bytes = 2 * 1024 * 1024;
     let report = agent
         .run("Read the evidence", CancellationToken::new(), None)
         .await;
@@ -623,6 +624,107 @@ async fn native_checkpoint_capacity_failure_reports_the_resource_cause()
         report.detail.contains("checkpoint capacity exhausted"),
         "{}",
         report.detail
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_long_tool_loop_completes_beyond_old_checkpoint_capacity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        workspace.path().join("large.txt"),
+        "retained evidence ".repeat(250),
+    )?;
+    let mut responses = (0..16)
+        .map(|index| {
+            turn(vec![call(
+                &format!("read-{index}"),
+                "read",
+                serde_json::json!({"path":"large.txt"}),
+            )])
+        })
+        .collect::<Vec<_>>();
+    responses.push(turn(vec![text("done")]));
+    let agent = super::agent(&workspace, responses, |_| {})?;
+    let report = agent
+        .run("Read the evidence", CancellationToken::new(), None)
+        .await;
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
+    assert_eq!(report.steps, 17);
+    assert_eq!(report.tool_calls, 16);
+    assert!(
+        report
+            .native
+            .as_ref()
+            .ok_or("missing native state")?
+            .bytes()
+            > 2 * 1024 * 1024
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_legacy_capacity_upgrades_between_runs_and_replays()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    let mut first = super::agent(&workspace, vec![turn(vec![text("first")])], |_| {})?;
+    first.native_checkpoint_bytes = 2 * 1024 * 1024;
+    let (commits, owner) = commit_recorder();
+    let report = first
+        .run_with_approvals(
+            "first",
+            CancellationToken::new(),
+            None,
+            None,
+            Some(commits),
+            None,
+        )
+        .await;
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
+    let mut records = owner.await?;
+    let mut saved = None;
+    for record in &records {
+        crate::agent::native::Saved::replay(&mut saved, record)?;
+    }
+    let next =
+        super::agent(&workspace, vec![turn(vec![text("second")])], |_| {})?.with_native(saved);
+    let (commits, owner) = commit_recorder();
+    let next = next
+        .run_context(
+            RunInput {
+                prompt: "continue".into(),
+                messages: report.messages,
+                user_item_id: "next".into(),
+                context_version: report.context_version,
+                checkpoint: None,
+                complete_checkpoint: false,
+                restored_verification: None,
+            },
+            CancellationToken::new(),
+            RunChannels {
+                events: None,
+                approvals: None,
+                commits: Some(commits),
+                control: None,
+            },
+        )
+        .await;
+    assert_eq!(next.status, RunStatus::Completed, "{}", next.detail);
+    records.extend(owner.await?);
+    let mut saved = None;
+    let mut upgraded = false;
+    for record in &records {
+        crate::agent::native::Saved::replay(&mut saved, record)?;
+        if let ExecutionRecord::CoreCheckpoint { limits, .. } = record {
+            upgraded |= limits.checkpoint_bytes == 32 * 1024 * 1024;
+        }
+    }
+    assert!(upgraded);
+    assert!(
+        saved
+            .as_ref()
+            .is_some_and(crate::agent::native::Saved::complete_projection)
     );
     Ok(())
 }

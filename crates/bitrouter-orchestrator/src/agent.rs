@@ -178,6 +178,7 @@ pub struct RunReport {
 pub struct Agent {
     native: Option<native::Saved>,
     native_record_bytes: usize,
+    native_checkpoint_bytes: u64,
     app: Arc<App>,
     caller: CallerContext,
     tools: WorkspaceTools,
@@ -332,6 +333,7 @@ impl Agent {
         Ok(Self {
             native: None,
             native_record_bytes: 4 * 1024 * 1024,
+            native_checkpoint_bytes: 32 * 1024 * 1024,
             app,
             caller,
             tools,

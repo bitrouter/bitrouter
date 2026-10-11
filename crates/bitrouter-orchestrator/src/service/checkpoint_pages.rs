@@ -5,7 +5,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 
 use crate::store::ExecutionRecord;
 
-const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
+// A 32 MiB Core payload expands to base64 inside its JSON record. Individual
+// store pages remain bounded independently of this complete record envelope.
+const MAX_RECORD_BYTES: usize = 48 * 1024 * 1024;
 
 fn checkpoint(record: &ExecutionRecord) -> bool {
     matches!(record, ExecutionRecord::TurnRecord { fact, .. }

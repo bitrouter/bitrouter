@@ -22,6 +22,15 @@ core-tree-pressure = { max-threads = 1 }
 filter = 'test(capacity::tree_limits::maximum_tree_)'
 test-group = 'core-tree-pressure'
 
+# A native cold recovery replays several multi-megabyte checkpoints before
+# admitting another Turn. Its debug serialization exceeded five minutes on
+# the two-core Linux runner when overlapping the full-tree cases. Serialize
+# those workloads and give only this end-to-end recovery case ten minutes.
+[[profile.default.overrides]]
+filter = 'test(native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery)'
+test-group = 'core-tree-pressure'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
 # Explicitly ignored acceptance launches hundreds of sequential native sessions
 # through external ACP workers. Its publication and rollback workload exceeds
 # the ordinary suite deadline; each prompt and evaluation is separately bounded.
