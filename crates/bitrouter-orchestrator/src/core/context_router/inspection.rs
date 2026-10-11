@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::session::{AgentStatus, ModelStep, SessionSnapshot};
 use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Inspection {
     pub run_id: String,
     pub tasks: Vec<TaskView>,
@@ -15,7 +15,7 @@ pub struct Inspection {
     pub decisions: DecisionUsage,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskView {
     pub task_id: String,
     pub agent_id: String,
@@ -37,7 +37,7 @@ pub struct TaskView {
 }
 
 /// Public progress from the current task's acknowledged execution state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutingStatus {
     pub phase: RoutingPhase,
     /// Accepted classifier labels, including explicit abstention as unknown.
@@ -74,14 +74,14 @@ impl RoutingPhase {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workflow {
     pub task_family: TaskFamily,
     pub next_step_role: NextStepRole,
     pub progress_state: ProgressState,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionUsage {
     pub attempts: usize,
     pub pending: usize,

@@ -661,11 +661,11 @@ async fn private_history_redirect_is_not_followed_or_claimed_as_success() -> Res
 }
 
 #[tokio::test]
-async fn private_history_core_changes_model_only_after_authorized_whole_message_rebuild()
--> Result<()> {
+async fn private_history_core_changes_model_only_after_authorized_context_rebuild() -> Result<()> {
     use bitrouter_orchestrator::core::protocol::DiscardableHistory;
     for protocol in ["messages", "responses"] {
-        for discard in [false, true] {
+        for (discard, portable) in [(false, false), (true, false), (false, true)] {
+            let rebuild = discard || (portable && protocol == "responses");
             let fixture = PrivateFixture::new(protocol).await?;
             if protocol == "responses" {
                 fixture.upstream.reset().await;
@@ -697,19 +697,28 @@ async fn private_history_core_changes_model_only_after_authorized_whole_message_
                 max_tool_output_bytes: 8192,
                 artifact_quota_bytes: 1024 * 1024,
                 max_artifact_chunk_bytes: 8192,
-                required_features: Vec::new(),
+                required_features: if portable {
+                    vec![
+                        bitrouter_orchestrator::core::context_router::FEATURE.into(),
+                        bitrouter_orchestrator::core::context_router::PORTABLE_RESPONSES_REASONING
+                            .into(),
+                    ]
+                } else {
+                    Vec::new()
+                },
             };
             let caps = Capabilities {
                 version: 1,
                 core_instance_id: "private-core".into(),
-                operations: Vec::new(),
+                operations: manifest.required_features.clone(),
                 transports: vec!["in_process".into()],
                 unsupported_features: Vec::new(),
                 limits: Limits::default(),
                 max_sessions: 16,
                 max_host_model_attempts: 16,
             };
-            let session = CoreSession::bind(
+            let app = Arc::new(fixture.app.app);
+            let mut session = CoreSession::bind(
                 Bind {
                     grant,
                     durable_head: DurableHead::default(),
@@ -718,7 +727,7 @@ async fn private_history_core_changes_model_only_after_authorized_whole_message_
                     limits: Limits::default(),
                 },
                 &caps,
-                Arc::new(fixture.app.app),
+                app.clone(),
                 owner(),
                 harness.clone(),
             )
@@ -755,7 +764,11 @@ async fn private_history_core_changes_model_only_after_authorized_whole_message_
             let first = session.drive().await?;
             assert_eq!(
                 first.run.as_ref().map(|run| run.status),
-                Some(RunStatus::Completed)
+                Some(RunStatus::Completed),
+                "protocol={protocol} discard={discard} portable={portable}: {:?}",
+                first
+                    .root_turn()
+                    .and_then(|turn| turn.terminal_reason.as_ref())
             );
             let history = first.agents[&first.agent_id].history.clone();
             let private_message = history
@@ -799,15 +812,15 @@ async fn private_history_core_changes_model_only_after_authorized_whole_message_
                 .context("wire requests")?;
             assert_eq!(
                 requests.len(),
-                if discard { 2 } else { 1 },
-                "protocol={protocol} discard={discard}: {:?}",
+                if rebuild { 2 } else { 1 },
+                "protocol={protocol} discard={discard} portable={portable}: {:?}",
                 second
                     .root_turn()
                     .and_then(|turn| turn.terminal_reason.as_ref())
             );
             let turn = second.root_turn().context("second turn")?;
             assert!(turn.steps[0].attempts.is_empty());
-            if discard {
+            if rebuild {
                 assert_eq!(
                     second.run.as_ref().map(|run| run.status),
                     Some(RunStatus::Completed)
@@ -817,6 +830,44 @@ async fn private_history_core_changes_model_only_after_authorized_whole_message_
                 assert!(!sent.contains("signed-fixture"));
                 assert!(!sent.contains("opaque-secret-fixture"));
                 assert!(sent.contains("independent next task"));
+                if portable {
+                    assert!(sent.contains("done"));
+                    assert!(!sent.contains("readable thought"));
+                    let source = &turn.steps[0];
+                    assert!(
+                        source
+                            .input_history
+                            .iter()
+                            .any(|message| message.content.iter().any(is_private))
+                    );
+                    let record = source.rebuild.as_ref().context("rebuild record")?;
+                    assert_eq!(record.strategy, "portable_responses_reasoning_v1");
+                    let projection = record
+                        .portable_reasoning
+                        .as_ref()
+                        .context("portable source record")?;
+                    assert_eq!(
+                        projection.history.source_sha256,
+                        record.source_history_sha256
+                    );
+                    assert_eq!(
+                        projection.history.view_sha256,
+                        crate::sha256(&serde_json::to_vec(&turn.steps[1].input_history)?)
+                    );
+                    assert_eq!(projection.prompt.reasoning_parts.len(), 2);
+                    assert!(
+                        turn.steps[1]
+                            .context_validation
+                            .as_ref()
+                            .is_some_and(|validation| validation.applied)
+                    );
+                    assert!(second.context_store.evidence.values().any(|block| {
+                        block
+                            .messages
+                            .iter()
+                            .any(|message| message.content.iter().any(is_private))
+                    }));
+                }
                 let second_receipt = turn.steps[1].attempts[0]
                     .receipt
                     .as_ref()
@@ -834,6 +885,60 @@ async fn private_history_core_changes_model_only_after_authorized_whole_message_
                     second.run.as_ref().map(|run| run.status),
                     Some(RunStatus::Completed)
                 );
+            }
+            if portable && protocol == "responses" {
+                session.disconnect().await;
+                let store = harness.store.lock().await;
+                let checkpoint = store.batches.last().context("recovery checkpoint")?.clone();
+                let restored: bitrouter_orchestrator::core::session::SessionSnapshot =
+                    serde_json::from_value(
+                        checkpoint.decode(&Limits::default())?.checkpoint.state,
+                    )?;
+                let request = bitrouter_orchestrator::core::protocol::Restore {
+                    binding: Bind {
+                        grant: harness.grant.clone(),
+                        durable_head: store.head.clone(),
+                        checkpoint: Some(checkpoint),
+                        manifest: restored.manifest,
+                        limits: Limits::default(),
+                    },
+                    journal_tail: Vec::new(),
+                    tools: Vec::new(),
+                    results: Vec::new(),
+                    available_artifacts: Vec::new(),
+                    previous_owner_stopped: true,
+                    active_time: None,
+                };
+                drop(store);
+                session =
+                    CoreSession::restore(request, &caps, app.clone(), owner(), harness.clone())
+                        .await?;
+                // Change back, then continue on the same model. The immutable
+                // old evidence must not reintroduce the prior model's reasoning.
+                for (key, expected_steps) in [("third", 2), ("fourth", 1)] {
+                    let mut followup = crate::input("continue after the model switch");
+                    followup.model = "bitrouter/private".into();
+                    session
+                        .start(key, session.head().await.state_revision, followup)
+                        .await?;
+                    let result = session.drive().await?;
+                    assert_eq!(
+                        result.run.as_ref().map(|run| run.status),
+                        Some(RunStatus::Completed)
+                    );
+                    assert_eq!(
+                        result.root_turn().context("followup turn")?.steps.len(),
+                        expected_steps
+                    );
+                }
+                let requests = fixture
+                    .upstream
+                    .received_requests()
+                    .await
+                    .context("wire requests")?;
+                assert_eq!(requests.len(), 4);
+                assert!(!std::str::from_utf8(&requests[2].body)?.contains("signed-fixture"));
+                assert!(std::str::from_utf8(&requests[3].body)?.contains("signed-fixture"));
             }
             assert!(!harness.store.lock().await.batches.is_empty());
         }

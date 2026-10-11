@@ -160,6 +160,52 @@ async fn skip_auth_keeps_declared_controller_headers_on_the_local_principal() {
 }
 
 #[tokio::test]
+async fn native_trace_headers_preserve_embedding_auth_but_never_establish_it() -> anyhow::Result<()>
+{
+    let hook = AuthHook::new(pool().await);
+    for (anonymous, credential, allowed) in [
+        (false, false, true),
+        (true, false, false),
+        (false, true, false),
+    ] {
+        let caller = if anonymous {
+            CallerContext::anonymous()
+        } else {
+            CallerContext::new("embedded-key", "embedded-owner")
+        };
+        let mut request = PipelineRequest::new("m", caller, prompt());
+        for name in [
+            "x-bitrouter-parent-session-id",
+            "x-bitrouter-agent-session-id",
+            "x-bitrouter-workflow-session",
+        ] {
+            request
+                .headers
+                .insert(name, http::HeaderValue::from_static("routing-trace"));
+        }
+        if credential {
+            request.headers.insert(
+                "authorization",
+                http::HeaderValue::from_static("Bearer invalid"),
+            );
+        }
+        let mut ctx = PipelineContext::new(request);
+        assert_eq!(
+            matches!(hook.check(&mut ctx).await?, HookDecision::Allow),
+            allowed
+        );
+        assert_eq!(
+            matches!(hook.revalidate_context(&ctx).await?, HookDecision::Allow),
+            allowed
+        );
+        if allowed {
+            assert_eq!(ctx.caller().user_id(), "embedded-owner");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn unknown_key_is_denied_401() {
     let pool = pool().await;
     let hook = AuthHook::new(pool);

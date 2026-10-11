@@ -2677,13 +2677,39 @@ impl CoreSession {
             live.model_controls.push(Arc::downgrade(&control));
         }
         drop(preparing);
+        // Keep model steps and child agents in one durable assignment unit.
+        // Trace identity never supplies semantic labels. An embedding host's
+        // explicit outer workflow identity takes precedence.
+        let mut request_headers = self.shared.request_headers.clone();
+        if !request_headers.contains_key("x-bitrouter-parent-session-id")
+            && let Some(parent) = request_headers.get("x-bitrouter-workflow-session").cloned()
+            && parent.to_str().is_ok_and(|value| !value.trim().is_empty())
+        {
+            request_headers.insert("x-bitrouter-parent-session-id", parent);
+        }
+        for (name, value) in [
+            ("x-bitrouter-parent-session-id", turn.run_id.as_str()),
+            ("x-bitrouter-agent-session-id", agent_id),
+        ] {
+            if !request_headers.contains_key(name) {
+                request_headers.insert(
+                    name,
+                    http::HeaderValue::from_str(value).map_err(|_| {
+                        reject(
+                            ErrorCode::OperationConflict,
+                            "invalid native routing identity",
+                        )
+                    })?,
+                );
+            }
+        }
         let response = self
             .shared
             .app
             .execute_native_controlled_with_headers(
                 prompt,
                 self.shared.caller.clone(),
-                self.shared.request_headers.clone(),
+                request_headers,
                 control.clone(),
             )
             .await;
@@ -4261,9 +4287,8 @@ impl NativeExecutionControl for StepControl {
                     selected_effort: plan.prompt.params.reasoning_effort,
                     reason_codes: if step.reconstructed_from.is_some() {
                         vec![
-                            "rebuild_from_required_materials".into(),
-                            "remove_explicitly_optional_history".into(),
-                            "retain_current_work_history".into(),
+                            "validated_context_rebuild".into(),
+                            "retain_required_context".into(),
                         ]
                     } else {
                         vec!["continue_current_work".into()]
@@ -4407,13 +4432,26 @@ impl NativeExecutionControl for StepControl {
                     candidate
                 };
                 let record = RebuildRecord {
-                    strategy: "explicitly_optional_history_v1".into(),
+                    strategy: candidate
+                        .as_ref()
+                        .map_or("explicitly_optional_history_v1", |candidate| {
+                            candidate.strategy()
+                        })
+                        .into(),
                     source_context_revision: current.context_revision,
                     source_history_sha256,
                     rebuilt_step_id: candidate.as_ref().ok().map(|_| rebuilt_step_id.clone()),
                     removed_history_messages: candidate
                         .as_ref()
                         .map_or(0, |candidate| candidate.removed_messages),
+                    removed_settled_history_messages: candidate
+                        .as_ref()
+                        .ok()
+                        .map(|candidate| candidate.removed_settled_messages),
+                    portable_reasoning: candidate
+                        .as_ref()
+                        .ok()
+                        .and_then(|candidate| candidate.portable_reasoning.clone()),
                     elapsed_ms,
                     error: candidate.as_ref().err().cloned(),
                 };
@@ -4637,7 +4675,13 @@ fn activate_rebuilt_context(
     }
     let history_start = turn
         .history_start
-        .and_then(|start| start.checked_sub(rebuild.removed_history_messages))
+        .and_then(|start| {
+            start.checked_sub(
+                rebuild
+                    .removed_settled_history_messages
+                    .unwrap_or(rebuild.removed_history_messages),
+            )
+        })
         .ok_or_else(|| {
             reject(
                 ErrorCode::OperationConflict,

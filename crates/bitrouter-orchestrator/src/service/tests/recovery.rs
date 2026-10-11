@@ -722,6 +722,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
                         lifecycle: crate::turn::TurnLifecycle::CancelRequested,
                     }),
                 }],
+                None,
             )?;
             memory
                 .commit_owned(&owner, &created.thread_id, u64::try_from(cutoff)?, &facts)
@@ -2443,7 +2444,7 @@ async fn native_checkpoint_spans_small_pages_and_incomplete_prefix_cannot_recove
 }
 
 #[tokio::test]
-async fn acceptance_retry_pages_share_reader_limits_without_holding_admission()
+async fn uncached_acceptance_retry_pages_share_reader_limits_without_holding_admission()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
@@ -2480,6 +2481,14 @@ async fn acceptance_retry_pages_share_reader_limits_without_holding_admission()
         )
         .await?;
     wait_for(&service, &first.turn_id, TurnStatus::Completed).await?;
+    // Resident receipts bypass journal readers. Exercise the bounded fallback
+    // for a turn whose admission metadata has not been cached yet.
+    service
+        .lock_state()
+        .turns
+        .get_mut(&first.turn_id)
+        .ok_or("completed turn missing")?
+        .queue_order = None;
     let cloned = service.clone();
     let retry_target = target.clone();
     let retry = tokio::spawn(async move {

@@ -286,6 +286,7 @@ impl Agent {
             operations: vec![
                 FEATURE.into(),
                 crate::core::context_router::NATIVE_TOOLS.into(),
+                crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
             ],
             transports: vec!["native".into()],
             unsupported_features: Vec::new(),
@@ -340,6 +341,7 @@ impl Agent {
             required_features: vec![
                 FEATURE.into(),
                 crate::core::context_router::NATIVE_TOOLS.into(),
+                crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
             ],
         };
         let (output, mut commands) = mpsc::channel(64);

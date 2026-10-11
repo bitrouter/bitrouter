@@ -73,6 +73,9 @@ without it verification is `not_requested`. `--read-only` forbids effectful
 tools and cannot be combined with `--check`. Explicit remote contexts fail
 without local fallback. `bro run <agent>` remains the separate ACP harness path.
 
+Unchanged routing observations and events without public changes are omitted
+from stdout. Cursors remain monotonic but need not be consecutive.
+
 BRO coding Turns expose six tools: `read(path, offset?, limit?)`,
 `glob(pattern, path?, limit?)`, `grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)`,
 `write(path, content)`, `edit(path, edits[{oldText, newText}])`, and
@@ -452,6 +455,11 @@ Its cleanup settles outstanding work before termination. After a stopped owner
 and complete terminal journal are confirmed, fresh workspace work is allowed;
 a prepared request rejected before dispatch does not count as a model attempt.
 Unconfirmed tool effects and incomplete records still require recovery.
+
+Native execution journals compress checkpoint content without discarding
+history. Startup upgrades older compressed rows in the ownership transaction,
+preserving each original record's bytes, hash and cursor. The updated binary
+reads old journals, but older binaries cannot read the new row encoding.
 
 ### `bro reload`
 
@@ -1373,6 +1381,7 @@ The lock contains deterministic routes, tiers, and learning thresholds, but no a
 
 ```text
 bro optimize run [--policy auto] [--candidate-tier TIER] \
+  [--objective cost|latency] \
   [--exploration-ppm 100000] [--minimum-tasks 3] [--maximum-tasks 20] \
   [--minimum-pass-rate-ppm 900000] \
   [--evaluator-config-digest sha256:...] \
@@ -1415,6 +1424,15 @@ enter the gate. Promotion requires the configured quality/pass gate, no hard
 violation, and a lower mean complete-unit cost for the challenger. Complete
 cost prefers `trajectory.cost.usd_micros` and accepts evaluator-authored
 `cost.usd_micros` in micro-USD; per-request price does not gate promotion.
+
+For unpriced subscriptions, `--objective latency` instead minimizes complete
+task wall time with the same quality and hard-violation gates. The conclusive
+task evaluator must report `latency.wall_ms` in `milliseconds` for every eligible
+unit in both arms, including failures, measured from admission through
+verification under comparable conditions. Missing or invalid measurements and
+per-request `latency.ms` do not authorize promotion. The objective is signed
+into exploration; later commands cannot change an active experiment's objective.
+Omitting the flag retains the existing `cost` objective.
 
 During exploration, router-authored decision evidence contains an optional
 signed `experiment` reference with the experiment id, `control` or

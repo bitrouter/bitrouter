@@ -19,6 +19,7 @@ fn report(action: &'static str, decision: &'static str) -> OptimizationControlle
             "sha256:4444444444444444444444444444444444444444444444444444444444444444".into(),
         ),
         treatment: Some(TreatmentReport {
+            objective: Default::default(),
             target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
@@ -30,6 +31,7 @@ fn report(action: &'static str, decision: &'static str) -> OptimizationControlle
         control: None,
         challenger: None,
         cost_delta_micro_usd: None,
+        latency_delta_ms: None,
         evaluator_config_digest: None,
         published: action == "optimize.run",
         reload_attempted: false,

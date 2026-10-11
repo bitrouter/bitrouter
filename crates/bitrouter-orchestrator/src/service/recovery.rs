@@ -454,6 +454,7 @@ impl ThreadService {
                     messages,
                 },
             ],
+            None,
         )?;
         let result = self
             .inner
@@ -1549,6 +1550,7 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
     let cancel = CancellationToken::new();
     cancel.cancel();
     TurnRecord {
+        queue_order: None,
         fence: Arc::new(crate::control::LaunchFence::default()),
         native: Default::default(),
         steering: Vec::new(),

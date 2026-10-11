@@ -85,17 +85,40 @@ async fn native_turns_restore_the_same_core_and_keep_evidence_and_views()
     let mut sessions = std::collections::BTreeSet::new();
     let mut epochs = std::collections::BTreeSet::new();
     let mut latest = None;
+    let mut checkpoints = 0;
+    let mut routing_changes = 0;
+    let mut previous_routing = None;
     for record in &saved.records {
         if let ExecutionRecord::TurnRecord { fact, .. } = record
             && let ExecutionRecord::CoreCheckpoint { batch, limits } = fact.as_ref()
         {
+            checkpoints += 1;
             sessions.insert(batch.identity.session_id.clone());
             epochs.insert(batch.identity.execution_epoch);
             latest = Some(serde_json::from_value::<
                 crate::core::session::SessionSnapshot,
             >(batch.decode(limits)?.checkpoint.state)?);
         }
+        if let ExecutionRecord::ThreadEvent { event } = record {
+            for change in &event.changes {
+                if let crate::thread::ThreadChange::ContextRouting {
+                    turn_id,
+                    inspection,
+                } = change
+                {
+                    let current = (turn_id.clone(), inspection.as_ref().clone());
+                    assert_ne!(previous_routing.as_ref(), Some(&current));
+                    previous_routing = Some(current);
+                    routing_changes += 1;
+                }
+            }
+        }
     }
+    assert!(routing_changes > 0 && routing_changes < checkpoints);
+    assert_eq!(
+        previous_routing.as_ref(),
+        Some(&(second.turn_id.clone(), inspection.clone()))
+    );
     assert_eq!(sessions.len(), 1);
     assert_eq!(epochs, std::collections::BTreeSet::from([1, 2]));
     let latest = latest.ok_or("missing Core snapshot")?;
@@ -1127,9 +1150,19 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         ErrorCode::Conflict
     );
     assert!(!workspace.path().join("approved.txt").exists());
-    service
+    // Approval receipts for resident turns must not scan their growing Core
+    // journal or depend on the capacity reserved for historical readers.
+    let readers = service
+        .inner
+        .recovery_readers
+        .acquire_many(u32::try_from(
+            service.inner.recovery_readers.available_permits(),
+        )?)
+        .await?;
+    let approved = service
         .answer_thread_input(&target, &caller, answer())
         .await?;
+    assert_eq!(approved.queue_order, receipt.queue_order);
     assert_eq!(
         wait_for(&service, &receipt.turn_id, TurnStatus::Completed)
             .await?
@@ -1143,6 +1176,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
             .turn_id,
         receipt.turn_id
     );
+    drop(readers);
     let mut conflicting = answer();
     conflicting.approved = false;
     assert_eq!(

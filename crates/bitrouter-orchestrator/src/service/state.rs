@@ -30,6 +30,9 @@ pub(super) struct VerificationBudget {
 }
 
 pub(super) struct TurnRecord {
+    /// Admission metadata cached for resident turns. Recovery may populate it
+    /// lazily from the journal when answering a historical idempotency key.
+    pub(super) queue_order: Option<u64>,
     pub(super) fence: Arc<crate::control::LaunchFence>,
     pub(super) native: Arc<crate::control::NativeInputs>,
     pub(super) steering: Vec<steering::SteeringInput>,

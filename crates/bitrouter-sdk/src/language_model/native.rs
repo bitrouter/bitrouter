@@ -574,7 +574,8 @@ pub trait NativeExecutionControl: Send + Sync {
     }
 
     /// Validate embedding preparation contracts within an acknowledged validation
-    /// intent. The pipeline freezes every field except whole-message removal.
+    /// intent. The pipeline permits only whole-message removal or an explicitly
+    /// authorized deterministic projection of authenticated Responses reasoning.
     async fn validate_context_rebuild(
         &self,
         _original: &Prompt,
@@ -594,7 +595,8 @@ pub trait NativeExecutionControl: Send + Sync {
     async fn plan(&self, plan: NativePlan) -> Result<NativePlanAdmission>;
 
     /// After rejecting a plan with no provider attempt, optionally commit one
-    /// rebuilt context. Only complete messages may be removed; input additions,
+    /// rebuilt context. Complete messages or explicitly authorized Responses
+    /// reasoning may be removed; arbitrary part rewrites, input additions,
     /// model/effort changes and generation-parameter changes are not permitted.
     /// The pipeline re-counts and re-admits the frozen provider chain without
     /// rerunning authentication, preparation, model selection or route hooks.

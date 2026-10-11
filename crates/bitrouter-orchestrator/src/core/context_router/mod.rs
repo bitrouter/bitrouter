@@ -24,6 +24,9 @@ pub const FEATURE: &str = "context_views_v1";
 /// Native adapters return JSON-encoded SDK tool values with bounded envelopes.
 pub const NATIVE_TOOLS: &str = "native_tool_values_v1";
 
+/// Owner permits an authenticated Responses reasoning projection on model change.
+pub const PORTABLE_RESPONSES_REASONING: &str = "portable_responses_reasoning_v1";
+
 /// Durable task and evidence state, independent of scheduler worker identity.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ContextStore {

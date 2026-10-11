@@ -178,6 +178,22 @@ impl ThreadService {
             .turn_id
             .as_ref()
             .ok_or("accepted turn identity missing")?;
+        {
+            let state = self.lock_state();
+            if let Some(turn) = state.turns.get(turn_id)
+                && turn.thread_id == entry.thread_id
+                && let Some(queue_order) = turn.queue_order
+                && let Some(thread) = state.threads.get(&entry.thread_id)
+            {
+                self.check_thread_grant(&state, thread)?;
+                return Ok(TurnReceipt {
+                    thread_id: entry.thread_id.clone(),
+                    turn_id: turn_id.clone(),
+                    queue_order,
+                    status: turn.snapshot.status,
+                });
+            }
+        }
         let mut receipt = None;
         self.scan_receipt(&entry.thread_id, |record| match record {
             ExecutionRecord::TurnQueued {
@@ -209,7 +225,10 @@ impl ThreadService {
         })
         .await?;
         let mut receipt = receipt.ok_or("accepted Turn admission missing")?;
-        if let Some(task) = self.lock_state().turns.get(turn_id) {
+        if let Some(task) = self.lock_state().turns.get_mut(turn_id)
+            && task.thread_id == entry.thread_id
+        {
+            task.queue_order = Some(receipt.queue_order);
             receipt.status = task.snapshot.status;
         }
         Ok(receipt)
@@ -464,6 +483,7 @@ impl ThreadService {
             state.turns.insert(
                 queued.turn_id.clone(),
                 TurnRecord {
+                    queue_order: Some(queued.order),
                     fence: Arc::new(crate::control::LaunchFence::default()),
                     native: Default::default(),
                     steering: Vec::new(),

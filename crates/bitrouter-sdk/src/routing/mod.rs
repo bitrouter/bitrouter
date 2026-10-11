@@ -21,6 +21,9 @@ pub enum ContextCapability {
     UseSummary,
     /// Retrieve admitted evidence outside the active view.
     RecallEvidence,
+    /// Project authenticated Responses reasoning into a portable execution view.
+    /// Public text and tool semantics must survive; immutable source is retained.
+    OmitPrivateReasoning,
 }
 
 pub mod preparation;

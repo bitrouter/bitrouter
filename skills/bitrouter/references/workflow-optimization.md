@@ -51,6 +51,16 @@ episode cost: prefer `trajectory.cost.usd_micros`; evaluator-authored
 `cost.usd_micros` must use the `micro_usd` unit. Per-request price is not the
 promotion cost.
 
+For subscription providers without per-request prices, use `--objective latency`
+when starting exploration. The same conclusive external task evaluator must
+report `latency.wall_ms` in `milliseconds` for every eligible complete task or
+episode in both arms, including failed tasks. Measure the full task from
+admission through verification under comparable conditions. The optimizer
+does not treat per-request `latency.ms` or missing measurements as task totals.
+The default objective remains `cost`; never invent dollar prices for a
+subscription. The objective is part of the signed experiment and cannot change
+mid-experiment.
+
 ## Advance one autonomous step
 
 ```bash
@@ -71,7 +81,7 @@ are:
 
 - `promote`: both arms have enough complete independent subjects, the
   challenger meets the pass-rate gate with no hard violation, and its mean
-  complete-unit cost is lower;
+  complete-unit cost (or wall time with `--objective latency`) is lower;
 - `retreat`: a hard violation occurs, or the challenger budget is exhausted
   without satisfying quality and cost;
 - `hold`: evidence remains inconclusive within budget;
@@ -89,6 +99,7 @@ Controller flags tune exposure and gates when needed:
 
 ```text
 --candidate-tier TIER
+--objective cost|latency
 --exploration-ppm 100000
 --minimum-tasks 3
 --maximum-tasks 20

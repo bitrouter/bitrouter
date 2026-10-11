@@ -79,6 +79,7 @@ impl ManagedCoreApi {
                 "artifact.chunk",
                 "responses.create",
                 bitrouter_orchestrator::core::context_router::FEATURE,
+                bitrouter_orchestrator::core::context_router::PORTABLE_RESPONSES_REASONING,
             ]
             .into_iter()
             .map(String::from)

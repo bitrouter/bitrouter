@@ -318,6 +318,7 @@ impl ThreadService {
         thread_id: &str,
         version: u64,
         facts: &[ExecutionRecord],
+        previous_context: Option<&(String, crate::core::context_router::inspection::Inspection)>,
     ) -> Result<(Vec<ExecutionRecord>, ThreadEvent), ServiceError> {
         let framed = super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
         let seq = version
@@ -336,12 +337,32 @@ impl ThreadService {
         for record in &records {
             project(record, thread_id, None, &mut changes);
         }
+        // Core checkpoints also acknowledge private admission/accounting work.
+        // Publish routing only when its public observation changes; retain every
+        // checkpoint and cursor for recovery and authoritative history.
+        let mut previous =
+            previous_context.map(|(turn_id, inspection)| (turn_id.as_str(), inspection));
+        let mut filtered = Vec::new();
+        for change in &changes {
+            if let ThreadChange::ContextRouting {
+                turn_id,
+                inspection,
+            } = change
+            {
+                let current = (turn_id.as_str(), inspection.as_ref());
+                if previous == Some(current) {
+                    continue;
+                }
+                previous = Some(current);
+            }
+            filtered.push(change.clone());
+        }
         let event = ThreadEvent {
             server_instance_id: self.inner.instance_id.clone(),
             thread_id: thread_id.into(),
             seq,
             timestamp_ms: now_ms(),
-            changes,
+            changes: filtered,
         };
         if serde_json::to_vec(&event)
             .map_err(|error| error.to_string())?
