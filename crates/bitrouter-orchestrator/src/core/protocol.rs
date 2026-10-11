@@ -116,6 +116,9 @@ pub struct Limits {
     pub child_depth: u32,
     pub model_attempts: u32,
     pub outstanding_tools: u32,
+    /// Cumulative workspace invocations across every worker in one run.
+    #[serde(default = "unlimited_tools")]
+    pub total_tools: u32,
     pub queued_runs: u32,
     pub mailbox_messages: u32,
     pub active_seconds: u64,
@@ -133,6 +136,7 @@ impl Default for Limits {
             child_depth: 4,
             model_attempts: 128,
             outstanding_tools: 8,
+            total_tools: unlimited_tools(),
             queued_runs: 32,
             mailbox_messages: 128,
             active_seconds: 600,
@@ -174,6 +178,7 @@ impl Limits {
             self.child_depth as u64,
             self.model_attempts as u64,
             self.outstanding_tools as u64,
+            self.total_tools as u64,
             self.queued_runs as u64,
             self.mailbox_messages as u64,
             self.active_seconds,
@@ -188,6 +193,7 @@ impl Limits {
             host.child_depth as u64,
             host.model_attempts as u64,
             host.outstanding_tools as u64,
+            host.total_tools as u64,
             host.queued_runs as u64,
             host.mailbox_messages as u64,
             host.active_seconds,
@@ -208,6 +214,10 @@ impl Limits {
         }
         Ok(())
     }
+}
+
+fn unlimited_tools() -> u32 {
+    u32::MAX
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,7 +351,10 @@ impl HarnessManifest {
         let mut names = BTreeSet::new();
         for tool in &self.tools {
             validate_id(&tool.name)?;
-            if !names.insert(&tool.name) || COLLABORATION_TOOLS.contains(&tool.name.as_str()) {
+            if !names.insert(&tool.name)
+                || COLLABORATION_TOOLS.contains(&tool.name.as_str())
+                || super::context_router::tools::NAMES.contains(&tool.name.as_str())
+            {
                 return Err(CoreError::rejected(
                     ErrorCode::UnsupportedCapability,
                     "duplicate tool or reserved core collaboration name",
@@ -418,6 +431,9 @@ pub struct TaskInput {
     /// token default; this is independent of all byte-count limits.
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    /// Hard serialized prompt bound for negotiated task-specific context views.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit_bytes: Option<u64>,
     #[serde(default)]
     pub routing: RoutingSettings,
     /// Explicit task-scoped context requirements from the authenticated caller.

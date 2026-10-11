@@ -90,8 +90,8 @@ Esc returns; browsing never submits, approves, resumes or stops work:
 bro code --model openai/gpt-5  # BRO scrollback Conversation; ← opens durable Threads
 bro code codex              # explicit interactive ACP session
 bro run claude "summarize this repo"  # headless ACP turn
-bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"  # BRO native task
-bro task run "inspect this project" --model openai/gpt-5 --read-only  # no shell or writes
+bro task run "fix the failing test" --check "cargo test"  # BRO native task
+bro task run "inspect this project" --read-only  # no shell or writes
 bro run codex "audit this repo" --background  # supervised; returns run id
 bro agents sessions --json  # scriptable supervised-run inventory
 bro agents                 # standalone manager; TTY only
@@ -102,12 +102,12 @@ remove are separate. Foreground `run` denies unmatched permissions; background a
 Same-worktree runs require the warned override. Read `references/sessions.md` first.
 
 `bro task run` joins `bro serve`, creates a Thread and starts one Turn, streams NDJSON,
-requires `--model`, and approves its own tools. `--check` adds verification; otherwise
+defaults to the bundled `bitrouter/auto` policy, and approves its own tools. `--check` adds verification; otherwise
 it is `not_requested`. Bare `bro code` keeps one Thread: Enter starts/enqueues,
 Ctrl-Enter steers, Ctrl-R resumes a paused queue, empty-composer `y`/`n` approves,
 and Ctrl-D detaches. Reattach with `--thread-id`; `--task-id` is removed.
 `--read-only` permits `read`, `glob`, `grep`; coding adds `write`, unique-span `edit`, and `shell`.
-Native Threads load global and ancestor `AGENTS.md` into durable user context, using overrides and model-read nested rules; see [wiring](references/cli.md#native-project-instructions-mcp-and-skills-wiring). Coding also exposes configured MCP tools through the same approvals; read-only does not connect to MCP. Skills discovery publishes metadata without prompt injection. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v15; opt-in HTTP uses `/agent/v2`. Durable history/keys
+Native Threads load global and ancestor `AGENTS.md` into durable user context, using overrides and model-read nested rules; see [wiring](references/cli.md#native-project-instructions-mcp-and-skills-wiring). Coding also exposes configured MCP tools through the same approvals; read-only does not connect to MCP. Skills discovery publishes metadata without prompt injection. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v17; opt-in HTTP uses `/agent/v2`. Durable history/keys
 survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
 See `references/cli.md` for permissions, controls, retries and recovery.
 Resident BRO daemons defer automatic replacement; finish work and use explicit `bro restart` after binary updates.
@@ -163,6 +163,8 @@ boundaries. Remote errors never fall back to this machine's configuration.
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
 | `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
+| `references/decision-native.md` | TypeSafe decision configuration, native BRO context views, evidence recall and decision accounting |
+
 ## Gotchas
 
 - Request-check extensions use SDK ExtensionApi and the shared foreground host. Restart the same custom binary, not official `bro restart`. No HTTP service or probe; legacy `plugins.bitrouter-guardrails` blocks startup. See `references/guardrails.md`.

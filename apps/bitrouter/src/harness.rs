@@ -715,6 +715,14 @@ fn codex_overlay(base_url: &str, auth: &str, model: Option<&str>) -> RoutingOver
         codex_config_string("model_providers.bitrouter.base_url", &v1_base_url(base_url)),
         "-c".to_string(),
         codex_config_string("model_providers.bitrouter.wire_api", "responses"),
+        // Preserve Codex's native model metadata and picker. Gateway ingress
+        // qualifies declared models under the same identity as the ACP facet.
+        // https://developers.openai.com/codex/config-reference
+        "-c".to_string(),
+        codex_config_string(
+            "model_providers.bitrouter.http_headers.x-bitrouter-harness",
+            "codex-acp",
+        ),
     ];
 
     // Real key → env_key indirection (keeps the secret out of argv/process
@@ -1152,6 +1160,9 @@ mod tests {
         let h = by_id("codex-acp").unwrap();
         let o = h.routing_overlay("http://127.0.0.1:4356", "brk_real", None);
         assert!(o.args.contains(&"model_provider=\"bitrouter\"".to_string()));
+        assert!(o.args.contains(
+            &"model_providers.bitrouter.http_headers.x-bitrouter-harness=\"codex-acp\"".to_string()
+        ));
         assert!(o.args.contains(
             &"model_providers.bitrouter.base_url=\"http://127.0.0.1:4356/v1\"".to_string()
         ));

@@ -1,8 +1,42 @@
 use std::collections::HashSet;
 
+#[cfg(test)]
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_ai::types::{Content, GenerationParams, Message, Prompt, Tool, ToolChoice};
+use bitrouter_ai::types::{Content, Message};
+#[cfg(test)]
+use bitrouter_ai::types::{GenerationParams, Prompt, Tool, ToolChoice};
 
+/// Gemini's absent wire call ID must survive the corresponding result. Do not
+/// copy private assistant signatures or origin seals into a tool message.
+/// <https://ai.google.dev/gemini-api/docs/function-calling>
+pub(crate) fn tool_result_metadata(
+    messages: &[Message],
+    call_id: &str,
+) -> bitrouter_ai::types::ProviderMetadata {
+    messages
+        .iter()
+        .rev()
+        .flat_map(|message| message.content.iter().rev())
+        .find_map(|content| match content {
+            Content::ToolCall {
+                id,
+                provider_metadata,
+                ..
+            } if id == call_id => Some(provider_metadata),
+            _ => None,
+        })
+        .and_then(|metadata| metadata.get("google"))
+        .and_then(|metadata| metadata.get("functionCallId"))
+        .map(|id| {
+            std::collections::BTreeMap::from([(
+                "google".into(),
+                serde_json::json!({"functionCallId":id}),
+            )])
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
 pub(crate) fn build(
     model: &str,
     effort: Option<ReasoningEffort>,

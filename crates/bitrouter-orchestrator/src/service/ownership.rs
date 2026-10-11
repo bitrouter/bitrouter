@@ -165,9 +165,9 @@ fn uncertain_cleanup(record: &ExecutionRecord) -> bool {
 fn launch_identity<'a>(record: &'a ExecutionRecord, execution_id: &'a str) -> Option<&'a str> {
     match record {
         ExecutionRecord::TurnRecord { turn_id, fact } => launch_identity(fact, turn_id),
-        ExecutionRecord::ModelRequest { .. } | ExecutionRecord::ToolIntent { .. } => {
-            Some(execution_id)
-        }
+        ExecutionRecord::CoreDispatch
+        | ExecutionRecord::ModelRequest { .. }
+        | ExecutionRecord::ToolIntent { .. } => Some(execution_id),
         _ => None,
     }
 }

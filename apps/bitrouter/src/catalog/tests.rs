@@ -11,7 +11,10 @@ fn snapshot(id: &str) -> CatalogSnapshot {
         fetched_at: 0,
         data: RegistryData {
             providers: Vec::new(),
-            canonical: vec![CanonicalModel { id: id.into() }],
+            canonical: vec![CanonicalModel {
+                id: id.into(),
+                ..Default::default()
+            }],
         },
     }
 }

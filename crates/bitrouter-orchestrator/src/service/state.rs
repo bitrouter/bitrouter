@@ -31,6 +31,7 @@ pub(super) struct VerificationBudget {
 
 pub(super) struct TurnRecord {
     pub(super) fence: Arc<crate::control::LaunchFence>,
+    pub(super) native: Arc<crate::control::NativeInputs>,
     pub(super) steering: Vec<steering::SteeringInput>,
     pub(super) verification_budget: Option<(u64, u32)>,
     pub(super) thread_id: String,
@@ -84,6 +85,7 @@ pub(super) struct QueuedTurn {
 }
 
 pub(super) struct ThreadRecord {
+    pub(super) native: Option<crate::agent::native::Saved>,
     pub(super) presentation: super::observation::Presentation,
     pub(super) snapshot: ThreadSnapshot,
     pub(super) caller: CallerContext,
@@ -124,6 +126,11 @@ impl ThreadRecord {
                     .iter()
                     .map(|entry| entry.prompt.len().saturating_mul(2))
                     .sum::<usize>(),
+            )
+            .saturating_add(
+                self.native
+                    .as_ref()
+                    .map_or(0, crate::agent::native::Saved::bytes),
             )
     }
 }

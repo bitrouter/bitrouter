@@ -46,8 +46,8 @@ Each `decisions[]` entry is exactly:
 {
   "decision_id": "router-decision-id",
   "policy": "auto",
-  "route_projection": "agent_route/v1|code:generation|implement|normal",
-  "request_key": "agent_route/v1|unknown|implement|normal",
+  "route_projection": "semantic_route/v1|code:generation|implement|normal",
+  "request_key": "semantic_route/v1|unknown|implement|normal",
   "selected_tier": "economy",
   "baseline_tier": "strong",
   "policy_digest": "sha256:...",
@@ -271,8 +271,8 @@ submit-ready result.
   "cohort": "evaluation",
   "holdout": false,
   "decisions": [
-    {"decision_id":"decision-edit","policy":"auto","route_projection":"agent_route/v1|code:generation|implement|normal","request_key":"agent_route/v1|unknown|implement|normal","selected_tier":"economy","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-    {"decision_id":"decision-review","policy":"auto","route_projection":"agent_route/v1|code:review|verify|normal","request_key":"agent_route/v1|code:review|verify|normal","selected_tier":"strong","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+    {"decision_id":"decision-edit","policy":"auto","route_projection":"semantic_route/v1|code:generation|implement|normal","request_key":"semantic_route/v1|unknown|implement|normal","selected_tier":"economy","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"decision_id":"decision-review","policy":"auto","route_projection":"semantic_route/v1|code:review|verify|normal","request_key":"semantic_route/v1|code:review|verify|normal","selected_tier":"strong","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
   ],
   "requested_dimensions": ["quality.pass", "cost.usd_micros", "latency.ms"],
   "evidence": [
@@ -315,3 +315,15 @@ bro eval subject seal subject-draft.json --output subject.json
 
 Insert `subject.json`, submit `result.json`, require `admitted`, and hand the
 packet to the operator. Do not publish a policy from this evaluator workflow.
+
+## Unified semantic routing
+
+Policy locks use version 4 and structured `{model, effort?, context}` actions.
+Route measurement schema 2 includes context strategy in candidate identity.
+Semantic evaluations must preserve the frozen candidate catalog and
+`routing.assessment` / `routing.plan` receipts from exported subjects. Never
+replace semantic probabilities with action propensities or task quality.
+A changed classifier backend, rubric or threshold is a different evidence cohort;
+compiled certificates cannot be reused across those cohorts. Request-level
+completion alone is not an independent task success. Task and overlapping episode
+credit, and repeated observations of one assignment unit, count once.

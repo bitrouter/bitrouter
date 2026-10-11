@@ -42,6 +42,9 @@ pub struct TrajectoryEvidence {
     pub digests: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_measurement: Option<RouteDecisionMeasurement>,
+    /// Shared classification and exact plan receipts, only on settlement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routing_evidence: Vec<crate::eval::types::EvidenceItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -316,6 +319,11 @@ pub fn validate_event(event: &TrajectoryEvent) -> Result<()> {
     {
         anyhow::bail!("route measurement is only valid on route-intent events")
     }
+    if !event.evidence.routing_evidence.is_empty()
+        && event.kind != TrajectoryEventKind::RequestSettled
+    {
+        anyhow::bail!("routing execution evidence is only valid on settlement events")
+    }
     validate_digest(&event.content_digest, "content_digest")?;
     if event.semantic_digest()? != event.content_digest {
         anyhow::bail!("trajectory event content_digest does not match its canonical content")
@@ -335,6 +343,45 @@ fn validate_evidence(evidence: &TrajectoryEvidence) -> Result<()> {
         &evidence.digests,
         "trajectory evidence",
     )?;
+    if evidence.routing_evidence.len() > 2 {
+        anyhow::bail!("too many routing receipts");
+    }
+    for item in &evidence.routing_evidence {
+        validate_identifier(&item.evidence_id, "routing receipt identity")?;
+        validate_digest(&item.digest, "routing receipt digest")?;
+        let allowed: &[&str] = match item.kind.as_str() {
+            "routing.assessment" => &[
+                "decision_receipt_id",
+                "input_digest",
+                "contract_digest",
+                "classifier_digest",
+                "model",
+                "requested_model",
+                "confidence_threshold",
+                "judgments",
+                "confidence_kind",
+                "input_tokens",
+                "output_tokens",
+            ],
+            "routing.plan" => &[
+                "model",
+                "context_view",
+                "prompt_digest",
+                "context_strategy",
+                "reason",
+            ],
+            _ => anyhow::bail!("unsupported routing receipt kind"),
+        };
+        if !item.redacted
+            || item.attributes.iter().any(|(key, value)| {
+                !allowed.contains(&key.as_str())
+                    || value.len() > 8192
+                    || attribute_looks_sensitive(key, value)
+            })
+        {
+            anyhow::bail!("invalid bounded routing receipt attributes");
+        }
+    }
     if let Some(measurement) = &evidence.route_measurement {
         validate_route_measurement(measurement)?;
     }
@@ -651,6 +698,7 @@ mod tests {
                 "vendor/economy",
                 None,
                 vec![RouteActionCandidate {
+                    context: Default::default(),
                     tier: "economy".into(),
                     model: "vendor/economy".into(),
                     effort: None,
@@ -669,6 +717,7 @@ mod tests {
 
     fn event_fixture() -> TrajectoryEvent {
         let evidence = TrajectoryEvidence {
+            routing_evidence: Vec::new(),
             structural: BTreeMap::from([("request.input_count".into(), 1)]),
             categorical: BTreeMap::from([("request.protocol".into(), "responses".into())]),
             digests: BTreeMap::from([(

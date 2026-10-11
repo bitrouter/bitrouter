@@ -1,4 +1,4 @@
-//! Route a Codex ACP adapter's native model names to its configured subscription.
+//! Route Codex harness native model names to their configured subscription.
 //! The harness header is a routing hint, never an authentication credential:
 //! ordinary gateway authorization and provider credentials still apply.
 
@@ -9,6 +9,22 @@ use bitrouter_sdk::config::ConfigRoutingTable;
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 const PROVIDER: &str = "openai-codex";
+
+/// Apply the same native-model mapping at ingress and launcher preflight.
+pub(crate) fn subscription_route(
+    config: &bitrouter_sdk::config::Config,
+    model: &str,
+) -> Option<String> {
+    if model.contains([':', '/', '@']) || config.models.contains_key(model) {
+        return None;
+    }
+    let provider = config.providers.get(PROVIDER).filter(|p| p.active)?;
+    provider
+        .models
+        .iter()
+        .any(|entry| entry.provider_model_id.as_deref().unwrap_or(&entry.id) == model)
+        .then(|| format!("{PROVIDER}:{model}"))
+}
 
 pub(crate) struct CodexRouter {
     routing_table: Arc<ConfigRoutingTable>,
@@ -33,39 +49,24 @@ impl PromptTransform for CodexRouter {
     fn apply(&self, _prompt: &mut Prompt) {}
 
     fn apply_with_headers(&self, prompt: &mut Prompt, headers: &HeaderMap) {
-        // Both ACP providers/set and the adapter's environment fallback carry
-        // this marker. Do not infer subscription intent for generic API calls,
+        // ACP providers/set, the adapter's environment fallback and the native
+        // launcher carry this marker. Do not infer intent for generic API calls,
         // other agents, explicit routes, canonical names or preset expressions.
         if headers
             .get("x-bitrouter-harness")
             .and_then(|value| value.to_str().ok())
             != Some("codex-acp")
-            || prompt.model.contains([':', '/', '@'])
         {
             return;
         }
         // Consult the live table so a reload's activation/model changes take
         // effect here too. User-defined virtual models remain authoritative.
         let config = self.routing_table.snapshot_config();
-        if config.models.contains_key(&prompt.model) {
-            return;
-        }
-        let Some(provider) = config
-            .providers
-            .get(PROVIDER)
-            .filter(|provider| provider.active)
-        else {
-            return;
-        };
-        if provider
-            .models
-            .iter()
-            .any(|model| model.provider_model_id.as_deref().unwrap_or(&model.id) == prompt.model)
-        {
+        if let Some(route) = subscription_route(&config, &prompt.model) {
             // Preserve the native name in the adapter (and its model metadata).
             // Only gateway ingress qualifies it; normal resolution still owns
             // protocol, credential, policy and account selection.
-            prompt.model = format!("{PROVIDER}:{}", prompt.model);
+            prompt.model = route;
         }
     }
 }

@@ -23,6 +23,16 @@ fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
 #[tokio::test]
 async fn steering_received_during_sdk_request_blocks_its_eventual_stale_calls_and_enforces_admission_bounds()
 -> Result<(), Box<dyn std::error::Error>> {
+    steering_during_model(false).await
+}
+
+#[tokio::test]
+async fn native_core_steering_preserves_thread_receipts_and_fences_stale_effects()
+-> Result<(), Box<dyn std::error::Error>> {
+    steering_during_model(true).await
+}
+
+async fn steering_during_model(native: bool) -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
     let model = Arc::new(HeldModel::new());
@@ -31,7 +41,7 @@ async fn steering_received_during_sdk_request_blocks_its_eventual_stale_calls_an
         ..RuntimeLimits::default()
     };
     let service = ThreadService::with_limits_and_store(
-        app_with_executor(model.clone())?,
+        super::support::app_with_execution_mode(model.clone(), native)?,
         &[workspace.path().to_path_buf()],
         limits,
         store.clone(),

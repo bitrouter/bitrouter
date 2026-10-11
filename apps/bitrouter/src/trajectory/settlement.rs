@@ -76,11 +76,14 @@ impl TrajectorySettlementRecorder {
         if metering.request_id != context.request_id {
             anyhow::bail!("metering settlement identity does not match trajectory request")
         }
+        let routing = crate::eval::settlement::routing_evidence(context)?;
         let owner = owner_user_id.to_owned();
         let settlement = self
             .store
             .settle_request_from_current_head(&owner, &request_id, |request, events, sequence| {
-                build_settlement(&owner, request, events, sequence, &metering, prediction)
+                build_settlement(
+                    &owner, request, events, sequence, &metering, prediction, &routing,
+                )
             })
             .await;
         if let Err(error) = settlement {
@@ -111,6 +114,7 @@ fn build_settlement(
     sequence: u64,
     metering: &MeteringSettlementEvent,
     prediction: Option<&PredictionObservationSnapshot>,
+    routing: &[crate::eval::types::EvidenceItem],
 ) -> Result<Settlement> {
     let captured_at = settlement_timestamp(request, events, metering.duration_ms)?;
     let mut structural =
@@ -177,6 +181,7 @@ fn build_settlement(
         sequence,
         kind: TrajectoryEventKind::RequestSettled,
         evidence: TrajectoryEvidence {
+            routing_evidence: routing.to_vec(),
             structural,
             categorical,
             digests: BTreeMap::new(),
@@ -469,7 +474,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &metering, None)
+                    build_settlement("owner-a", request, events, sequence, &metering, None, &[])
                 },
             )
             .await?;
@@ -521,7 +526,7 @@ mod tests {
                 "owner-a",
                 "request-delivery-time",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &metering, None)
+                    build_settlement("owner-a", request, events, sequence, &metering, None, &[])
                 },
             )
             .await?;
@@ -566,7 +571,7 @@ mod tests {
                     "owner-a",
                     "request-1",
                     |request, events, sequence| {
-                        build_settlement("owner-a", request, events, sequence, &metering, None)
+                        build_settlement("owner-a", request, events, sequence, &metering, None, &[])
                     },
                 )
                 .await?;
@@ -578,7 +583,15 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &conflicting, None)
+                    build_settlement(
+                        "owner-a",
+                        request,
+                        events,
+                        sequence,
+                        &conflicting,
+                        None,
+                        &[],
+                    )
                 },
             )
             .await
@@ -754,6 +767,7 @@ mod tests {
                         sequence,
                         &current_metering,
                         None,
+                        &[],
                     )
                 },
             )
@@ -782,6 +796,7 @@ mod tests {
                         sequence,
                         &foreign_metering,
                         None,
+                        &[],
                     )
                 },
             )
@@ -919,7 +934,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &unknown, None)
+                    build_settlement("owner-a", request, events, sequence, &unknown, None, &[])
                 },
             )
             .await?;
@@ -981,7 +996,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &unknown, None)
+                    build_settlement("owner-a", request, events, sequence, &unknown, None, &[])
                 },
             )
             .await?;
@@ -1196,6 +1211,7 @@ mod tests {
                         sequence,
                         &poison_metering,
                         None,
+                        &[],
                     )?;
                     if let Some(outbox) = &mut settlement.outbox {
                         outbox.outbox_id = "aaa-poison".into();
@@ -1219,6 +1235,7 @@ mod tests {
                         sequence,
                         &valid_metering,
                         None,
+                        &[],
                     )?;
                     if let Some(outbox) = &mut settlement.outbox {
                         outbox.outbox_id = "zzz-valid".into();
@@ -1259,7 +1276,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &metering, None)
+                    build_settlement("owner-a", request, events, sequence, &metering, None, &[])
                 },
             )
             .await?;
@@ -1332,7 +1349,7 @@ mod tests {
                     "owner-a",
                     &request_id,
                     |request, events, sequence| {
-                        build_settlement("owner-a", request, events, sequence, &metering, None)
+                        build_settlement("owner-a", request, events, sequence, &metering, None, &[])
                     },
                 )
                 .await?;
@@ -1486,7 +1503,7 @@ mod tests {
                 route_event_id: format!("route-{request_id}"),
                 guard_event_id: format!("guard-{request_id}"),
                 policy_name: "auto:cost".into(),
-                route_projection: "agent_route/v1|code:generation|implement|normal".into(),
+                route_projection: "semantic_route/v1|code:generation|implement|normal".into(),
                 request_key: "agent_trace/v2|edit|normal".into(),
                 baseline_tier: Some("reference".into()),
                 baseline_effort: None,

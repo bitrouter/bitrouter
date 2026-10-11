@@ -1,10 +1,11 @@
+use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
 use bitrouter_ai::types::{Content, Prompt, Role};
-use bitrouter_sdk::config::parse_agent_route_key;
+use bitrouter_sdk::config::parse_semantic_route_key;
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
 use crate::workflow_state::extractors::terminus_2::{
@@ -14,113 +15,6 @@ use crate::workflow_state::ir::{
     EvidenceLevel, NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection,
     RouteRisk, ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NextStepRole {
-    Orchestrate,
-    Implement,
-    Mechanical,
-    Verify,
-    Finalize,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskFamily {
-    CodeGeneration,
-    CodeDebugging,
-    CodeReview,
-    CodeSqlDatabase,
-    CodeFrontendUi,
-    CodeDevopsConfig,
-    CodeRepositoryAnalysis,
-    AgentMultiStepPlanning,
-    AgentWorkflowExecution,
-    AgentWebResearch,
-    AgentMemoryOperations,
-    AgentGeneral,
-    #[default]
-    Unknown,
-}
-
-impl TaskFamily {
-    pub const fn key(self) -> &'static str {
-        match self {
-            Self::CodeGeneration => "code:generation",
-            Self::CodeDebugging => "code:debugging",
-            Self::CodeReview => "code:review",
-            Self::CodeSqlDatabase => "code:sql_database",
-            Self::CodeFrontendUi => "code:frontend_ui",
-            Self::CodeDevopsConfig => "code:devops_config",
-            Self::CodeRepositoryAnalysis => "code:repository_analysis",
-            Self::AgentMultiStepPlanning => "agent:multi_step_planning",
-            Self::AgentWorkflowExecution => "agent:workflow_execution",
-            Self::AgentWebResearch => "agent:web_research",
-            Self::AgentMemoryOperations => "agent:memory_operations",
-            Self::AgentGeneral => "agent:general",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    pub fn parse_key(value: &str) -> Option<Self> {
-        match value {
-            "code:generation" => Some(Self::CodeGeneration),
-            "code:debugging" => Some(Self::CodeDebugging),
-            "code:review" => Some(Self::CodeReview),
-            "code:sql_database" => Some(Self::CodeSqlDatabase),
-            "code:frontend_ui" => Some(Self::CodeFrontendUi),
-            "code:devops_config" => Some(Self::CodeDevopsConfig),
-            "code:repository_analysis" => Some(Self::CodeRepositoryAnalysis),
-            "agent:multi_step_planning" => Some(Self::AgentMultiStepPlanning),
-            "agent:workflow_execution" => Some(Self::AgentWorkflowExecution),
-            "agent:web_research" => Some(Self::AgentWebResearch),
-            "agent:memory_operations" => Some(Self::AgentMemoryOperations),
-            "agent:general" => Some(Self::AgentGeneral),
-            "unknown" => Some(Self::Unknown),
-            _ => None,
-        }
-    }
-}
-
-impl NextStepRole {
-    pub const fn key(self) -> &'static str {
-        match self {
-            Self::Orchestrate => "orchestrate",
-            Self::Implement => "implement",
-            Self::Mechanical => "mechanical",
-            Self::Verify => "verify",
-            Self::Finalize => "finalize",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    fn parse_key(value: &str) -> Option<Self> {
-        match value {
-            "orchestrate" => Some(Self::Orchestrate),
-            "implement" => Some(Self::Implement),
-            "mechanical" => Some(Self::Mechanical),
-            "verify" => Some(Self::Verify),
-            "finalize" => Some(Self::Finalize),
-            "unknown" => Some(Self::Unknown),
-            _ => None,
-        }
-    }
-}
-
-impl ProgressState {
-    pub const fn key(self) -> &'static str {
-        match self {
-            Self::Opening => "opening",
-            Self::Progressing => "progressing",
-            Self::Stalled => "stalled",
-            Self::Recovering => "recovering",
-            Self::NearDone => "near_done",
-            Self::Unknown => "unknown",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,17 +35,6 @@ pub enum TaskComplexity {
     Simple,
     Substantive,
     Ambiguous,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProgressState {
-    Opening,
-    Progressing,
-    Stalled,
-    Recovering,
-    NearDone,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,7 +119,7 @@ impl PredictiveRouteProjection {
 
     pub fn key(&self) -> String {
         format!(
-            "agent_route/v1|{}|{}|{}",
+            "semantic_route/v1|{}|{}|{}",
             self.task_family.key(),
             self.next_step_role.key(),
             self.risk
@@ -248,7 +131,7 @@ impl PredictiveRouteProjection {
     }
 
     pub fn parse_key(value: &str) -> Option<Self> {
-        let (task_family, next_step_role, risk) = parse_agent_route_key(value)?;
+        let (task_family, next_step_role, risk) = parse_semantic_route_key(value)?;
         let risk = parse_route_risk(risk)?;
 
         Some(Self::new(
@@ -1025,7 +908,19 @@ pub fn compiled_scorecard_digest() -> &'static str {
     COMPILED_SCORECARD_DIGEST
 }
 
+/// Serving classifier contract. The deterministic scorecard remains an offline
+/// research fixture and cannot certify a decision-model route.
 pub fn compiled_predictor_contract() -> PredictorContract {
+    PredictorContract {
+        algorithm: "system_one".into(),
+        version: 1,
+        config_digest: bitrouter_sdk::routing::assessment::contract_digest(),
+        confidence_kind: "provider_probability".into(),
+        calibration_digest: None,
+    }
+}
+
+pub fn compiled_scorecard_contract() -> PredictorContract {
     PredictorContract {
         algorithm: PREDICTOR_ALGORITHM.to_owned(),
         version: 1,
@@ -2152,16 +2047,16 @@ mod tests {
 
         assert_eq!(
             projection.key(),
-            "agent_route/v1|code:generation|implement|normal"
+            "semantic_route/v1|code:generation|implement|normal"
         );
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
         assert!(RouteProjection::parse_key("agent_trace/v2|edit|normal").is_some());
-        let retired_short_v1 = format!("agent_route/v1|{}|normal", "implement");
+        let retired_short_v1 = format!("semantic_route/v1|{}|normal", "implement");
         let retired_v2 = format!(
-            "agent_route/{}|code:review|verify|normal",
+            "semantic_route/{}|code:review|verify|normal",
             ["v", "2"].concat()
         );
         assert!(PredictiveRouteProjection::parse_key(&retired_short_v1).is_none());
@@ -2176,18 +2071,21 @@ mod tests {
             RouteRisk::Normal,
         );
 
-        assert_eq!(projection.key(), "agent_route/v1|code:review|verify|normal");
+        assert_eq!(
+            projection.key(),
+            "semantic_route/v1|code:review|verify|normal"
+        );
         assert_eq!(
             projection.unknown_baseline().key(),
-            "agent_route/v1|unknown|verify|normal"
+            "semantic_route/v1|unknown|verify|normal"
         );
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
-        let retired_short_v1 = format!("agent_route/v1|{}|normal", "verify");
+        let retired_short_v1 = format!("semantic_route/v1|{}|normal", "verify");
         let retired_v2 = format!(
-            "agent_route/{}|code:review|verify|normal",
+            "semantic_route/{}|code:review|verify|normal",
             ["v", "2"].concat()
         );
         assert!(PredictiveRouteProjection::parse_key(&retired_short_v1).is_none());
@@ -2261,7 +2159,7 @@ mod tests {
         );
         let key = projection.key();
 
-        assert_eq!(key, "agent_route/v1|code:debugging|implement|normal");
+        assert_eq!(key, "semantic_route/v1|code:debugging|implement|normal");
         for source_identity in ["codex", "claude_code", "hermes", "smithers", "openclaw"] {
             assert!(!key.contains(source_identity), "{source_identity}");
         }
@@ -2673,7 +2571,7 @@ mod tests {
 
     #[test]
     fn compiled_predictor_contract_is_stable_and_heuristic() -> anyhow::Result<()> {
-        let contract = compiled_predictor_contract();
+        let contract = compiled_scorecard_contract();
         let recomputed_digest = predictor_behavior_digest(compiled_predictor_behavior())?;
 
         assert_eq!(contract.algorithm, "deterministic_scorecard");
@@ -2942,19 +2840,19 @@ mod tests {
 
         assert_eq!(
             projection.key(),
-            "agent_route/v1|code:debugging|implement|guarded"
+            "semantic_route/v1|code:debugging|implement|guarded"
         );
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
         assert!(
-            PredictiveRouteProjection::parse_key("agent_route/v1|debugging|implement|guarded")
+            PredictiveRouteProjection::parse_key("semantic_route/v1|debugging|implement|guarded")
                 .is_none()
         );
         assert!(
             PredictiveRouteProjection::parse_key(
-                "agent_route/v1|code:debugging|implement|guarded|extra"
+                "semantic_route/v1|code:debugging|implement|guarded|extra"
             )
             .is_none()
         );

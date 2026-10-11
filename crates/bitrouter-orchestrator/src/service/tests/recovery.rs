@@ -33,6 +33,123 @@ fn recovery_request(
 }
 
 #[tokio::test]
+async fn native_cold_recovery_reuses_core_evidence_and_views()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        workspace.path().join("evidence"),
+        "persistent native evidence",
+    )?;
+    let memory = Arc::new(MemoryExecutionStore::default());
+    let make_app = |turns: Vec<bitrouter_ai::types::GenerateResult>| {
+        super::support::app_with_execution_mode(
+            Arc::new(bitrouter_sdk::language_model::MockExecutor::new(
+                turns.into_iter().map(super::support::mock_stream).collect(),
+            )),
+            true,
+        )
+    };
+    let source = ThreadService::with_store(
+        make_app(vec![
+            turn(vec![tool_call(
+                "read",
+                "read",
+                serde_json::json!({"path":"evidence"}),
+            )]),
+            final_turn(),
+        ])?,
+        &[workspace.path().into()],
+        memory.clone(),
+    )?;
+    let created = source
+        .create_thread(
+            &source.inner.instance_id,
+            thread_request(&workspace, "native-cold"),
+        )
+        .await?;
+    let first = source
+        .start_turn(
+            &target(&created),
+            &CallerContext::local(),
+            input("Read evidence", "first"),
+        )
+        .await?;
+    let first = wait_for(&source, &first.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(first.status, TurnStatus::Completed, "{:?}", first.detail);
+    source.shutdown().await;
+    let destination = ThreadService::with_store(
+        make_app(vec![final_turn()])?,
+        &[workspace.path().into()],
+        memory.clone(),
+    )?;
+    let rebound = crate::thread::ThreadTarget {
+        thread_id: created.thread_id.clone(),
+        server_instance_id: destination.inner.instance_id.clone(),
+    };
+    let loaded = destination
+        .load_thread(&rebound, &CallerContext::local())
+        .await?;
+    let recovery = loaded.recovery.as_ref().ok_or("missing recovery")?;
+    assert!(recovery.context_valid, "{:?}", recovery.blockers);
+    assert!(
+        recovery
+            .blockers
+            .iter()
+            .all(|blocker| matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed)),
+        "{:?}",
+        recovery.blockers
+    );
+    destination
+        .recover_thread(
+            &rebound,
+            &CallerContext::local(),
+            recovery_request(&loaded, "recover")?,
+        )
+        .await?;
+    destination
+        .resume_queue(&rebound, &CallerContext::local(), "resume".into())
+        .await?;
+    let next = destination
+        .start_turn(
+            &rebound,
+            &CallerContext::local(),
+            input("Use previous evidence", "second"),
+        )
+        .await?;
+    let next = wait_for(&destination, &next.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(next.status, TurnStatus::Completed, "{:?}", next.detail);
+    let saved = memory
+        .load(&created.thread_id)
+        .await?
+        .ok_or("missing Thread")?;
+    let mut sessions = std::collections::BTreeSet::new();
+    let mut epochs = std::collections::BTreeSet::new();
+    let mut latest = None;
+    for record in &saved.records {
+        if let ExecutionRecord::TurnRecord { fact, .. } = record
+            && let ExecutionRecord::CoreCheckpoint { batch, limits } = fact.as_ref()
+        {
+            sessions.insert(batch.identity.session_id.clone());
+            epochs.insert(batch.identity.execution_epoch);
+            latest = Some(serde_json::from_value::<
+                crate::core::session::SessionSnapshot,
+            >(batch.decode(limits)?.checkpoint.state)?);
+        }
+    }
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(epochs, std::collections::BTreeSet::from([1, 2]));
+    let latest = latest.ok_or("missing Core state")?;
+    assert_eq!(latest.context_store.work.len(), 2);
+    assert!(latest.context_store.views.len() >= 3);
+    assert!(
+        serde_json::to_string(&latest.context_store.evidence)?
+            .contains("persistent native evidence")
+    );
+    destination.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stopped_terminal_thread_reopens_with_original_context_and_idempotent_recovery()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
@@ -857,7 +974,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
         .await?
         .ok_or("source records missing")?;
     let cutoff = saved.records.iter().position(|record| matches!(record,
-        ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::RunCheckpoint { model_steps: 1, tool_calls: 1, .. })
+        ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::RunCheckpoint { model_steps: 1, tool_calls: 0, .. })
     )).ok_or("pending-steering checkpoint missing")? + 1;
     let memory = Arc::new(MemoryExecutionStore::default());
     let crate::store::OwnerClaim::Acquired { owner } =
@@ -1584,8 +1701,15 @@ async fn committed_windows_rebuild_calls_context_and_budgets_without_replaying_c
             );
             assert!(!recovery.context_valid);
         }
-        if window == "result" || window == "settled" || window == "terminal" {
+        if window == "result" {
+            // The durable outcome is known, but Core has not consumed the
+            // complete tool batch into its canonical prompt at this boundary.
+            assert!(!recovery.context_valid);
+        }
+        if window == "settled" || window == "terminal" {
             assert!(recovery.context_valid);
+        }
+        if window == "result" || window == "settled" || window == "terminal" {
             assert!(rebuilt.unresolved_calls.is_empty());
             assert!(
                 !recovery
@@ -1595,7 +1719,9 @@ async fn committed_windows_rebuild_calls_context_and_budgets_without_replaying_c
             );
         }
         if window == "request" {
-            assert_eq!(rebuilt.budget.model_steps, 1);
+            // Native preparation has committed a plan, but has not dispatched
+            // a provider attempt at this journal boundary.
+            assert_eq!(rebuilt.budget.model_steps, 0);
             assert_eq!(rebuilt.budget.usage_unknown_steps.len(), 1);
             assert!(!rebuilt.budget.estimated_spend_available);
         }
@@ -2225,6 +2351,94 @@ async fn recovered_verification_result_must_match_the_exact_committed_invocation
             .is_none()
     );
     service.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_checkpoint_spans_small_pages_and_incomplete_prefix_cannot_recover()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    let memory = Arc::new(MemoryExecutionStore::default());
+    let source = ThreadService::with_limits_and_store(
+        app(vec![final_turn()])?,
+        &[workspace.path().into()],
+        RuntimeLimits {
+            recovery_page_bytes: 64 * 1024,
+            ..Default::default()
+        },
+        memory.clone(),
+    )?;
+    let thread = source
+        .create_thread(
+            &source.inner.instance_id,
+            thread_request(&workspace, "framed"),
+        )
+        .await?;
+    let accepted = source
+        .start_turn(
+            &target(&thread),
+            &CallerContext::local(),
+            input(&"evidence ".repeat(1200), "large"),
+        )
+        .await?;
+    let done = wait_for(&source, &accepted.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(done.status, TurnStatus::Completed, "{:?}", done.detail);
+    source.shutdown().await;
+    let stored = memory
+        .load(&thread.thread_id)
+        .await?
+        .ok_or("records missing")?;
+    let partial = stored
+        .records
+        .iter()
+        .position(|record| {
+            matches!(
+                record,
+                ExecutionRecord::CoreCheckpointPart { offset: 0, .. }
+            )
+        })
+        .ok_or("checkpoint did not span pages")? as u64
+        + 1;
+    for cutoff in [partial, stored.version] {
+        let store = Arc::new(PrefixStore {
+            memory: memory.clone(),
+            cutoff,
+            reads: AtomicUsize::new(0),
+        });
+        let service = ThreadService::with_limits_and_store(
+            app(vec![])?,
+            &[workspace.path().into()],
+            RuntimeLimits {
+                recovery_page_records: 2,
+                recovery_page_bytes: 64 * 1024,
+                ..Default::default()
+            },
+            store,
+        )?;
+        let view = service
+            .load_thread(
+                &crate::thread::ThreadTarget {
+                    thread_id: thread.thread_id.clone(),
+                    server_instance_id: service.inner.instance_id.clone(),
+                },
+                &CallerContext::local(),
+            )
+            .await?;
+        let report = view.recovery.as_ref().ok_or("recovery missing")?;
+        let invalid = report
+            .blockers
+            .iter()
+            .any(|blocker| matches!(blocker, RecoveryBlocker::InvalidRecord { .. }));
+        assert_eq!(invalid, cutoff == partial, "{:?}", report.blockers);
+        if cutoff == stored.version {
+            assert!(report.context_valid);
+            assert_eq!(
+                view.latest_turn.as_ref().map(|turn| turn.status),
+                Some(TurnStatus::Completed)
+            );
+        }
+        service.shutdown().await;
+    }
     Ok(())
 }
 

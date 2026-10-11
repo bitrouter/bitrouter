@@ -564,6 +564,15 @@ impl PipelineContext {
         self.inbound_protocol.clone()
     }
 
+    pub(crate) fn apply_routing_prompt(&mut self, prompt: Prompt) -> Result<()> {
+        let current = self.input.generation_prompt_mut().ok_or_else(|| {
+            BitrouterError::bad_request("generation routing cannot rewrite a decisions request")
+        })?;
+        self.model.clone_from(&prompt.model);
+        *current = prompt;
+        Ok(())
+    }
+
     /// Replace the canonical model name (used after preset/variant stripping).
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.model = model.into();

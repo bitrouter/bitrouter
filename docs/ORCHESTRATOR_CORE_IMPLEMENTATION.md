@@ -4074,3 +4074,19 @@ seconds of active time, runs a thirty-second command and retains a fifteen-secon
 outer guard. A start marker additionally proves the command ran; the original
 unknown-effect, terminal-state, no-late-write and call/result assertions remain.
 This changes only test timing, not product budgets or cancellation behavior.
+
+
+## Unified routing after the model-core migration
+
+Generation requests retain the shared semantic assessment, policy action and
+owner-admitted context plan after canonical model types move to `bitrouter-ai`.
+The provider-facing Decisions operation bypasses generation context preparation
+and retains its operation-scoped hooks. Final route and context-revalidation hooks
+cannot rewrite the committed generation prompt.
+
+Native streaming uses the same frozen protocol/endpoint pricing snapshot as
+ordinary streaming, including an explicitly unknown rate. Responses reasoning
+summary/text lanes retain their canonical ordering and must match retained native
+state. A stream policy changing actionable text or tool calls cannot be undone
+by restoring the provider's terminal output. Raw tool failures remain typed in
+the journal; provider-facing prompts carry an explicit error envelope.

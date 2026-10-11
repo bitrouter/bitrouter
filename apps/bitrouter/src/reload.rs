@@ -134,7 +134,6 @@ pub enum ReloadOutcome {
 pub enum ReloadParticipant {
     RoutingTable,
     UpstreamTimeoutClients,
-    PolicyTable,
     NamedPolicyRuntime,
     AccessPolicyStore,
 }
@@ -295,11 +294,10 @@ impl ReloadReport {
 }
 
 impl ReloadParticipant {
-    fn all() -> [Self; 5] {
+    fn all() -> [Self; 4] {
         [
             Self::RoutingTable,
             Self::UpstreamTimeoutClients,
-            Self::PolicyTable,
             Self::NamedPolicyRuntime,
             Self::AccessPolicyStore,
         ]
@@ -615,6 +613,9 @@ fn restart_required_fields(
     // resulting provider set, such as auth adapters and pricing state.
     if current.inherit_defaults != candidate.inherit_defaults {
         fields.insert("inherit_defaults".to_string());
+    }
+    if current.decision_model != candidate.decision_model {
+        fields.insert("decision_model".to_string());
     }
     if current.control != candidate.control {
         fields.insert("control".to_string());
@@ -1235,7 +1236,6 @@ fn fixed_top_level_field(name: &str) -> &'static str {
         "inherit_defaults" => "inherit_defaults",
         "registry" => "registry",
         "policy" => "policy",
-        "policy_table" => "policy_table",
         "configuration_source" => "configuration_source",
         _ => "unclassified",
     }
@@ -1276,6 +1276,7 @@ fn fixed_restart_field(path: &str) -> String {
         | "server.require_known_pricing" => path.to_string(),
         "inherit_defaults"
         | "control"
+        | "decision_model"
         | "chat"
         | "database.url"
         | "eval"
@@ -1291,7 +1292,6 @@ fn fixed_restart_field(path: &str) -> String {
         | "agents"
         | "upstream.fallback_backoff_ms"
         | "providers.*.models.*.pricing"
-        | "policy_table"
         | "configuration_source" => path.to_string(),
         _ if path.starts_with("providers.") => "providers".to_string(),
         _ => "unclassified".to_string(),
@@ -1397,12 +1397,14 @@ async fn load_configuration_baseline_at(
                     guardrails_migration_required: false,
                 }
             })?;
-            let config = bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
-                .map_err(|error| ConfigurationLoadError {
-                    saved: SavedConfigState::Invalid,
-                    error: anyhow::Error::new(error),
-                    guardrails_migration_required: false,
-                })?;
+            let mut config =
+                bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
+                    .map_err(|error| ConfigurationLoadError {
+                        saved: SavedConfigState::Invalid,
+                        error: anyhow::Error::new(error),
+                        guardrails_migration_required: false,
+                    })?;
+            crate::policy_lock::apply_defaults(&mut config, Some(path));
             let guardrails_migration_required = config.plugins.contains_key("bitrouter-guardrails");
             crate::assemble::validate_host_configuration(&config).map_err(|error| {
                 ConfigurationLoadError {
@@ -1446,6 +1448,7 @@ async fn load_configuration_baseline_at(
         crate::paths::ConfigSource::Default { .. } => {
             let mut config = crate::providers::apply::zero_config();
             crate::cloud::enable_in_zero_config(&mut config);
+            crate::policy_lock::apply_defaults(&mut config, None);
             Ok(ConfigurationBaseline {
                 source: source.clone(),
                 loaded_source: effective_source.clone(),
@@ -1490,11 +1493,6 @@ pub struct AppReloader {
     /// config reload must rebuild the live executor's client set too.
     upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
-    /// The live `policy_table:` transform, when one was wired at assembly.
-    /// Reload rebuilds its spec from the fresh config and swaps it in —
-    /// without this the daemon kept serving the tiers it started with, and
-    /// only `restart` applied an edit.
-    policy_table_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
     /// Owns admission for local IPC, SIGHUP, and guarded remote reloads. The
     /// routing table's own lock is narrower and cannot protect preparation or
     /// the other live participants.
@@ -1539,14 +1537,8 @@ struct PreparedReload {
     baseline: ConfigurationBaseline,
     config: bitrouter_sdk::config::Config,
     timeout_clients: bitrouter_sdk::language_model::executor::PreparedProviderTimeouts,
-    policy_table: PreparedPolicyTable,
     named_policy_runtime: Option<crate::policy_lock::PreparedPolicySnapshot>,
     access_policy_store: Option<crate::policy::store::PreparedPolicyStore>,
-}
-
-enum PreparedPolicyTable {
-    Apply(Arc<crate::policy_table_router::PolicyTable>),
-    Unchanged,
 }
 
 struct PreparationError {
@@ -1596,7 +1588,6 @@ impl AppReloader {
             environment_revision: AtomicU64::new(0),
             upstream_executor,
             policy_runtime: None,
-            policy_table_router: None,
             coordinator: ReloadCoordinator::new(),
             source,
             #[cfg(test)]
@@ -1618,16 +1609,6 @@ impl AppReloader {
         self.startup_configuration_source = Some(baseline.source.clone());
         self.startup_unclassified_values = baseline.unclassified_values.clone();
         self.running_baseline = Mutex::new(Some(baseline));
-        self
-    }
-
-    /// Attach the live `policy_table:` transform so a reload re-applies its
-    /// tiers.
-    pub fn with_policy_table_router(
-        mut self,
-        router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
-    ) -> Self {
-        self.policy_table_router = router;
         self
     }
 
@@ -1691,32 +1672,6 @@ impl AppReloader {
         Duration::from_secs(PREPARATION_TIMEOUT_SECONDS)
     }
 
-    /// Build a replacement policy table before any live participant changes.
-    /// A daemon that started without this transform cannot add it later because
-    /// the transform is part of the built pipeline, so remote reload correctly
-    /// classifies that shape as restart-required.
-    fn prepare_policy_table(
-        &self,
-        fresh: &bitrouter_sdk::config::Config,
-    ) -> Result<PreparedPolicyTable, PreparationError> {
-        let mut effective = fresh.policy_table.clone();
-        effective.adequacy = fresh
-            .policy
-            .mode
-            .apply_to_adequacy(&fresh.policy_table.adequacy);
-        let candidate = match crate::policy_table_router::PolicyTable::from_config(&effective) {
-            Some(table) => table,
-            None => crate::policy_table_router::PolicyTable::inert(),
-        };
-        match (&self.policy_table_router, effective.tiers.is_empty()) {
-            (Some(_), _) => Ok(PreparedPolicyTable::Apply(candidate)),
-            (None, true) => Ok(PreparedPolicyTable::Unchanged),
-            (None, false) => Err(PreparationError::restart_required(vec![
-                "policy_table".to_string(),
-            ])),
-        }
-    }
-
     async fn prepare_candidate(&self) -> Result<ConfigurationBaseline, PreparationError> {
         let source = self.source_for_inspection();
         let revision = self.environment_revision.load(Ordering::Acquire);
@@ -1777,7 +1732,6 @@ impl AppReloader {
         if !restart_required.is_empty() {
             return Err(PreparationError::restart_required(restart_required));
         }
-        let policy_table = self.prepare_policy_table(&config)?;
         let named_policy_runtime = match &self.policy_runtime {
             Some(runtime) => {
                 let path = match &self.source {
@@ -1820,7 +1774,6 @@ impl AppReloader {
             baseline,
             config,
             timeout_clients,
-            policy_table,
             named_policy_runtime,
             access_policy_store,
         })
@@ -1946,33 +1899,6 @@ impl AppReloader {
             self.upstream_executor
                 .commit_provider_timeouts(prepared.timeout_clients);
             report.participant_applied(ReloadParticipant::UpstreamTimeoutClients);
-        }
-        reservation.update_progress(&report);
-
-        if self.should_fail_apply(ReloadParticipant::PolicyTable) {
-            report.participant_failed(
-                ReloadParticipant::PolicyTable,
-                ReloadFailure::new("fault_injected", "policy table update failed"),
-            );
-        } else {
-            match prepared.policy_table {
-                PreparedPolicyTable::Apply(table) => match &self.policy_table_router {
-                    Some(router) if router.replace_table(table) => {
-                        report.participant_applied(ReloadParticipant::PolicyTable);
-                    }
-                    Some(_) => report.participant_failed(
-                        ReloadParticipant::PolicyTable,
-                        ReloadFailure::new(
-                            "policy_table_apply_failed",
-                            "policy table update failed",
-                        ),
-                    ),
-                    None => report.participant_unchanged(ReloadParticipant::PolicyTable),
-                },
-                PreparedPolicyTable::Unchanged => {
-                    report.participant_unchanged(ReloadParticipant::PolicyTable);
-                }
-            }
         }
         reservation.update_progress(&report);
 
@@ -2168,7 +2094,7 @@ impl AppReloader {
                     &running_baseline.revision,
                     &saved_baseline.revision,
                 );
-                let mut raw_restart_fields = if source_changed {
+                let raw_restart_fields = if source_changed {
                     vec!["configuration_source".to_string()]
                 } else {
                     let changed_unclassified = changed_unclassified_config_paths(
@@ -2187,12 +2113,6 @@ impl AppReloader {
                         })
                         .unwrap_or_default()
                 };
-                if !source_changed
-                    && self.policy_table_router.is_none()
-                    && !saved_baseline.config.policy_table.tiers.is_empty()
-                {
-                    raw_restart_fields.push("policy_table".to_string());
-                }
                 for field in &raw_restart_fields {
                     let _ = changed.remove(restart_field_category(field));
                 }
@@ -2402,7 +2322,6 @@ providers:
         _home: tempfile::TempDir,
         reloader: Arc<AppReloader>,
         routing_table: Arc<ConfigRoutingTable>,
-        policy_table: Arc<crate::policy_table_router::PolicyTableRouter>,
         policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
         policy_store: Arc<PolicyStore>,
         initial_policy_digest: String,
@@ -2412,7 +2331,7 @@ providers:
         access_policy_dir: std::path::PathBuf,
     }
 
-    fn coordinated_config_yaml(model: &str, policy_table_model: &str, read_secs: u64) -> String {
+    fn coordinated_config_yaml(model: &str, read_secs: u64) -> String {
         format!(
             r#"inherit_defaults: false
 upstream:
@@ -2437,22 +2356,23 @@ presets:
   coding:
     model: {model}
     policy: coding
-policy_table:
-  tiers:
-    only: {policy_table_model}
-  default_tier: only
 "#
         )
     }
 
     fn coordinated_policy_lock_yaml(model: &str) -> String {
         format!(
-            r#"lockfileVersion: 1
+            r#"lockfileVersion: 4
+artifact:
+  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  source_snapshot_time_unix_ms: 0
+  compiler:
+    id: fixture
+    version: 1
+    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 policies:
   coding:
-    key_strategy: agent_trace
-    tiers: {{ strong: {model} }}
-    routes: {{}}
+    tiers: {{ strong: {{ model: "{model}", context: evidence }} }}
     default_tier: strong
     tool_use_tier: strong
     tool_safe_tiers: [strong]
@@ -2473,10 +2393,7 @@ policies:
         let lock_path = home.path().join("policy-lock.yaml");
         let access_policy_dir = home.path().join("access-policies");
         std::fs::create_dir(&access_policy_dir)?;
-        std::fs::write(
-            &config_path,
-            coordinated_config_yaml("alpha:m", "alpha:m", 30),
-        )?;
+        std::fs::write(&config_path, coordinated_config_yaml("alpha:m", 30))?;
         std::fs::write(&lock_path, coordinated_policy_lock_yaml("alpha:m"))?;
         std::fs::write(
             access_policy_dir.join("operator.yaml"),
@@ -2492,9 +2409,6 @@ policies:
                 .await?;
         let mut initial = initial_baseline.config.clone();
         resolve_reloadable_config(&mut initial).await;
-        let table = crate::policy_table_router::PolicyTable::from_config(&initial.policy_table)
-            .ok_or_else(|| anyhow::anyhow!("initial policy table is unexpectedly inert"))?;
-        let policy_table = Arc::new(crate::policy_table_router::PolicyTableRouter::new(table));
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial.clone()));
         let executor = Arc::new(HttpExecutor::new(HttpTimeouts::default())?);
         let db = crate::db::connect("sqlite::memory:").await?;
@@ -2502,7 +2416,6 @@ policies:
         let policy_runtime = crate::policy_lock::PolicyRuntime::new(
             &initial,
             Some(&config_path),
-            db,
             None,
             crate::eval::settlement::PendingEvalDecisionStore::default(),
             None,
@@ -2517,7 +2430,7 @@ policies:
         // Change every participant's input before executing the test-only
         // boundary fault. The fixture therefore verifies both the participant
         // report and the live state on either side of every mutation boundary.
-        std::fs::write(&config_path, coordinated_config_yaml("beta:m", "beta:m", 1))?;
+        std::fs::write(&config_path, coordinated_config_yaml("beta:m", 1))?;
         std::fs::write(&lock_path, coordinated_policy_lock_yaml("beta:m"))?;
         std::fs::write(
             access_policy_dir.join("operator.yaml"),
@@ -2538,8 +2451,7 @@ policies:
             ReloadSource::File(config_path.clone()),
         )
         .with_startup_configuration(initial_baseline)
-        .with_policy_runtime(policy_runtime.clone())
-        .with_policy_table_router(Some(policy_table.clone()));
+        .with_policy_runtime(policy_runtime.clone());
         if let Some(failure) = failure {
             reloader = reloader.with_test_apply_failure(failure);
         }
@@ -2551,7 +2463,6 @@ policies:
             _home: home,
             reloader: Arc::new(reloader),
             routing_table,
-            policy_table,
             policy_runtime,
             policy_store,
             initial_policy_digest,
@@ -2628,91 +2539,6 @@ policies:
     /// a `policy_table:` edit. The transform is baked into the built `App` and
     /// cannot be re-registered, so nothing swapped its spec.
     #[tokio::test]
-    async fn reload_rebuilds_the_policy_table_and_routes_to_the_new_provider() -> anyhow::Result<()>
-    {
-        use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
-
-        let (path, dir) = temp_config_path();
-        // Two providers, each serving a model of its own. The policy table's
-        // one tier decides which of them a bare `m` request reaches.
-        let config_with_tier = |tier_model: &str| {
-            format!(
-                r#"inherit_defaults: false
-providers:
-  alpha:
-    api_base: https://alpha.example.com/v1
-    api_key: k
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - {{ id: m }}
-  beta:
-    api_base: https://beta.example.com/v1
-    api_key: k
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - {{ id: m }}
-policy_table:
-  tiers:
-    only: {tier_model}
-  default_tier: only
-"#
-            )
-        };
-
-        std::fs::write(&path, config_with_tier("alpha:m"))?;
-        let mut initial = config::parse(&config_with_tier("alpha:m"))?;
-        resolve_reloadable_config(&mut initial).await;
-
-        // The pieces the daemon holds: the routing table, and the live
-        // transform built from the same config.
-        let table = crate::policy_table_router::PolicyTable::from_config(&initial.policy_table)
-            .ok_or_else(|| anyhow::anyhow!("the initial config defines a tier"))?;
-        let router = Arc::new(crate::policy_table_router::PolicyTableRouter::new(table));
-        let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
-        let executor = Arc::new(HttpExecutor::new(HttpTimeouts::default())?);
-        let reloader = AppReloader::new(
-            Arc::new(PolicyStore::new()),
-            routing_table.clone(),
-            executor,
-            ReloadSource::File(path.clone()),
-        )
-        .with_policy_table_router(Some(router.clone()));
-
-        // Issue a request before the reload: the tier sends it to alpha.
-        let provider_serving = async |model: &str| -> anyhow::Result<String> {
-            let chain = routing_table
-                .route_chain(model, &RoutingPrefs::default(), &CallerContext::local())
-                .await?;
-            chain
-                .first()
-                .map(|target| target.provider_name.clone())
-                .ok_or_else(|| anyhow::anyhow!("no routable target for `{model}`"))
-        };
-        let mut before = prompt();
-        router.apply(&mut before);
-        assert_eq!(before.model, "alpha:m", "the starting tier");
-        assert_eq!(provider_serving(&before.model).await?, "alpha");
-
-        // Re-point the tier and reload — no restart.
-        std::fs::write(&path, config_with_tier("beta:m"))?;
-        reloader.reload().await?;
-
-        // The same request must now reach the *new* provider.
-        let mut after = prompt();
-        router.apply(&mut after);
-        std::fs::remove_dir_all(dir).ok();
-        assert_eq!(
-            after.model, "beta:m",
-            "reload must rebuild the policy table, not keep the tiers the daemon started with"
-        );
-        assert_eq!(provider_serving(&after.model).await?, "beta");
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn invalid_policy_candidate_does_not_swap_routing_or_policy() {
         use crate::policy_lock::PolicyRuntime;
         use bitrouter_sdk::config::PolicyRuntimeMode;
@@ -2731,11 +2557,18 @@ presets:
         std::fs::write(&path, config_yaml("vendor:old")).expect("write initial config");
         std::fs::write(
             dir.join("policy-lock.yaml"),
-            r#"lockfileVersion: 1
+            r#"lockfileVersion: 4
+artifact:
+  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  source_snapshot_time_unix_ms: 0
+  compiler:
+    id: bitrouter-policy-compiler
+    version: 1
+    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 policies:
   coding:
     key_strategy: agent_trace
-    tiers: { strong: vendor:old }
+    tiers: { strong: { model: vendor:old, context: evidence } }
     routes: {}
     default_tier: strong
     tool_use_tier: strong
@@ -2752,7 +2585,6 @@ policies:
         let runtime = PolicyRuntime::new(
             &initial,
             Some(&path),
-            db,
             None,
             crate::eval::settlement::PendingEvalDecisionStore::default(),
             None,
@@ -2811,7 +2643,7 @@ policies:
                     .iter()
                     .filter(|entry| entry.outcome == ReloadParticipantOutcome::Applied)
                     .count(),
-                4,
+                3,
                 "every non-failed participant should have made its prepared change"
             );
             for entry in &report.participants {
@@ -2867,15 +2699,6 @@ policies:
                 .ok_or_else(|| anyhow::anyhow!("coding preset is absent after reload"))?;
             assert_eq!(routed_model, expected_routing_model);
 
-            let expected_table_model = if failed_participant == ReloadParticipant::PolicyTable {
-                "alpha:m"
-            } else {
-                "beta:m"
-            };
-            let mut table_prompt = prompt();
-            fixture.policy_table.apply(&mut table_prompt);
-            assert_eq!(table_prompt.model, expected_table_model);
-
             let expected_access_model =
                 if failed_participant == ReloadParticipant::AccessPolicyStore {
                     "alpha:m"
@@ -2912,7 +2735,7 @@ policies:
     #[tokio::test]
     async fn later_preparation_failure_keeps_the_mixed_cause_in_configuration_state()
     -> anyhow::Result<()> {
-        let fixture = fault_fixture(ReloadParticipant::PolicyTable).await?;
+        let fixture = fault_fixture(ReloadParticipant::NamedPolicyRuntime).await?;
         assert!(fixture.reloader.reload().await.is_err());
         std::fs::write(&fixture.config_path, "providers: [invalid\n")?;
         assert!(fixture.reloader.reload().await.is_err());
@@ -2937,7 +2760,7 @@ policies:
                 .participants
                 .iter()
                 .any(|entry| {
-                    entry.participant == ReloadParticipant::PolicyTable
+                    entry.participant == ReloadParticipant::NamedPolicyRuntime
                         && entry.outcome == ReloadParticipantOutcome::Failed
                 })
         );
@@ -2963,10 +2786,7 @@ policies:
         // table, named-policy, and access-policy inputs. Revert every source
         // file before allowing mutation; any late source read would install
         // alpha instead and make this test fail.
-        std::fs::write(
-            &fixture.config_path,
-            coordinated_config_yaml("alpha:m", "alpha:m", 30),
-        )?;
+        std::fs::write(&fixture.config_path, coordinated_config_yaml("alpha:m", 30))?;
         std::fs::write(&fixture.lock_path, coordinated_policy_lock_yaml("alpha:m"))?;
         std::fs::write(
             fixture.access_policy_dir.join("operator.yaml"),
@@ -2989,9 +2809,6 @@ policies:
             .and_then(|preset| preset.model.as_deref())
             .ok_or_else(|| anyhow::anyhow!("coding preset is absent after reload"))?;
         assert_eq!(routed_model, "beta:m");
-        let mut table_prompt = prompt();
-        fixture.policy_table.apply(&mut table_prompt);
-        assert_eq!(table_prompt.model, "beta:m");
         let access_model = fixture.policy_store.with_policy("operator", |policy| {
             policy
                 .and_then(|policy| policy.allowed_models.as_ref())
@@ -3299,7 +3116,7 @@ presets:
         );
         partial.participant_applied(ReloadParticipant::RoutingTable);
         partial.participant_failed(
-            ReloadParticipant::PolicyTable,
+            ReloadParticipant::NamedPolicyRuntime,
             ReloadFailure::new("fault_injected", "policy table update failed"),
         );
         partial.finish(ReloadOutcome::PartiallyApplied);
@@ -3442,45 +3259,8 @@ presets:
     }
 
     #[tokio::test]
-    async fn adding_policy_table_transform_requires_restart_in_status_and_reload()
-    -> anyhow::Result<()> {
-        let (path, dir) = temp_config_path();
-        let initial_yaml = config_yaml(30);
-        std::fs::write(&path, &initial_yaml)?;
-        let baseline =
-            load_configuration_baseline(&crate::paths::ConfigSource::File(path.clone())).await?;
-        let mut startup_config = baseline.config.clone();
-        resolve_reloadable_config(&mut startup_config).await;
-        let routing_table = Arc::new(ConfigRoutingTable::from_config(startup_config));
-        let reloader = AppReloader::new(
-            Arc::new(PolicyStore::new()),
-            routing_table,
-            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
-            ReloadSource::File(path.clone()),
-        )
-        .with_startup_configuration(baseline);
-        let candidate = format!(
-            "{initial_yaml}\npolicy_table:\n  tiers:\n    only: slow:m\n  default_tier: only\n"
-        );
-        std::fs::write(&path, candidate)?;
-
-        let state = reloader
-            .configuration_state()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
-        assert_eq!(state.running, RunningConfigState::RestartRequired);
-        assert!(
-            state
-                .restart_required_fields
-                .contains(&"policy_table".into())
-        );
-        assert!(reloader.reload().await.is_err());
-        let report = reloader
-            .reload_state()
-            .and_then(|state| state.last_outcome)
-            .ok_or_else(|| anyhow::anyhow!("reload report is unavailable"))?;
-        assert_eq!(report.restart_required_fields, ["policy_table"]);
-        let _ = std::fs::remove_dir_all(dir);
+    async fn removed_global_policy_table_is_rejected_before_reload() -> anyhow::Result<()> {
+        assert!(config::parse("policy_table: {}\n").is_err());
         Ok(())
     }
 
@@ -3529,6 +3309,16 @@ presets:
         assert!(fields.contains(&"server.listen".to_string()));
         assert!(fields.contains(&"upstream.fallback_backoff_ms".to_string()));
         assert!(fields.contains(&"future_runtime".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn changing_semantic_backend_requires_restart() -> anyhow::Result<()> {
+        let current = config::parse("decision_model:\n  model: semantic-v1\n")?;
+        let candidate = config::parse("decision_model:\n  model: semantic-v2\n")?;
+        let fields = restart_required_fields(&current, &candidate, Some(&BTreeSet::new()));
+        assert!(fields.contains(&"decision_model".into()));
+        assert_eq!(fixed_restart_fields(fields), vec!["decision_model"]);
         Ok(())
     }
 

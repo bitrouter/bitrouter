@@ -21,7 +21,7 @@ dev/test debug=0. Hosted CI for the published head is a separate gate.
 - Cold `ListThreads` reads are caller/workspace/profile filtered, paginated at
   a membership cutoff, bounded to 16 roots and existing store byte limits, and
   install no context, worker, subscriber or runner. Resident pages refresh
-  current public state every two seconds. Local protocol is v15; HTTP v2 is
+  current public state every two seconds. Local protocol is v17; HTTP v2 is
   unchanged and has no new directory endpoint.
 - History reconstruction uses one public durable cutoff and stable entity IDs.
   Observation resynchronization restores that same snapshot cutoff; stale live

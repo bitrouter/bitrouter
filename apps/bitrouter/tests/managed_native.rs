@@ -107,6 +107,7 @@ fn input() -> TaskInput {
         model: "fixture-model".into(),
         effort: None,
         max_output_tokens: Some(128),
+        context_limit_bytes: None,
         routing: Default::default(),
         max_concurrent_subagents: None,
         discardable_history: None,

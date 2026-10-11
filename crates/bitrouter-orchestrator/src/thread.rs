@@ -160,6 +160,10 @@ pub enum RecoveryBlocker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ThreadChange {
+    ContextRouting {
+        turn_id: String,
+        inspection: Box<crate::core::context_router::inspection::Inspection>,
+    },
     Created {
         view: Box<ThreadView>,
     },

@@ -48,7 +48,6 @@ fn participant(participant: ReloadParticipant) -> &'static str {
     match participant {
         ReloadParticipant::RoutingTable => "routing_table",
         ReloadParticipant::UpstreamTimeoutClients => "upstream_timeout_clients",
-        ReloadParticipant::PolicyTable => "policy_table",
         ReloadParticipant::NamedPolicyRuntime => "named_policy_runtime",
         ReloadParticipant::AccessPolicyStore => "access_policy_store",
     }

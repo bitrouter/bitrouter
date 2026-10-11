@@ -319,8 +319,9 @@ impl ThreadService {
         version: u64,
         facts: &[ExecutionRecord],
     ) -> Result<(Vec<ExecutionRecord>, ThreadEvent), ServiceError> {
+        let framed = super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
         let seq = version
-            .checked_add(u64::try_from(facts.len()).map_err(|error| error.to_string())?)
+            .checked_add(u64::try_from(framed.len()).map_err(|error| error.to_string())?)
             .and_then(|seq| seq.checked_add(1))
             .ok_or("Thread cursor exhausted")?;
         let mut records = facts.to_vec();
@@ -352,6 +353,8 @@ impl ThreadService {
                 "Thread transaction projection exceeds history byte bound",
             ));
         }
+        let mut records =
+            super::checkpoint_pages::split(&records, self.inner.limits.recovery_page_bytes)?;
         records.push(ExecutionRecord::ThreadEvent {
             event: event.clone(),
         });
@@ -367,6 +370,26 @@ pub(crate) fn project(
 ) {
     let turn = turn_id.map_or_else(String::new, str::to_owned);
     let change = match record {
+        ExecutionRecord::CoreCheckpoint { batch, limits } => {
+            let Some(inspection) = batch
+                .decode(limits)
+                .ok()
+                .and_then(|payload| {
+                    serde_json::from_value::<crate::core::session::SessionSnapshot>(
+                        payload.checkpoint.state,
+                    )
+                    .ok()
+                })
+                .as_ref()
+                .and_then(crate::core::context_router::inspection::Inspection::capture)
+            else {
+                return;
+            };
+            ThreadChange::ContextRouting {
+                turn_id: turn,
+                inspection: Box::new(inspection),
+            }
+        }
         ExecutionRecord::ThreadCreated {
             snapshot,
             config,
@@ -537,6 +560,16 @@ impl ThreadView {
         }
         for change in &event.changes {
             match change {
+                ThreadChange::ContextRouting {
+                    turn_id,
+                    inspection,
+                } => {
+                    if let Some(turn) = &mut self.latest_turn
+                        && &turn.turn_id == turn_id
+                    {
+                        turn.context_routing = Some(inspection.as_ref().clone());
+                    }
+                }
                 ThreadChange::Created { view } => *self = view.as_ref().clone(),
                 ThreadChange::Checkpoint { snapshot } => self.thread = snapshot.clone(),
                 ThreadChange::TurnQueued { receipt, .. } => {
@@ -629,6 +662,7 @@ pub(super) fn empty_turn(
     turn_id: &str,
 ) -> TurnSnapshot {
     TurnSnapshot {
+        context_routing: None,
         resources: None,
         steering: Vec::new(),
         thread_id: thread.thread_id.clone(),

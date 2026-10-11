@@ -191,7 +191,7 @@ mod tests {
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
 
-    const IMPLEMENT_KEY: &str = "agent_route/v1|unknown|implement|normal";
+    const IMPLEMENT_KEY: &str = "semantic_route/v1|unknown|implement|normal";
 
     fn candidate(reward: f64) -> SemanticPolicyTransitionCandidate {
         SemanticPolicyTransitionCandidate {
@@ -294,8 +294,8 @@ mod tests {
         let service = EvalService::new(EvalStore::new(db), Default::default());
         let mut predictive = candidate(1.0);
         predictive.policy = None;
-        predictive.request_key = "agent_route/v1|unknown|implement|normal".into();
-        predictive.ledger_key = Some("auto\0agent_route/v1|unknown|implement|normal".into());
+        predictive.request_key = "semantic_route/v1|unknown|implement|normal".into();
+        predictive.ledger_key = Some("auto\0semantic_route/v1|unknown|implement|normal".into());
 
         let summary = import_semantic_reward_feedback(&service, &[predictive]).await?;
 
@@ -310,7 +310,7 @@ mod tests {
         db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db), Default::default());
         let mut malformed = candidate(1.0);
-        malformed.request_key = "agent_route/v1|developer|normal".into();
+        malformed.request_key = "semantic_route/v1|developer|normal".into();
 
         let summary = import_semantic_reward_feedback(&service, &[malformed]).await?;
 

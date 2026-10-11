@@ -169,6 +169,30 @@ fn codex_message_phase_survives_stateless_replay() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn empty_reasoning_content_remains_replayable_without_stored_state() -> Result<()> {
+    for content in [Value::Null, json!([])] {
+        let item = json!({"type":"reasoning", "id":"rs_empty", "summary":[], "content":content, "encrypted_content":"opaque"});
+        let response = json!({"output":[item.clone()]});
+        assert!(output_replayable(&response));
+        let result = ResponsesAdapter.parse_response(response)?;
+        let mut prompt =
+            ResponsesAdapter.parse_request(json!({"model":"served", "input":"task"}))?;
+        prompt.messages.push(Message {
+            role: Role::Assistant,
+            content: result.content,
+        });
+        ResponsesAdapter
+            .validate_managed_prompt(&prompt)
+            .map_err(ModelError::invalid_request)?;
+        assert_eq!(
+            managed_render(&ResponsesAdapter, &prompt)?["input"][1],
+            item
+        );
+    }
+    Ok(())
+}
+
 fn managed_render(adapter: &ResponsesAdapter, prompt: &Prompt) -> Result<Value> {
     let target = ModelTarget {
         provider_name: "openai".into(),

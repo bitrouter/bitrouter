@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context;
+
 use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_orchestrator::agent::ToolMode;
 use bitrouter_orchestrator::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
@@ -13,14 +15,14 @@ use tokio_util::sync::CancellationToken;
 
 pub struct Options {
     pub prompt: String,
-    pub model: String,
+    pub model: Option<String>,
     pub effort: Option<ReasoningEffort>,
     pub check: Option<String>,
     pub read_only: bool,
     pub workspace: Option<PathBuf>,
     pub config: Option<PathBuf>,
     pub session: Option<String>,
-    pub max_output_tokens: u32,
+    pub max_output_tokens: Option<u32>,
 }
 
 struct HeadlessApproval;
@@ -36,7 +38,7 @@ impl NativeApproval for HeadlessApproval {
 
 pub async fn run(options: Options) -> anyhow::Result<()> {
     anyhow::ensure!(
-        options.max_output_tokens > 0,
+        options.max_output_tokens != Some(0),
         "output reservation must be positive"
     );
     let workspace = options
@@ -86,12 +88,21 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
             signal_cancel.cancel();
         }
     });
+    let model = options
+        .model
+        .or_else(|| crate::policy_lock::native_default_model(&config).map(str::to_owned))
+        .context("no native model configured; pass --model or enable defaults")?;
+    let model_mode = crate::policy_lock::native_model_mode(&config, &model)?;
     let input = TaskInput {
         text: options.prompt,
-        model: options.model,
+        model,
         effort: options.effort.map(|effort| effort.to_string()),
-        max_output_tokens: Some(options.max_output_tokens),
-        routing: Default::default(),
+        max_output_tokens: options.max_output_tokens,
+        context_limit_bytes: None,
+        routing: bitrouter_orchestrator::core::protocol::RoutingSettings {
+            model: model_mode,
+            ..Default::default()
+        },
         max_concurrent_subagents: None,
         discardable_history: None,
         acceptance_criteria: vec![],

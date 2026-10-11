@@ -104,7 +104,42 @@ impl ThreadService {
     ) -> Result<(), ServiceError> {
         let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
-        self.commit_serialized(turn_id, records).await?;
+        let steering = self.native_steering_events(turn_id, records)?;
+        let mut facts = records.to_vec();
+        for event in &steering {
+            if let TurnEventPayload::SteeringUpdated { receipt, .. } = &event.payload {
+                facts.push(ExecutionRecord::SteeringResolved {
+                    receipt: receipt.clone(),
+                });
+            }
+            if let Some(fact) = lifecycle_fact(event) {
+                facts.push(fact);
+            }
+        }
+        self.commit_serialized(turn_id, &facts).await?;
+        if !steering.is_empty() {
+            let mut state = self.lock_state();
+            for event in steering {
+                if let TurnEventPayload::SteeringUpdated { receipt, .. } = &event.payload
+                    && let Some(task) = state.turns.get_mut(turn_id)
+                    && let Some(pending) = task
+                        .steering
+                        .iter_mut()
+                        .find(|entry| entry.receipt.input_id == receipt.input_id)
+                {
+                    pending.receipt = receipt.clone();
+                }
+                self.append_locked(&mut state, turn_id, event.payload)?;
+            }
+            if let Some(task) = state.turns.get(turn_id)
+                && task
+                    .steering
+                    .iter()
+                    .all(|entry| entry.receipt.status != crate::turn::SteeringStatus::Received)
+            {
+                task.fence.set(false);
+            }
+        }
         for record in records {
             if let ExecutionRecord::VerificationResult {
                 active_duration_ms,
@@ -442,6 +477,18 @@ impl ThreadService {
         }
         for record in records {
             match record {
+                ExecutionRecord::CoreCheckpoint { .. } => {
+                    let mut changes = Vec::new();
+                    super::observation::project(record, thread_id, Some(turn_id), &mut changes);
+                    for change in changes {
+                        if let crate::thread::ThreadChange::ContextRouting { inspection, .. } =
+                            change
+                            && let Some(task) = state.turns.get_mut(turn_id)
+                        {
+                            task.snapshot.context_routing = Some(*inspection);
+                        }
+                    }
+                }
                 ExecutionRecord::InstructionContext { snapshot, .. } => {
                     if let Some(thread) = state.threads.get_mut(thread_id) {
                         thread.instructions = Some(snapshot.as_ref().clone());

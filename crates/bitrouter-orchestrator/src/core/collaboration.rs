@@ -35,6 +35,8 @@ pub struct Work {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "context")]
+    Context(super::context_router::tools::ContextAction),
     #[serde(rename = "spawn_agent")]
     Spawn { task: Work },
     #[serde(rename = "delegate_task")]
@@ -65,12 +67,29 @@ fn default_wait() -> u64 {
 
 impl Action {
     pub fn parse(name: &str, arguments: Value) -> Result<Self, CoreError> {
+        if super::context_router::tools::NAMES.contains(&name) {
+            return serde_json::from_value(json!({"name":name,"arguments":arguments}))
+                .map(Self::Context)
+                .map_err(|error| reject(ErrorCode::InvalidToolResult, error.to_string()));
+        }
         serde_json::from_value(json!({"name":name,"arguments":arguments}))
             .map_err(|error| reject(ErrorCode::InvalidToolResult, error.to_string()))
     }
 
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Context(super::context_router::tools::ContextAction::Extract { .. }) => {
+                "context_extract"
+            }
+            Self::Context(super::context_router::tools::ContextAction::Search { .. }) => {
+                "context_search"
+            }
+            Self::Context(super::context_router::tools::ContextAction::Recall { .. }) => {
+                "context_recall"
+            }
+            Self::Context(super::context_router::tools::ContextAction::Publish { .. }) => {
+                "context_publish"
+            }
             Self::Spawn { .. } => "spawn_agent",
             Self::Delegate { .. } => "delegate_task",
             Self::Message { .. } => "send_message",
@@ -199,6 +218,7 @@ pub fn apply(
         ));
     }
     let result = match action {
+        Action::Context(action) => super::context_router::tools::apply(state, actor_id, action)?,
         Action::Spawn { task } => {
             return allocate(state, actor_id, task, Intent::Spawn, state_revision);
         }
@@ -433,11 +453,12 @@ fn spawn(
         .get(actor_id)
         .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown parent"))?;
     let agent_id = id("agent");
-    let mut history = if kind == ContextKind::Inherited {
-        allocation::inherited_history(parent).to_vec()
-    } else {
-        Vec::new()
-    };
+    let mut history =
+        if kind == ContextKind::Inherited && !super::context_router::tasks::enabled(state) {
+            allocation::inherited_history(parent).to_vec()
+        } else {
+            Vec::new()
+        };
     let context_sources = if kind == ContextKind::Inherited {
         parent.context_sources.clone()
     } else {

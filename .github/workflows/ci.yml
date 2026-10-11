@@ -80,6 +80,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: >-
           cargo nextest run --workspace --all-features
+          --no-fail-fast
           --retries "${{ matrix.retries }}"
 
   # A cold all-features build used to compile and link every large application

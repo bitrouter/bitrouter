@@ -1322,7 +1322,9 @@ providers:
                     if participant.participant == crate::reload::ReloadParticipant::RoutingTable {
                         participant.outcome = crate::reload::ReloadParticipantOutcome::Applied;
                     }
-                    if participant.participant == crate::reload::ReloadParticipant::PolicyTable {
+                    if participant.participant
+                        == crate::reload::ReloadParticipant::NamedPolicyRuntime
+                    {
                         participant.outcome = crate::reload::ReloadParticipantOutcome::Failed;
                         participant.error = Some(crate::reload::ReloadFailure {
                             code: "fixture_policy_failure".into(),

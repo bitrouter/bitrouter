@@ -13,13 +13,12 @@
 //! a three-protocol upstream and a three-provider config, so it lives here
 //! rather than in its own file.
 
+#[path = "support/decision.rs"]
+mod decision;
+
 use axum_test::TestServer;
 use bitrouter::metering::entities::requests;
-use bitrouter::workflow_state::ir::ProtocolKind;
-use bitrouter::workflow_state::online::OnlineWorkflowState;
-use bitrouter_ai::types::{Content, ProviderMetadata};
-use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
-use bitrouter_sdk::HeaderMap;
+use bitrouter_ai::types::{Content, GenerationParams, Message, Prompt, ProviderMetadata, Role};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
 use bitrouter_sdk::language_model::PipelineRequest;
@@ -44,8 +43,24 @@ async fn named_router_migration_protocol_matrix() -> anyhow::Result<()> {
             let directory = tempfile::tempdir()?;
             let config_path = directory.path().join("bitrouter.yaml");
             let policy_path = directory.path().join("policy-lock.yaml");
-            let policy = "lockfileVersion: 1\npolicies:\n  coding:\n    tiers:\n      strong: mock:test-model\n    default_tier: strong\n    tool_use_tier: strong\n    tool_safe_tiers: [strong]\n";
-            std::fs::write(&policy_path, policy)?;
+            let mut policy = bitrouter::policy_lock::PolicyLock::default();
+            policy.policies.insert(
+                "coding".into(),
+                bitrouter::policy_lock::PolicyDefinition {
+                    tiers: std::collections::BTreeMap::from([(
+                        "strong".into(),
+                        "mock:test-model".into(),
+                    )]),
+                    default_tier: Some("strong".into()),
+                    tool_use_tier: Some("strong".into()),
+                    tool_safe_tiers: vec!["strong".into()],
+                    ..Default::default()
+                },
+            );
+            std::fs::write(
+                &policy_path,
+                bitrouter::policy_lock::deterministic_yaml(&policy)?,
+            )?;
             let legacy = format!(
                 "inherit_defaults: false\nserver:\n  skip_auth: true\ndatabase:\n  url: 'sqlite::memory:'\nproviders:\n  mock:\n    api_base: {}\n    api_key: test-key\n    models:\n      - id: base-model\n      - id: test-model\npresets:\n  coding:\n    model: mock:base-model\n    policy: coding\n    system_prompt: default system\n    params:\n      temperature: 0.2\n",
                 upstream.uri()
@@ -164,7 +179,7 @@ async fn named_router_migration_protocol_matrix() -> anyhow::Result<()> {
             }
             assert_eq!(
                 std::fs::read_to_string(policy_path)?,
-                policy,
+                bitrouter::policy_lock::deterministic_yaml(&policy)?,
                 "migration must not rewrite policy artifact"
             );
         }
@@ -312,46 +327,6 @@ async fn mock_streaming_chat_completions_upstream(model: &str) -> MockServer {
         .mount(&server)
         .await;
     server
-}
-
-fn prompt_for_policy_key(messages: Vec<Message>) -> Prompt {
-    Prompt {
-        model: "router-entry".to_string(),
-        system: None,
-        system_provider_metadata: Default::default(),
-        messages,
-        tools: Vec::new(),
-        params: GenerationParams::default(),
-        response_format: None,
-        tool_choice: None,
-        stream: false,
-    }
-}
-
-fn assistant_calls_for_policy_key(tool: &str) -> Message {
-    Message {
-        role: Role::Assistant,
-        content: vec![Content::ToolCall {
-            id: format!("call_{tool}"),
-            name: tool.to_string(),
-            arguments: "{}".to_string(),
-            provider_executed: false,
-            dynamic: false,
-            provider_metadata: ProviderMetadata::new(),
-        }],
-    }
-}
-
-fn workflow_key_for(messages: Vec<Message>) -> String {
-    let prompt = prompt_for_policy_key(messages);
-    OnlineWorkflowState::from_prompt(
-        &HeaderMap::new(),
-        &prompt,
-        None,
-        ProtocolKind::ChatCompletions,
-    )
-    .routing_key()
-    .to_string()
 }
 
 /// A config pointing one provider at the mock upstream, `skip_auth: true` and
@@ -557,26 +532,11 @@ async fn e2e_http_server_chat_completions_end_to_end() {
 }
 
 #[tokio::test]
-async fn workflow_state_policy_routes_by_ir_key() {
+async fn workflow_state_policy_routes_by_ir_key() -> anyhow::Result<()> {
     let strong = mock_chat_completions_upstream_with_content("strong").await;
     let cheap = mock_chat_completions_upstream_with_content("cheap").await;
-    let opening_key = workflow_key_for(vec![Message::text(Role::User, "start")]);
-    let tool_followup_key = workflow_key_for(vec![
-        Message::text(Role::User, "fix"),
-        assistant_calls_for_policy_key("read_file"),
-        Message {
-            role: Role::Tool,
-            content: vec![Content::ToolResult {
-                call_id: "call_read_file".to_string(),
-                tool_name: None,
-                output: bitrouter_ai::types::ToolResultOutput::Text {
-                    value: "source contents".to_string(),
-                },
-                dynamic: false,
-                provider_metadata: ProviderMetadata::new(),
-            }],
-        },
-    ]);
+    let opening_key = "semantic_route/v1|code:generation|implement|normal";
+    let tool_followup_key = "semantic_route/v1|code:debugging|verify|normal";
 
     let yaml = format!(
         r#"
@@ -600,25 +560,30 @@ providers:
       - "*": chat_completions
     models:
       - id: cheap-model
-policy_table:
-  key_strategy: agent_trace
-  tiers:
-    capable: strong:strong-model
-    cheap_tool_safe: cheap:cheap-model
-  fingerprints:
-    "{opening_key}": capable
-    "{tool_followup_key}": cheap_tool_safe
-  default_tier: capable
-  tool_use_tier: capable
-  tool_safe_tiers:
-    - capable
-    - cheap_tool_safe
+routers:
+  auto:
+    selection: {{kind: policy, policy: auto, base_model: router-entry}}
 "#,
         strong_uri = strong.uri(),
         cheap_uri = cheap.uri(),
     );
-    let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
-    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let policy_yaml = format!(
+        r#"key_strategy: agent_trace
+tiers:
+  capable: {{model: strong:strong-model, context: evidence}}
+  cheap_tool_safe: {{model: cheap:cheap-model, context: evidence}}
+routes:
+  "{opening_key}": capable
+  "{tool_followup_key}": cheap_tool_safe
+default_tier: capable
+tool_use_tier: capable
+tool_safe_tiers:
+  - capable
+  - cheap_tool_safe
+"#
+    );
+    let (assembled, _policy_dir, _decision_backend) =
+        assemble_named_fixture(&yaml, &policy_yaml).await?;
     let state = AppState {
         language_model: assembled.app.language_model().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
@@ -631,7 +596,7 @@ policy_table:
     server
         .post("/v1/chat/completions")
         .json(&json!({
-            "model": "router-entry",
+            "model": "bitrouter/auto",
             "messages": [{ "role": "user", "content": "start" }],
         }))
         .await
@@ -640,7 +605,7 @@ policy_table:
     server
         .post("/v1/chat/completions")
         .json(&json!({
-            "model": "router-entry",
+            "model": "bitrouter/auto",
             "messages": [
                 { "role": "user", "content": "fix" },
                 {
@@ -670,29 +635,15 @@ policy_table:
     let cheap_body: Value = serde_json::from_slice(&cheap_requests[0].body).unwrap();
     assert_eq!(strong_body["model"], "strong-model");
     assert_eq!(cheap_body["model"], "cheap-model");
+    Ok(())
 }
 
 #[tokio::test]
 async fn workflow_state_policy_routes_same_model_at_distinct_efforts_end_to_end()
 -> anyhow::Result<()> {
     let upstream = mock_chat_completions_upstream().await;
-    let opening_key = workflow_key_for(vec![Message::text(Role::User, "start")]);
-    let tool_followup_key = workflow_key_for(vec![
-        Message::text(Role::User, "fix"),
-        assistant_calls_for_policy_key("read_file"),
-        Message {
-            role: Role::Tool,
-            content: vec![Content::ToolResult {
-                call_id: "call_read_file".to_string(),
-                tool_name: None,
-                output: bitrouter_ai::types::ToolResultOutput::Text {
-                    value: "source contents".to_string(),
-                },
-                dynamic: false,
-                provider_metadata: ProviderMetadata::new(),
-            }],
-        },
-    ]);
+    let opening_key = "semantic_route/v1|code:generation|implement|normal";
+    let tool_followup_key = "semantic_route/v1|code:debugging|verify|normal";
     let yaml = format!(
         r#"
 server:
@@ -712,26 +663,33 @@ providers:
         reasoning_effort:
           levels: [low, high]
           default: high
-policy_table:
-  key_strategy: agent_trace
-  tiers:
-    high:
-      model: mock:same-model
-      effort: high
-    low:
-      model: mock:same-model
-      effort: low
-  fingerprints:
-    "{opening_key}": high
-    "{tool_followup_key}": low
-  default_tier: high
-  tool_use_tier: high
-  tool_safe_tiers: [high, low]
+routers:
+  auto:
+    selection: {{kind: policy, policy: auto, base_model: router-entry}}
 "#,
         upstream_uri = upstream.uri(),
     );
-    let cfg = config::parse_with(&yaml, |_| None)?;
-    let assembled = bitrouter::build_app(&cfg).await?;
+    let policy_yaml = format!(
+        r#"key_strategy: agent_trace
+tiers:
+  high:
+    model: mock:same-model
+    context: evidence
+    effort: high
+  low:
+    model: mock:same-model
+    context: evidence
+    effort: low
+routes:
+  "{opening_key}": high
+  "{tool_followup_key}": low
+default_tier: high
+tool_use_tier: high
+tool_safe_tiers: [high, low]
+"#
+    );
+    let (assembled, _policy_dir, _decision_backend) =
+        assemble_named_fixture(&yaml, &policy_yaml).await?;
     let language_model = assembled
         .app
         .language_model()
@@ -749,7 +707,7 @@ policy_table:
     server
         .post("/v1/chat/completions")
         .json(&json!({
-            "model": "router-entry",
+            "model": "bitrouter/auto",
             "messages": [{ "role": "user", "content": "start" }],
         }))
         .await
@@ -757,7 +715,7 @@ policy_table:
     server
         .post("/v1/chat/completions")
         .json(&json!({
-            "model": "router-entry",
+            "model": "bitrouter/auto",
             "messages": [
                 { "role": "user", "content": "fix" },
                 {
@@ -790,7 +748,7 @@ policy_table:
 }
 
 #[tokio::test]
-async fn streaming_adequacy_settlement_also_persists_metering() {
+async fn streaming_adequacy_settlement_also_persists_metering() -> anyhow::Result<()> {
     use std::time::Duration;
 
     let strong = mock_streaming_chat_completions_upstream("strong-model").await;
@@ -817,27 +775,31 @@ providers:
       - "*": chat_completions
     models:
       - id: cheap-model
-policy_table:
-  key_strategy: agent_trace
-  tiers:
-    capable: strong:strong-model
-    cheap: cheap:cheap-model
-  default_tier: capable
-  tool_use_tier: capable
-  tool_safe_tiers: [capable, cheap]
-  adequacy:
-    enabled: true
-    escalation_tier: capable
-    explore_enabled: true
-    explore_tier: cheap
-    explore_interval: 2
-    explore_threshold: 3
+routers:
+  auto:
+    selection: {{kind: policy, policy: auto, base_model: router-entry}}
 "#,
         strong_uri = strong.uri(),
         cheap_uri = cheap.uri(),
     );
-    let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
-    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let policy_yaml = r#"key_strategy: agent_trace
+tiers:
+  capable: {model: strong:strong-model, context: evidence}
+  cheap: {model: cheap:cheap-model, context: evidence}
+default_tier: capable
+tool_use_tier: capable
+tool_safe_tiers: [capable, cheap]
+adequacy:
+  enabled: true
+  escalation_tier: capable
+  explore_enabled: true
+  explore_tier: cheap
+  explore_interval: 2
+  explore_threshold: 3
+"#
+    .to_string();
+    let (assembled, _policy_dir, _decision_backend) =
+        assemble_named_fixture(&yaml, &policy_yaml).await?;
     let state = AppState {
         language_model: assembled.app.language_model().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
@@ -852,7 +814,7 @@ policy_table:
         .add_header("x-bitrouter-request-id", "adequacy-metering-1")
         .add_header("accept", "text/event-stream")
         .json(&json!({
-            "model": "router-entry",
+            "model": "bitrouter/auto",
             "stream": true,
             "stream_options": { "include_usage": true },
             "messages": [
@@ -883,15 +845,15 @@ policy_table:
             assert_eq!(row.provider_id, "strong");
             assert_eq!(row.prompt_tokens, 11);
             assert_eq!(row.completion_tokens, 7);
-            return;
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("metering row did not persist after adequacy settlement");
+    anyhow::bail!("metering row did not persist after policy settlement")
 }
 
 #[tokio::test]
-async fn disconnected_stream_with_adequacy_also_persists_metering() {
+async fn disconnected_stream_with_adequacy_also_persists_metering() -> anyhow::Result<()> {
     use std::convert::Infallible;
     use std::time::Duration;
 
@@ -950,25 +912,29 @@ providers:
     models:
       - id: strong-model
       - id: cheap-model
-policy_table:
-  key_strategy: agent_trace
-  tiers:
-    capable: mock:strong-model
-    cheap: mock:cheap-model
-  default_tier: capable
-  tool_use_tier: capable
-  tool_safe_tiers: [capable, cheap]
-  adequacy:
-    enabled: true
-    escalation_tier: capable
-    explore_enabled: true
-    explore_tier: cheap
-    explore_interval: 2
-    explore_threshold: 3
+routers:
+  auto:
+    selection: {{kind: policy, policy: auto, base_model: router-entry}}
 "#,
     );
-    let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
-    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let policy_yaml = r#"key_strategy: agent_trace
+tiers:
+  capable: {model: mock:strong-model, context: evidence}
+  cheap: {model: mock:cheap-model, context: evidence}
+default_tier: capable
+tool_use_tier: capable
+tool_safe_tiers: [capable, cheap]
+adequacy:
+  enabled: true
+  escalation_tier: capable
+  explore_enabled: true
+  explore_tier: cheap
+  explore_interval: 2
+  explore_threshold: 3
+"#
+    .to_string();
+    let (assembled, _policy_dir, _decision_backend) =
+        assemble_named_fixture(&yaml, &policy_yaml).await?;
     let state = AppState {
         language_model: assembled.app.language_model().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
@@ -986,7 +952,7 @@ policy_table:
         .post(format!("http://{daemon_addr}/v1/chat/completions"))
         .header("x-bitrouter-request-id", "adequacy-metering-drop-1")
         .json(&json!({
-            "model": "router-entry",
+            "model": "bitrouter/auto",
             "stream": true,
             "messages": [
                 { "role": "user", "content": "fix" },
@@ -1024,13 +990,13 @@ policy_table:
         if row.is_some() {
             daemon_task.abort();
             upstream_task.abort();
-            return;
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     daemon_task.abort();
     upstream_task.abort();
-    panic!("metering row did not persist after disconnected adequacy settlement");
+    anyhow::bail!("metering row did not persist after disconnected policy settlement")
 }
 
 #[tokio::test]
@@ -2593,4 +2559,34 @@ async fn e2e_reasoning_effort_translates_across_all_protocol_pairs() {
             run_effort_cell(inbound, outbound).await;
         }
     }
+}
+
+async fn assemble_named_fixture(
+    yaml: &str,
+    policy_yaml: &str,
+) -> anyhow::Result<(bitrouter::Assembled, tempfile::TempDir, MockServer)> {
+    let directory = tempfile::tempdir()?;
+    let mut lock = bitrouter::policy_lock::PolicyLock::default();
+    lock.policies
+        .insert("auto".into(), serde_saphyr::from_str(policy_yaml)?);
+    decision::certify_routes(&mut lock);
+    let path = directory.path().join("policy-lock.yaml");
+    std::fs::write(&path, bitrouter::policy_lock::deterministic_yaml(&lock)?)?;
+    let mut config = config::parse_with(yaml, |_| None)?;
+    config.policy.path = Some(path);
+    let backend = decision::attach(&mut config, |input| {
+        if input["signals"]
+            .as_array()
+            .is_some_and(|signals| signals.iter().any(|signal| signal["kind"] == "tool_result"))
+        {
+            ("code:debugging", "verify", "progressing")
+        } else {
+            ("code:generation", "implement", "progressing")
+        }
+    })
+    .await?;
+    let assembled =
+        bitrouter::build_app_with_path(&config, Some(&directory.path().join("bitrouter.yaml")))
+            .await?;
+    Ok((assembled, directory, backend))
 }

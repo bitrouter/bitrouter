@@ -78,6 +78,7 @@ impl ManagedCoreApi {
                 "checkpoint.ack",
                 "artifact.chunk",
                 "responses.create",
+                bitrouter_orchestrator::core::context_router::FEATURE,
             ]
             .into_iter()
             .map(String::from)

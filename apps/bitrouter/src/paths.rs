@@ -205,7 +205,7 @@ pub fn resolve_config_with(
 /// reach for a `Config` — every call site goes through here so the
 /// zero-config story is wired in uniformly.
 pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config::Config> {
-    let config = match source {
+    let mut config = match source {
         ConfigSource::File(path) => bitrouter_sdk::config::load(path)
             .await
             .with_context(|| format!("loading {}", path.display())),
@@ -218,6 +218,13 @@ pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config:
             Ok(cfg)
         }
     }?;
+    crate::policy_lock::apply_defaults(
+        &mut config,
+        match source {
+            ConfigSource::File(path) => Some(path.as_path()),
+            ConfigSource::Default { .. } => None,
+        },
+    );
     crate::assemble::validate_host_configuration(&config)?;
     Ok(config)
 }

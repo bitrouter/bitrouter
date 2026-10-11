@@ -57,6 +57,28 @@ pub struct SettlementOutcome {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum ExecutionRecord {
+    /// Last-mile native workspace ownership check after model/tool queue waits.
+    /// Execution authority and outcomes remain in the preceding Core facts.
+    CoreDispatch,
+    /// Exact Core bytes acknowledged by the same fenced Thread commit owner.
+    CoreCheckpoint {
+        batch: crate::core::checkpoint::CheckpointBatch,
+        limits: crate::core::protocol::Limits,
+    },
+    /// Contiguous pieces of one native checkpoint record, appended atomically.
+    /// Readers verify the complete digest before interpreting any Core state.
+    CoreCheckpointPart {
+        sha256: String,
+        bytes: u64,
+        offset: u64,
+        content_base64: String,
+    },
+    /// Immutable artifact chunks precede every checkpoint that references them.
+    CoreArtifact {
+        reference: crate::core::protocol::ArtifactRef,
+        offset: u64,
+        content_base64: String,
+    },
     InstructionContext {
         context_version: u64,
         snapshot: Box<crate::harness::instructions::InstructionSnapshot>,
@@ -202,10 +224,10 @@ pub enum EffectStatus {
     Unknown,
 }
 
-pub const RUNTIME_FORMAT_VERSION: u32 = 4;
+pub const RUNTIME_FORMAT_VERSION: u32 = 6;
 
 pub fn validate_runtime_format(version: u32) -> Result<(), String> {
-    if !matches!(version, 2 | 3 | RUNTIME_FORMAT_VERSION) {
+    if !matches!(version, 2 | 3 | 4 | 5 | RUNTIME_FORMAT_VERSION) {
         return Err(format!("unsupported_runtime_format: {version}"));
     }
     Ok(())

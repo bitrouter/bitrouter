@@ -1,6 +1,9 @@
 //! HTTP-level generality and trajectory-inflation regressions for the
 //! task-neutral progress control plane.
 
+#[path = "support/decision.rs"]
+mod decision;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -68,6 +71,7 @@ struct FixtureRequest {
 
 struct HttpHarness {
     _home: TempDir,
+    _decision_backend: MockServer,
     config_path: PathBuf,
     config: config::Config,
     strong: MockServer,
@@ -108,6 +112,10 @@ impl HttpHarness {
             .insert("balanced".into(), "balanced:balanced-model".into());
         auto.tiers
             .insert("economy".into(), "economy:economy-model".into());
+        auto.routes.insert(
+            "semantic_route/v1|unknown|implement|normal".into(),
+            "balanced".into(),
+        );
         Self::with_lock_and_upstream_authority(lock, InboundProtocol::Responses, false).await
     }
 
@@ -169,7 +177,7 @@ impl HttpHarness {
     }
 
     async fn with_lock_and_upstream_authority(
-        lock: PolicyLock,
+        mut lock: PolicyLock,
         upstream_protocol: InboundProtocol,
         shared_responses_authority: bool,
     ) -> anyhow::Result<Self> {
@@ -261,12 +269,39 @@ presets:
     policy: auto
 "#,
         );
-        let config = config::parse_with(&yaml, |_| None)?;
+        let mut config = config::parse_with(&yaml, |_| None)?;
+        let backend = decision::attach(&mut config, |input| {
+            let signals = input["signals"].as_array();
+            let last_tool = signals.and_then(|items| {
+                items
+                    .iter()
+                    .rev()
+                    .find(|item| item["kind"] == "tool_result")
+            });
+            let recovery = last_tool
+                .and_then(|item| item["text"].as_str())
+                .is_some_and(|text| text.contains("error:"));
+            let followup = signals.is_some_and(|items| {
+                items.iter().any(|item| item["kind"] == "assistant") || last_tool.is_some()
+            });
+            (
+                "unknown",
+                if followup { "implement" } else { "orchestrate" },
+                if recovery {
+                    "recovering"
+                } else {
+                    "progressing"
+                },
+            )
+        })
+        .await?;
+        decision::certify_routes(&mut lock);
         write_policy_lock(home.path(), &lock).await?;
         Ok(Self {
             config_path: home.path().join("bitrouter.yaml"),
             config,
             _home: home,
+            _decision_backend: backend,
             strong,
             economy,
             responses_state,
@@ -2636,20 +2671,8 @@ async fn predictive_policy_route_keeps_observed_projection_in_progress_guard() -
         .insert("economy".into(), "economy:economy-model".into());
     auto.default_tier = Some("strong".into());
     auto.routes.insert(
-        "agent_route/v1|unknown|orchestrate|normal".into(),
+        "semantic_route/v1|unknown|orchestrate|normal".into(),
         "economy".into(),
-    );
-    let mut certificate = lock
-        .certificates
-        .get("auto")
-        .and_then(|certificates| certificates.values().next())
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("template lock is missing an auto certificate"))?;
-    certificate.selected_tier = "economy".into();
-    certificate.baseline_tier = Some("strong".into());
-    lock.certificates.entry("auto".into()).or_default().insert(
-        "agent_route/v1|unknown|orchestrate|normal".into(),
-        certificate,
     );
     let harness = HttpHarness::with_lock(lock).await?;
     let assembled = harness.assemble().await?;
@@ -2678,13 +2701,13 @@ async fn predictive_policy_route_keeps_observed_projection_in_progress_guard() -
     );
     assert_ne!(
         outcome.latest_projection.as_deref(),
-        Some("agent_route/v1|unknown|orchestrate|normal")
+        Some("semantic_route/v1|unknown|orchestrate|normal")
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn auto_template_balanced_recovery_activates_balanced_hold() -> anyhow::Result<()> {
+async fn explicit_balanced_policy_recovery_activates_balanced_hold() -> anyhow::Result<()> {
     let mut lock: PolicyLock = serde_saphyr::from_str(include_str!(
         "../../../templates/auto-router/policy-lock.yaml"
     ))?;
@@ -2699,6 +2722,7 @@ async fn auto_template_balanced_recovery_activates_balanced_hold() -> anyhow::Re
     auto.tiers
         .insert("economy".into(), "economy:economy-model".into());
 
+    auto.default_tier = Some("balanced".into());
     let harness = HttpHarness::with_lock(lock).await?;
     let assembled = harness.assemble().await?;
     let server = server(&assembled);
@@ -2749,15 +2773,9 @@ async fn recovery_at_another_protected_tier_activates_hold_for_unprotected_follo
         .ok_or_else(|| anyhow::anyhow!("template auto policy has no progress guard"))?
         .protected_tiers
         .insert("balanced".into());
-    let unprotected_followup_key = "agent_route/v1|unknown|implement|normal";
+    let unprotected_followup_key = "semantic_route/v1|unknown|implement|normal";
     auto.routes
         .insert(unprotected_followup_key.into(), "economy".into());
-    lock.certificates
-        .get_mut("auto")
-        .and_then(|certificates| certificates.get_mut(unprotected_followup_key))
-        .ok_or_else(|| anyhow::anyhow!("template followup certificate is missing"))?
-        .selected_tier = "economy".into();
-
     let harness = HttpHarness::with_lock(lock).await?;
     let assembled = harness.assemble().await?;
     let server = server(&assembled);

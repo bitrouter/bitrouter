@@ -356,7 +356,7 @@ mod snapshot_tests {
         let candidate_yaml = "inherit_defaults: false\npolicy:\n  mode: adaptive\npresets:\n  chat:\n    model: fixture:new\n    policy: coding\n";
         let policy_yaml = |model: &str| {
             format!(
-                "lockfileVersion: 1\npolicies:\n  coding:\n    key_strategy: agent_trace\n    tiers: {{ strong: fixture:{model} }}\n    routes: {{}}\n    default_tier: strong\n    tool_use_tier: strong\n    tool_safe_tiers: [strong]\n"
+                "lockfileVersion: 4\nartifact:\n  evidence_root: \"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n  source_snapshot_time_unix_ms: 0\n  compiler:\n    id: bitrouter-policy-compiler\n    version: 1\n    config_digest: \"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\npolicies:\n  coding:\n    key_strategy: agent_trace\n    tiers: {{ strong: {{ model: fixture:{model}, context: evidence }} }}\n    routes: {{}}\n    default_tier: strong\n    tool_use_tier: strong\n    tool_safe_tiers: [strong]\n"
             )
         };
         std::fs::write(&path, initial_yaml)?;
@@ -367,7 +367,6 @@ mod snapshot_tests {
         let runtime = PolicyRuntime::new(
             &initial,
             Some(&path),
-            db,
             None,
             crate::eval::settlement::PendingEvalDecisionStore::default(),
             None,

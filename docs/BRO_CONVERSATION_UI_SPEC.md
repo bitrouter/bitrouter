@@ -62,7 +62,7 @@ Threads can be inspected but cannot start new work through this view.
 
 ## Local protocol and directory
 
-Local protocol is v15; HTTP v2 is unchanged. All local clients use the same
+Local protocol is v17; HTTP v2 is unchanged. All local clients use the same
 version and negotiated instance. No old-protocol fallback or implicit resubmit.
 `ListThreads { after, cutoff, limit }` permits 1–16 roots per request and uses the
 durable root index. Membership cutoff is stable across pagination; each row's

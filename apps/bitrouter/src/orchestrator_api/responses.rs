@@ -452,6 +452,7 @@ async fn accept(session: &CoreSession, create: &Create) -> Result<String, CoreEr
             model: create.model.clone(),
             effort: create.reasoning.as_ref().map(|value| value.effort.clone()),
             max_output_tokens: create.max_output_tokens,
+            context_limit_bytes: None,
             max_concurrent_subagents: Some(
                 create.multi_agent.max_concurrent_subagents.unwrap_or(3),
             ),

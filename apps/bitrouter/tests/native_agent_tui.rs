@@ -449,9 +449,7 @@ async fn submit(
     let (thread, turn) = client
         .create_and_start(
             workspace.into(),
-            "test-model".into(),
-            None,
-            false,
+            bitrouter_orchestrator::agent::AgentConfig::fixed("test-model", None),
             check,
             "Change note.txt".into(),
         )

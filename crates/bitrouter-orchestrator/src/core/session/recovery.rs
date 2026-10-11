@@ -80,6 +80,7 @@ impl CoreSession {
         let sent_tools = reconcile_tools(&mut state, &request, workspace_changed)?;
         responses::validate(&state, &request.binding)?;
         recovery_time::reconcile(&mut state, &request)?;
+        context_decisions::reconcile(&mut state);
         let outputs = resume_model_steps(&mut state);
         let initialization = PendingInitialization {
             base_revision: request.binding.durable_head.state_revision,
@@ -304,6 +305,7 @@ async fn restore_snapshot(
     let mut response_history = None;
     let mut wait_output_history = BTreeMap::new();
     let mut auxiliary_output_history = BTreeMap::new();
+    let mut context_history = super::super::context_router::validation::History::default();
     for (index, batch) in std::iter::once(checkpoint)
         .chain(&request.journal_tail)
         .enumerate()
@@ -315,6 +317,7 @@ async fn restore_snapshot(
         responses::validate_history(&payload, &mut response_history)?;
         wait_output::validate_history(&payload, &mut wait_output_history)?;
         auxiliary_output::validate_history(&payload, &mut auxiliary_output_history)?;
+        super::super::context_router::validation::validate_history(&payload, &mut context_history)?;
         recovery_time::validate_history(
             &payload,
             CheckpointAck::for_batch(batch, &payload).head(),
@@ -377,6 +380,7 @@ fn validate_snapshot(
         ));
     }
     state.manifest.validate(caps, &binding.limits)?;
+    super::super::context_router::validation::validate(state)?;
     release::validate(state, binding)?;
     root_queue::validate(state, &binding.limits)?;
     budget::validate(state)?;
@@ -848,6 +852,13 @@ pub(super) fn artifacts(
             })
             .cloned()
             .chain(state.recovery_archive.iter().cloned())
+            .chain(
+                state
+                    .context_store
+                    .artifacts
+                    .values()
+                    .map(|artifact| artifact.reference.clone()),
+            )
             .chain(
                 state
                     .signals

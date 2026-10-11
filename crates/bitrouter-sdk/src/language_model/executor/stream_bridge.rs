@@ -2,6 +2,7 @@
 //! <https://developers.openai.com/api/docs/guides/streaming-responses>
 
 use super::*;
+use bitrouter_ai::types::Content;
 
 #[derive(Default)]
 struct Source {
@@ -9,6 +10,7 @@ struct Source {
     storage_allowed: bool,
     effort_bound: bool,
     terminal: Option<serde_json::Value>,
+    reasoning_streamed: bool,
     opened: std::collections::BTreeSet<u64>,
     done: std::collections::BTreeMap<u64, serde_json::Value>,
     scrubber: Option<UpstreamErrorScrubber>,
@@ -18,6 +20,51 @@ struct Source {
 pub(super) struct BridgeCapture(Mutex<Source>);
 
 impl BridgeCapture {
+    /// Full terminal output owns private continuation state. Stream policy must
+    /// not rewrite actionable text/calls and then silently restore their original
+    /// values from that terminal. Refuse such a mismatch before tool admission.
+    pub(super) fn complete_observed(
+        &self,
+        executor: &HttpExecutor,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        folded: GenerateResult,
+    ) -> Result<GenerateResult> {
+        fn visible(result: &GenerateResult, reasoning_streamed: bool) -> Vec<serde_json::Value> {
+            result
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    Content::Text { text, .. } if !text.is_empty() => {
+                        Some(serde_json::json!({"text":text}))
+                    }
+                    Content::Reasoning { text, .. } if reasoning_streamed => {
+                        Some(serde_json::json!({"reasoning":text}))
+                    }
+                    Content::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                        provider_executed: false,
+                        ..
+                    } => Some(serde_json::json!({"id":id,"name":name,"arguments":arguments})),
+                    _ => None,
+                })
+                .collect()
+        }
+        let reasoning_streamed = self.source().reasoning_streamed;
+        let observed = visible(&folded, reasoning_streamed);
+        let complete = self.complete(executor, target, prompt, ctx, folded)?;
+        if observed != visible(&complete, reasoning_streamed) {
+            return Err(BitrouterError::UpstreamInvalidResponse {
+                message: "managed stream and complete terminal output differ".into(),
+                usage: complete.usage.clone().map(Box::new),
+            });
+        }
+        Ok(complete)
+    }
+
     fn source(&self) -> std::sync::MutexGuard<'_, Source> {
         self.0
             .lock()
@@ -59,6 +106,20 @@ impl BridgeCapture {
             .and_then(serde_json::Value::as_str)
             .or(event.event.as_deref());
         let mut source = self.source();
+        if matches!(
+            event_type,
+            Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta")
+        ) || (matches!(
+            event_type,
+            Some("response.output_item.added" | "response.output_item.done")
+        ) && json
+            .get("item")
+            .and_then(|item| item.get("type"))
+            .and_then(serde_json::Value::as_str)
+            == Some("reasoning"))
+        {
+            source.reasoning_streamed = true;
+        }
         match event_type {
             Some("response.output_item.added") => {
                 if let Some(index) = json.get("output_index").and_then(serde_json::Value::as_u64) {

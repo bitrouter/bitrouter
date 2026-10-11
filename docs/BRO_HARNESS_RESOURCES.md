@@ -67,7 +67,7 @@ readable; a new append upgrades the root envelope in the same version-fenced
 transaction, without rewriting its history or identities. An older binary refuses
 format 4 before decoding new instruction facts. Formats 0/1 and future versions remain
 unsupported. There is no schema migration or automatic lost-owner retirement.
-Local protocol remains v15: inventories use optional fields in existing snapshot
+Local protocol remains v17: inventories use optional fields in existing snapshot
 and context-advanced messages; no new public message variant is introduced.
 
 ## Workspace project instructions

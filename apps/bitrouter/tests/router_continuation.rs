@@ -173,17 +173,23 @@ routers:
         serde_json::to_string(&database_url)?,
         serde_json::to_string(&upstream.uri())?,
     );
-    let policy_text = r#"lockfileVersion: 1
+    let policy_text = r#"lockfileVersion: 4
 policies:
   coding:
     tiers:
-      strong: responses:selected-model
+      strong: {model: responses:selected-model, context: evidence}
     default_tier: strong
     tool_use_tier: strong
     tool_safe_tiers: [strong]
 "#;
     tokio::fs::write(&config_path, &config_text).await?;
-    tokio::fs::write(&policy_path, policy_text).await?;
+    let mut lock: bitrouter::policy_lock::PolicyLock = serde_saphyr::from_str(policy_text)?;
+    lock.artifact = bitrouter::policy_lock::PolicyLock::default().artifact;
+    tokio::fs::write(
+        &policy_path,
+        bitrouter::policy_lock::deterministic_yaml(&lock)?,
+    )
+    .await?;
 
     let config = config::parse(&config_text)?;
     let assembled = bitrouter::build_app_with_path(&config, Some(&config_path)).await?;

@@ -3,6 +3,31 @@
 use super::*;
 use crate::core::checkpoint::ToolStartFence;
 
+pub(super) fn remaining_tools(state: &SessionSnapshot) -> u64 {
+    let Some(run) = &state.run else { return 0 };
+    let used = state.cost_work.get(&run.run_id).map_or_else(
+        || {
+            state
+                .agents
+                .values()
+                .filter_map(|agent| agent.turn.as_ref())
+                .filter(|turn| turn.run_id == run.run_id)
+                .map(|turn| turn.invocations.len() as u64)
+                .sum()
+        },
+        |ledger| {
+            ledger
+                .work
+                .values()
+                .filter(|work| {
+                    work.kind == super::super::accounting::work::CostWorkKind::WorkspaceTool
+                })
+                .count() as u64
+        },
+    );
+    u64::from(run.limits.total_tools).saturating_sub(used)
+}
+
 pub(super) fn ensure(state: &SessionSnapshot) -> Result<(), CoreError> {
     if let Some(run) = &state.run {
         if let Some(error) = &run.resource_error {

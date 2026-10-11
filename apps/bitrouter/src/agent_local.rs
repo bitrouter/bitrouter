@@ -23,7 +23,7 @@ use bitrouter_orchestrator::turn::{
     ApprovalAnswer, CancelTurnRequest, SteeringReceipt, SteeringRequest, TurnReceipt, TurnRequest,
 };
 
-pub const CONTRACT_VERSION: u32 = 15;
+pub const CONTRACT_VERSION: u32 = 17;
 const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 const MAX_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -89,7 +89,11 @@ pub enum Operation {
     CreateThread {
         workspace: PathBuf,
         model: String,
+        #[serde(default)]
+        model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
         effort: Option<ReasoningEffort>,
+        #[serde(default)]
+        max_output_tokens: Option<u32>,
         #[serde(default)]
         read_only: bool,
         verification_command: Option<String>,
@@ -406,7 +410,9 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
         Operation::CreateThread {
             workspace,
             model,
+            model_mode,
             effort,
+            max_output_tokens,
             read_only,
             verification_command,
             idempotency_key,
@@ -418,9 +424,14 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                         caller,
                         workspace,
                         config: if read_only {
-                            AgentConfig::fixed(model, effort).read_only()
+                            AgentConfig::fixed(model, effort)
+                                .with_model_mode(model_mode)
+                                .with_output_reservation(max_output_tokens)
+                                .read_only()
                         } else {
                             AgentConfig::fixed(model, effort)
+                                .with_model_mode(model_mode)
+                                .with_output_reservation(max_output_tokens)
                         },
                         permission_profile: if read_only {
                             PermissionProfile::ReadOnly
@@ -619,9 +630,7 @@ impl ThreadClient {
     pub async fn create_and_start(
         &self,
         workspace: PathBuf,
-        model: String,
-        effort: Option<ReasoningEffort>,
-        read_only: bool,
+        config: AgentConfig,
         verification_command: Option<String>,
         prompt: String,
     ) -> Result<(ThreadSnapshot, TurnReceipt)> {
@@ -630,9 +639,11 @@ impl ThreadClient {
         let turn_key = format!("{request_key}:start");
         let create = || Operation::CreateThread {
             workspace: workspace.clone(),
-            model: model.clone(),
-            effort,
-            read_only,
+            model: config.model.clone(),
+            model_mode: config.model_mode,
+            effort: config.effort,
+            max_output_tokens: config.max_output_tokens,
+            read_only: config.tool_mode() == bitrouter_orchestrator::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
         };
@@ -1000,9 +1011,7 @@ mod tests {
         let (thread, turn) = client
             .create_and_start(
                 PathBuf::from("/fixture"),
-                "fixture-model".into(),
-                None,
-                true,
+                AgentConfig::fixed("fixture-model", None).read_only(),
                 None,
                 "original prompt".into(),
             )

@@ -151,6 +151,17 @@ impl ModelResolution {
 /// carrying an explicit policy binding.
 #[async_trait]
 pub trait ModelSelector: Send + Sync {
+    /// Freeze and validate named-policy inputs after entry admission and before
+    /// paid semantic inference. Selection must consume this same snapshot.
+    async fn prepare_selection(
+        &self,
+        _policy: &str,
+        _variant: Option<&str>,
+        _ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Select the model for a named policy and known Stage-0 variant.
     async fn select_variant(
         &self,
