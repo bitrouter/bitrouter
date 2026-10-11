@@ -307,3 +307,66 @@ fn is_reserved_user_id_recognises_synthesised_ids() {
     assert!(!db::is_reserved_user_id("alice"));
     assert!(!db::is_reserved_user_id("Local")); // case-sensitive on purpose
 }
+
+#[tokio::test]
+async fn context_revalidation_rejects_rebound_or_revoked_keys() -> anyhow::Result<()> {
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    db::upsert_user(&db, "owner").await?;
+    let key = keys::generate();
+    db::insert_api_key(
+        &db,
+        &NewApiKey {
+            id: "revalidation-key".into(),
+            key_hash: key.hash,
+            user_id: "owner".into(),
+            spend_limit_micro_usd: None,
+            rpm_limit: None,
+            policy_id: Some("original-policy".into()),
+        },
+    )
+    .await?;
+    let hook = AuthHook::new(db.clone());
+    let mut request = PipelineRequest::new("m", CallerContext::anonymous(), prompt());
+    request
+        .headers
+        .insert("authorization", format!("Bearer {}", key.secret).parse()?);
+    let mut context = PipelineContext::new(request);
+    assert!(matches!(
+        PreRequestHook::check(&hook, &mut context).await?,
+        HookDecision::Allow
+    ));
+    assert!(matches!(
+        hook.revalidate_context(&context).await?,
+        HookDecision::Allow
+    ));
+    api_keys::Entity::update_many()
+        .col_expr(
+            api_keys::Column::PolicyId,
+            Expr::value("replacement-policy"),
+        )
+        .filter(api_keys::Column::Id.eq("revalidation-key"))
+        .exec(&db)
+        .await?;
+    assert!(matches!(
+        hook.revalidate_context(&context).await?,
+        HookDecision::Deny(_)
+    ));
+    assert_eq!(
+        context
+            .get_event::<Authenticated>()
+            .and_then(|event| event.policy_id.as_deref()),
+        Some("original-policy")
+    );
+    api_keys::Entity::update_many()
+        .col_expr(api_keys::Column::PolicyId, Expr::value("original-policy"))
+        .col_expr(api_keys::Column::Active, Expr::value(false))
+        .filter(api_keys::Column::Id.eq("revalidation-key"))
+        .exec(&db)
+        .await?;
+    assert!(matches!(
+        hook.revalidate_context(&context).await?,
+        HookDecision::Deny(_)
+    ));
+    Ok(())
+}

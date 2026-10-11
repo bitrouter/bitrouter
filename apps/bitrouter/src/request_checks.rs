@@ -269,6 +269,7 @@ mod tests {
                 text: Some(TEXT.to_owned()),
             }],
             coverage: RequestCheckCoverage {
+                excluded_private_fragments: 0,
                 scope: RequestCheckCoverageScope::EntryRequestText,
                 text_bytes: TEXT.len() as u64,
                 text_fragments: 1,

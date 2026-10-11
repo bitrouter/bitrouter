@@ -48,6 +48,7 @@ async fn observe_handler_cancellation(
 
 fn target() -> RoutingTarget {
     RoutingTarget {
+        model_constraints: Default::default(),
         provider_name: "fixture".into(),
         service_id: "native-test".into(),
         api_protocol: ApiProtocol::Decisions,

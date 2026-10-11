@@ -272,6 +272,33 @@ impl RouteHook for CaptureTariffs {
         }
         Ok(())
     }
+
+    async fn revalidate_context(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
+        let snapshots = ctx.get_events::<TargetTariffSnapshot>();
+        for target in chain {
+            let key = PricingTargetKey::from_target(target);
+            let snapshot = snapshots
+                .iter()
+                .rev()
+                .find(|snapshot| snapshot.target == key)
+                .ok_or_else(|| {
+                    bitrouter_sdk::error::BitrouterError::bad_request(
+                        "rebuilt context has no admitted tariff for the selected route",
+                    )
+                })?;
+            if self.require_known && !snapshot.tariff.guarantees_known_price() {
+                return Err(bitrouter_sdk::error::BitrouterError::bad_request(
+                    "known-price coverage is unavailable for the selected route",
+                ));
+            }
+        }
+        // Context removal cannot refresh prices or change the admitted target.
+        Ok(())
+    }
 }
 
 fn stream_pricing(pricing: &ModelPricing) -> UsagePricing {

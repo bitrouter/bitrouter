@@ -35,6 +35,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         request_id: format!("r-{api_key}-{prompt}-{completion}"),
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
         target: Some(bitrouter_sdk::language_model::types::RoutingTarget {
+            model_constraints: Default::default(),
             provider_name: "openai".into(),
             service_id: "gpt-5".into(),
             api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,

@@ -35,6 +35,7 @@ fn routing_target() -> RoutingTarget {
         chat_supports_stream_options: None,
         chat_google_extensions: false,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -152,18 +153,17 @@ pub(super) async fn wait_for(
     turn_id: &str,
     status: TurnStatus,
 ) -> Result<TurnSnapshot, String> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(if cfg!(windows) { 10 } else { 3 }),
-        async {
-            loop {
-                let snapshot = service.read(turn_id).map_err(|error| error.to_string())?;
-                if snapshot.status == status || snapshot.status.terminal() {
-                    return Ok(snapshot);
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    // MCP cleanup alone allows five seconds; leave room for process startup
+    // and settlement on loaded CI hosts on every platform.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let snapshot = service.read(turn_id).map_err(|error| error.to_string())?;
+            if snapshot.status == status || snapshot.status.terminal() {
+                return Ok(snapshot);
             }
-        },
-    )
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
     .await
     .map_err(|error| error.to_string())?
 }

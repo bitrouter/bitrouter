@@ -56,6 +56,7 @@ mod tests {
                 text_bytes: fragments.iter().map(|text| text.len() as u64).sum(),
                 text_fragments: fragments.len() as u64,
                 excluded_media_fragments: 0,
+                excluded_private_fragments: 0,
                 status: RequestCheckCoverageStatus::CompleteWithinScope,
             },
         }

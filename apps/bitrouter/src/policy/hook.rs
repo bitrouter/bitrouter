@@ -43,16 +43,15 @@ impl PolicyHook {
     }
 }
 
-#[async_trait]
-impl PreRequestHook for PolicyHook {
-    async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+impl PolicyHook {
+    async fn evaluate(&self, ctx: &PipelineContext, model: &str) -> Result<HookDecision> {
         let policy_id = Self::policy_id(ctx);
         // No policy bound → no constraints (the combination is permissive).
         let ids: Vec<&str> = policy_id.as_deref().into_iter().collect();
         let effective = self.store.effective_for(&ids);
 
         // 1. model allow / deny
-        if let Err(violation) = effective.check_model(ctx.model()) {
+        if let Err(violation) = effective.check_model(model) {
             return Ok(HookDecision::Deny(DenyReason::Forbidden(
                 violation.to_string(),
             )));
@@ -116,5 +115,41 @@ impl PreRequestHook for PolicyHook {
         }
 
         Ok(HookDecision::Allow)
+    }
+}
+
+struct FrozenPolicyBinding {
+    model: String,
+    policy_id: Option<String>,
+}
+
+#[async_trait]
+impl PreRequestHook for PolicyHook {
+    async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        let binding = FrozenPolicyBinding {
+            model: ctx.model().into(),
+            policy_id: Self::policy_id(ctx),
+        };
+        let result = self.evaluate(ctx, &binding.model).await?;
+        if matches!(&result, HookDecision::Allow) {
+            ctx.insert_extension(Arc::new(binding));
+        }
+        Ok(result)
+    }
+
+    async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
+        let binding = ctx.extension::<FrozenPolicyBinding>().ok_or_else(|| {
+            bitrouter_sdk::BitrouterError::bad_request(
+                "policy revalidation lost its ingress binding",
+            )
+        })?;
+        if binding.policy_id != Self::policy_id(ctx) {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "policy binding changed after admission",
+            ));
+        }
+        // Stage 1 checks the normalized selector, not the later policy-selected
+        // model. Preserve that contract while rechecking live policy and spend.
+        self.evaluate(ctx, &binding.model).await
     }
 }

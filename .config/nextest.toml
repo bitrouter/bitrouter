@@ -11,6 +11,17 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# These cases serialize and validate full 32-agent checkpoint histories. Avoid
+# competing large fixtures on small CI hosts; each case still overlaps four
+# model futures and keeps the ordinary timeout and all product limits.
+# https://nexte.st/docs/configuration/test-groups/
+[test-groups]
+core-tree-pressure = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(capacity::tree_limits::maximum_tree_)'
+test-group = 'core-tree-pressure'
+
 # Explicitly ignored acceptance launches hundreds of sequential native sessions
 # through external ACP workers. Its publication and rollback workload exceeds
 # the ordinary suite deadline; each prompt and evaluation is separately bounded.

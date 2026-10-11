@@ -264,6 +264,9 @@ async fn serve_with_options(
         let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
             .ok_or_else(|| anyhow::anyhow!("daemon reload state is unavailable at startup"))?
             .server_instance_id;
+        let managed_core = crate::orchestrator_api::ManagedCoreApi::new(
+            app.clone(), assembled.db.clone(), server_instance_id.clone(),
+        );
         let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(reloader);
 
         let inference_listener = tokio::net::TcpListener::bind(&listen)
@@ -319,6 +322,7 @@ async fn serve_with_options(
             .map(bitrouter_telemetry::otel::http_layer::router_wrapper);
         let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
         let http = async move {
+            let managed_shutdown = managed_core.clone();
             let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
             let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
             let task_shutdown = tokio_util::sync::CancellationToken::new();
@@ -348,7 +352,7 @@ async fn serve_with_options(
                                 inference_listener,
                                 move |router| {
                                     workflow_wrapper(otel_wrapper(
-                                        router.merge(eval_router.clone()),
+                                        managed_core.wrap(router.merge(eval_router.clone())),
                                     ))
                                 },
                                 inference_shutdown,
@@ -359,7 +363,7 @@ async fn serve_with_options(
                         http_app
                             .serve_listener_with_router_wrapper_and_shutdown(
                                 inference_listener,
-                                move |router| otel_wrapper(router.merge(eval_router.clone())),
+                                move |router| otel_wrapper(managed_core.wrap(router.merge(eval_router.clone()))),
                                 inference_shutdown,
                             )
                             .await
@@ -424,6 +428,7 @@ async fn serve_with_options(
 
             tokio::select! {
                 result = &mut inference => {
+                    managed_shutdown.shutdown().await;
                     let _ = remote_shutdown_tx.send(());
                     task_shutdown.cancel();
                     remote.await?;
@@ -431,6 +436,7 @@ async fn serve_with_options(
                     result
                 }
                 result = &mut remote => {
+                    managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     task_shutdown.cancel();
                     inference.await?;
@@ -438,6 +444,7 @@ async fn serve_with_options(
                     result
                 }
                 result = &mut task => {
+                    managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
                     let (inference_result, remote_result) = tokio::join!(inference, remote);
@@ -446,6 +453,7 @@ async fn serve_with_options(
                     result
                 }
                 _ = &mut shutdown => {
+                    managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
                     task_shutdown.cancel();

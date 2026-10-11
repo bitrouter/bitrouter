@@ -246,6 +246,20 @@ fn hops(observed: &JudgeAttemptObserved) -> std::sync::MutexGuard<'_, Vec<Execut
 
 #[async_trait]
 impl PreRequestHook for JudgeCosts {
+    async fn revalidate_context(
+        &self,
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<HookDecision> {
+        if ctx.request_id().starts_with("brjudge_")
+            || ctx.get_event::<JudgeAttemptObserved>().is_some()
+        {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "reserved judge input cannot be reconstructed",
+            ));
+        }
+        Ok(HookDecision::Allow)
+    }
+
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
         self.admit(ctx).await.map_err(internal)?;
         Ok(HookDecision::Allow)

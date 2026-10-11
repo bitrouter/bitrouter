@@ -143,6 +143,11 @@ impl FusionAliasConfig {
 }
 
 impl crate::app::PromptTransform for FusionAliasConfig {
+    fn validate_context_rebuild(&self, _original: &Prompt, _rebuilt: &Prompt) -> crate::Result<()> {
+        // The alias only sets model and tool declarations, which stay frozen.
+        Ok(())
+    }
+
     fn apply(&self, prompt: &mut Prompt) {
         // Discard the matched flag; the server applies every transform and a
         // non-matching one is a no-op.

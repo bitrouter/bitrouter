@@ -11,6 +11,10 @@ use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
 use tracing::Instrument;
 
+use super::native_preparation::{
+    NativePreparationRuntime, NativePreparationWorkKind, observe_pipeline,
+    runtime as preparation_runtime,
+};
 use crate::error::{BitrouterError, Result};
 use crate::extension::request_check::{Decision, Input};
 use crate::language_model::context::PipelineContext;
@@ -18,6 +22,9 @@ use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
+};
+use crate::language_model::native::{
+    NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan, NativeRoute,
 };
 use crate::language_model::operations::{HookRegistration, OperationScope, applicable};
 use crate::language_model::request_checks::{
@@ -60,6 +67,9 @@ struct ResolvedRequestBinding {
     request_checks: Vec<RequestCheckBinding>,
     resolved_selector: String,
 }
+
+/// Immutable ingress checks also apply to a managed context reconstruction.
+struct FrozenRequestChecks(Vec<RequestCheckBinding>);
 
 struct PreparedEntry {
     ctx: PipelineContext,
@@ -189,6 +199,11 @@ pub(crate) struct PreparedPipelineResponse {
     pub(crate) delivery: DeliveryPermit,
     #[cfg(feature = "server")]
     pub(crate) model_id: String,
+}
+
+struct ControlledExecution {
+    result: ExecutionResult,
+    output_rejection: Option<BitrouterError>,
 }
 
 pub(crate) struct PreparedPipelineStream {
@@ -327,6 +342,11 @@ pub struct Pipeline {
     /// billing us for.
     pub(crate) detached_executions: tokio_util::task::TaskTracker,
     pub(crate) request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
+    pub(crate) native_private_context:
+        Option<Arc<dyn super::native_context::NativePrivateContextPolicy>>,
+    pub(crate) native_cost_estimator:
+        Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
+    pub(crate) native_cost_source: Option<Arc<dyn super::native_accounting::NativeCostSource>>,
     pub(crate) served_operations: OperationScope,
 }
 
@@ -531,13 +551,15 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<PreparedPipelineResponse> {
-        self.execute_detached_prepared_with_mode(req, true).await
+        self.execute_detached_prepared_with_mode(req, true, None)
+            .await
     }
 
     async fn execute_detached_prepared_with_mode(
         self: Arc<Self>,
         req: PipelineRequest,
         run_server_tools: bool,
+        control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
         let pipeline = Arc::clone(&self);
         // `tokio::spawn` does not propagate the current tracing span, so attach
@@ -547,7 +569,9 @@ impl Pipeline {
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         self.detached_executions.spawn(
             async move {
-                let result = pipeline.execute_prepared(req, run_server_tools).await;
+                let result = pipeline
+                    .execute_prepared(req, run_server_tools, control)
+                    .await;
                 // A dropped handler drops the prepared delivery permit here;
                 // upstream execution and settlement have nevertheless run on
                 // this shutdown-tracked task.
@@ -564,7 +588,7 @@ impl Pipeline {
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
-        let prepared = self.execute_prepared(req, true).await?;
+        let prepared = self.execute_prepared(req, true, None).await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
     }
@@ -578,7 +602,19 @@ impl Pipeline {
         // A cancelled agent may stop waiting for a model turn. The accepted
         // upstream request still needs to settle before its result is dropped.
         let prepared = Arc::clone(&self)
-            .execute_detached_prepared_with_mode(req, false)
+            .execute_detached_prepared_with_mode(req, false, None)
+            .await?;
+        prepared.delivery.deliver().await?;
+        Ok(prepared.response)
+    }
+
+    pub(crate) async fn execute_native_controlled(
+        self: Arc<Self>,
+        req: PipelineRequest,
+        control: Arc<dyn NativeExecutionControl>,
+    ) -> Result<PipelineResponse> {
+        let prepared = self
+            .execute_detached_prepared_with_mode(req, false, Some(control))
             .await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
@@ -588,12 +624,50 @@ impl Pipeline {
         &self,
         req: PipelineRequest,
         run_server_tools: bool,
+        control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
-        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, false).await?;
+        let PreparedEntry { mut ctx, chain } =
+            self.prepare_entry(req, false, control.clone()).await?;
+
+        if let Some(control) = &control {
+            ctx.insert_extension(Arc::new(super::native_work::NativeWorkRuntime::new(
+                control.clone(),
+            )));
+        }
+        let control = control.as_deref();
+
+        if control.is_some()
+            && let Some(tokens) = ctx.require_generation_prompt()?.params.max_tokens
+        {
+            ctx.insert_extension(Arc::new(
+                crate::language_model::native::NativeOutputReservation(tokens),
+            ));
+        }
+        let mut native_routes = if control.is_some() {
+            chain
+                .iter()
+                .map(|target| {
+                    let mut route = NativeRoute::from_target(target);
+                    route.output_token_limit_supported =
+                        self.executor.output_token_limit_support(target);
+                    route
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let admission = match control {
+            Some(control) => self
+                .admit_native_plan(&chain, &mut ctx, &mut native_routes, control)
+                .await
+                .map(Some),
+            None => Ok(None),
+        };
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
-        let exec_outcome = match (ctx.input(), &self.server_tool_loop) {
-            (PipelineInput::Generation(prompt), Some(server_loop)) if run_server_tools => {
+        let exec_outcome = match (admission, ctx.input(), &self.server_tool_loop) {
+            (Err(error), _, _) => Err(error),
+            (Ok(_), PipelineInput::Generation(prompt), Some(server_loop)) if run_server_tools => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream = PipelineUpstream {
                     pipeline: self,
@@ -603,28 +677,61 @@ impl Pipeline {
                 server_loop
                     .run_with_provenance(prompt, &tool_ctx, &upstream)
                     .await
-                    .map(|outcome| (outcome.result, outcome.provider_terminal_exposed))
+                    .map(|outcome| (outcome.result, outcome.provider_terminal_exposed, None))
             }
-            (PipelineInput::Generation(prompt), _) => self
-                .execute_with_fallback(&chain, ExecutionInput::Generation(prompt), &ctx)
+            (Ok(admission), PipelineInput::Generation(prompt), _) => self
+                .execute_with_fallback_controlled(
+                    &chain,
+                    prompt,
+                    &ctx,
+                    control
+                        .zip(admission.as_ref())
+                        .map(|(control, admission)| (control, native_routes.as_slice(), admission)),
+                )
                 .await
-                .map(|result| (result, true)),
-            (PipelineInput::Decisions(request), _) => self
+                .map(|outcome| (outcome.result, true, outcome.output_rejection)),
+            (Ok(_), PipelineInput::Decisions(request), _) => self
                 .execute_with_fallback(&chain, ExecutionInput::Decisions(request), &ctx)
                 .await
-                .map(|result| (result, true)),
+                .map(|result| ControlledExecution {
+                    result,
+                    output_rejection: None,
+                })
+                .map(|outcome| (outcome.result, true, outcome.output_rejection)),
         };
         match exec_outcome {
-            Ok((result, provider_terminal_exposed)) => {
+            Ok((result, provider_terminal_exposed, output_rejection)) => {
+                if let Some(error) = output_rejection {
+                    // The provider completed and may bill the entire result.
+                    // Preserve its original usage for settlement, but never
+                    // deliver rejected content or start a fallback attempt.
+                    ctx.execution_result = Some(result);
+                    self.run_settlement(&mut ctx, false, Some(error.clone()))
+                        .await;
+                    self.observe_after(Phase::Settlement, &ctx).await;
+                    self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                        .await;
+                    return Err(error);
+                }
+                // Managed execution retains terminal validity privately after
+                // removing the raw Responses ID from output and receipts.
+                let response_id_valid = ctx
+                    .extension::<super::native_context::NativePrivateContextRuntime>()
+                    .map_or_else(
+                        || {
+                            result
+                                .result
+                                .generation()
+                                .and_then(|result| result.response_id.as_deref())
+                                .is_some_and(|id| !id.is_empty())
+                        },
+                        |runtime| runtime.response_terminal_valid(),
+                    );
                 let native_responses_terminal_invalid = provider_terminal_exposed
                     && ctx.successful_target().is_some_and(|target| {
                         target.api_protocol == bitrouter_ai::types::ApiProtocol::Responses
                     })
-                    && (result
-                        .result
-                        .generation()
-                        .and_then(|result| result.response_id.as_deref())
-                        .is_none_or(str::is_empty)
+                    && (!response_id_valid
                         || !matches!(
                             result
                                 .result
@@ -653,11 +760,7 @@ impl Pipeline {
                     && ctx.successful_target().is_some_and(|target| {
                         target.api_protocol == bitrouter_ai::types::ApiProtocol::Responses
                     })
-                    && result
-                        .result
-                        .generation()
-                        .and_then(|result| result.response_id.as_deref())
-                        .is_some_and(|id| !id.is_empty())
+                    && response_id_valid
                     && matches!(
                         result
                             .result
@@ -728,6 +831,224 @@ impl Pipeline {
         })
     }
 
+    async fn admit_native_plan(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &mut PipelineContext,
+        routes: &mut [NativeRoute],
+        control: &dyn NativeExecutionControl,
+    ) -> Result<crate::language_model::native::NativePlanAdmission> {
+        use crate::language_model::native::{
+            NativeCountedRequests, NativeInputCount, NativeInputCountReport,
+        };
+        let prompt = ctx.require_generation_prompt()?;
+        let can_rebuild = ctx
+            .extension::<crate::language_model::context::ProviderContinuation>()
+            .is_none()
+            && ctx
+                .extension::<crate::language_model::context::SuppressProviderContinuation>()
+                .is_none()
+            && ["previous_response_id", "conversation"].iter().all(|key| {
+                prompt
+                    .params
+                    .extra
+                    .get(*key)
+                    .is_none_or(serde_json::Value::is_null)
+                    && prompt
+                        .params
+                        .supplemental_extra
+                        .get(*key)
+                        .is_none_or(serde_json::Value::is_null)
+            });
+        for rebuild_round in 0..=1 {
+            for (route, target) in routes.iter_mut().zip(chain) {
+                route.input_count = None;
+                route.continuation = self.executor.native_continuation(
+                    target,
+                    ctx.require_generation_prompt()?,
+                    ctx,
+                );
+                route.protocol_validation = self.executor.native_protocol_validation(
+                    target,
+                    ctx.require_generation_prompt()?,
+                    ctx,
+                );
+            }
+            let mut plan = NativePlan {
+                request_id: ctx.request_id().to_owned(),
+                original_model: ctx.original_model().to_owned(),
+                effective_model: ctx.model().to_owned(),
+                effort_source: ctx
+                    .require_generation_prompt()?
+                    .params
+                    .reasoning_effort_source,
+                prompt: ctx.require_generation_prompt()?.clone(),
+                routes: routes.to_vec(),
+                router: ctx.router_identity().cloned(),
+            };
+            for (index, target) in chain.iter().enumerate() {
+                if !routes[index].requires_input_count() {
+                    continue;
+                }
+                let route_index = u32::try_from(index)
+                    .map_err(|_| BitrouterError::bad_request("route index exhausted"))?;
+                let report_limit = super::native_auxiliary::limit(control, &plan.request_id)?;
+                control.before_input_count(&plan, route_index).await?;
+                let started = Instant::now();
+                let outcome = match self
+                    .executor
+                    .count_input_tokens(target, ctx.require_generation_prompt()?, ctx)
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    // Errors can contain parser body previews, native continuation
+                    // IDs or credentials from extensions. Persist categories only.
+                    Err(error) => NativeInputCount::Unavailable {
+                        reason: format!(
+                            "input_count_failed:{}:{}",
+                            error.error_code(),
+                            error.status()
+                        ),
+                    },
+                };
+                let mut report = NativeInputCountReport {
+                    request_id: plan.request_id.clone(),
+                    route_index,
+                    outcome,
+                    elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                    report_rejection: None,
+                };
+                super::native_auxiliary::count(&mut report, report_limit)?;
+                let outcome = report.outcome.clone();
+                let rejected = report.report_rejection.is_some();
+                control.after_input_count(report).await?;
+                if rejected {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        usage: None,
+                        message: super::native::NativeInputCountRejection::REASON.into(),
+                    });
+                }
+                routes[index].input_count = Some(outcome);
+            }
+            plan.routes = routes.to_vec();
+            let admission = match control.plan(plan.clone()).await {
+                Ok(admission) => admission,
+                Err(error) => {
+                    if rebuild_round == 0
+                        && can_rebuild
+                        && let Some(messages) = control.rebuild_context(&plan).await?
+                    {
+                        ctx.replace_managed_messages(messages)?;
+                        let checks = ctx
+                            .extension::<FrozenRequestChecks>()
+                            .map(|checks| checks.0.clone())
+                            .ok_or_else(|| {
+                                BitrouterError::internal(
+                                    "managed rebuild lost its request-check bindings",
+                                )
+                            })?;
+                        let _ = super::native_auxiliary::limit(control, ctx.request_id())?;
+                        control.before_context_validation(ctx.request_id()).await?;
+                        let started = Instant::now();
+                        let validated = async {
+                            control.check_context_validation(ctx.request_id()).await?;
+                            control
+                                .validate_context_rebuild(
+                                    &plan.prompt,
+                                    ctx.require_generation_prompt()?,
+                                    ctx.request_id(),
+                                )
+                                .await?;
+                            self.revalidate_native_context(chain, ctx, &checks, control)
+                                .await
+                        }
+                        .await;
+                        let elapsed = started.elapsed();
+                        let work_elapsed_ms = control
+                            .context_validation_gate_duration()
+                            .and_then(|gates| elapsed.checked_sub(gates))
+                            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64);
+                        control
+                            .after_context_validation(
+                                crate::language_model::native::NativeContextValidationReport {
+                                    request_id: ctx.request_id().to_owned(),
+                                    allowed: validated.is_ok(),
+                                    error_code: validated
+                                        .as_ref()
+                                        .err()
+                                        .map(|error| error.error_code().to_owned()),
+                                    elapsed_ms: elapsed.as_millis().min(u128::from(u64::MAX))
+                                        as u64,
+                                    work_elapsed_ms,
+                                },
+                            )
+                            .await?;
+                        validated?;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
+            admission.validate(routes.len())?;
+            if admission.route_indices.iter().any(|index| {
+                matches!(
+                    routes[*index as usize].protocol_validation,
+                    crate::language_model::native::NativeProtocolValidation::Rejected { .. }
+                )
+            }) {
+                return Err(BitrouterError::bad_request(
+                    "admitted route failed managed protocol validation",
+                ));
+            }
+            if admission.route_indices.iter().any(|index| {
+                let route = &routes[*index as usize];
+                route.constraints.input_token_counting.is_some()
+                    && !matches!(route.input_count, Some(NativeInputCount::Counted { .. }))
+            }) {
+                return Err(BitrouterError::bad_request(
+                    "admitted route has no successful configured input count",
+                ));
+            }
+            ctx.insert_extension(Arc::new(NativeCountedRequests::default()));
+            return Ok(admission);
+        }
+        Err(BitrouterError::bad_request(
+            "managed context rebuild exhausted",
+        ))
+    }
+
+    async fn revalidate_native_context(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &mut PipelineContext,
+        checks: &[RequestCheckBinding],
+        control: &dyn NativeExecutionControl,
+    ) -> Result<()> {
+        for hook in self
+            .pre_resolution_hooks
+            .iter()
+            .chain(&self.router_preparation_hooks)
+            .chain(&self.pre_request_hooks)
+            .filter(|hook| hook.supports(ctx.operation()))
+        {
+            control.check_context_validation(ctx.request_id()).await?;
+            match hook.revalidate_context(ctx).await? {
+                HookDecision::Allow => {}
+                HookDecision::Deny(reason) => return Err(reason.into()),
+            }
+        }
+        self.run_request_checks(ctx, checks, Some(control)).await?;
+        for hook in self
+            .route_hooks
+            .iter()
+            .filter(|hook| hook.supports(ctx.operation()))
+        {
+            control.check_context_validation(ctx.request_id()).await?;
+            hook.revalidate_context(chain, ctx).await?;
+        }
+        Ok(())
+    }
+
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
     /// failures are real errors), then the canonical `StreamPart` stream flows
     /// through the StreamHook stage; Settlement runs once the stream terminates.
@@ -771,7 +1092,7 @@ impl Pipeline {
         req: PipelineRequest,
         run_server_tools: bool,
     ) -> Result<PreparedPipelineStream> {
-        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true).await?;
+        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true, None).await?;
         let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
 
         // Route Stage 3 through the server-side tool loop when configured: the
@@ -969,7 +1290,15 @@ impl Pipeline {
 
     // ===== stage helpers =====
 
-    async fn prepare_entry(&self, req: PipelineRequest, streamed: bool) -> Result<PreparedEntry> {
+    async fn prepare_entry(
+        &self,
+        req: PipelineRequest,
+        streamed: bool,
+        control: Option<Arc<dyn NativeExecutionControl>>,
+    ) -> Result<PreparedEntry> {
+        let selection = control
+            .as_deref()
+            .map(NativeExecutionControl::model_selection);
         if !self.served_operations.contains(req.input.operation()) {
             return Err(BitrouterError::bad_request(
                 "pipeline does not serve this model operation",
@@ -990,9 +1319,27 @@ impl Pipeline {
             ));
         }
         let mut ctx = PipelineContext::new(req);
+        if let Some(control) = control {
+            if let Some(limit) = control.provider_response_byte_limit() {
+                ctx.insert_extension(Arc::new(super::native::NativeResponseByteLimit(limit)));
+            }
+            ctx.insert_extension(Arc::new(NativePreparationRuntime::new(control)));
+        }
+        if selection.is_some() {
+            ctx.insert_extension(Arc::new(super::native::NativeManagedRequest));
+            ctx.insert_extension(Arc::new(
+                super::native_context::NativePrivateContextRuntime::new(
+                    self.native_private_context.clone(),
+                ),
+            ));
+        }
         self.observe_start(&ctx).await;
 
-        match self.prepare_entry_stages(&mut ctx).await {
+        let prepared = self.prepare_entry_stages(&mut ctx, selection).await;
+        if let Some(runtime) = preparation_runtime(&ctx) {
+            runtime.finish();
+        }
+        match prepared {
             Ok(chain) => {
                 self.observe_after(Phase::Route, &ctx).await;
                 log_request_received(&ctx, chain.first(), streamed);
@@ -1015,11 +1362,24 @@ impl Pipeline {
     async fn prepare_entry_stages(
         &self,
         ctx: &mut PipelineContext,
+        selection: Option<NativeModelSelection>,
     ) -> std::result::Result<Vec<RoutingTarget>, EntryPreparationFailure> {
+        let fixed_selector =
+            (selection == Some(NativeModelSelection::Fixed)).then(|| ctx.model().to_owned());
+        let manual_effort = ctx
+            .generation_prompt()
+            .filter(|prompt| {
+                selection.is_some()
+                    && prompt.params.reasoning_effort_source == ReasoningEffortSource::Caller
+            })
+            .and_then(|prompt| prompt.params.reasoning_effort);
         // Local auth/session/continuation normalization must finish before any
         // configured checker can cause external egress.
         self.run_pre_resolution(ctx)
             .await
+            .map_err(EntryPreparationFailure::pre_request)?;
+
+        super::native_context::validate_managed_history(ctx)
             .map_err(EntryPreparationFailure::pre_request)?;
 
         // Freeze the ingress router identity and checker bindings before an
@@ -1062,29 +1422,38 @@ impl Pipeline {
                 .map_err(EntryPreparationFailure::pre_request)?;
         }
 
-        self.run_request_checks(ctx, &binding.request_checks)
+        if fixed_selector
+            .as_deref()
+            .is_some_and(|model| model != ctx.model())
+        {
+            return Err(EntryPreparationFailure::route(BitrouterError::bad_request(
+                "managed fixed model was changed during preparation",
+            )));
+        }
+        if let Some(effort) = manual_effort {
+            ctx.preserve_caller_effort(effort);
+        }
+        self.run_request_checks(ctx, &binding.request_checks, None)
             .await
             .map_err(EntryPreparationFailure::request_check)?;
+        ctx.insert_extension(Arc::new(FrozenRequestChecks(
+            binding.request_checks.clone(),
+        )));
         self.observe_after(Phase::PreRequest, ctx).await;
 
-        self.resolve_route(ctx, binding)
+        self.resolve_route(ctx, binding, selection, manual_effort)
             .await
             .map_err(EntryPreparationFailure::route)
     }
 
     async fn run_pre_resolution(&self, ctx: &mut PipelineContext) -> Result<()> {
-        let operation = ctx.operation();
-        for hook in self
-            .pre_resolution_hooks
-            .iter()
-            .filter(|hook| hook.supports(operation))
-        {
-            match hook.check(ctx).await? {
-                HookDecision::Allow => continue,
-                HookDecision::Deny(reason) => return Err(reason.into()),
-            }
-        }
-        Ok(())
+        self.run_admitted_hooks(
+            ctx,
+            &self.pre_resolution_hooks,
+            None,
+            NativePreparationWorkKind::PreResolutionHook,
+        )
+        .await
     }
 
     async fn run_pre_request(
@@ -1092,13 +1461,23 @@ impl Pipeline {
         ctx: &mut PipelineContext,
         checked_selector: Option<&str>,
     ) -> Result<()> {
-        self.run_admitted_hooks(ctx, &self.pre_request_hooks, checked_selector)
-            .await
+        self.run_admitted_hooks(
+            ctx,
+            &self.pre_request_hooks,
+            checked_selector,
+            NativePreparationWorkKind::PreRequestHook,
+        )
+        .await
     }
 
     async fn run_router_preparation(&self, ctx: &mut PipelineContext) -> Result<()> {
-        self.run_admitted_hooks(ctx, &self.router_preparation_hooks, None)
-            .await
+        self.run_admitted_hooks(
+            ctx,
+            &self.router_preparation_hooks,
+            None,
+            NativePreparationWorkKind::RouterPreparationHook,
+        )
+        .await
     }
 
     async fn run_admitted_hooks(
@@ -1106,27 +1485,44 @@ impl Pipeline {
         ctx: &mut PipelineContext,
         hooks: &[HookRegistration<dyn PreRequestHook>],
         checked_selector: Option<&str>,
+        kind: NativePreparationWorkKind,
     ) -> Result<()> {
         let operation = ctx.operation();
         for hook in hooks.iter().filter(|hook| hook.supports(operation)) {
-            let decision = hook.check(ctx).await?;
-            match decision {
-                HookDecision::Allow => {
-                    if checked_selector.is_some_and(|selector| ctx.model() != selector) {
-                        return Err(BitrouterError::internal(
-                            "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
-                        ));
+            observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                kind,
+                async {
+                    // Persist the complete verdict before acknowledging the
+                    // callback. Otherwise a lost ACK can erase a known Deny.
+                    match hook.check(ctx).await? {
+                        HookDecision::Allow => {
+                            if checked_selector.is_some_and(|selector| ctx.model() != selector) {
+                                return Err(BitrouterError::internal(
+                                    "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
+                                ));
+                            }
+                            Ok(())
+                        }
+                        HookDecision::Deny(reason) => Err(reason.into()),
                     }
-                }
-                HookDecision::Deny(reason) => return Err(reason.into()),
-            }
+                },
+            )
+            .await?;
         }
         Ok(())
     }
 
     async fn resolve_binding(&self, ctx: &mut PipelineContext) -> Result<ResolvedRequestBinding> {
         let resolved_selector = ctx.model().to_owned();
-        let mut resolution = self.routing_table.resolve_model(ctx.model()).await?;
+        let mut resolution = observe_pipeline(
+            preparation_runtime(ctx),
+            ctx.request_id().into(),
+            NativePreparationWorkKind::RouterLookup,
+            self.routing_table.resolve_model(ctx.model()),
+        )
+        .await?;
         if resolution.request_checks.len() > MAX_REQUEST_CHECKS_PER_ROUTER {
             return Err(BitrouterError::internal(
                 "named router exceeds the maximum of 16 request checks",
@@ -1158,7 +1554,13 @@ impl Pipeline {
         mut binding: ResolvedRequestBinding,
     ) -> Result<ResolvedRequestBinding> {
         if ctx.model() != binding.resolved_selector {
-            let effective = self.routing_table.resolve_model(ctx.model()).await?;
+            let effective = observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                NativePreparationWorkKind::RouterLookup,
+                self.routing_table.resolve_model(ctx.model()),
+            )
+            .await?;
             if binding.request_checks.is_empty() && !effective.request_checks.is_empty() {
                 return Err(BitrouterError::internal(
                     "a selector rewrite cannot introduce request checks after the ingress binding is frozen",
@@ -1213,9 +1615,20 @@ impl Pipeline {
         &self,
         ctx: &mut PipelineContext,
         bindings: &[RequestCheckBinding],
+        validation: Option<&dyn NativeExecutionControl>,
     ) -> Result<()> {
+        super::native_context::validate_managed_history(ctx)?;
         if bindings.is_empty() {
             return Ok(());
+        }
+        for content in ctx
+            .generation_prompt()
+            .into_iter()
+            .flat_map(|prompt| &prompt.messages)
+            .flat_map(|message| &message.content)
+        {
+            bitrouter_ai::protocol::responses::validate_reasoning_projection(content)
+                .map_err(BitrouterError::bad_request)?;
         }
         let runner = self.request_checker_runner.as_ref();
         ctx.router_identity().ok_or_else(|| {
@@ -1227,6 +1640,9 @@ impl Pipeline {
             ));
         };
         for binding in bindings {
+            if let Some(control) = validation {
+                control.check_context_validation(ctx.request_id()).await?;
+            }
             let projection = match ctx.input() {
                 PipelineInput::Generation(prompt) => {
                     content_fragments(prompt, binding.max_input_bytes)
@@ -1238,42 +1654,51 @@ impl Pipeline {
             let (content, coverage) = projection.map_err(|_| BitrouterError::BadRequest {
                 message: "request exceeds the configured checker input limit".to_string(),
             })?;
-            let result = runner
-                .check(
-                    binding.clone(),
-                    Input {
-                        operation: ctx.operation(),
-                        content,
-                        coverage,
-                    },
-                )
-                .await
-                .and_then(|result| {
-                    result.decision.validate().map_err(|_| CheckerFailure {
-                        kind: CheckerFailureKind::InvalidResponse,
-                        detail: Some("invalid_decision".to_owned()),
-                    })?;
-                    Ok(result)
-                });
-            match result {
-                Ok(CheckerResult {
-                    decision: Decision::Allow,
-                    revision: _,
-                }) => {}
-                Ok(CheckerResult {
-                    decision: Decision::Deny { reason_code: _ },
-                    revision: _,
-                }) => {
-                    return Err(BitrouterError::Forbidden(
-                        "request denied by configured checker".to_string(),
-                    ));
-                }
-                Err(_) => {
-                    return Err(BitrouterError::internal(
-                        "configured request checker failed closed",
-                    ));
-                }
-            }
+            observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                NativePreparationWorkKind::RequestCheck,
+                async {
+                    let result = runner
+                        .check(
+                            binding.clone(),
+                            Input {
+                                operation: ctx.operation(),
+                                content,
+                                coverage,
+                            },
+                        )
+                        .await
+                        .and_then(|result| {
+                            result.decision.validate().map_err(|_| CheckerFailure {
+                                kind: CheckerFailureKind::InvalidResponse,
+                                detail: Some("invalid_decision".to_owned()),
+                            })?;
+                            Ok(result)
+                        });
+                    match result {
+                        Ok(CheckerResult {
+                            decision: Decision::Allow,
+                            revision: _,
+                        }) => {}
+                        Ok(CheckerResult {
+                            decision: Decision::Deny { reason_code: _ },
+                            revision: _,
+                        }) => {
+                            return Err(BitrouterError::Forbidden(
+                                "request denied by configured checker".to_string(),
+                            ));
+                        }
+                        Err(_) => {
+                            return Err(BitrouterError::internal(
+                                "configured request checker failed closed",
+                            ));
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1352,6 +1777,8 @@ impl Pipeline {
         &self,
         ctx: &mut PipelineContext,
         binding: ResolvedRequestBinding,
+        selection: Option<NativeModelSelection>,
+        manual_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     ) -> Result<Vec<RoutingTarget>> {
         // Binding/default resolution already ran before local and external
         // request checks. Effective model selection remains here so existing
@@ -1363,22 +1790,32 @@ impl Pipeline {
         }
         let resolution = binding.resolution;
         ctx.set_model(resolution.clean_model);
-        if let Some(policy) = resolution.policy.as_deref() {
+        if selection != Some(NativeModelSelection::Fixed)
+            && let Some(policy) = resolution.policy.as_deref()
+        {
             let operation = ctx.operation();
             for selector in self
                 .model_selectors
                 .iter()
                 .filter(|hook| hook.supports(operation))
             {
-                selector
-                    .select_variant(policy, resolution.variant.as_deref(), ctx)
-                    .await?;
+                observe_pipeline(
+                    preparation_runtime(ctx),
+                    ctx.request_id().into(),
+                    NativePreparationWorkKind::ModelSelection,
+                    selector.select_variant(policy, resolution.variant.as_deref(), ctx),
+                )
+                .await?;
             }
         }
 
-        // Restrict the chain to providers that advertise every capability this
-        // request actually uses (e.g. structured outputs). Empty for plain
-        // requests, so those route unchanged.
+        if let Some(effort) = manual_effort {
+            ctx.preserve_caller_effort(effort);
+        }
+
+        // Supply actual prompt requirements to the shared routing table. The
+        // configured catalog carries positive observations; omitted declarations
+        // alone do not establish incompatibility or remove a provider.
         let mut prefs = resolution.prefs;
         prefs.require_capabilities = ctx
             .generation_prompt()
@@ -1388,17 +1825,70 @@ impl Pipeline {
         // Carry the inbound protocol so the table can prefer a native,
         // same-protocol upstream for each chosen target.
         prefs.inbound_protocol = ctx.inbound_protocol();
-        let mut chain = self
-            .routing_table
-            .route_resolved(ctx.model(), &prefs, ctx.caller())
-            .await?;
+        let mut chain = observe_pipeline(
+            preparation_runtime(ctx),
+            ctx.request_id().into(),
+            NativePreparationWorkKind::RouterLookup,
+            self.routing_table
+                .route_resolved(ctx.model(), &prefs, ctx.caller()),
+        )
+        .await?;
+        let fixed_routes = (selection == Some(NativeModelSelection::Fixed)).then(|| {
+            chain
+                .iter()
+                .map(|target| (target.provider_name.clone(), target.service_id.clone()))
+                .collect::<Vec<_>>()
+        });
+        let selected_model = ctx.model().to_owned();
         let operation = ctx.operation();
         for hook in self
             .route_hooks
             .iter()
             .filter(|hook| hook.supports(operation))
         {
-            hook.resolve(&mut chain, ctx).await?;
+            observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                NativePreparationWorkKind::RouteHook,
+                hook.resolve(&mut chain, ctx),
+            )
+            .await?;
+        }
+        if selection.is_some()
+            && ctx
+                .extension::<crate::language_model::context::ProviderContinuation>()
+                .is_some_and(|continuation| {
+                    !continuation.admits_effort(
+                        ctx.generation_prompt()
+                            .and_then(|prompt| prompt.params.reasoning_effort),
+                    )
+                })
+            && ctx
+                .extension::<crate::language_model::context::SuppressProviderContinuation>()
+                .is_none()
+        {
+            return Err(BitrouterError::bad_request(
+                "managed effort differs from the authoritative provider continuation or its constraint is unknown",
+            ));
+        }
+        if (selection == Some(NativeModelSelection::Fixed) && ctx.model() != selected_model)
+            || fixed_routes.is_some_and(|routes| {
+                chain.iter().any(|target| {
+                    !routes.contains(&(target.provider_name.clone(), target.service_id.clone()))
+                })
+            })
+            || manual_effort.is_some_and(|effort| {
+                ctx.generation_prompt()
+                    .and_then(|prompt| prompt.params.reasoning_effort)
+                    != Some(effort)
+            })
+        {
+            return Err(BitrouterError::bad_request(
+                "a route hook changed a managed manual model or effort constraint",
+            ));
+        }
+        if let Some(effort) = manual_effort {
+            ctx.preserve_caller_effort(effort);
         }
         chain.retain(|target| target.api_protocol.operation() == ctx.operation());
         if let Some(prompt) = ctx.generation_prompt() {
@@ -1535,6 +2025,282 @@ impl Pipeline {
         Err(aggregate_fallback_errors(errors))
     }
 
+    async fn execute_with_fallback_controlled(
+        &self,
+        chain: &[RoutingTarget],
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        control: Option<(
+            &dyn NativeExecutionControl,
+            &[NativeRoute],
+            &crate::language_model::native::NativePlanAdmission,
+        )>,
+    ) -> Result<ControlledExecution> {
+        let mut errors = Vec::new();
+        let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
+        let mut dispatched = 0;
+        for (attempt_index, target) in chain.iter().enumerate() {
+            let index = u32::try_from(attempt_index)
+                .map_err(|_| BitrouterError::internal("provider attempt index exhausted"))?;
+            if control.is_some_and(|(_, _, admission)| !admission.route_indices.contains(&index)) {
+                continue;
+            }
+            if !self
+                .admit_candidate(target, prompt, false, ctx, &mut excluded)
+                .await?
+            {
+                continue;
+            }
+            let attempt_control = match control {
+                Some((control, routes, _)) => Some((
+                    control,
+                    routes.get(attempt_index).ok_or_else(|| {
+                        BitrouterError::internal("managed route snapshot missing")
+                    })?,
+                )),
+                None => None,
+            };
+            if let Some((_, route)) = attempt_control
+                && let Some(counted) =
+                    ctx.extension::<crate::language_model::native::NativeCountedRequests>()
+            {
+                counted.select(route.input_count.as_ref())?;
+            }
+            let report_limit = match attempt_control {
+                Some((control, route)) => {
+                    let limit = control.attempt_report_byte_limit(ctx.request_id(), route)?;
+                    if let Some(limit) = limit
+                        && limit
+                            < NativeAttemptReport::rejection_byte_reserve(ctx.request_id(), route)?
+                    {
+                        return Err(BitrouterError::bad_request(
+                            "attempt report limit cannot hold rejection evidence",
+                        ));
+                    }
+                    limit
+                }
+                None => None,
+            };
+            self.wait_before_fallback(dispatched).await;
+            dispatched += 1;
+            self.observe_hop_start(ctx, target).await;
+            if let Some((control, _)) = attempt_control
+                && let Err(error) = control.before_attempt(ctx.request_id(), index).await
+            {
+                self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
+                    .await;
+                return Err(error);
+            }
+            let private_context =
+                ctx.extension::<super::native_context::NativePrivateContextRuntime>();
+            let work = ctx.extension::<super::native_work::NativeWorkRuntime>();
+            if let Some(runtime) = &work {
+                runtime.begin_attempt(index)?;
+            }
+            if let Some(runtime) = &private_context {
+                runtime.begin_attempt();
+            }
+            let started = Instant::now();
+            let mut outcome = match attempt_control {
+                Some((control, _)) => tokio::select! {
+                    // A prior cancellation must not poll a new executor future.
+                    // Accepted work may still have unknown provider-side usage.
+                    biased;
+                    _ = control.provider_cancelled() => Err(BitrouterError::internal(
+                        "managed provider execution cancelled by durable authority",
+                    )),
+                    outcome = self.executor.execute(target, prompt, ctx) => outcome,
+                },
+                None => self.executor.execute(target, prompt, ctx).await,
+            };
+            outcome = outcome.and_then(|result| {
+                if result.result.generation().is_none() {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: "executor result operation mismatch".into(),
+                        usage: None,
+                    });
+                }
+                Ok(result)
+            });
+            let output_limit =
+                attempt_control.and_then(|(control, _)| control.canonical_output_byte_limit());
+            // Count without allocating an encoded copy, before private-output
+            // sealing or durable-report cloning. Check again after sealing,
+            // since trusted policy metadata may grow the canonical result.
+            let mut output_rejected = output_limit.is_some_and(|limit| {
+                outcome.as_ref().is_ok_and(|result| {
+                    result
+                        .result
+                        .generation()
+                        .is_none_or(|result| !super::native_output::fits(result, limit))
+                })
+            });
+            if !output_rejected
+                && let (Some(runtime), Ok(result)) = (&private_context, &mut outcome)
+                && let Some(generation) = result.result.generation_mut()
+            {
+                runtime.seal_output(ctx, target, generation);
+            }
+            output_rejected |= output_limit.is_some_and(|limit| {
+                outcome.as_ref().is_ok_and(|result| {
+                    result
+                        .result
+                        .generation()
+                        .is_none_or(|result| !super::native_output::fits(result, limit))
+                })
+            });
+            if let Some(runtime) = &work {
+                runtime.flush().await;
+            }
+            let mut report_rejected = false;
+            if let Some((control, route)) = attempt_control {
+                let mut report = NativeAttemptReport {
+                    request_id: ctx.request_id().to_owned(),
+                    attempt_index: index,
+                    route: route.clone(),
+                    actual_provider: outcome
+                        .as_ref()
+                        .ok()
+                        .map(|result| result.provider_id.clone()),
+                    actual_model: outcome.as_ref().ok().map(|result| result.model_id.clone()),
+                    // Move the original through the estimator. Only admitted
+                    // output is cloned for the durable callback below.
+                    result: outcome
+                        .as_mut()
+                        .ok()
+                        .and_then(|result| result.result.generation_mut())
+                        .map(|result| {
+                            std::mem::replace(result, super::native_output::empty_result())
+                        }),
+                    output_rejection: None,
+                    report_rejection: None,
+                    error: outcome.as_ref().err().map(ToString::to_string),
+                    elapsed_ms: super::timing::duration_millis(
+                        work.as_ref()
+                            .map(|runtime| runtime.work_duration(started.elapsed()))
+                            .unwrap_or_else(|| started.elapsed()),
+                    ),
+                    token_cost: Default::default(),
+                    private_context: private_context
+                        .as_ref()
+                        .map(|runtime| runtime.observation())
+                        .unwrap_or_default(),
+                    continuation: private_context
+                        .as_ref()
+                        .map(|runtime| runtime.continuation_observation())
+                        .unwrap_or_default(),
+                    cache: Default::default(),
+                };
+                report.cache = super::native_accounting::NativeCacheObservation::capture(
+                    &route.protocol,
+                    report
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.usage.as_ref()),
+                );
+                if let Some(estimator) = &self.native_cost_estimator {
+                    report.token_cost = estimator.estimate_for_attempt(&report, ctx, target);
+                }
+                if let Some(result) = report.result.take() {
+                    if output_rejected && let Some(limit) = output_limit {
+                        report.output_rejection =
+                            Some(super::native_output::rejection(&result, limit));
+                        report.error =
+                            Some("canonical model output exceeds its admitted byte limit".into());
+                    } else {
+                        report.result = Some(result.clone());
+                    }
+                    if let Ok(execution) = &mut outcome {
+                        execution.result = result.into();
+                    }
+                }
+                if let Some(limit) = report_limit {
+                    match super::native_report::admit(&mut report, limit) {
+                        Ok(rejected) => report_rejected = rejected,
+                        Err(error) => {
+                            // Even an internal projection failure cannot discard
+                            // a successful executor's original billing evidence.
+                            return match outcome {
+                                Ok(result) => Ok(ControlledExecution {
+                                    result,
+                                    output_rejection: Some(error),
+                                }),
+                                Err(_) => Err(error),
+                            };
+                        }
+                    }
+                }
+                control.after_attempt(report).await;
+            }
+            match &outcome {
+                Ok(result) => {
+                    self.observe_hop_end(ctx, target, HopOutcome::Generated(result))
+                        .await;
+                }
+                Err(e) => {
+                    self.observe_hop_end(ctx, target, HopOutcome::Failed(e))
+                        .await;
+                }
+            }
+            match outcome {
+                Ok(result) => {
+                    if output_rejected || report_rejected {
+                        // Do not let a fallible success hook discard the
+                        // original billed result before rejection settlement.
+                        ctx.set_successful_target(target.clone());
+                        return Ok(ControlledExecution {
+                            result,
+                            output_rejection: Some(BitrouterError::UpstreamInvalidResponse {
+                                usage: None,
+                                message: if report_rejected {
+                                    "attempt report metadata rejected by durable admission"
+                                } else {
+                                    "canonical model output exceeds its admitted byte limit"
+                                }
+                                .into(),
+                            }),
+                        });
+                    }
+                    for hook in self
+                        .execution_hooks
+                        .iter()
+                        .filter(|hook| hook.supports(ctx.operation()))
+                    {
+                        hook.on_success(ctx, &result).await?;
+                    }
+                    ctx.set_successful_target(target.clone());
+                    return Ok(ControlledExecution {
+                        result,
+                        output_rejection: None,
+                    });
+                }
+                Err(_) if report_rejected => {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        usage: None,
+                        message: "attempt report metadata rejected by durable admission".into(),
+                    });
+                }
+                Err(e) => match self.classify_failure(ctx, &e, target).await {
+                    FallbackDecision::TryNext => {
+                        tracing::warn!(
+                            provider = %target.provider_name,
+                            model = %target.service_id,
+                            error = %e,
+                            "upstream route candidate failed"
+                        );
+                        errors.push(e);
+                        continue;
+                    }
+                    FallbackDecision::Fail(e) => return Err(e),
+                },
+            }
+        }
+        if errors.is_empty() && !excluded.issues.is_empty() {
+            return Err(BitrouterError::Incompatible { report: excluded });
+        }
+        Err(aggregate_fallback_errors(errors))
+    }
+
     async fn execute_stream_with_fallback(
         &self,
         chain: &[RoutingTarget],
@@ -1622,13 +2388,18 @@ impl Pipeline {
         ctx: &PipelineContext,
         excluded: &mut bitrouter_ai::conversion::ConversionReport,
     ) -> Result<bool> {
-        let assessment = self
-            .executor
-            .preflight(target, prompt, stream)
-            .and_then(|report| {
-                report.require_admitted()?;
-                Ok(report)
-            });
+        let assessment = if ctx
+            .extension::<super::native::NativeManagedRequest>()
+            .is_some()
+        {
+            self.executor.preflight_managed(target, prompt, stream, ctx)
+        } else {
+            self.executor.preflight(target, prompt, stream)
+        }
+        .and_then(|report| {
+            report.require_admitted()?;
+            Ok(report)
+        });
         match assessment {
             Ok(report) => {
                 if !report.admitted.is_empty() {
@@ -2008,6 +2779,7 @@ mod policy_effort_target_tests {
                 levels,
                 default: None,
             }),
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,

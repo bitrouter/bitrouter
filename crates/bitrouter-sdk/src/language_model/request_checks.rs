@@ -114,16 +114,22 @@ struct ContentProjection {
     text_bytes: u64,
     text_fragments: u64,
     excluded_media_fragments: u64,
+    excluded_private_fragments: u64,
     max_input_bytes: u64,
 }
 
 impl ContentProjection {
-    fn new(excluded_media_fragments: u64, max_input_bytes: u64) -> Self {
+    fn new(
+        excluded_media_fragments: u64,
+        excluded_private_fragments: u64,
+        max_input_bytes: u64,
+    ) -> Self {
         Self {
             fragments: Vec::new(),
             text_bytes: 0,
             text_fragments: 0,
             excluded_media_fragments,
+            excluded_private_fragments,
             max_input_bytes,
         }
     }
@@ -205,6 +211,7 @@ impl ContentProjection {
             text_bytes: self.text_bytes,
             text_fragments: self.text_fragments,
             excluded_media_fragments: self.excluded_media_fragments,
+            excluded_private_fragments: self.excluded_private_fragments,
             status,
         }
     }
@@ -257,13 +264,26 @@ pub(crate) fn content_fragments(
     max_input_bytes: u64,
 ) -> Result<(Vec<ContentFragment>, RequestCheckCoverage), RequestCheckCoverage> {
     let excluded_media_fragments = count_excluded_media(prompt);
-    let mut projection = ContentProjection::new(excluded_media_fragments, max_input_bytes);
+    let excluded_private_fragments = prompt
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter(|content| super::native_context::has_opaque_payload(content))
+        .count() as u64;
+    let mut projection = ContentProjection::new(
+        excluded_media_fragments,
+        excluded_private_fragments,
+        max_input_bytes,
+    );
     if let Some(system) = prompt.system.as_ref() {
         projection.push(ContentRole::System, ContentFragmentKind::Text, system)?;
     }
     for message in &prompt.messages {
         let role = ContentRole::from(message.role);
         for content in &message.content {
+            if super::native_context::is_opaque_reasoning(content) {
+                continue;
+            }
             match content {
                 Content::Text { text, .. } => {
                     projection.push(role, ContentFragmentKind::Text, text)?
@@ -328,7 +348,7 @@ pub(crate) fn decision_content_fragments(
     request: &DecisionRequest,
     max_input_bytes: u64,
 ) -> Result<(Vec<ContentFragment>, RequestCheckCoverage), RequestCheckCoverage> {
-    let mut projection = ContentProjection::new(request.image_count(), max_input_bytes);
+    let mut projection = ContentProjection::new(request.image_count(), 0, max_input_bytes);
     let mut failure = None;
     request.visit_text(|kind, _, text| {
         if failure.is_some() {

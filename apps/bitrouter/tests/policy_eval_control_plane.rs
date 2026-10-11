@@ -330,6 +330,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
                 chat_supports_stream_options: None,
                 chat_google_extensions: false,
                 reasoning_effort: None,
+                model_constraints: Default::default(),
                 account_label: None,
                 api_key_override: None,
                 api_base_override: None,

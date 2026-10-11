@@ -157,14 +157,13 @@ impl CodeWire {
                 SessionEventKind::Update { update } => {
                     self.events.push_back(WireEvent::Update(update))
                 }
-                SessionEventKind::Permission { permission } => {
+                SessionEventKind::Permission { permission }
                     if self
                         .pending
                         .insert(permission.permission_id.clone(), permission.clone())
-                        .is_none()
-                    {
-                        self.events.push_back(WireEvent::Permission(permission));
-                    }
+                        .is_none() =>
+                {
+                    self.events.push_back(WireEvent::Permission(permission));
                 }
                 SessionEventKind::PermissionResolved { permission_id, .. } => {
                     self.pending.remove(&permission_id);

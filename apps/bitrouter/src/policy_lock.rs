@@ -3067,6 +3067,19 @@ pub(crate) struct PredictiveSingleTargetRouteHook;
 
 #[async_trait::async_trait]
 impl RouteHook for PredictiveSingleTargetRouteHook {
+    async fn revalidate_context(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
+        if ctx.extension::<PredictiveSingleTargetDispatch>().is_some() && chain.len() != 1 {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "predictive dispatch lost its single-target binding",
+            ));
+        }
+        Ok(())
+    }
+
     async fn resolve(
         &self,
         chain: &mut Vec<RoutingTarget>,

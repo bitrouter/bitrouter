@@ -80,6 +80,16 @@ impl From<DenyReason> for BitrouterError {
 pub trait PreRequestHook: Send + Sync {
     /// Inspect the request and either allow it or deny it.
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision>;
+
+    /// Recheck a managed request after authorized history removal, with its
+    /// caller, metadata, model and parameters frozen. This must not register a
+    /// new request, select a model, or execute model/tool work. Live permission
+    /// reads are allowed. The default rejects rather than reusing an old Allow.
+    async fn revalidate_context(&self, _ctx: &PipelineContext) -> Result<HookDecision> {
+        Err(BitrouterError::bad_request(
+            "preparation hook has no context revalidation contract",
+        ))
+    }
 }
 
 /// Stage 2 — route resolution. Each hook may rewrite the whole fallback chain
@@ -103,6 +113,17 @@ pub trait RouteHook: Send + Sync {
         _ctx: &mut PipelineContext,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Revalidate the frozen chain without changing admission or executing work.
+    async fn revalidate_context(
+        &self,
+        _chain: &[RoutingTarget],
+        _ctx: &PipelineContext,
+    ) -> Result<()> {
+        Err(BitrouterError::bad_request(
+            "route hook has no context revalidation contract",
+        ))
     }
 }
 

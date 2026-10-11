@@ -14,7 +14,18 @@ async fn launch_background(
         "--json",
     ]);
     command.args(extra);
-    let output = tokio::time::timeout(PTY_TIMEOUT, command.output()).await??;
+    let output = tokio::time::timeout(PTY_TIMEOUT, command.output())
+        .await
+        .with_context(|| {
+            let log = std::fs::read_to_string(mock._directory.path().join("bitrouter.log"))
+                .unwrap_or_else(|error| format!("daemon log unavailable: {error}"));
+            let mut tail = log.lines().rev().take(25).collect::<Vec<_>>();
+            tail.reverse();
+            format!(
+                "background CLI did not exit; daemon log tail:\n{}",
+                tail.join("\n")
+            )
+        })??;
     ensure!(
         output.status.success(),
         "background launch failed: {}",
@@ -34,20 +45,27 @@ async fn wait_for_run(
     run_id: &str,
     ready: impl Fn(&bitrouter::supervisor::RunSnapshot) -> bool,
 ) -> Result<bitrouter::supervisor::RunSnapshot> {
+    let mut last_run = None;
     tokio::time::timeout(PTY_TIMEOUT, async {
         loop {
             if let Some(run) = mock
                 .supervised_runs()
                 .await?
                 .into_iter()
-                .find(|run| run.run_id == run_id && ready(run))
+                .find(|run| run.run_id == run_id)
             {
-                return Ok(run);
+                if ready(&run) {
+                    return Ok(run);
+                }
+                last_run = Some(run);
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
-    .await?
+    .await
+    .with_context(|| {
+        format!("background run {run_id} did not become ready; last observed state: {last_run:?}")
+    })?
 }
 
 fn selected_option(outcome: &serde_json::Value) -> Option<&str> {

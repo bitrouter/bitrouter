@@ -135,6 +135,22 @@ impl ModelClient {
         })
     }
 
+    /// Use a caller-configured HTTP transport (for example, disabled redirects
+    /// and retries for a durable managed attempt). Request deadlines still use
+    /// `timeouts`; connection-level settings belong to the supplied client.
+    pub fn with_http_client(
+        timeouts: HttpTimeouts,
+        dispatch: Arc<OutboundDispatch>,
+        client: reqwest::Client,
+    ) -> Self {
+        Self {
+            client,
+            timeouts,
+            dispatch,
+            auth_appliers: AuthAppliers::new(),
+        }
+    }
+
     /// Register explicit authentication mechanisms; no credentials are loaded here.
     pub fn with_auth_appliers(mut self, auth_appliers: AuthAppliers) -> Self {
         self.auth_appliers = auth_appliers;

@@ -443,7 +443,7 @@ impl RouteAction {
     /// both surfaces: the effective model is what the table selects, and the
     /// chain is resolved for *that*, not for what was asked.
     async fn via_config(&self, input: RouteInput) -> Result<RouteReport> {
-        let resolved = self.resolved_config().await?;
+        let resolved = crate::commands::resolve_discovered(self.resolved_config().await?).await;
         let pricing = crate::assemble::build_pricing_table(&resolved);
         let policy = PolicyTableRouter::from_config(&resolved.policy_table);
         let table = ConfigRoutingTable::from_config(resolved.clone());
@@ -674,6 +674,8 @@ impl RouteQuery for RouteAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// Write `yaml` as a `bitrouter.yaml` in a fresh temp dir and return the
     /// source pointing at it.
@@ -739,6 +741,47 @@ policy_table:
         assert_eq!(cli.provider_chain.len(), 1);
         assert_eq!(cli.provider_chain[0].provider, "demo");
         assert_eq!(cli.provider_chain[0].service_id, "demo-model");
+    }
+
+    #[tokio::test]
+    async fn config_route_resolves_models_discovered_by_models_listing() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "discovered-model"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir()?;
+        let source = config_source(
+            dir.path(),
+            &format!(
+                "providers:\n  demo:\n    api_base: {}\n    api_key: sk-test\n    active: true\n    auto_discover: true\n",
+                server.uri()
+            ),
+        );
+        let config = crate::paths::load_config(&source).await?;
+        let models = crate::commands::list_models(&config).await?;
+        assert!(models.iter().any(|model| model.id == "discovered-model"));
+
+        let action = RouteAction::new(source, None);
+        let route = action
+            .report(RouteInput {
+                model: "discovered-model".to_string(),
+                prompt: None,
+            })
+            .await?;
+        assert_eq!(route.resolved_via, ResolvedVia::Config);
+        assert_eq!(route.provider_chain.len(), 1);
+        assert_eq!(route.provider_chain[0].provider, "demo");
+        assert_eq!(route.provider_chain[0].service_id, "discovered-model");
+
+        let direct = crate::commands::resolve_route(&config, "discovered-model").await?;
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[0].provider, "demo");
+        Ok(())
     }
 
     /// The disagreement this phase resolves: `bro route` used to skip the

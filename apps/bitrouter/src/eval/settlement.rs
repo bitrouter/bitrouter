@@ -1103,6 +1103,7 @@ mod tests {
         context.operation = ModelOperation::Decisions;
         context.completion_tokens = 0;
         context.target = Some(RoutingTarget {
+            model_constraints: Default::default(),
             provider_name: context.provider_id.clone(),
             service_id: context.model_id.clone(),
             api_protocol: ApiProtocol::Decisions,

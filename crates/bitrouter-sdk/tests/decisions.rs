@@ -65,6 +65,7 @@ fn target(base: &str, provider: &str, protocol: ApiProtocol) -> RoutingTarget {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         chat_google_extensions: false,
+        model_constraints: Default::default(),
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,

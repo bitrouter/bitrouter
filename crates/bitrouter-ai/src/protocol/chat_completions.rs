@@ -965,6 +965,19 @@ impl InboundAdapter for ChatCompletionsAdapter {
 }
 
 impl OutboundAdapter for ChatCompletionsAdapter {
+    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        super::managed::validate_prompt(&ApiProtocol::ChatCompletions, prompt)
+    }
+
+    fn validate_managed_body(
+        &self,
+        expected: &serde_json::Value,
+        actual: &serde_json::Value,
+        _target: &ModelTarget,
+    ) -> std::result::Result<(), &'static str> {
+        super::managed::validate_body(&ApiProtocol::ChatCompletions, expected, actual)
+    }
+
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::ChatCompletions
     }
@@ -1684,7 +1697,8 @@ fn finish_reason_str(r: &FinishReason) -> String {
     }
 }
 
-pub(crate) fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
+/// Parse independently verifiable Chat usage, including on malformed content events.
+pub fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     let prompt_tokens = value.get("prompt_tokens")?.as_u64()?;
     let completion_tokens = value
         .get("completion_tokens")

@@ -1201,7 +1201,8 @@ pub enum ReasoningEffort {
 /// Caller-authored effort keeps the historical pass-through behavior. A
 /// policy-owned effort is a router treatment and must be positively supported
 /// by the exact provider/model route before dispatch.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningEffortSource {
     /// The inbound request supplied the effort value.
     #[default]
@@ -1608,11 +1609,31 @@ impl Prompt {
         // Input modalities: each file part contributes the capability implied by
         // its media type, deduplicated (one `image_input` for several images).
         for content in self.messages.iter().flat_map(|m| &m.content) {
-            if let Content::File { media_type, .. } = content {
+            let mut add_media = |media_type: &str| {
                 let cap = Capability::from_input_media_type(media_type);
                 if !caps.contains(&cap) {
                     caps.push(cap);
                 }
+            };
+            match content {
+                Content::File { media_type, .. } => add_media(media_type),
+                Content::ToolResult {
+                    output: ToolResultOutput::Content { value },
+                    ..
+                } => {
+                    for part in value {
+                        match part {
+                            ToolResultContentPart::Media { media_type, .. } => {
+                                add_media(media_type)
+                            }
+                            ToolResultContentPart::FileId { media_type, .. } => add_media(
+                                media_type.as_deref().unwrap_or("application/octet-stream"),
+                            ),
+                            ToolResultContentPart::Text { .. } => {}
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         // Output modalities: from the requested response modalities.

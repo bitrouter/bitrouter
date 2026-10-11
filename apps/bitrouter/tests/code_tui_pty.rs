@@ -36,8 +36,10 @@ const ENTER_ALTERNATE_SCREEN: &str = "\x1b[?1049h";
 const LEAVE_ALTERNATE_SCREEN: &str = "\x1b[?1049l";
 const BEGIN_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026h";
 const END_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026l";
+// Each fixture has an empty home/cache. Disable remote catalog loading so
+// daemon readiness and agent lifecycle tests do not depend on public networking.
 const MOCK_DAEMON_CONFIG: &str =
-    "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  inherit_defaults: false\n";
+    "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  enabled: false\n";
 
 #[path = "code_tui_pty/evolution.rs"]
 mod evolution;

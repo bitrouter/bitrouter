@@ -5,7 +5,7 @@ use crate::error::ModelError;
 /// Filters exact sensitive values from model/transport diagnostics.
 ///
 /// This is diagnostic filtering, not continuation or replay authorization.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DiagnosticRedactor {
     replacements: Vec<(String, String)>,
 }
@@ -34,6 +34,13 @@ impl DiagnosticRedactor {
     /// Capture opaque output continuity before diagnostic/telemetry serialization.
     pub fn capture_content_continuity(&mut self, content: &[crate::types::Content]) {
         for content in content {
+            if let crate::types::Content::Reasoning {
+                native: Some(crate::types::NativeReasoning::Responses(item)),
+                ..
+            } = content
+            {
+                self.capture_reasoning_item(item);
+            }
             let metadata = match content {
                 crate::types::Content::ToolCall {
                     provider_metadata, ..
@@ -43,6 +50,11 @@ impl DiagnosticRedactor {
                 } => provider_metadata,
                 _ => continue,
             };
+            if let Some(item) = crate::types::provider_namespace(metadata, "openai")
+                .and_then(|fields| fields.get("reasoningItem"))
+            {
+                self.capture_reasoning_item(item);
+            }
             for namespace in metadata.values().filter_map(serde_json::Value::as_object) {
                 for (key, value) in namespace {
                     if matches!(
@@ -56,6 +68,14 @@ impl DiagnosticRedactor {
             }
         }
     }
+    fn capture_reasoning_item(&mut self, item: &serde_json::Value) {
+        for field in ["id", "encrypted_content"] {
+            if let Some(value) = item.get(field).and_then(serde_json::Value::as_str) {
+                self.add_replacement(value.to_owned(), "[redacted continuity]".into());
+            }
+        }
+    }
+
     /// Capture credentials from the final request headers and URL.
     pub fn capture_request_credentials(
         &mut self,

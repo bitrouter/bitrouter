@@ -259,6 +259,8 @@ pub struct RoutingTarget {
     /// Exact qualitative reasoning-effort support for this provider/model.
     /// `None` means unknown, not unsupported.
     pub reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Authoritative limits for managed model execution.
+    pub model_constraints: crate::language_model::native::NativeRouteConstraints,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a

@@ -15,6 +15,7 @@ use futures_core::Stream;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::native_auth::{is_continuation_scope_header, request_scope_headers};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::context::ProviderContinuation;
@@ -27,10 +28,55 @@ use bitrouter_ai::auth::{
 };
 use bitrouter_ai::client::{HttpTimeouts, ModelClient, parse_retry_after};
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
-use bitrouter_ai::protocol::OutboundDispatch;
+use bitrouter_ai::protocol::SseEvent;
 use bitrouter_ai::protocol::decisions::{DecisionsCodec, DecisionsTransport};
+use bitrouter_ai::protocol::{OutboundAdapter, OutboundDispatch};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 use tokio_util::sync::CancellationToken;
+
+mod input_count;
+mod response_body;
+mod stream_bridge;
+
+use stream_bridge::BridgeCapture;
+
+use super::native_continuation::{
+    ContinuationFailure, NativeContinuationInput, NativeContinuationPlan,
+};
+use super::native_work::{self, NativeProviderWorkKind};
+
+fn native_continuation_plan(
+    target: &RoutingTarget,
+    prompt: &Prompt,
+    ctx: &PipelineContext,
+) -> Result<Option<NativeContinuationPlan>> {
+    ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+        .map(|runtime| {
+            runtime
+                .continuation_plan(prompt, ctx.caller(), target)
+                .map_err(ContinuationFailure::error)
+        })
+        .transpose()
+}
+
+fn record_native_dispatch(
+    prompt: &Prompt,
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) -> Result<()> {
+    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
+        let plan = runtime
+            .continuation_plan(prompt, ctx.caller(), target)
+            .map_err(ContinuationFailure::error)?;
+        runtime.dispatched(
+            &plan
+                .execution_prompt(prompt)
+                .map_err(ContinuationFailure::error)?,
+        );
+        runtime.continuation_dispatched(&plan);
+    }
+    Ok(())
+}
 
 /// A boxed stream of canonical stream parts.
 pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>;
@@ -43,6 +89,46 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Pure local assessment, distinct from actual generation dispatch evidence.
+    fn native_continuation(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> NativeContinuationInput {
+        NativeContinuationInput::Unknown
+    }
+    /// Pure local assessment before counting or admission. Implementations must
+    /// not perform provider/auth I/O, consume a response or modify the request.
+    fn native_protocol_validation(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> crate::language_model::native::NativeProtocolValidation {
+        Default::default()
+    }
+
+    /// Count the exact managed input when explicitly configured. Unsupported
+    /// executors fail that candidate rather than claim a known capacity fit.
+    async fn count_input_tokens(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<crate::language_model::native::NativeInputCount> {
+        Err(BitrouterError::bad_request(
+            "input token counting is unsupported",
+        ))
+    }
+
+    /// Whether this executor/target is known to preserve output-token limits.
+    /// Unknown implementations retain `None`, never an asserted guarantee.
+    fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
+        None
+    }
+
+    /// Execute a non-streaming request against `target`.
     /// Validate conversion before an observable provider attempt.
     /// Custom executors add their own representation rules here. No I/O or
     /// credential resolution belongs in preflight; execution checks again.
@@ -57,6 +143,18 @@ pub trait Executor: Send + Sync {
         let report = bitrouter_ai::conversion::request_admission(prompt, &target.api_protocol);
         report.require_admitted()?;
         Ok(report)
+    }
+
+    /// Preflight a host-managed request after local origin and route validation.
+    /// Custom executors retain ordinary admission unless they opt in explicitly.
+    fn preflight_managed(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+        _ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        self.preflight(target, prompt, stream)
     }
 
     /// Validate native Decisions support without authentication or I/O.
@@ -321,6 +419,7 @@ struct ProviderContinuationSubstitution {
     public_or_redacted: String,
 }
 
+#[derive(Clone)]
 struct UpstreamErrorScrubber {
     redactor: bitrouter_ai::diagnostics::DiagnosticRedactor,
 }
@@ -439,6 +538,46 @@ fn apply_provider_continuation(
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<Option<ProviderContinuationSubstitution>> {
+    if let Some(plan) = native_continuation_plan(target, ctx.require_generation_prompt()?, ctx)? {
+        if ctx.extension::<ProviderContinuation>().is_some()
+            || ctx.extension::<SuppressProviderContinuation>().is_some()
+        {
+            return Err(ContinuationFailure::BindingChanged.error());
+        }
+        match plan {
+            NativeContinuationPlan::Resume(binding) => {
+                if target.api_protocol != ApiProtocol::Responses
+                    || body
+                        .get("previous_response_id")
+                        .and_then(serde_json::Value::as_str)
+                        != Some(binding.response_id())
+                    || body
+                        .get("reasoning")
+                        .and_then(|reasoning| reasoning.get("effort"))
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null)
+                        != serde_json::to_value(
+                            ctx.require_generation_prompt()?.params.reasoning_effort,
+                        )
+                        .map_err(|_| ContinuationFailure::BindingChanged.error())?
+                {
+                    return Err(ContinuationFailure::BindingChanged.error());
+                }
+                return Ok(Some(ProviderContinuationSubstitution {
+                    native: binding.response_id().to_owned(),
+                    public_or_redacted: "[redacted provider continuation]".into(),
+                }));
+            }
+            NativeContinuationPlan::FullHistory(_) => {
+                if body
+                    .get("previous_response_id")
+                    .is_some_and(|value| !value.is_null())
+                {
+                    return Err(ContinuationFailure::BindingChanged.error());
+                }
+            }
+        }
+    }
     if ctx.extension::<SuppressProviderContinuation>().is_some() {
         if target.api_protocol != ApiProtocol::Responses {
             return Err(BitrouterError::internal(
@@ -493,6 +632,11 @@ fn validate_continuation_authority(
     ctx: &PipelineContext,
     actual: Option<&ContinuationAuthority>,
 ) -> Result<()> {
+    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
+        runtime
+            .validate_continuation_authority(ctx, target, actual)
+            .map_err(ContinuationFailure::error)?;
+    }
     if target.api_protocol == ApiProtocol::Responses
         && ctx.extension::<RequireContinuationAuthority>().is_some()
         && actual.is_none()
@@ -544,6 +688,8 @@ struct HttpClientSet {
     /// timeouts (for the per-request `total` cap, which is not a client
     /// setting).
     default_client: ModelClient,
+    managed_default_client: ModelClient,
+    managed_provider_clients: HashMap<String, ModelClient>,
     default_timeouts: HttpTimeouts,
     /// Per-provider clients keyed by `provider_name`, each paired with the
     /// resolved timeouts it was built from. Built once at construction; empty
@@ -560,21 +706,52 @@ struct HttpClientSet {
 /// subsystem.
 pub struct PreparedProviderTimeouts(HttpClientSet);
 
-enum SelectedRequest<'a> {
-    Generation(&'a Prompt),
-    Decisions(&'a DecisionRequest),
-}
-
 /// Immutable inputs reused each time an authenticated upstream request is
 /// rebuilt, including after a provider refreshes an expired credential.
 struct RequestBuildInput<'a> {
     client: &'a ModelClient,
     url: &'a str,
     body: &'a serde_json::Value,
+    managed_expected: Option<&'a serde_json::Value>,
     target: &'a RoutingTarget,
     transport: &'a Arc<dyn bitrouter_ai::protocol::Transport>,
     ctx: &'a PipelineContext,
     trace_headers: Option<&'a http::HeaderMap>,
+}
+
+/// Build a reqwest client from the connection-level timeout knobs. `total` is
+/// deliberately not applied here — it is a per-request deadline set via
+/// [`reqwest::RequestBuilder::timeout`], not a client-builder setting.
+fn build_http_client(
+    timeouts: &HttpTimeouts,
+    managed: bool,
+    dispatch: Arc<OutboundDispatch>,
+) -> Result<ModelClient> {
+    // A redirect would disclose private history before the next origin could be
+    // authenticated. Managed calls therefore require an explicit final endpoint.
+    // https://docs.rs/reqwest/latest/reqwest/redirect/struct.Policy.html
+    let builder = reqwest::Client::builder();
+    let builder = if managed {
+        // Every actual HTTP retry needs its own durable admission and budget.
+        // https://docs.rs/reqwest/0.13.4/reqwest/retry/fn.never.html
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+    } else {
+        builder
+    };
+    let client = builder
+        .connect_timeout(timeouts.connect)
+        .read_timeout(timeouts.read)
+        .pool_idle_timeout(timeouts.pool_idle)
+        .tcp_keepalive(timeouts.tcp_keepalive)
+        .build()
+        .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))?;
+    Ok(ModelClient::with_http_client(
+        timeouts.clone(),
+        dispatch,
+        client,
+    ))
 }
 
 fn build_http_client_set(
@@ -582,18 +759,25 @@ fn build_http_client_set(
     per_provider: HashMap<String, HttpTimeouts>,
     dispatch: Arc<OutboundDispatch>,
 ) -> Result<HttpClientSet> {
-    let default_client =
-        ModelClient::with_dispatch(default_timeouts.clone(), Arc::clone(&dispatch))?;
+    let default_client = build_http_client(&default_timeouts, false, Arc::clone(&dispatch))?;
+    let managed_default_client = build_http_client(&default_timeouts, true, Arc::clone(&dispatch))?;
+    let mut managed_provider_clients = HashMap::new();
     let mut provider_clients = HashMap::new();
     for (name, timeouts) in per_provider {
         if timeouts == default_timeouts {
             continue;
         }
-        let client = ModelClient::with_dispatch(timeouts.clone(), Arc::clone(&dispatch))?;
+        let client = build_http_client(&timeouts, false, Arc::clone(&dispatch))?;
+        managed_provider_clients.insert(
+            name.clone(),
+            build_http_client(&timeouts, true, Arc::clone(&dispatch))?,
+        );
         provider_clients.insert(name, (timeouts, client));
     }
     Ok(HttpClientSet {
         default_client,
+        managed_default_client,
+        managed_provider_clients,
         default_timeouts,
         provider_clients,
     })
@@ -688,11 +872,25 @@ impl HttpExecutor {
 
     /// Pick the client + timeouts for `target`: a per-provider override when one
     /// is registered for its `provider_name`, else the default pair.
-    fn client_for(&self, target: &RoutingTarget) -> (ModelClient, HttpTimeouts) {
+    fn client_for(&self, target: &RoutingTarget, managed: bool) -> (ModelClient, HttpTimeouts) {
         let guard = match self.clients.read() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+        if managed {
+            let client = guard
+                .managed_provider_clients
+                .get(&target.provider_name)
+                .unwrap_or(&guard.managed_default_client)
+                .clone();
+            let timeouts = guard
+                .provider_clients
+                .get(&target.provider_name)
+                .map(|(timeouts, _)| timeouts)
+                .unwrap_or(&guard.default_timeouts)
+                .clone();
+            return (client, timeouts);
+        }
         match guard.provider_clients.get(&target.provider_name) {
             Some((timeouts, client)) => (client.clone(), timeouts.clone()),
             None => (guard.default_client.clone(), guard.default_timeouts.clone()),
@@ -757,47 +955,312 @@ impl HttpExecutor {
         Ok(())
     }
 
+    fn render_execution_request(
+        &self,
+        adapter: &dyn OutboundAdapter,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        stream: bool,
+    ) -> Result<serde_json::Value> {
+        self.render_execution_with_report(adapter, target, prompt, ctx, stream)
+            .map(|(body, _)| body)
+    }
+
+    fn render_execution_with_report(
+        &self,
+        adapter: &dyn OutboundAdapter,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        stream: bool,
+    ) -> Result<(
+        serde_json::Value,
+        bitrouter_ai::conversion::ConversionReport,
+    )> {
+        let plan = native_continuation_plan(target, prompt, ctx)?;
+        let mut upstream = match plan.as_ref() {
+            Some(plan) => plan
+                .execution_prompt(prompt)
+                .map_err(ContinuationFailure::error)?,
+            None => prompt.clone(),
+        };
+        upstream.model = target.service_id.clone();
+        upstream.stream = stream;
+        let (mut body, report) = if let Some(runtime) =
+            ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+        {
+            runtime
+                .validate_history(ctx)
+                .map_err(super::native_context::PrivateContextFailure::error)?;
+            runtime
+                .validate_target(prompt, ctx, target)
+                .map_err(super::native_context::PrivateContextFailure::error)?;
+            adapter.render_managed_request_for_target(&upstream, &target.model_target())?
+        } else {
+            let report = adapter.admission(&upstream);
+            report.require_admitted()?;
+            (
+                adapter.render_request_for_target(&upstream, &target.model_target())?,
+                report,
+            )
+        };
+        if let Some(NativeContinuationPlan::Resume(binding)) = plan {
+            if body
+                .get("previous_response_id")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(ContinuationFailure::BindingChanged.error());
+            }
+            body.as_object_mut()
+                .ok_or_else(|| ContinuationFailure::BindingChanged.error())?
+                .insert("previous_response_id".into(), binding.response_id().into());
+        }
+        Ok((body, report))
+    }
+
+    fn managed_expected_body(
+        &self,
+        rendered: &serde_json::Value,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+    ) -> Result<Option<serde_json::Value>> {
+        if ctx
+            .extension::<crate::language_model::native::NativeManagedRequest>()
+            .is_none()
+        {
+            return Ok(None);
+        }
+        self.prepare_managed_baseline(rendered, target, ctx)
+            .map(Some)
+            .map_err(|reason| {
+                BitrouterError::bad_request(format!("managed protocol validation failed: {reason}"))
+            })
+    }
+
+    fn prepare_managed_baseline(
+        &self,
+        rendered: &serde_json::Value,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+    ) -> std::result::Result<serde_json::Value, &'static str> {
+        let mut expected = rendered.clone();
+        if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+            applier
+                .normalize_managed_body(&mut expected, &target.model_target())
+                .map_err(|_| "provider_body_normalization_failed")?;
+        }
+        if expected
+            .get("previous_response_id")
+            .is_some_and(|value| !value.is_null())
+            && ctx.extension::<ProviderContinuation>().is_none()
+            && ctx.extension::<SuppressProviderContinuation>().is_none()
+            && !matches!(
+                native_continuation_plan(
+                    target,
+                    ctx.generation_prompt()
+                        .ok_or("managed_generation_required")?,
+                    ctx
+                ),
+                Ok(Some(NativeContinuationPlan::Resume(_)))
+            )
+        {
+            return Err("provider_continuation_unbound");
+        }
+        apply_provider_continuation(&mut expected, target, ctx)
+            .map_err(|_| "provider_continuation_incompatible")?;
+        let (adapter, _) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or("outbound_adapter_unavailable")?;
+        adapter.validate_managed_body(&expected, &expected, &target.model_target())?;
+        Ok(expected)
+    }
+
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<reqwest::Request> {
+    ) -> Result<bitrouter_ai::auth::AppliedAuth> {
+        native_work::observe(
+            input.ctx,
+            NativeProviderWorkKind::Authentication,
+            self.build_authenticated_request_inner(input),
+            |_| None,
+        )
+        .await
+    }
+
+    async fn build_authenticated_request_inner(
+        &self,
+        input: &RequestBuildInput<'_>,
+    ) -> Result<AppliedAuth> {
+        input.ctx.record_credential_authority(None);
         let mut request = input.client.build_request(input.url, input.body)?;
         forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
-        let applied = self
+        apply_provider_headers(&mut request, input.target, input.ctx, true);
+        let scope = request_scope_headers(input.target, Some(input.ctx.headers()))
+            .ok_or_else(|| BitrouterError::internal("request account scope unavailable"))?;
+        let mut applied = self
             .apply_auth(request, input.target, input.transport)
             .await?;
-        let (mut request, mut credential_authority) = applied.into_parts();
-        apply_provider_headers(&mut request, input.target, input.ctx);
-        merge_outbound_trace_headers(&mut request, input.trace_headers);
-        inject_outbound_request_id(&mut request, input.ctx)?;
-        credential_authority =
-            credential_authority.filter(|authority| authority.validates_final_request(&request));
+        apply_provider_headers(&mut applied, input.target, input.ctx, false);
+        merge_outbound_trace_headers(&mut applied, input.trace_headers);
+        inject_outbound_request_id(&mut applied, input.ctx)?;
+        let (request, credential_authority) = applied.into_parts();
+        if input.target.headers.iter().any(|rule| {
+            is_continuation_scope_header(rule.name().as_str())
+                && !scope
+                    .get_all(rule.name())
+                    .iter()
+                    .eq(request.headers().get_all(rule.name()).iter())
+        }) {
+            return Err(BitrouterError::bad_request(
+                "provider authentication changed configured account scope",
+            ));
+        }
+        let credential_authority =
+            credential_authority.map(|authority| authority.with_request_scope(&scope));
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         bitrouter_ai::providers::google_chat::validate_authenticated_request(
             &request,
             &input.target.model_target(),
         )?;
-        input.ctx.record_credential_authority(credential_authority);
-        Ok(request)
+        if input
+            .ctx
+            .extension::<crate::language_model::native::NativeManagedRequest>()
+            .is_some()
+        {
+            let expected_url = reqwest::Url::parse(input.url)
+                .map_err(|_| BitrouterError::bad_request("managed endpoint unavailable"))?;
+            if request.url() != &expected_url {
+                return Err(BitrouterError::bad_request(
+                    "managed authentication changed endpoint",
+                ));
+            }
+            if let Some(runtime) = input
+                .ctx
+                .extension::<super::native_context::NativePrivateContextRuntime>()
+            {
+                runtime
+                    .validate_authority(input.ctx, input.target, credential_authority.as_ref())
+                    .map_err(super::native_context::PrivateContextFailure::error)?;
+            }
+            let expected = input.managed_expected.ok_or_else(|| {
+                BitrouterError::bad_request("managed request baseline unavailable")
+            })?;
+            let (adapter, _) = self
+                .dispatch
+                .lookup(&input.target.api_protocol)
+                .ok_or_else(|| Self::no_dispatch_error(input.target))?;
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| BitrouterError::bad_request("managed request body unavailable"))?;
+            let actual = serde_json::from_slice(bytes)
+                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
+            adapter
+                .validate_managed_body(expected, &actual, &input.target.model_target())
+                .map_err(|reason| {
+                    BitrouterError::bad_request(format!(
+                        "managed protocol validation failed: {reason}"
+                    ))
+                })?;
+        }
+        if let Some(reservation) = input
+            .ctx
+            .extension::<crate::language_model::native::NativeOutputReservation>()
+        {
+            let (adapter, _) = self
+                .dispatch
+                .lookup(&input.target.api_protocol)
+                .ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "managed output reservation cannot be verified for this protocol",
+                    )
+                })?;
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "managed output reservation requires a verifiable request body",
+                    )
+                })?;
+            let body = serde_json::from_slice(bytes)
+                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
+            if adapter.output_token_limit(&body)? != Some(reservation.0) {
+                return Err(BitrouterError::bad_request(
+                    "provider shaping changed the managed output reservation",
+                ));
+            }
+        }
+        if input
+            .target
+            .model_constraints
+            .input_token_counting
+            .is_some()
+            && let Some(counted) = input
+                .ctx
+                .extension::<crate::language_model::native::NativeCountedRequests>()
+            && !counted.matches(&input_count::request_digest(&request, input.target)?)?
+        {
+            return Err(BitrouterError::bad_request(
+                "managed request changed after provider input token counting",
+            ));
+        }
+        input
+            .ctx
+            .record_credential_authority(credential_authority.clone());
+        Ok(match credential_authority {
+            Some(authority) => bitrouter_ai::auth::AppliedAuth::proven_with_scheme(
+                request,
+                authority.credential().clone(),
+                authority.effective_scheme(),
+            ),
+            None => bitrouter_ai::auth::AppliedAuth::unproven(request),
+        })
     }
 
     async fn refresh_auth_after_unauthorized(
         &self,
         target: &RoutingTarget,
         rejected_authorization: Option<&reqwest::header::HeaderValue>,
+        ctx: &PipelineContext,
     ) -> Result<bool> {
         let Some(applier) = self.auth_appliers.lookup(&target.provider_name) else {
             return Ok(false);
         };
-        applier
-            .refresh_after_unauthorized(&target.model_target(), rejected_authorization)
-            .await
-            .map_err(|error| {
-                BitrouterError::from(normalize_auth_extension_error(
-                    error,
-                    AuthOperation::Refresh,
-                ))
-            })
+        native_work::observe(
+            ctx,
+            NativeProviderWorkKind::AuthenticationRefresh,
+            async {
+                applier
+                    .refresh_after_unauthorized(&target.model_target(), rejected_authorization)
+                    .await
+                    .map_err(|error| {
+                        BitrouterError::from(normalize_auth_extension_error(
+                            error,
+                            AuthOperation::Refresh,
+                        ))
+                    })
+            },
+            |_| None,
+        )
+        .await
+    }
+
+    fn check_response_format(
+        prompt: &Prompt,
+        adapter: &Arc<dyn bitrouter_ai::protocol::OutboundAdapter>,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        if prompt.response_format.is_some() && !adapter.supports_response_format() {
+            return adapter
+                .admission(prompt)
+                .require_admitted()
+                .map_err(Into::into);
+        }
+        Ok(())
     }
 
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
@@ -813,49 +1276,29 @@ impl HttpExecutor {
     async fn execute_json(
         &self,
         target: &RoutingTarget,
-        input: SelectedRequest<'_>,
+        request: &DecisionRequest,
         transport: &Arc<dyn bitrouter_ai::protocol::Transport>,
         ctx: &PipelineContext,
     ) -> Result<(String, UpstreamErrorScrubber, u64)> {
-        let (client, _) = self.client_for(target);
+        let (client, _) = self.client_for(target, false);
         let cancellation = CancellationToken::new();
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
         let mut scrubber = UpstreamErrorScrubber::new(None);
         scrubber.capture_effective_target_key(target);
-        if let SelectedRequest::Generation(prompt) = input {
-            scrubber.redactor.capture_prompt_continuity(prompt);
-        }
         let started = Instant::now();
         let mut refreshed = false;
         loop {
-            let mut body = match input {
-                SelectedRequest::Generation(prompt) => {
-                    client.render_request(&target.model_target(), prompt, false)?
-                }
-                SelectedRequest::Decisions(request) => {
-                    client.render_decision_request(&target.model_target(), request)?
-                }
-            };
+            let mut body = client.render_decision_request(&target.model_target(), request)?;
             self.shape_request_body(&mut body, target)
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
-            match input {
-                SelectedRequest::Generation(_) => {
-                    if let Some(continuation) = apply_provider_continuation(&mut body, target, ctx)?
-                    {
-                        scrubber
-                            .redactor
-                            .add_replacement(continuation.native, continuation.public_or_redacted);
-                    }
-                }
-                SelectedRequest::Decisions(_) => {
-                    DecisionsCodec::parse_request(body.clone())?;
-                }
-            }
+            DecisionsCodec::parse_request(body.clone())?;
             let request = self
                 .build_authenticated_request(&RequestBuildInput {
                     client: &client,
+
+                    managed_expected: None,
                     url: &url,
                     body: &body,
                     target,
@@ -865,6 +1308,7 @@ impl HttpExecutor {
                 })
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
+            let (request, _) = request.into_parts();
             scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
@@ -886,7 +1330,7 @@ impl HttpExecutor {
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !refreshed
                 && self
-                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref(), ctx)
                     .await
                     .map_err(|error| scrubber.scrub_error(error))?
             {
@@ -911,11 +1355,15 @@ impl HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
-        let result = bitrouter_ai::stream::collect::collect_generate(
-            self.execute_stream(target, prompt, ctx).await?,
+        let capture = Arc::new(BridgeCapture::default());
+        let collected = bitrouter_ai::stream::collect::collect_generate(
+            self.execute_http_stream(target, prompt, ctx, Some(capture.clone()))
+                .await?,
         )
         .await?;
+        let result = capture.complete(self, target, prompt, ctx, collected)?;
         let elapsed = started.elapsed().as_millis() as u64;
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
@@ -923,7 +1371,11 @@ impl HttpExecutor {
             account_label: target.account_label.clone(),
             result: result.into(),
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(elapsed),
+            upstream_duration_ms: Some(native_work::elapsed_work_millis(
+                ctx,
+                started,
+                initial_gate,
+            )),
             server_tool_calls: Vec::new(),
         })
     }
@@ -934,15 +1386,21 @@ impl HttpExecutor {
 /// reserved authentication, framing, tracing, and request-id fields remain
 /// outside this mechanism. The rules themselves were validated when the route
 /// was built.
+/// Account selectors run before authentication and participate in its stable
+/// scope. Other compatibility headers run after authentication as overrides.
 ///
 /// HTTP field semantics: <https://www.rfc-editor.org/rfc/rfc9110.html#section-5>
 fn apply_provider_headers(
     request: &mut reqwest::Request,
     target: &RoutingTarget,
     ctx: &PipelineContext,
+    account_scope: bool,
 ) {
     for rule in &target.headers {
         let name = rule.name();
+        if is_continuation_scope_header(name.as_str()) != account_scope {
+            continue;
+        }
         request.headers_mut().remove(name);
         if rule.passthrough() {
             let inbound = ctx
@@ -1029,13 +1487,117 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    fn native_continuation(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> NativeContinuationInput {
+        match ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
+            Some(runtime) => match runtime.continuation_plan(prompt, ctx.caller(), target) {
+                Ok(plan) => plan.observation(),
+                Err(reason) => NativeContinuationInput::Rejected { reason },
+            },
+            None => NativeContinuationInput::Unknown,
+        }
+    }
+    fn native_protocol_validation(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> crate::language_model::native::NativeProtocolValidation {
+        let validate = || -> std::result::Result<(), &'static str> {
+            if let Some(runtime) =
+                ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+            {
+                runtime
+                    .validate_target(prompt, ctx, target)
+                    .map_err(super::native_context::PrivateContextFailure::reason)?;
+            }
+            let (adapter, _) = self
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or("outbound_adapter_unavailable")?;
+            let plan = ctx
+                .extension::<super::native_context::NativePrivateContextRuntime>()
+                .map(|runtime| runtime.continuation_plan(prompt, ctx.caller(), target))
+                .transpose()
+                .map_err(ContinuationFailure::reason)?;
+            let effective = match plan.as_ref() {
+                Some(plan) => plan
+                    .execution_prompt(prompt)
+                    .map_err(ContinuationFailure::reason)?,
+                None => prompt.clone(),
+            };
+            adapter.validate_managed_prompt(&effective)?;
+            Self::check_response_format(prompt, adapter, target)
+                .map_err(|_| "response_format_unsupported")?;
+            let body = self
+                .render_execution_request(
+                    adapter.as_ref(),
+                    target,
+                    prompt,
+                    ctx,
+                    target.provider_name == "openai-codex",
+                )
+                .map_err(|_| "protocol_render_failed")?;
+            self.prepare_managed_baseline(&body, target, ctx)?;
+            Ok(())
+        };
+        match validate() {
+            Ok(()) => crate::language_model::native::NativeProtocolValidation::Compatible,
+            Err(reason) => crate::language_model::native::NativeProtocolValidation::Rejected {
+                reason: reason.into(),
+            },
+        }
+    }
+
+    async fn count_input_tokens(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<crate::language_model::native::NativeInputCount> {
+        self.count_managed_input(target, prompt, ctx).await
+    }
+
+    fn output_token_limit_support(&self, target: &RoutingTarget) -> Option<bool> {
+        if !self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .is_some_and(|(adapter, _)| adapter.supports_output_token_limit_validation())
+        {
+            return Some(false);
+        }
+        match self.auth_appliers.lookup(&target.provider_name) {
+            Some(applier) => applier.output_token_limit_support(&target.model_target()),
+            None => Some(true),
+        }
+    }
+
+    fn preflight_managed(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+        ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        let (adapter, _) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| Self::no_dispatch_error(target))?;
+        self.render_execution_with_report(adapter.as_ref(), target, prompt, ctx, stream)
+            .map(|(_, report)| report)
+    }
+
     fn preflight(
         &self,
         target: &RoutingTarget,
         prompt: &Prompt,
         stream: bool,
     ) -> Result<bitrouter_ai::conversion::ConversionReport> {
-        let (client, _) = self.client_for(target);
+        let (client, _) = self.client_for(target, false);
         client
             .render_request_with_report(&target.model_target(), prompt, stream)
             .map(|(_, report)| report)
@@ -1056,28 +1618,173 @@ impl Executor for HttpExecutor {
             .lookup(&target.api_protocol)
             .ok_or_else(|| Self::no_dispatch_error(target))?;
 
-        let (text, error_scrubber, elapsed) = self
-            .execute_json(target, SelectedRequest::Generation(prompt), transport, ctx)
+        Self::check_response_format(prompt, adapter, target)?;
+
+        let mut error_scrubber = UpstreamErrorScrubber::new(None);
+        error_scrubber.capture_effective_target_key(target);
+        error_scrubber.redactor.capture_prompt_continuity(prompt);
+        let url = transport.endpoint_url(&target.model_target(), false);
+        let trace_headers = ctx.take_outbound_trace_headers();
+
+        let (client, _) = self.client_for(
+            target,
+            ctx.extension::<super::native::NativeManagedRequest>()
+                .is_some(),
+        );
+
+        let initial_gate = native_work::gate_duration(ctx);
+        let started = Instant::now();
+        let mut attempted_auth_refresh = false;
+        let requested_effort = serde_json::to_value(prompt.params.reasoning_effort)
+            .map_err(|_| ContinuationFailure::BindingChanged.error())?;
+        let (text, successful_authority, storage_allowed, effort_bound) = loop {
+            let mut body = self.render_execution_request(
+                adapter.as_ref(),
+                target,
+                prompt,
+                ctx,
+                target.provider_name == "openai-codex",
+            )?;
+            let managed_expected = self.managed_expected_body(&body, target, ctx)?;
+            if self.auth_appliers.lookup(&target.provider_name).is_some() {
+                native_work::observe(
+                    ctx,
+                    NativeProviderWorkKind::AuthenticationPreparation,
+                    self.shape_request_body(&mut body, target),
+                    |_| None,
+                )
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+            }
+            let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
+            if let Some(continuation) = continuation_substitution {
+                error_scrubber
+                    .redactor
+                    .add_replacement(continuation.native, continuation.public_or_redacted);
+            }
+            let request_input = RequestBuildInput {
+                client: &client,
+
+                url: &url,
+                body: &body,
+                managed_expected: managed_expected.as_ref(),
+                target,
+                transport,
+                ctx,
+                trace_headers: trace_headers.as_ref(),
+            };
+
+            let applied = self
+                .build_authenticated_request(&request_input)
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+            let (request, authority) = applied.into_parts();
+            let wire: Option<serde_json::Value> = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .and_then(|bytes| serde_json::from_slice(bytes).ok());
+            let storage_allowed = wire
+                .as_ref()
+                .is_some_and(|body| body.get("store") != Some(&serde_json::Value::Bool(false)));
+            let effort_bound = wire.as_ref().is_some_and(|body| {
+                body.get("reasoning")
+                    .and_then(|reasoning| reasoning.get("effort"))
+                    .unwrap_or(&serde_json::Value::Null)
+                    == &requested_effort
+            });
+            error_scrubber.capture_request_credentials(&request, target);
+            let rejected_authorization = request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .cloned();
+            let response = native_work::observe(
+                ctx,
+                NativeProviderWorkKind::HttpDispatch,
+                async {
+                    record_native_dispatch(prompt, target, ctx)?;
+                    client
+                        .send(request, &CancellationToken::new())
+                        .await
+                        .map_err(|error| error_scrubber.scrub_error(error.into()))
+                },
+                |response| Some(response.status().as_u16()),
+            )
             .await?;
 
+            let status = response.status();
+            let retry_after =
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+            let text = response_body::read(response, ctx)
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+
+            if status.is_success() {
+                break (text, authority, storage_allowed, effort_bound);
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                && !attempted_auth_refresh
+                && self
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref(), ctx)
+                    .await
+                    .map_err(|error| error_scrubber.scrub_error(error))?
+            {
+                attempted_auth_refresh = true;
+                continue;
+            }
+            let scrubbed = error_scrubber.scrub_body(&text);
+            return Err(classify_upstream_error(
+                status.as_u16(),
+                &scrubbed,
+                retry_after,
+            ));
+        };
+
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+            error_scrubber.scrub_error(BitrouterError::Upstream {
+                status: 502,
+                message: format!("upstream returned non-JSON body: {error}"),
+            })
+        })?;
+        if target.api_protocol == ApiProtocol::Responses {
+            validate_nonstream_responses_terminal(&json)
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+        }
+        let stored_response = target.api_protocol == ApiProtocol::Responses
+            && storage_allowed
+            && json.get("store") == Some(&serde_json::Value::Bool(true));
+        let replayable = bitrouter_ai::protocol::responses::output_replayable(&json);
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
-            .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
-        let result =
+            .map_err(|error| error_scrubber.scrub_error(error.into()))?;
+        let mut result =
             bitrouter_ai::providers::google_chat::bind_result(result, &target.model_target())
-                .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
+                .map_err(|error| error_scrubber.scrub_error(error.into()))?;
+        let elapsed = started.elapsed().as_millis() as u64;
+        if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+        {
+            if target.api_protocol == ApiProtocol::Responses && !replayable {
+                super::native_continuation::mark_required_state(&mut result.content);
+            }
+            runtime.succeeded(prompt, target, successful_authority, &result);
+            runtime.stored_response(stored_response, replayable, effort_bound);
+        }
+
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
             result: result.into(),
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(elapsed),
+            upstream_duration_ms: Some(native_work::elapsed_work_millis(
+                ctx,
+                started,
+                initial_gate,
+            )),
             server_tool_calls: Vec::new(),
         })
     }
 
     fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
-        let (client, _) = self.client_for(target);
+        let (client, _) = self.client_for(target, false);
         client.render_decision_request(&target.model_target(), request)?;
         Ok(())
     }
@@ -1090,9 +1797,7 @@ impl Executor for HttpExecutor {
     ) -> Result<ExecutionResult> {
         self.preflight_decisions(target, request)?;
         let transport: Arc<dyn bitrouter_ai::protocol::Transport> = Arc::new(DecisionsTransport);
-        let (text, scrubber, elapsed) = self
-            .execute_json(target, SelectedRequest::Decisions(request), &transport, ctx)
-            .await?;
+        let (text, scrubber, elapsed) = self.execute_json(target, request, &transport, ctx).await?;
         let result = ModelClient::parse_decision_response(&text, request).map_err(|error| {
             let error = scrubber.redactor.scrub_error(error);
             if error.is_completed_decision_failure() {
@@ -1117,83 +1822,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
-        let (adapter, transport) = self
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| Self::no_dispatch_error(target))?;
-
-        let (client, _) = self.client_for(target);
-        let cancellation = CancellationToken::new();
-        let mut body = client.render_request(&target.model_target(), prompt, true)?;
-        self.shape_request_body(&mut body, target).await?;
-        let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
-        let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
-        error_scrubber.capture_effective_target_key(target);
-        error_scrubber.redactor.capture_prompt_continuity(prompt);
-        let url = transport.endpoint_url(&target.model_target(), true);
-        let trace_headers = ctx.take_outbound_trace_headers();
-
-        let request_input = RequestBuildInput {
-            client: &client,
-            url: &url,
-            body: &body,
-            target,
-            transport,
-            ctx,
-            trace_headers: trace_headers.as_ref(),
-        };
-        let mut attempted_auth_refresh = false;
-        let response = loop {
-            let request = self
-                .build_authenticated_request(&request_input)
-                .await
-                .map_err(|error| error_scrubber.scrub_error(error))?;
-            error_scrubber.capture_request_credentials(&request, target);
-            let rejected_authorization = request
-                .headers()
-                .get(reqwest::header::AUTHORIZATION)
-                .cloned();
-            let response = client
-                .send(request, &cancellation)
-                .await
-                .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
-
-            let status = response.status();
-            let retry_after =
-                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
-            if status.is_success() {
-                break response;
-            }
-            let text = ModelClient::read_body(response, &cancellation)
-                .await
-                .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                && !attempted_auth_refresh
-                && self
-                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
-                    .await
-                    .map_err(|error| error_scrubber.scrub_error(error))?
-            {
-                attempted_auth_refresh = true;
-                continue;
-            }
-            let scrubbed = error_scrubber.scrub_body(&text);
-            return Err(classify_upstream_error(
-                status.as_u16(),
-                &scrubbed,
-                retry_after,
-            ));
-        };
-
-        let stream = bitrouter_ai::providers::google_chat::bind_stream(
-            ModelClient::decode_stream(Arc::clone(adapter), response, cancellation),
-            target.model_target(),
-        )
-        .map(move |part| {
-            part.map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))
-        });
-
-        Ok(Box::pin(stream))
+        self.execute_http_stream(target, prompt, ctx, None).await
     }
 }
 
@@ -1287,6 +1916,19 @@ impl DispatchExecutor {
 
 #[async_trait]
 impl Executor for DispatchExecutor {
+    fn preflight_managed(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+        ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .preflight_managed(target, prompt, stream, ctx)
+    }
+
     fn preflight(
         &self,
         target: &RoutingTarget,
@@ -1620,6 +2262,7 @@ mod beta_forward_tests {
             chat_supports_stream_options: None,
             chat_google_extensions: false,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -1739,7 +2382,7 @@ mod beta_forward_tests {
             .headers_mut()
             .insert("x-rejected", http::HeaderValue::from_static("transport"));
 
-        apply_provider_headers(&mut request, &target, &ctx);
+        apply_provider_headers(&mut request, &target, &ctx, false);
 
         let sessions = request
             .headers()
@@ -1774,13 +2417,15 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("chat transport was not registered"))?;
-        let (client, _) = executor.client_for(&target);
+        let (client, _) = executor.client_for(&target, false);
         let body = serde_json::json!({"model": "claude-haiku"});
         let request = executor
             .build_authenticated_request(&RequestBuildInput {
                 client: &client,
+
                 url: "https://api.example/v1/chat/completions",
                 body: &body,
+                managed_expected: None,
                 target: &target,
                 transport,
                 ctx: &ctx,
@@ -1794,6 +2439,372 @@ mod beta_forward_tests {
         );
         assert_eq!(request.headers()["x-opencode-session"], "request-session");
         assert_eq!(request.headers()["x-bitrouter-request-id"], "t");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
+    -> crate::Result<()> {
+        use crate::language_model::native::{
+            InputTokenCounting, NativeCountedRequests, NativeInputCount,
+        };
+        let mut ctx = ctx_with_headers(http::HeaderMap::new());
+        let mut target = target(ApiProtocol::Responses);
+        target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);
+        target.api_key = "first-account-secret".into();
+        let executor = HttpExecutor::with_defaults()?;
+        let (_, transport) = executor
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| BitrouterError::internal("missing Responses transport"))?;
+        let (client, _) = executor.client_for(&target, false);
+        let body = serde_json::json!({"model":"fixture","input":"required text","tools":[]});
+        let initial = executor
+            .build_authenticated_request(&RequestBuildInput {
+                client: &client,
+
+                url: "https://example.invalid/v1/responses",
+                body: &body,
+                managed_expected: None,
+                target: &target,
+                transport,
+                ctx: &ctx,
+                trace_headers: None,
+            })
+            .await?;
+        let count = NativeInputCount::Counted {
+            input_tokens: 10,
+            request_sha256: input_count::request_digest(&initial, &target)?,
+            source: "fixture".into(),
+        };
+        let counted = Arc::new(NativeCountedRequests::default());
+        counted.select(Some(&count))?;
+        ctx.insert_extension(counted.clone());
+        let build = |body, target, ctx| RequestBuildInput {
+            client: &client,
+
+            url: "https://example.invalid/v1/responses",
+            body,
+            managed_expected: None,
+            target,
+            transport,
+            ctx,
+            trace_headers: None,
+        };
+        executor
+            .build_authenticated_request(&build(&body, &target, &ctx))
+            .await?;
+        let changed =
+            serde_json::json!({"model":"fixture","input":"different required text","tools":[]});
+        assert!(
+            executor
+                .build_authenticated_request(&build(&changed, &target, &ctx))
+                .await
+                .is_err()
+        );
+        let mut account = target.clone();
+        account.api_key = "second-account-secret".into();
+        assert!(
+            executor
+                .build_authenticated_request(&build(&body, &account, &ctx))
+                .await
+                .is_err()
+        );
+        let mut headers = target.clone();
+        headers.headers = vec![OutboundHeaderRule::new(
+            "openai-organization",
+            Some("other-org"),
+            false,
+        )?];
+        assert!(
+            executor
+                .build_authenticated_request(&build(&body, &headers, &ctx))
+                .await
+                .is_err()
+        );
+        // Even an identical target cannot borrow a previous candidate's success.
+        counted.select(Some(&NativeInputCount::Unavailable {
+            reason: "fixture failure".into(),
+        }))?;
+        assert!(
+            executor
+                .build_authenticated_request(&build(&body, &target, &ctx))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    struct RewriteOutputLimit;
+
+    #[async_trait]
+    impl bitrouter_ai::auth::AuthApplier for RewriteOutputLimit {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| {
+                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                })?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+                bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+            })?;
+            body["max_tokens"] = 4096.into();
+            *request.body_mut() = Some(
+                serde_json::to_vec(&body)
+                    .map_err(|error| {
+                        bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                    })?
+                    .into(),
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_output_limit_is_checked_after_auth_body_mutation() -> crate::Result<()> {
+        let target = target(ApiProtocol::ChatCompletions);
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteOutputLimit)),
+        )?;
+        let (_, transport) = executor
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
+        let (client, _) = executor.client_for(&target, false);
+        let body = serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}],"max_tokens":128});
+        for managed in [false, true] {
+            let mut ctx = ctx_with_beta(None);
+            if managed {
+                ctx.insert_extension(Arc::new(
+                    crate::language_model::native::NativeOutputReservation(128),
+                ));
+            }
+            let result = executor
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+
+                    url: "https://example.invalid/v1/chat/completions",
+                    body: &body,
+                    managed_expected: None,
+                    target: &target,
+                    transport,
+                    ctx: &ctx,
+                    trace_headers: None,
+                })
+                .await;
+            assert_eq!(result.is_err(), managed);
+            if managed {
+                assert!(result.err().is_some_and(|error| {
+                    error
+                        .to_string()
+                        .contains("changed the managed output reservation")
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn managed_output_limit_survives_each_builtin_wire_renderer() -> crate::Result<()> {
+        let executor = HttpExecutor::with_defaults()?;
+        for protocol in [
+            ApiProtocol::ChatCompletions,
+            ApiProtocol::Responses,
+            ApiProtocol::Messages,
+        ] {
+            let target = target(protocol);
+            let mut ctx = ctx_with_beta(None);
+            ctx.insert_extension(Arc::new(
+                crate::language_model::native::NativeOutputReservation(128),
+            ));
+            let mut prompt = ctx.require_generation_prompt()?.clone();
+            prompt.messages = vec![Message::text(Role::User, "hello")];
+            prompt.params.max_tokens = Some(128);
+            let (adapter, transport) = executor
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or_else(|| BitrouterError::internal("missing fixture adapter"))?;
+            let body = adapter.render_request_for_target(&prompt, &target.model_target())?;
+            let (client, _) = executor.client_for(&target, false);
+            executor
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+
+                    url: "https://example.invalid/fixture",
+                    body: &body,
+                    managed_expected: None,
+                    target: &target,
+                    transport,
+                    ctx: &ctx,
+                    trace_headers: None,
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    struct RewriteEndpoint;
+    #[async_trait]
+    impl bitrouter_ai::auth::AuthApplier for RewriteEndpoint {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            *request.url_mut() = reqwest::Url::parse("https://other.invalid/messages")
+                .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?;
+            request
+                .headers_mut()
+                .insert("x-api-key", http::HeaderValue::from_static("fixture-key"));
+            Ok(request)
+        }
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            Ok(AppliedAuth::proven(
+                self.apply(request, target).await?,
+                CredentialAuthority::derive("fixture", "principal"),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_auth_cannot_change_endpoint_even_before_proving_request() -> Result<()> {
+        let target = target(ApiProtocol::Messages);
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteEndpoint)),
+        )?;
+        let mut ctx = ctx_with_beta(None);
+        ctx.insert_extension(Arc::new(
+            crate::language_model::native::NativeManagedRequest,
+        ));
+        let (adapter, transport) = executor
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| BitrouterError::internal("fixture dispatch"))?;
+        let body = adapter
+            .render_request_for_target(ctx.require_generation_prompt()?, &target.model_target())?;
+        let (client, _) = executor.client_for(&target, true);
+        let error = executor
+            .build_authenticated_request(&RequestBuildInput {
+                client: &client,
+
+                url: "https://example.invalid/messages",
+                body: &body,
+                managed_expected: Some(&body),
+                target: &target,
+                transport,
+                ctx: &ctx,
+                trace_headers: None,
+            })
+            .await
+            .err()
+            .ok_or_else(|| BitrouterError::internal("changed endpoint accepted"))?;
+        assert!(
+            error
+                .to_string()
+                .contains("managed authentication changed endpoint")
+        );
+        Ok(())
+    }
+
+    struct RewriteManagedField(&'static str, serde_json::Value);
+    #[async_trait]
+    impl bitrouter_ai::auth::AuthApplier for RewriteManagedField {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| {
+                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                })?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes)
+                .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?;
+            body[self.0] = self.1.clone();
+            *request.body_mut() = Some(
+                serde_json::to_vec(&body)
+                    .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?
+                    .into(),
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_protocol_revalidates_every_authenticated_body_without_a_counter() -> Result<()>
+    {
+        let target = target(ApiProtocol::Responses);
+        let body = serde_json::json!({"model":target.service_id,"input":"mandatory input","tools":[],"temperature":0.2});
+        for (field, replacement) in [
+            ("input", serde_json::json!("lost input")),
+            (
+                "tools",
+                serde_json::json!([{"type":"function","name":"unapproved"}]),
+            ),
+            ("model", serde_json::json!("different-model")),
+            ("temperature", serde_json::json!(1)),
+            ("truncation", serde_json::json!("auto")),
+            ("previous_response_id", serde_json::json!("private-handle")),
+        ] {
+            let executor = HttpExecutor::with_dispatch_and_auth(
+                Default::default(),
+                OutboundDispatch::builtin(),
+                AuthAppliers::new().with(
+                    &target.provider_name,
+                    Arc::new(RewriteManagedField(field, replacement)),
+                ),
+            )?;
+            let (_, transport) = executor
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or_else(|| BitrouterError::internal("fixture transport"))?;
+            let (client, _) = executor.client_for(&target, false);
+            for managed in [false, true] {
+                let mut ctx = ctx_with_beta(None);
+                if managed {
+                    ctx.insert_extension(Arc::new(
+                        crate::language_model::native::NativeManagedRequest,
+                    ));
+                }
+                let baseline = executor.managed_expected_body(&body, &target, &ctx)?;
+                // Rebuilding after credential refresh uses this same immutable
+                // input and must repeat validation, without an input counter.
+                for _retry in 0..2 {
+                    let result = executor
+                        .build_authenticated_request(&RequestBuildInput {
+                            client: &client,
+
+                            url: "https://example.invalid/responses",
+                            body: &body,
+                            managed_expected: baseline.as_ref(),
+                            target: &target,
+                            transport,
+                            ctx: &ctx,
+                            trace_headers: None,
+                        })
+                        .await;
+                    assert_eq!(result.is_err(), managed, "field={field}");
+                    if let Err(error) = result {
+                        assert!(!error.to_string().contains("private-handle"));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1825,6 +2836,141 @@ mod provider_continuation_tests {
     };
     use bitrouter_ai::types::{GenerationParams, Message, Role};
 
+    struct RewriteAfterProof;
+
+    struct UnprovenScopeRewrite;
+
+    #[async_trait]
+    impl bitrouter_ai::auth::AuthApplier for UnprovenScopeRewrite {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            request.headers_mut().insert(
+                "authorization",
+                reqwest::header::HeaderValue::from_static("Bearer fixture-key"),
+            );
+            request.headers_mut().insert(
+                "openai-project",
+                reqwest::header::HeaderValue::from_static("unrequested-project"),
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn unproven_auth_cannot_rewrite_scope_on_an_ordinary_request() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|_| BitrouterError::internal("fixture bind failed"))?;
+        let mut target = responses_target("scope-rewrite");
+        target.api_base = format!(
+            "http://{}/v1",
+            listener
+                .local_addr()
+                .map_err(|_| BitrouterError::internal("fixture address unavailable"))?
+        );
+        target
+            .headers
+            .push(crate::language_model::types::OutboundHeaderRule::new(
+                "openai-project",
+                Some("requested-project"),
+                false,
+            )?);
+        let ctx = plain_context();
+        assert!(ctx.extension::<RequireContinuationAuthority>().is_none());
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with("scope-rewrite", Arc::new(UnprovenScopeRewrite)),
+        )?;
+        let error = tokio::select! {
+            outcome = executor.execute(&target, ctx.require_generation_prompt()?, &ctx) => outcome.err()
+                .ok_or_else(|| BitrouterError::internal("changed scope was dispatched"))?,
+            _ = listener.accept() => return Err(BitrouterError::internal("unexpected upstream connection")),
+            _ = tokio::time::sleep(Duration::from_secs(2)) => return Err(BitrouterError::internal("fixture timed out")),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("changed configured account scope")
+        );
+        assert!(!error.to_string().contains("unrequested-project"));
+        Ok(())
+    }
+
+    #[async_trait]
+    impl bitrouter_ai::auth::AuthApplier for RewriteAfterProof {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            request.headers_mut().insert(
+                "authorization",
+                reqwest::header::HeaderValue::from_static("Bearer original-private-key"),
+            );
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &bitrouter_ai::target::ModelTarget,
+        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            let request = self.apply(request, target).await?;
+            let mut applied = AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive("test", "original-principal"),
+            );
+            applied.headers_mut().insert(
+                "authorization",
+                reqwest::header::HeaderValue::from_static("Bearer replaced-private-key"),
+            );
+            Ok(applied)
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_credential_proof_blocks_dispatch_and_clears_stale_authority() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|_| BitrouterError::internal("fixture bind failed"))?;
+        let mut target = responses_target("mutating-auth");
+        target.api_base = format!(
+            "http://{}/v1",
+            listener
+                .local_addr()
+                .map_err(|_| BitrouterError::internal("fixture address unavailable"))?
+        );
+        let mut ctx = plain_context();
+        ctx.insert_extension(Arc::new(RequireContinuationAuthority));
+        ctx.record_credential_authority(Some(ContinuationAuthority::new(
+            CredentialAuthority::derive("test", "stale-count-principal"),
+            bitrouter_ai::types::AuthScheme::Bearer,
+        )));
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with("mutating-auth", Arc::new(RewriteAfterProof)),
+        )?;
+        let error = tokio::select! {
+            outcome = executor.execute(&target, ctx.require_generation_prompt()?, &ctx) => outcome.err()
+                .ok_or_else(|| BitrouterError::internal("changed credentials were dispatched"))?,
+            _ = listener.accept() => return Err(BitrouterError::internal("unexpected upstream connection")),
+            _ = tokio::time::sleep(Duration::from_secs(2)) => return Err(BitrouterError::internal("fixture timed out")),
+        };
+        assert!(error.to_string().contains("authority unavailable"));
+        assert!(!error.to_string().contains("private-key"));
+        assert!(
+            ctx.required_finalization_context(false)
+                .credential_authority
+                .is_none()
+        );
+        Ok(())
+    }
+
     fn responses_target(provider: &str) -> RoutingTarget {
         RoutingTarget {
             provider_name: provider.into(),
@@ -1837,6 +2983,7 @@ mod provider_continuation_tests {
             chat_supports_stream_options: None,
             chat_google_extensions: false,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: Some("primary".into()),
             api_key_override: None,
             api_base_override: None,
@@ -2075,6 +3222,7 @@ mod client_selection_tests {
             chat_supports_stream_options: None,
             chat_google_extensions: false,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -2103,10 +3251,10 @@ mod client_selection_tests {
         .expect("build executor");
 
         // A provider with an override resolves to its own timeouts…
-        let (_, slow) = exec.client_for(&target("slow"));
+        let (_, slow) = exec.client_for(&target("slow"), false);
         assert_eq!(slow.read, Duration::from_secs(300));
         // …and one absent from the map falls back to the default.
-        let (_, other) = exec.client_for(&target("openai"));
+        let (_, other) = exec.client_for(&target("openai"), false);
         assert_eq!(other.read, default.read);
     }
 
@@ -2142,7 +3290,7 @@ mod client_selection_tests {
         )
         .expect("build executor");
 
-        let (_, before) = exec.client_for(&target("slow"));
+        let (_, before) = exec.client_for(&target("slow"), false);
         assert_eq!(before.read, default.read);
 
         let mut overrides = HashMap::new();
@@ -2156,7 +3304,7 @@ mod client_selection_tests {
         exec.reload_provider_timeouts(default, overrides)
             .expect("reload timeout clients");
 
-        let (_, after) = exec.client_for(&target("slow"));
+        let (_, after) = exec.client_for(&target("slow"), false);
         assert_eq!(after.read, Duration::from_secs(450));
     }
 
@@ -2199,6 +3347,7 @@ mod client_selection_tests {
             chat_supports_stream_options: None,
             chat_google_extensions: false,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -2327,6 +3476,7 @@ mod openai_codex_stream_bridge_tests {
             chat_supports_stream_options: None,
             chat_google_extensions: false,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -2407,5 +3557,70 @@ mod openai_codex_stream_bridge_tests {
         assert_eq!(usage.origin, UsageOrigin::ProviderReported);
 
         Ok(())
+    }
+}
+
+fn parse_upstream_success(
+    adapter: &dyn OutboundAdapter,
+    json: serde_json::Value,
+) -> Result<GenerateResult> {
+    ModelClient::parse_response(adapter, &adapter.protocol(), &json.to_string()).map_err(Into::into)
+}
+
+fn validate_nonstream_responses_terminal(json: &serde_json::Value) -> Result<()> {
+    let status = json.get("status").and_then(serde_json::Value::as_str);
+    if !matches!(status, Some("completed" | "incomplete")) {
+        return Err(BitrouterError::UpstreamInvalidResponse {
+            usage: None,
+            message: format!(
+                "Responses response has non-success terminal status '{}'",
+                status.unwrap_or("<missing>")
+            ),
+        });
+    }
+    if json
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(BitrouterError::UpstreamInvalidResponse {
+            usage: None,
+            message: "Responses response missing non-empty 'id'".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> BitrouterError {
+    if is_timeout {
+        BitrouterError::UpstreamTimeout
+    } else {
+        BitrouterError::Upstream {
+            status: 502,
+            message: format!("upstream stream error: {display}"),
+        }
+    }
+}
+
+fn classify_stream_decoder_error(error: bitrouter_ai::error::ModelError) -> BitrouterError {
+    match BitrouterError::from(error) {
+        error @ (BitrouterError::UpstreamPolicyViolation { .. }
+        | BitrouterError::Upstream { .. }
+        | BitrouterError::UpstreamInvalidResponse { .. }) => error,
+        error => BitrouterError::UpstreamInvalidResponse {
+            message: error.to_string(),
+            usage: None,
+        },
+    }
+}
+
+fn upstream_body_error(context: &'static str, error: reqwest::Error) -> BitrouterError {
+    if error.is_timeout() {
+        BitrouterError::UpstreamTimeout
+    } else {
+        BitrouterError::Upstream {
+            status: 502,
+            message: format!("{context}: {error}"),
+        }
     }
 }

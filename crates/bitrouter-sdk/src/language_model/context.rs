@@ -3,7 +3,6 @@
 //! view borrowed from it). `SettlementContext` lives in
 //! [`crate::language_model::settlement`].
 
-use crate::error::{BitrouterError, Result};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -11,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::caller::CallerContext;
+use crate::error::{BitrouterError, Result};
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::routing::RouterRequestIdentity;
 use crate::language_model::settlement::RequiredFinalizationContext;
@@ -29,8 +29,8 @@ use bitrouter_ai::protocol::responses::{
     assistant_turn_commitment, extend_causal_prefix,
 };
 use bitrouter_ai::types::{
-    ApiProtocol, ChatStreamOptions, Content, FinishReason, ModelOperation, Prompt, StreamPart,
-    Usage,
+    ApiProtocol, ChatStreamOptions, Content, FinishReason, Message, ModelOperation, Prompt,
+    StreamPart, Usage,
 };
 
 static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
@@ -61,6 +61,7 @@ pub struct ProviderContinuation {
     api_base: String,
     api_key: String,
     credential_authority: ContinuationAuthority,
+    effort_constraint: Option<Option<bitrouter_ai::types::ReasoningEffort>>,
 }
 
 /// Request-scoped marker requiring the selected native Responses target to
@@ -96,7 +97,25 @@ impl ProviderContinuation {
                 .clone()
                 .unwrap_or_else(|| target.api_key.clone()),
             credential_authority,
+            effort_constraint: None,
         }
+    }
+
+    /// Preserve an authoritative effort from the continuation record. `None`
+    /// means the recorded provider default, distinct from unknown provenance.
+    pub fn with_effort_constraint(
+        mut self,
+        effort: Option<bitrouter_ai::types::ReasoningEffort>,
+    ) -> Self {
+        self.effort_constraint = Some(effort);
+        self
+    }
+
+    pub(crate) fn admits_effort(
+        &self,
+        effort: Option<bitrouter_ai::types::ReasoningEffort>,
+    ) -> bool {
+        self.effort_constraint == Some(effort)
     }
 
     pub(crate) fn response_id(&self) -> &str {
@@ -511,6 +530,34 @@ impl PipelineContext {
         self.completed_decision_failure.load(Ordering::Acquire)
     }
 
+    /// A managed runtime may explicitly rebuild visible context before any
+    /// attempt. Every other prepared request field and hook binding stays fixed.
+    pub(crate) fn replace_managed_messages(&mut self, messages: Vec<Message>) -> Result<()> {
+        let prompt = self
+            .input
+            .generation_prompt_mut()
+            .ok_or_else(|| BitrouterError::bad_request("managed context requires generation"))?;
+        if messages.len() >= prompt.messages.len() {
+            return Err(BitrouterError::bad_request(
+                "managed context rebuild must reduce history",
+            ));
+        }
+        let mut retained = messages.iter();
+        let mut next = retained.next();
+        for original in &prompt.messages {
+            if next == Some(original) {
+                next = retained.next();
+            }
+        }
+        if next.is_some() {
+            return Err(BitrouterError::bad_request(
+                "managed context rebuild rewrote or reordered prepared messages",
+            ));
+        }
+        prompt.messages = messages;
+        Ok(())
+    }
+
     /// The inbound wire protocol the request arrived on, if known. Route
     /// resolution uses it to prefer a native (same-protocol) upstream.
     pub fn inbound_protocol(&self) -> Option<ApiProtocol> {
@@ -558,6 +605,15 @@ impl PipelineContext {
         prompt.params.reasoning_effort = effort;
         prompt.params.reasoning_effort_source = bitrouter_ai::types::ReasoningEffortSource::Policy;
         Ok(())
+    }
+
+    /// Restore the embedding caller's hard effort constraint after policy.
+    pub(crate) fn preserve_caller_effort(&mut self, effort: bitrouter_ai::types::ReasoningEffort) {
+        let Some(prompt) = self.input.generation_prompt_mut() else {
+            return;
+        };
+        prompt.params.reasoning_effort = Some(effort);
+        prompt.params.reasoning_effort_source = bitrouter_ai::types::ReasoningEffortSource::Caller;
     }
 
     /// Apply preset prompt-body overrides. `system_prompt`, when
