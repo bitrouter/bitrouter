@@ -27,7 +27,7 @@ mod state;
 mod steering;
 mod threads;
 mod verification;
-mod workspace;
+pub(crate) mod workspace;
 
 const MAX_EVENT_PAGE: usize = 1000;
 

@@ -190,10 +190,24 @@ struct TaskRunArgs {
     config: Option<PathBuf>,
 }
 
+#[derive(clap::Args)]
+struct ManagedTaskArgs {
+    #[command(flatten)]
+    task: TaskRunArgs,
+    /// Durable native managed session name; reuse it to continue released work.
+    #[arg(long)]
+    session: Option<String>,
+    /// Per-step output reservation. Uncapped subscription routes need the model ceiling.
+    #[arg(long, default_value_t = 4096)]
+    max_output_tokens: u32,
+}
+
 #[derive(Subcommand)]
 enum TaskAction {
     /// Submit a native coding task and wait for its terminal result.
     Run(TaskRunArgs),
+    /// Run the native workspace harness under the model/context routing core.
+    Managed(ManagedTaskArgs),
 }
 
 #[derive(Subcommand)]
@@ -1981,6 +1995,25 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     match command {
         Command::Task { action } => match action {
             TaskAction::Run(args) => run_native_task(args, remote_context.is_some()).await,
+            TaskAction::Managed(args) => {
+                anyhow::ensure!(
+                    remote_context.is_none(),
+                    "managed native tasks run on the local host"
+                );
+                let task = args.task;
+                bitrouter::managed_task::run(bitrouter::managed_task::Options {
+                    prompt: task.prompt,
+                    model: task.model,
+                    effort: task.effort,
+                    check: task.check,
+                    read_only: task.read_only,
+                    workspace: task.workspace,
+                    config: task.config,
+                    session: args.session,
+                    max_output_tokens: args.max_output_tokens,
+                })
+                .await
+            }
         },
         Command::Serve {
             config,

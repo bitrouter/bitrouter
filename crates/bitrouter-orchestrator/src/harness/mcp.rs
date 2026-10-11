@@ -73,6 +73,7 @@ pub struct McpConnections {
     cleanup: Vec<process::ProcessOwner>,
     pub(super) tools: Vec<McpTool>,
     pub(super) instructions: Vec<MaterialRef>,
+    pub(super) instruction_bodies: BTreeMap<String, String>,
 }
 
 impl McpConnections {
@@ -192,8 +193,11 @@ impl McpConnections {
                     return Err(reject("MCP server instructions exceed 64 KiB"));
                 }
                 let digest = sha256(text.as_bytes());
+                let material_id = format!("mcp_instructions_{}", sha256(server.name.as_bytes()));
+                self.instruction_bodies
+                    .insert(material_id.clone(), text.clone());
                 self.instructions.push(MaterialRef {
-                    material_id: format!("mcp_instructions_{}", sha256(server.name.as_bytes())),
+                    material_id,
                     version: digest.clone(),
                     sha256: digest,
                     media_type: "text/plain".into(),

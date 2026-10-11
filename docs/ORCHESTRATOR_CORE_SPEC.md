@@ -616,6 +616,13 @@ must not be presented as verified fit. An infeasible candidate is rejected;
 required context is not silently truncated. Summarization/rebuild work is
 explicit and counted, with its result validated before execution.
 
+A transport declaring no request-level output cap can be admitted when the
+explicit reservation covers its known, positive model output ceiling. The
+ordinary maximum-output and combined-context checks still apply. The final
+wire check permits only an absent cap for such a transport; silently rewritten
+caps or unknown model ceilings remain failures. The decision retains both the
+configured ceiling and the transport's lack of request-level cap support.
+
 Settled work is not implicitly disposable. The initial deterministic history
 reduction accepts an optional task-scoped `discardable_history` constraint from
 the authenticated caller: `history_sha256` commits to the serialized canonical

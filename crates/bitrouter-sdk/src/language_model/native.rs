@@ -24,6 +24,16 @@ pub struct ModelTokenLimits {
     pub context_window: Option<u64>,
 }
 
+impl ModelTokenLimits {
+    /// A provider that cannot accept a request-level output cap may still fit
+    /// a reservation covering its entire configured model output ceiling.
+    /// Missing or zero metadata never establishes that bound.
+    pub fn output_reservation_covers_model(&self, reservation: u32) -> bool {
+        self.max_output_tokens
+            .is_some_and(|ceiling| ceiling > 0 && ceiling <= u64::from(reservation))
+    }
+}
+
 /// Explicit provider support, never inferred from a compatible generation API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

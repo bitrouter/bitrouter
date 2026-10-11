@@ -898,7 +898,7 @@ fn other_provider_env_var_hints() -> Vec<String> {
 }
 
 /// Static daemon-owned resources; opening or browsing a Thread never connects.
-fn native_harness_config(
+pub(crate) fn native_harness_config(
     cfg: &bitrouter_sdk::config::Config,
     home: &std::path::Path,
 ) -> bitrouter_orchestrator::harness::HarnessConfig {

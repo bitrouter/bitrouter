@@ -155,7 +155,7 @@ pub(super) async fn wait_for(
 ) -> Result<TurnSnapshot, String> {
     // MCP cleanup alone allows five seconds; leave room for process startup
     // and settlement on loaded CI hosts on every platform.
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             let snapshot = service.read(turn_id).map_err(|error| error.to_string())?;
             if snapshot.status == status || snapshot.status.terminal() {
