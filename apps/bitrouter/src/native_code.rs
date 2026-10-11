@@ -224,6 +224,8 @@ pub async fn run(
     let mut events = Some(EventStream::new());
     let mut shutdown = crate::chat::signals::Shutdown::install();
     let mut ticker = tokio::time::interval(Duration::from_millis(500));
+    let mut animation = tokio::time::interval(Duration::from_millis(100));
+    animation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         view.draw(&mut state)?;
         tokio::select! {
@@ -263,6 +265,9 @@ pub async fn run(
                     Ok(page) => show_directory(&mut state, &mut directory, page),
                     Err(error) => state.menu.set_error(Some(format!("BRO inventory unavailable: {error}"))),
                 }
+            },
+            _ = animation.tick(), if state.is_working() && !state.menu.is_open() => {
+                state.animate();
             },
             _ = ticker.tick() => {
                 inventory_ticks = inventory_ticks.wrapping_add(1);
@@ -578,6 +583,9 @@ async fn handle_event(
                     if matches!(pending.mode, SubmissionMode::Start) {
                         state.turn_id = Some(receipt.turn_id.clone());
                         state.status = "accepted".into();
+                        state.selected_model = None;
+                        state.workflow = None;
+                        state.routing_phase = None;
                     }
                     state.push(format!(
                         "Turn ID: {} ({:?})",
@@ -628,6 +636,9 @@ fn update_view(state: &mut NativeState, view: &ThreadView) {
         update_snapshot(state, turn);
     } else {
         state.status = "idle".into();
+        state.selected_model = None;
+        state.workflow = None;
+        state.routing_phase = None;
         state.live = None;
         state.pending_input_id = None;
         state.pending_input_detail = None;
@@ -887,6 +898,44 @@ fn context_status(
 }
 
 fn update_snapshot(state: &mut NativeState, snapshot: &TurnSnapshot) {
+    let root = snapshot.context_routing.as_ref().and_then(|inspection| {
+        inspection
+            .tasks
+            .iter()
+            .find(|task| task.parent_task_id.is_none())
+    });
+    let routing = root.and_then(|task| task.routing.as_ref());
+    state.selected_model = match routing {
+        Some(routing) => routing.model.clone(),
+        None => root.and_then(|task| task.selected_model.clone()),
+    };
+    state.routing_phase = routing.map(|routing| routing.phase.key().into());
+    state.workflow = routing
+        .and_then(|routing| routing.workflow.as_ref())
+        .map(|workflow| {
+            use bitrouter_sdk::routing::signals::TaskFamily;
+            let family = match workflow.task_family {
+                TaskFamily::CodeGeneration => "code",
+                TaskFamily::CodeDebugging => "debug",
+                TaskFamily::CodeReview => "review",
+                TaskFamily::CodeSqlDatabase => "database",
+                TaskFamily::CodeFrontendUi => "frontend",
+                TaskFamily::CodeDevopsConfig => "devops",
+                TaskFamily::CodeRepositoryAnalysis => "repo",
+                TaskFamily::AgentMultiStepPlanning => "planning",
+                TaskFamily::AgentWorkflowExecution => "workflow",
+                TaskFamily::AgentWebResearch => "research",
+                TaskFamily::AgentMemoryOperations => "memory",
+                TaskFamily::AgentGeneral => "general",
+                TaskFamily::Unknown => "unknown",
+            };
+            format!(
+                "{family}/{}/{}",
+                workflow.next_step_role.key(),
+                workflow.progress_state.key()
+            )
+        });
+
     if snapshot.status == bitrouter_orchestrator::turn::TurnStatus::Failed
         && let Some(detail) = &snapshot.detail
     {
@@ -1087,6 +1136,9 @@ mod tests {
             model: "fixture-model".into(),
             status: "busy".into(),
             turn_id: Some("active".into()),
+            selected_model: Some("provider:active-model".into()),
+            workflow: Some("frontend/implement/progressing".into()),
+            routing_phase: Some("generating".into()),
             ..Default::default()
         };
         let mut session = Session {
@@ -1138,6 +1190,15 @@ mod tests {
             .await?;
             assert!(state.editor.is_empty());
             assert_eq!(state.turn_id.as_deref(), Some("active"));
+            assert_eq!(
+                state.selected_model.as_deref(),
+                Some("provider:active-model")
+            );
+            assert_eq!(
+                state.workflow.as_deref(),
+                Some("frontend/implement/progressing")
+            );
+            assert_eq!(state.routing_phase.as_deref(), Some("generating"));
         }
         server.await??;
         Ok(())
@@ -1214,7 +1275,10 @@ mod tests {
         let client = ThreadClient::connect(&socket).await?;
         let mut state = NativeState {
             model: "fixture-model".into(),
-            status: "idle".into(),
+            status: "completed".into(),
+            selected_model: Some("provider:previous-model".into()),
+            workflow: Some("code/implement/done".into()),
+            routing_phase: Some("finished".into()),
             ..Default::default()
         };
         let mut session = Session {
@@ -1242,6 +1306,10 @@ mod tests {
         .await?;
         assert_eq!(state.editor.text(), "draft y");
         assert!(session.pending.is_some());
+        assert_eq!(
+            state.selected_model.as_deref(),
+            Some("provider:previous-model")
+        );
         handle_event(
             &client,
             home.path(),
@@ -1266,6 +1334,11 @@ mod tests {
         .await?;
         assert!(state.editor.is_empty());
         assert!(session.pending.is_none());
+        assert_eq!(state.turn_id.as_deref(), Some("original-turn"));
+        assert_eq!(state.status, "accepted");
+        assert!(state.selected_model.is_none());
+        assert!(state.workflow.is_none());
+        assert!(state.routing_phase.is_none());
         server.await??;
         Ok(())
     }

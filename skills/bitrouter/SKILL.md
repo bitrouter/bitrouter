@@ -105,7 +105,7 @@ Same-worktree runs require the warned override. Read `references/sessions.md` fi
 defaults to the bundled `bitrouter/auto` policy, and approves its own tools. `--check` adds verification; otherwise
 it is `not_requested`. Bare `bro code` keeps one Thread: Enter starts/enqueues,
 Ctrl-Enter steers, Ctrl-R resumes a paused queue, empty-composer `y`/`n` approves,
-and Ctrl-D detaches. Reattach with `--thread-id`; `--task-id` is removed.
+and Ctrl-D detaches. The docked status bar animates active work and shows accepted routing workflow labels plus the selected serving model. Reattach with `--thread-id`; `--task-id` is removed.
 `--read-only` permits `read`, `glob`, `grep`; coding adds `write`, unique-span `edit`, and `shell`.
 Native Threads load global and ancestor `AGENTS.md` into durable user context, using overrides and model-read nested rules; see [wiring](references/cli.md#native-project-instructions-mcp-and-skills-wiring). Coding also exposes configured MCP tools through the same approvals; read-only does not connect to MCP. Skills discovery publishes metadata without prompt injection. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v17; opt-in HTTP uses `/agent/v2`. Durable history/keys
 survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.

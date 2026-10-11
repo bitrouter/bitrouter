@@ -49,6 +49,10 @@ pub struct NativeEntry {
 #[derive(Default)]
 pub struct NativeState {
     pub model: String,
+    pub selected_model: Option<String>,
+    pub workflow: Option<String>,
+    pub routing_phase: Option<String>,
+    pub animation_frame: u8,
     pub workspace: String,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
@@ -69,6 +73,22 @@ pub struct NativeState {
 }
 
 impl NativeState {
+    pub fn is_working(&self) -> bool {
+        self.pending_input_id.is_none()
+            && matches!(
+                self.status.as_str(),
+                "accepted" | "running" | "busy" | "verifying" | "cancelling"
+            )
+    }
+
+    pub fn animate(&mut self) {
+        self.animation_frame = if self.is_working() {
+            self.animation_frame.wrapping_add(1) % SPINNER.len() as u8
+        } else {
+            0
+        };
+    }
+
     pub fn push(&mut self, line: impl Into<String>) {
         self.notice = Some(line.into());
     }
@@ -463,40 +483,155 @@ fn render_dock(frame: &mut ratatui::Frame<'_>, state: &NativeState) {
         .style(input_style),
         composer,
     );
-    let hint = if state.can_open_agents() {
-        " · ← agents"
+    render_status_bar(
+        frame,
+        state,
+        Rect::new(frame.area().x, context.y, frame.area().width, 1),
+    );
+    let controls = if help.width < 76 && state.can_open_agents() {
+        "Enter send · ← agents · Ctrl-D detach"
     } else {
-        ""
+        "Enter send/queue · Ctrl-Enter steer · Ctrl-R resume · Ctrl-D detach"
     };
-    let id = state.thread_id.as_deref().unwrap_or("new");
-    let mut facts = format!(
-        "{} · thread: {} · status: {} · queue: {}",
-        state.model,
-        id.get(..8).unwrap_or(id),
-        state.status,
-        state.queued
-    );
-    if context.width >= 110 {
-        facts.push_str(&format!(" · check: {}", state.verification));
-    }
-    let available = usize::from(context.width).saturating_sub(hint.chars().count());
-    let mut width = 0;
-    let facts = facts
-        .chars()
-        .take_while(|ch| {
-            width += unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(0);
-            width <= available
-        })
-        .collect::<String>();
     frame.render_widget(
-        Paragraph::new(format!("{facts}{hint}")).style(Style::default().fg(Color::DarkGray)),
-        context,
-    );
-    frame.render_widget(
-        Paragraph::new("Enter send/queue · Ctrl-Enter steer · Ctrl-R resume · Ctrl-D detach")
-            .style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(controls).style(Style::default().fg(Color::DarkGray)),
         help,
     );
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn activity(state: &NativeState) -> (&str, Color) {
+    if state.pending_input_id.is_some() || state.status == "waiting_for_input" {
+        return ("APPROVAL", Color::Yellow);
+    }
+    if state.is_working() {
+        return match state.routing_phase.as_deref() {
+            Some("classifying") => ("CLASSIFYING", Color::Yellow),
+            Some("routing" | "preparing") => ("ROUTING", Color::Yellow),
+            Some("generating") => ("GENERATING", Color::Cyan),
+            Some("tools") => ("TOOLS", Color::Blue),
+            Some("waiting") => ("AGENTS", Color::Blue),
+            Some("cancelling") => ("CANCELLING", Color::Yellow),
+            _ => ("WORKING", Color::Cyan),
+        };
+    }
+    match state.status.as_str() {
+        "completed" => ("DONE", Color::Green),
+        "failed" => ("FAILED", Color::Red),
+        "cancelled" | "interrupted" => ("STOPPED", Color::Yellow),
+        "paused" => ("PAUSED", Color::Yellow),
+        "disconnected" | "server_instance_lost" => ("OFFLINE", Color::Red),
+        "recovery_required" => ("RECOVERY", Color::Red),
+        _ => ("READY", Color::Cyan),
+    }
+}
+
+fn render_status_bar(frame: &mut ratatui::Frame<'_>, state: &NativeState, area: Rect) {
+    let (label, color) = activity(state);
+    let indicator = if state.is_working() {
+        SPINNER[usize::from(state.animation_frame) % SPINNER.len()]
+    } else {
+        "●"
+    };
+    let foreground = if matches!(color, Color::Blue | Color::Red) {
+        Color::White
+    } else {
+        Color::Black
+    };
+    let mode = format!(" {indicator} {label} ");
+    let mode_width = (mode.width() as u16).min((area.width / 3).max(1));
+    let tail = if area.width >= 80 {
+        let id = state.thread_id.as_deref().unwrap_or("new");
+        format!(
+            " {} q:{}{} ",
+            id.get(..8).unwrap_or(id),
+            state.queued,
+            if state.can_open_agents() {
+                " · ← agents"
+            } else {
+                ""
+            }
+        ) + &if area.width >= 120 && !state.verification.is_empty() {
+            format!(" check:{}", state.verification)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    let tail_width = (tail.width() as u16).min(area.width.saturating_sub(mode_width));
+    let remaining = area.width.saturating_sub(mode_width + tail_width);
+    let workflow_width = (remaining / 2).min(42);
+    let model_width = remaining.saturating_sub(workflow_width);
+    let workflow = state.workflow.as_deref().unwrap_or("default");
+    let prefix = if area.width >= 80 { "workflow: " } else { "" };
+    let full = format!("{prefix}{workflow}");
+    // Preserve task and next-step role before optional progress text. Reserving
+    // padding here keeps those labels visible across changing activity widths.
+    let workflow =
+        if area.width < 80 || full.width() > usize::from(workflow_width.saturating_sub(2)) {
+            format!(
+                "{prefix}{}",
+                workflow.split('/').take(2).collect::<Vec<_>>().join("/")
+            )
+        } else {
+            full
+        };
+    let (prefix, model) = match state.selected_model.as_deref() {
+        Some(model) => ("model", model),
+        None => (
+            "route",
+            if state.model.is_empty() {
+                "choose model"
+            } else {
+                &state.model
+            },
+        ),
+    };
+    let full_model = format!(" {prefix}: {model} ");
+    let model = if full_model.width() > usize::from(model_width) {
+        format!(
+            " {prefix}: {} ",
+            model.rsplit([':', '/']).next().unwrap_or(model)
+        )
+    } else {
+        full_model
+    };
+    let base = Style::default().bg(Color::Indexed(236)).fg(Color::Gray);
+    frame.render_widget(Paragraph::new("").style(base), area);
+    for (x, width, text, style) in [
+        (
+            area.x,
+            mode_width,
+            mode,
+            Style::default()
+                .bg(color)
+                .fg(foreground)
+                .add_modifier(Modifier::BOLD),
+        ),
+        (area.x + mode_width, workflow_width, workflow, base),
+        (
+            area.x + mode_width + workflow_width,
+            model_width,
+            model,
+            base.fg(Color::White).bg(Color::Indexed(238)),
+        ),
+        (
+            area.right().saturating_sub(tail_width),
+            tail_width,
+            tail,
+            base,
+        ),
+    ] {
+        if width > 0 {
+            frame.render_widget(
+                Paragraph::new(format!(" {} ", compact(&text, width.saturating_sub(2))))
+                    .style(style),
+                Rect::new(x, area.y, width, 1),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -589,5 +724,87 @@ mod tests {
         state.model_editor = Some(Editor::default());
         assert!(!state.can_open_agents());
         assert_eq!(state.editor.text(), "unsent draft");
+    }
+
+    fn bar(state: &NativeState, width: u16) -> io::Result<(String, ratatui::buffer::Buffer)> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1))?;
+        terminal.draw(|frame| render_status_bar(frame, state, frame.area()))?;
+        let buffer = terminal.backend().buffer().clone();
+        let text = buffer_lines(&buffer)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok((text, buffer))
+    }
+
+    #[test]
+    fn status_bar_animates_actual_generation_and_preserves_history() -> io::Result<()> {
+        let mut state = NativeState {
+            status: "running".into(),
+            model: "bitrouter/auto".into(),
+            selected_model: Some("subscription:gpt-example".into()),
+            workflow: Some("repo/verify/progressing".into()),
+            routing_phase: Some("generating".into()),
+            ..Default::default()
+        };
+        let (first, buffer) = bar(&state, 140)?;
+        state.animate();
+        let (second, _) = bar(&state, 140)?;
+        assert!(first.contains("⠋ GENERATING") && second.contains("⠙ GENERATING"));
+        assert!(second.contains("workflow: repo/verify/progressing"));
+        assert!(second.contains("model: subscription:gpt-example"));
+        assert!(!second.contains("bitrouter/auto"));
+        assert_eq!(buffer[(0, 0)].bg, Color::Cyan);
+        assert!(state.entries.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn status_bar_stops_animation_at_approval_terminal_and_disconnect() -> io::Result<()> {
+        let mut state = NativeState {
+            status: "running".into(),
+            routing_phase: Some("generating".into()),
+            pending_input_id: Some("approval".into()),
+            ..Default::default()
+        };
+        state.animate();
+        assert!(!state.is_working());
+        assert!(bar(&state, 80)?.0.contains("APPROVAL"));
+        state.pending_input_id = None;
+        for (status, label) in [
+            ("completed", "DONE"),
+            ("failed", "FAILED"),
+            ("disconnected", "OFFLINE"),
+            ("recovery_required", "RECOVERY"),
+        ] {
+            state.status = status.into();
+            state.animate();
+            let text = bar(&state, 80)?.0;
+            assert!(!state.is_working());
+            assert!(text.contains(label) && !SPINNER.iter().any(|glyph| text.contains(glyph)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn status_bar_distinguishes_pending_selection_and_clips_unicode_safely() -> io::Result<()> {
+        let mut state = NativeState {
+            status: "accepted".into(),
+            model: "bitrouter/auto".into(),
+            routing_phase: Some("classifying".into()),
+            ..Default::default()
+        };
+        let text = bar(&state, 100)?.0;
+        assert!(text.contains("CLASSIFYING") && text.contains("route: bitrouter/auto"));
+        assert!(!text.contains("model:"));
+        state.selected_model = Some("provider:模型👩‍💻\x1b[2J".repeat(20));
+        state.workflow = Some("frontend/implement/progressing".into());
+        for width in [40, 60, 80, 120] {
+            let (text, _) = bar(&state, width)?;
+            assert!(!text.contains('\x1b'));
+            assert!(text.width() <= usize::from(width));
+        }
+        Ok(())
     }
 }

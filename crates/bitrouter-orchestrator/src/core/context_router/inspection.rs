@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::session::{AgentStatus, SessionSnapshot};
+use crate::core::session::{AgentStatus, ModelStep, SessionSnapshot};
+use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Inspection {
@@ -30,6 +31,54 @@ pub struct TaskView {
     pub source_groups: usize,
     pub omitted_groups: usize,
     pub result_references: usize,
+    /// Current-step presentation facts; absent in older observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<RoutingStatus>,
+}
+
+/// Public progress from the current task's acknowledged execution state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RoutingStatus {
+    pub phase: RoutingPhase,
+    /// Accepted classifier labels, including explicit abstention as unknown.
+    pub workflow: Option<Workflow>,
+    /// Current serving attempt, or the selected plan before dispatch.
+    pub model: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingPhase {
+    Preparing,
+    Classifying,
+    Routing,
+    Generating,
+    Tools,
+    Waiting,
+    Cancelling,
+    Finished,
+}
+
+impl RoutingPhase {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Preparing => "preparing",
+            Self::Classifying => "classifying",
+            Self::Routing => "routing",
+            Self::Generating => "generating",
+            Self::Tools => "tools",
+            Self::Waiting => "waiting",
+            Self::Cancelling => "cancelling",
+            Self::Finished => "finished",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Workflow {
+    pub task_family: TaskFamily,
+    pub next_step_role: NextStepRole,
+    pub progress_state: ProgressState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,6 +135,7 @@ impl Inspection {
                     source_groups: work.evidence.len(),
                     omitted_groups: view.map_or(0, |view| view.omitted.len()),
                     result_references: work.result_evidence.len(),
+                    routing: task_routing(state, work),
                 }
             })
             .collect();
@@ -157,4 +207,102 @@ impl Inspection {
             decisions,
         })
     }
+}
+
+fn task_routing(state: &SessionSnapshot, work: &super::WorkUnit) -> Option<RoutingStatus> {
+    let turn = state
+        .agents
+        .get(&work.agent_id)?
+        .turn
+        .as_ref()
+        .filter(|turn| turn.agent_turn_id == work.task_id)?;
+    let waiting = turn.status == AgentStatus::Runnable
+        && turn.final_answer.is_some()
+        && crate::core::session::pending_dependencies(state, &work.agent_id);
+    let step = turn
+        .steps
+        .last()
+        .filter(|step| waiting || turn.status != AgentStatus::Runnable || !step.settled);
+    let decision = step.and_then(|step| {
+        state
+            .context_store
+            .decisions
+            .values()
+            .filter(|receipt| {
+                receipt.task_id == work.task_id
+                    && receipt.run_id == work.run_id
+                    && receipt.agent_id == work.agent_id
+                    && receipt.source.context_revision == step.context_revision
+                    && receipt.source.signal_revision == step.signal_revision
+                    && !receipt.stale
+            })
+            .max_by_key(|receipt| receipt.intent_state_revision)
+    });
+    // Applied views bind the classifier receipt to this exact execution step.
+    // Pending classification can report progress without reusing old labels.
+    let assessment_receipt = step
+        .and_then(|step| state.context_store.executions.get(&step.step_id))
+        .filter(|execution| {
+            execution.task_id == work.task_id && execution.agent_id == work.agent_id
+        })
+        .and_then(|execution| execution.decision_id.as_ref())
+        .and_then(|id| state.context_store.decisions.get(id))
+        .filter(|receipt| !receipt.stale);
+    let workflow = assessment_receipt.and_then(|receipt| {
+        let response = receipt.outcome.as_ref()?.as_ref().ok()?;
+        let assessment = bitrouter_sdk::routing::assessment::decode(
+            &receipt.request,
+            response,
+            receipt.policy.confidence_threshold,
+        )
+        .ok()?;
+        Some(Workflow {
+            task_family: assessment.task_family,
+            next_step_role: assessment.next_step_role,
+            progress_state: assessment.progress_state,
+        })
+    });
+    let phase = match turn.status {
+        AgentStatus::ModelRunning if decision.is_some_and(|receipt| receipt.outcome.is_none()) => {
+            RoutingPhase::Classifying
+        }
+        AgentStatus::ModelRunning
+            if step.is_some_and(|step| !step.attempts.is_empty() && !step.settled) =>
+        {
+            RoutingPhase::Generating
+        }
+        AgentStatus::ModelRunning => RoutingPhase::Routing,
+        AgentStatus::WaitingTool | AgentStatus::WaitingMaterial => RoutingPhase::Tools,
+        AgentStatus::WaitingMessage => RoutingPhase::Waiting,
+        AgentStatus::Runnable if waiting => RoutingPhase::Waiting,
+        AgentStatus::Runnable => RoutingPhase::Preparing,
+        AgentStatus::Cancelling => RoutingPhase::Cancelling,
+        _ => RoutingPhase::Finished,
+    };
+    // A new preparation cannot display the previous step's model as its choice.
+    let model = step.and_then(serving_model);
+    Some(RoutingStatus {
+        phase,
+        workflow,
+        model,
+    })
+}
+
+fn serving_model(step: &ModelStep) -> Option<String> {
+    let plan = step.plan.as_ref()?;
+    if let Some(attempt) = step.attempts.last()
+        && let Some(route) = usize::try_from(attempt.index)
+            .ok()
+            .and_then(|index| plan.routes.get(index))
+    {
+        let report = attempt.receipt.as_ref().map(|receipt| &receipt.report);
+        let provider = report
+            .and_then(|report| report.actual_provider.as_deref())
+            .unwrap_or(&route.provider);
+        let model = report
+            .and_then(|report| report.actual_model.as_deref())
+            .unwrap_or(&route.model);
+        return Some(format!("{provider}:{model}"));
+    }
+    Some(plan.effective_model.clone())
 }
