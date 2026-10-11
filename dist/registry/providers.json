@@ -3314,6 +3314,21 @@
             }
           },
           "provider_model_id": "openai/gpt-6.1-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-haiku-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider_model_id": "anthropic/claude-haiku-5.5"
         }
       ],
       "name": "bitrouter",
@@ -4599,6 +4614,104 @@
             }
           },
           "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-pro-0813",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.044,
+              "no_cache": 1.32
+            },
+            "output_tokens": {
+              "text": 3.96
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "minimax/minimax-m3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-2.4t-a95b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "qwen/qwen3.8-2.4t-a95b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-27b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.085,
+              "no_cache": 0.42
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider_model_id": "qwen/qwen3.8-27b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider_model_id": "qwen/qwen3.8-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-max",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "qwen/qwen3.8-max"
         }
       ],
       "name": "novita",
