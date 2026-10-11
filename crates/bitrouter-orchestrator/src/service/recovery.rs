@@ -1074,17 +1074,18 @@ impl Rebuild {
                     }
                 }
             }
-            self.consume(&record)?;
+            let native_snapshot = self.consume(&record)?;
             if let ExecutionRecord::ThreadEvent { event } = &record {
                 if event.seq != self.sequence || event.thread_id != self.view.thread.thread_id {
                     self.invalid("public Thread event has a mismatched durable cursor or identity");
                 }
             } else {
                 let mut changes = Vec::new();
-                super::observation::project(
+                super::observation::project_with_native(
                     &record,
                     &self.view.thread.thread_id,
                     None,
+                    native_snapshot.as_ref(),
                     &mut changes,
                 );
                 self.view.apply(&crate::thread::ThreadEvent {
@@ -1100,7 +1101,11 @@ impl Rebuild {
         Ok(())
     }
 
-    fn consume(&mut self, record: &ExecutionRecord) -> Result<(), ServiceError> {
+    fn consume(
+        &mut self,
+        record: &ExecutionRecord,
+    ) -> Result<Option<crate::core::session::SessionSnapshot>, ServiceError> {
+        let mut native_snapshot = None;
         match record {
             ExecutionRecord::ThreadCreated { .. } if self.sequence != 1 => {
                 self.invalid("duplicate Thread header")
@@ -1266,10 +1271,11 @@ impl Rebuild {
                     && &active.turn_id == turn_id
                 {
                     match crate::agent::native::Saved::replay(&mut self.native, fact) {
-                        Ok(Some(snapshot)) => {
-                            if let Err(error) = native::observe(active, &snapshot, fact) {
+                        Ok(Some((snapshot, input_accepted))) => {
+                            if let Err(error) = native::observe(active, &snapshot, input_accepted) {
                                 self.invalid(error);
                             }
+                            native_snapshot = Some(snapshot);
                         }
                         Ok(None) => {}
                         Err(error) => self.invalid(error),
@@ -1308,7 +1314,7 @@ impl Rebuild {
                 "Thread reconstruction exceeds bounded state capacity",
             ));
         }
-        Ok(())
+        Ok(native_snapshot)
     }
 
     fn finish(

@@ -144,7 +144,53 @@ pub struct CheckpointBatch {
     pub payload_sha256: String,
 }
 
+/// A verified decode tied to immutable bytes and the limits used to admit them.
+/// Internal replay consumers can share it without accepting an arbitrary payload.
+pub(crate) struct VerifiedBatch<'a> {
+    batch: &'a CheckpointBatch,
+    limits: &'a Limits,
+    payload: CheckpointPayload,
+}
+
+impl VerifiedBatch<'_> {
+    pub(crate) fn batch(&self) -> &CheckpointBatch {
+        self.batch
+    }
+
+    pub(crate) fn payload(&self) -> &CheckpointPayload {
+        &self.payload
+    }
+
+    pub(crate) fn validate_append(
+        &self,
+        grant: &OwnershipGrant,
+        head: &DurableHead,
+        limits: &Limits,
+        available: &BTreeMap<String, ArtifactRef>,
+        retained_ack: Option<&CheckpointAck>,
+    ) -> Result<CheckpointAck, CoreError> {
+        if self.limits != limits {
+            return Err(conflict("verified checkpoint limits changed"));
+        }
+        grant.validate()?;
+        head.validate()?;
+        self.batch
+            .validate_decoded_append(&self.payload, grant, head, available, retained_ack)
+    }
+}
+
 impl CheckpointBatch {
+    pub(crate) fn verified<'a>(
+        &'a self,
+        limits: &'a Limits,
+    ) -> Result<VerifiedBatch<'a>, CoreError> {
+        Ok(VerifiedBatch {
+            batch: self,
+            limits,
+            payload: self.decode(limits)?,
+        })
+    }
+
     /// Check a projected payload length without allocating its base64 bytes.
     /// Base64 contains no JSON-escaped characters, so the empty wire envelope
     /// plus its encoded length gives the exact transport size.

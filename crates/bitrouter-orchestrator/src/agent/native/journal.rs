@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::checkpoint::{
-    CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence, sha256,
+    CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence, VerifiedBatch, sha256,
 };
 use crate::core::protocol::{ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant};
 
@@ -238,6 +238,14 @@ impl Journal {
     }
 
     pub(super) fn prepare(&self, batch: &CheckpointBatch) -> Result<CheckpointAck, CoreError> {
+        self.prepare_verified(&batch.verified(&self.limits)?)
+    }
+
+    pub(super) fn prepare_verified(
+        &self,
+        verified: &VerifiedBatch<'_>,
+    ) -> Result<CheckpointAck, CoreError> {
+        let batch = verified.batch();
         let retained = self
             .checkpoint
             .as_ref()
@@ -256,17 +264,33 @@ impl Journal {
             })
             .map(|(id, (reference, _))| (id.clone(), reference.clone()))
             .collect();
-        let (ack, payload) = batch.validate_append_with_payload(
+        let ack = verified.validate_append(
             &self.grant,
             &self.head,
             &self.limits,
             &available,
             retained.as_ref(),
         )?;
-        for reference in &payload.checkpoint.artifact_refs {
+        for reference in &verified.payload().checkpoint.artifact_refs {
             self.require(reference, &mut BTreeSet::new())?;
         }
         Ok(ack)
+    }
+
+    pub(super) fn apply_replayed(
+        &mut self,
+        decoded: &super::DecodedCheckpoint<'_>,
+        ack: &CheckpointAck,
+    ) -> Result<(), CoreError> {
+        crate::core::context_router::validation::validate_store_history(
+            &decoded.snapshot.context_store,
+            &mut self.context_history,
+        )?;
+        self.fences
+            .extend(decoded.verified.payload().tool_start_fences.iter().cloned());
+        self.head = ack.head();
+        self.checkpoint = Some(decoded.verified.batch().clone());
+        Ok(())
     }
 
     pub(super) fn apply(
