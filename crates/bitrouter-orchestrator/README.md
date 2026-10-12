@@ -26,8 +26,10 @@ from `service`, `thread` or `store`.
 2. `service/admission.rs` accepts a keyed input and commits its Turn identity.
 3. `service/runner.rs` drives the Agent while handling commit, approval, model-boundary
    and live-output channels.
-4. `agent.rs` runs the model/tool loop. `agent/stream.rs` collects provider output;
-   `agent/batch.rs` schedules bounded read groups and exclusive tools.
+4. `agent.rs` owns the native model/tool run contract. `agent/native.rs` adapts
+   production runs to the Core scheduler; its `native/` modules keep the durable
+   journal, Core port, budget, projections, bounded scheduling, artifacts, and
+   native tool dispatch together.
 5. `tools.rs` declares, validates and dispatches the six tools. Implementations live
    in `tools/{read,glob,grep,write,edit,shell}.rs`.
 6. `service/verification.rs` runs the optional configured check.
@@ -59,7 +61,8 @@ Tests needing private runtime state remain child modules under `src/`, loaded
 with `#[cfg(test)] mod tests;`. A separate source file does not make such a test
 an external integration test.
 
-- Agent and tool suites live in `agent/tests.rs` and `tools/tests/mod.rs`.
+- Agent and tool suites live in `agent/tests.rs`, `agent/tests_native.rs`, and
+  `tools/tests/mod.rs`.
 - Service behavior suites live in `service/tests/`, indexed by `service/tests.rs`.
 - Shared service fixtures, request constructors and synchronization helpers live
   in `service/tests/support.rs`; suites do not borrow helpers from other suites.
