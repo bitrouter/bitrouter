@@ -573,16 +573,19 @@ impl MockAcp {
         Ok(outcomes)
     }
 
-    fn wait_for_permission_outcomes(&self) -> Result<Vec<(String, serde_json::Value)>> {
+    fn wait_for_permission_outcomes(
+        &self,
+        expected: usize,
+    ) -> Result<Vec<(String, serde_json::Value)>> {
         let deadline = Instant::now() + PTY_TIMEOUT;
         loop {
             let outcomes = self.captured_permission_outcomes()?;
-            if outcomes.len() >= 2 {
+            if outcomes.len() >= expected {
                 return Ok(outcomes);
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "timed out waiting for both pending permission outcomes; received {outcomes:?}"
+                    "timed out waiting for {expected} permission outcomes; received {outcomes:?}"
                 );
             }
             thread::sleep(Duration::from_millis(10));
@@ -2129,7 +2132,7 @@ fn permission_arriving_in_inspector_needs_slash_and_fresh_selection() -> Result<
     let _ = code.pty.wait_for_text("Allow fixture 2")?;
     code.pty.send(b"1\r")?;
     let _ = code.pty.wait_for_text("Turn completed")?;
-    let outcomes = code.mock.wait_for_permission_outcomes()?;
+    let outcomes = code.mock.wait_for_permission_outcomes(2)?;
     ensure!(
         outcomes.len() == 2,
         "permissions were not resolved exactly once"
@@ -2187,7 +2190,7 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
         .pty
         .wait_for_raw_text_since(&focus_second, "\x1b[?2026h")?;
     code.pty.send(b"\x1b")?;
-    let outcomes = code.mock.wait_for_permission_outcomes()?;
+    let outcomes = code.mock.wait_for_permission_outcomes(2)?;
     ensure!(
         outcomes.len() == 2,
         "safe denial did not resolve both requests"

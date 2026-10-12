@@ -102,10 +102,25 @@ impl TerminalClient {
         self.wait_for_presence(needle, true)
     }
 
+    fn frame_complete(&self) -> bool {
+        // PTY reads can split synchronized updates; observe only committed frames.
+        // https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
+        let begin = self
+            .raw
+            .windows(b"\x1b[?2026h".len())
+            .rposition(|window| window == b"\x1b[?2026h");
+        let end = self
+            .raw
+            .windows(b"\x1b[?2026l".len())
+            .rposition(|window| window == b"\x1b[?2026l");
+        begin.is_none_or(|begin| end.is_some_and(|end| end > begin))
+    }
+
     fn wait_for_presence(&mut self, needle: &str, present: bool) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
-            if self.screen.screen().contents().contains(needle) == present {
+            if self.screen.screen().contents().contains(needle) == present && self.frame_complete()
+            {
                 return Ok(());
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -150,6 +165,7 @@ impl TerminalClient {
             if self.raw[offset..]
                 .windows(end.len())
                 .any(|window| window == end)
+                && self.frame_complete()
             {
                 return Ok(());
             }
@@ -175,7 +191,7 @@ impl TerminalClient {
             .ok_or_else(|| anyhow::anyhow!("{phase} has no visible spinner"))?;
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if current(&self.screen).is_some_and(|glyph| glyph != first) {
+            if current(&self.screen).is_some_and(|glyph| glyph != first) && self.frame_complete() {
                 return Ok(());
             }
             let bytes = self
@@ -724,6 +740,9 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let frame_offset = tui.raw.len();
+    // Resize while stopped, then wait for raw mode and the resumed frame before
+    // sending keys, so input cannot be buffered by the restored canonical mode.
+    tui.resize(24, 100)?;
     ensure!(
         Command::new("kill")
             .arg("-CONT")
@@ -732,11 +751,12 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
             .await?
             .success()
     );
-    tui.resize(24, 100)?;
-    tui.send(b"\x0c")?;
     let resume_frame = tui.wait_for_raw_since(frame_offset, b"\x1b[?2004h")?;
     tui.wait_for_frame_since(resume_frame)?;
     tui.wait_for("Enter view")?;
+    let redraw_offset = tui.raw.len();
+    tui.send(b"\x0c")?;
+    tui.wait_for_frame_since(redraw_offset)?;
     tui.send(b"/")?;
     tui.wait_for("Agents · search:")?;
     tui.send(second.thread_id.as_bytes())?;
