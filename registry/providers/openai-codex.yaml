@@ -73,10 +73,21 @@ models:
     capabilities: [reasoning, tools]
   - id: openai/gpt-6-luna
     provider_model_id: gpt-6-luna
+    # Codex model/list declares the effort ladder; policy-owned effort requires
+    # explicit support even when a direct caller may pass it through.
+    # https://developers.openai.com/codex/app-server#models
+    reasoning_effort:
+      levels: [low, medium, high, xhigh, max]
+      default: medium
+    capabilities: [reasoning, tools]
   - id: openai/gpt-6-sol
     provider_model_id: gpt-6-sol
   - id: openai/gpt-6.1-sol
     provider_model_id: gpt-6.1-sol
+    reasoning_effort:
+      levels: [low, medium, high, xhigh, max]
+      default: low
+    capabilities: [reasoning, tools]
 status: active
 auto_sync:
   feed: models_dev

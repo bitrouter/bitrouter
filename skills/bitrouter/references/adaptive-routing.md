@@ -115,6 +115,13 @@ request. Evaluators preserve the optional router-authored `experiment`
 reference verbatim and never invent or edit it; the evaluator-owned `cohort`
 field does not assign experiment membership.
 
+For unpriced subscriptions, start exploration with `optimize run --objective
+latency`. This retains the quality gate and instead requires lower complete-task
+wall time. The same conclusive evaluator must supply `latency.wall_ms` in
+`milliseconds` for every eligible unit in both arms. The objective is signed
+into the experiment; per-request latency and partial measurements cannot
+justify promotion.
+
 The hot path never reads Eval rows. `frozen` and `adaptive` route identically;
 mode controls write authority, not request-time learning. `bro policy
 verify --evidence` reconstructs an active compiled lock's evidence root when

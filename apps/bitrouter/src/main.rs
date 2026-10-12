@@ -1395,6 +1395,9 @@ enum OptimizeAction {
         /// Challenger tier; defaults to the policy's adequacy explore tier.
         #[arg(long)]
         candidate_tier: Option<String>,
+        /// Complete-task resource to minimize while retaining the quality gate.
+        #[arg(long, value_enum, default_value = "cost")]
+        objective: bitrouter::optimization::exploration::OptimizationObjective,
         #[arg(long, default_value_t = 100_000)]
         exploration_ppm: u32,
         #[arg(long, default_value_t = 3)]
@@ -2753,7 +2756,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                 catchup,
             } => {
                 for event in catchup {
-                    emit_task_json(serde_json::json!({"type":"event", "event":event}))?;
+                    emit_task_event(&event)?;
                 }
                 view = *fresh;
                 emit_task_json(
@@ -2762,7 +2765,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             }
             bitrouter_orchestrator::thread::ThreadObservation::Event { event } => {
                 view.apply(&event);
-                emit_task_json(serde_json::json!({"type":"event", "event":event}))?;
+                emit_task_event(&event)?;
             }
             bitrouter_orchestrator::thread::ThreadObservation::Live {
                 event,
@@ -2848,6 +2851,15 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             return Ok(());
         }
     }
+}
+
+fn emit_task_event(event: &bitrouter_orchestrator::thread::ThreadEvent) -> Result<()> {
+    // Private execution fences still advance the durable cursor. The client
+    // applies them locally, but NDJSON consumers only need public changes.
+    if !event.changes.is_empty() {
+        emit_task_json(serde_json::json!({"type":"event", "event":event}))?;
+    }
+    Ok(())
 }
 
 fn emit_task_json(value: serde_json::Value) -> Result<()> {
@@ -4610,6 +4622,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
         OptimizeAction::Run {
             policy,
             candidate_tier,
+            objective,
             exploration_ppm,
             minimum_tasks,
             maximum_tasks,
@@ -4623,6 +4636,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             let options = bitrouter::optimization::controller::OptimizationOptions {
                 policy: policy.clone(),
                 candidate_tier,
+                objective,
                 challenger_exposure_ppm: exploration_ppm,
                 minimum_tasks_per_arm: minimum_tasks,
                 maximum_challenger_tasks: maximum_tasks,
@@ -4677,6 +4691,7 @@ fn optimization_run_report(
         control: cohort.map(|assessment| arm_report(&assessment.control)),
         challenger: cohort.map(|assessment| arm_report(&assessment.challenger)),
         cost_delta_micro_usd: cohort.and_then(|assessment| assessment.cost_delta_micro_usd),
+        latency_delta_ms: cohort.and_then(|assessment| assessment.latency_delta_ms),
         evaluator_config_digest: cohort
             .and_then(|assessment| assessment.evaluator_config_digest.clone())
             .or_else(|| {
@@ -4710,6 +4725,7 @@ fn optimization_status_report(
         control: None,
         challenger: None,
         cost_delta_micro_usd: None,
+        latency_delta_ms: None,
         evaluator_config_digest: status
             .active_experiment
             .and_then(|experiment| experiment.gate.evaluator_config_digest),
@@ -4722,6 +4738,7 @@ fn treatment_report(
     exploration: &bitrouter::optimization::exploration::RouteExploration,
 ) -> TreatmentReport {
     TreatmentReport {
+        objective: exploration.gate.objective,
         target_request_key: exploration.target_request_key.clone(),
         champion_tier: exploration.champion_tier.clone(),
         challenger_tier: exploration.challenger_tier.clone(),
@@ -4743,6 +4760,7 @@ fn arm_report(assessment: &bitrouter::optimization::cohort::ArmAssessment) -> Ar
         hard_violations: assessment.hard_violations,
         pass_rate_ppm: assessment.pass_rate_ppm,
         mean_cost_micro_usd: assessment.mean_cost_micro_usd,
+        mean_latency_ms: assessment.mean_latency_ms,
     }
 }
 
@@ -8307,6 +8325,16 @@ mod tests {
             );
         }
 
+        let latency = Cli::try_parse_from(["bro", "optimize", "run", "--objective", "latency"])?;
+        assert!(matches!(
+            latency.command,
+            Some(Command::Optimize {
+                action: OptimizeAction::Run {
+                    objective: bitrouter::optimization::exploration::OptimizationObjective::Latency,
+                    ..
+                }
+            })
+        ));
         let run = Cli::try_parse_from(["bitrouter", "optimize", "run"])?;
         assert!(matches!(
             run.command,
@@ -8314,6 +8342,7 @@ mod tests {
                 action: OptimizeAction::Run {
                     policy,
                     candidate_tier: None,
+                    objective: bitrouter::optimization::exploration::OptimizationObjective::Cost,
                     exploration_ppm: 100_000,
                     minimum_tasks: 3,
                     maximum_tasks: 20,
@@ -8365,6 +8394,7 @@ mod tests {
                     challenger_tier: "economy".into(),
                     challenger_exposure_ppm: 100_000,
                     gate: bitrouter::optimization::exploration::OptimizationGate {
+                        objective: Default::default(),
                         minimum_tasks_per_arm: 3,
                         maximum_challenger_tasks: 20,
                         minimum_pass_rate_ppm: 900_000,

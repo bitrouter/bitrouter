@@ -876,7 +876,8 @@ impl PolicyTableRouter {
 
     pub(crate) fn record_bound_policy_decision(
         &self,
-        request_id: &str,
+        // Persist the owner-opaque identity while committing to the canonical ingress id.
+        request_ids: (&str, &str),
         invocation: &EvalInvocation,
         input_model: String,
         input_effort: Option<ReasoningEffort>,
@@ -888,7 +889,7 @@ impl PolicyTableRouter {
             input_effort,
             decision,
             headers,
-            Some(request_id),
+            Some(request_ids),
             Some(invocation),
         )
     }
@@ -899,7 +900,7 @@ impl PolicyTableRouter {
         input_effort: Option<ReasoningEffort>,
         decision: PolicyDecision,
         headers: &HeaderMap,
-        request_id_override: Option<&str>,
+        request_id_override: Option<(&str, &str)>,
         invocation: Option<&EvalInvocation>,
     ) -> Option<PolicyModelTarget> {
         let baseline_tier = self.eval_baseline_tier(&decision);
@@ -907,12 +908,16 @@ impl PolicyTableRouter {
             .as_deref()
             .and_then(|tier| decision.policy_snapshot.effort_of_tier(tier))
             .or(input_effort);
-        let ingress_request_id = headers
-            .get("x-bitrouter-request-id")
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let request_id = request_id_override.or(ingress_request_id);
+        let ingress_request_id = request_id_override.map(|(_, ingress)| ingress).or_else(|| {
+            headers
+                .get("x-bitrouter-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+        let request_id = request_id_override
+            .map(|(stored, _)| stored)
+            .or(ingress_request_id);
         let request_id_for_log = request_id.unwrap_or("-");
         tracing::info!(
             request_id = request_id_for_log,
@@ -1548,7 +1553,7 @@ mod tests {
             .finish();
         tracing::subscriber::with_default(subscriber, || {
             router.record_bound_policy_decision(
-                &opaque_request_id,
+                (&opaque_request_id, raw_request_id),
                 &invocation,
                 "inbound".into(),
                 None,
@@ -1633,6 +1638,7 @@ mod tests {
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 1_000_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,
@@ -1683,6 +1689,7 @@ mod tests {
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 100_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,
@@ -1725,6 +1732,7 @@ mod tests {
             challenger_tier: "strong".into(),
             challenger_exposure_ppm: 1_000_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,
@@ -1780,6 +1788,7 @@ mod tests {
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 1_000_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,
@@ -1828,6 +1837,7 @@ mod tests {
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 1_000_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,
@@ -2147,7 +2157,7 @@ mod tests {
         let decision = router.decision_for_bound_policy(&routed, &headers, &assessment);
 
         let selected = router.record_bound_policy_decision(
-            "request-1",
+            ("request-1", "request-1"),
             &invocation,
             routed.model.clone(),
             routed.params.reasoning_effort,
@@ -2217,7 +2227,7 @@ mod tests {
         let decision = router.decision_for_bound_policy(&routed, &headers, &assessment);
 
         let selected = router.record_bound_policy_decision(
-            "trajectory-request-opaque",
+            ("trajectory-request-opaque", "request-2"),
             &invocation,
             routed.model.clone(),
             routed.params.reasoning_effort,
@@ -2963,7 +2973,7 @@ mod tests {
         )?;
         let invocation = EvalInvocation::new("local");
         router.record_bound_policy_decision(
-            "request-unified-v1",
+            ("request-unified-v1", "request-unified-v1"),
             &invocation,
             prompt.model,
             prompt.params.reasoning_effort,
@@ -3354,7 +3364,7 @@ mod tests {
         let invocation = EvalInvocation::new("local");
 
         router.record_bound_policy_decision(
-            "request-legacy",
+            ("request-legacy", "request-legacy"),
             &invocation,
             p.model,
             p.params.reasoning_effort,
@@ -3398,7 +3408,7 @@ mod tests {
         )?;
 
         router.record_bound_policy_decision(
-            "request-continuation",
+            ("request-continuation", "request-continuation"),
             &EvalInvocation::new("owner"),
             "@auto".to_owned(),
             None,

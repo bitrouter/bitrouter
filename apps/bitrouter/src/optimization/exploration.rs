@@ -9,9 +9,26 @@ use crate::workflow_state::ir::WorkflowIdentity;
 
 const ASSIGNMENT_DOMAIN: &str = "bitrouter.route-exploration.assignment.v1";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum OptimizationObjective {
+    #[default]
+    Cost,
+    Latency,
+}
+
+impl OptimizationObjective {
+    pub fn is_cost(&self) -> bool {
+        *self == Self::Cost
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OptimizationGate {
+    /// Omission preserves the identity of existing cost-based experiments.
+    #[serde(default, skip_serializing_if = "OptimizationObjective::is_cost")]
+    pub objective: OptimizationObjective,
     pub minimum_tasks_per_arm: u32,
     pub maximum_challenger_tasks: u32,
     pub minimum_pass_rate_ppm: u32,
@@ -149,12 +166,42 @@ mod tests {
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 700_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,
                 evaluator_config_digest: None,
             },
         }
+    }
+
+    #[test]
+    fn objective_is_signed_and_legacy_cost_gate_keeps_its_wire_identity() -> Result<()> {
+        let mut gate = experiment().gate;
+        let legacy = serde_json::to_value(&gate)?;
+        let cost_config = crate::optimization::identity::explore_compiler_config_digest(
+            "auto", "economy", 100_000, &gate,
+        )?;
+        assert!(legacy.get("objective").is_none());
+        assert_eq!(
+            serde_json::from_value::<OptimizationGate>(legacy.clone())?,
+            gate
+        );
+        gate.objective = OptimizationObjective::Latency;
+        assert_ne!(
+            cost_config,
+            crate::optimization::identity::explore_compiler_config_digest(
+                "auto", "economy", 100_000, &gate,
+            )?
+        );
+        let latency = serde_json::to_value(&gate)?;
+        assert_eq!(latency["objective"], "latency");
+        assert_ne!(
+            crate::eval::types::canonical_digest(&legacy)?,
+            crate::eval::types::canonical_digest(&latency)?
+        );
+        assert_eq!(serde_json::from_value::<OptimizationGate>(latency)?, gate);
+        Ok(())
     }
 
     #[test]

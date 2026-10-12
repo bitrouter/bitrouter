@@ -141,12 +141,16 @@ impl CoreSession {
             .as_ref()
             .ok_or_else(|| reject(ErrorCode::Busy, "context task is absent"))?;
         if !enabled(&snapshot) {
-            return Ok(Some(
-                bitrouter_sdk::routing::preparation::Prepared::from_prompt(
-                    &original, None, step_id,
-                )
-                .await,
-            ));
+            let mut prepared = bitrouter_sdk::routing::preparation::Prepared::from_prompt(
+                &original, None, step_id,
+            )
+            .await;
+            if portable_reasoning(&snapshot, turn) {
+                prepared
+                    .capabilities
+                    .insert(bitrouter_sdk::routing::ContextCapability::OmitPrivateReasoning);
+            }
+            return Ok(Some(prepared));
         }
         let task_id = turn.agent_turn_id.clone();
         let run_id = turn.run_id.clone();
@@ -471,12 +475,17 @@ impl CoreSession {
             hard_limit_bytes,
             capabilities: if turn.input.routing.context == super::super::protocol::ContextMode::Auto
             {
-                std::collections::BTreeSet::from([
+                let mut capabilities = std::collections::BTreeSet::from([
                     bitrouter_sdk::routing::ContextCapability::OmitEvidence,
                     bitrouter_sdk::routing::ContextCapability::UseExtract,
                     bitrouter_sdk::routing::ContextCapability::UseSummary,
                     bitrouter_sdk::routing::ContextCapability::RecallEvidence,
-                ])
+                ]);
+                if portable_reasoning(&snapshot, turn) {
+                    capabilities
+                        .insert(bitrouter_sdk::routing::ContextCapability::OmitPrivateReasoning);
+                }
+                capabilities
             } else {
                 Default::default()
             },
@@ -556,6 +565,15 @@ impl CoreSession {
         .await?;
         Ok(())
     }
+}
+
+fn portable_reasoning(state: &SessionSnapshot, turn: &AgentTurn) -> bool {
+    turn.input.routing.context == super::super::protocol::ContextMode::Auto
+        && state
+            .manifest
+            .required_features
+            .iter()
+            .any(|feature| feature == crate::core::context_router::PORTABLE_RESPONSES_REASONING)
 }
 
 pub(super) struct Pending {

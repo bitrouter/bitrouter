@@ -1,5 +1,15 @@
 # Harness: Codex
 
+Native `bro task run` supplies stable Core run and agent identities to routing
+and task evaluation. All model steps and child agents in a run share an
+experiment assignment; recovery retains that identity. Embedding hosts may
+retain their explicit outer workflow identity. These identities do not choose
+semantic labels or model tiers.
+
+Decision JSONL records include a digest of the canonical ingress request ID,
+including direct Core calls without HTTP headers. An evaluator can join these
+to native attempt records while guarded trajectory IDs remain owner-opaque.
+
 Codex has two deliberate BitRouter facets:
 
 - `bro code codex` drives the built-in `codex-acp` adapter inside
@@ -73,6 +83,13 @@ diagnostics live under the BitRouter home in `logs/session-*.log`.
 ## BRO native tools with a Codex subscription
 
 `bro code` (without an agent ID) and `bro task run` use BRO's native harness.
+With automatic context routing, the native harness permits a portable execution
+view when a model switch rejects authenticated Responses reasoning. Core retains
+the original source and public messages/tool pairs, omits Responses reasoning
+from the new view, and reruns admission and checks with the chosen model fixed.
+Fixed context and policy `preserve` do not permit this projection. Remote-state
+dependencies and other private signatures remain nonportable. Custom harnesses
+must explicitly negotiate `portable_responses_reasoning_v1` to permit it.
 After importing an existing subscription login, the shortest startup is:
 
 ```bash
@@ -93,6 +110,14 @@ To pin a model or run a headless task:
 bro code --model openai-codex:openai/gpt-6.1-sol --workspace PATH
 bro task run "Inspect this workspace" --read-only --workspace PATH
 ```
+
+Headless NDJSON emits changed routing observations and omits events without
+public changes. Durable cursors remain monotonic, with gaps; consumers must
+not interpret those gaps as lost tool results or missing model responses.
+
+Native journal rows compress checkpoint content without changing durable
+facts, hashes, or cursors. Startup upgrades older compressed rows atomically;
+older binaries cannot read the new storage encoding.
 
 An explicit `--max-output-tokens` is retained with the Thread. It bounds
 admission; it does not promise a provider-enforced cap or establish a monetary

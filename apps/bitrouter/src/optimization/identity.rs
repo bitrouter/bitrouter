@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::optimization::exploration::{OptimizationGate, RouteExploration};
+use crate::optimization::exploration::{OptimizationGate, OptimizationObjective, RouteExploration};
 
 pub(crate) const HISTORY_OPTIMIZER_ID: &str = "bitrouter-history-optimizer";
 pub(crate) const HISTORY_OPTIMIZER_VERSION: u32 = 1;
@@ -65,6 +65,8 @@ pub(crate) fn explore_compiler_config_digest(
     }
     #[derive(Serialize)]
     struct CompilerOptions<'a> {
+        #[serde(skip_serializing_if = "OptimizationObjective::is_cost")]
+        objective: OptimizationObjective,
         policy: &'a str,
         candidate_tier: Option<&'a str>,
         challenger_exposure_ppm: u32,
@@ -77,6 +79,7 @@ pub(crate) fn explore_compiler_config_digest(
         id: HISTORY_OPTIMIZER_ID,
         version: HISTORY_OPTIMIZER_VERSION,
         options: CompilerOptions {
+            objective: gate.objective,
             policy: policy_name,
             candidate_tier: Some(challenger_tier),
             challenger_exposure_ppm,

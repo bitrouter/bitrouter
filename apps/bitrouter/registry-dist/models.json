@@ -4916,8 +4916,22 @@
         },
         {
           "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "provider": "openai-codex",
-          "provider_model_id": "gpt-6-luna"
+          "provider_model_id": "gpt-6-luna",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
@@ -5271,8 +5285,22 @@
         },
         {
           "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "provider": "openai-codex",
-          "provider_model_id": "gpt-6.1-sol"
+          "provider_model_id": "gpt-6.1-sol",
+          "reasoning_effort": {
+            "default": "low",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",

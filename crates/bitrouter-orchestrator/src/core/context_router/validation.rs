@@ -288,6 +288,14 @@ pub(crate) fn validate_history(
         }
         None => ContextStore::default(),
     };
+    validate_store_history(&store, history)
+}
+
+/// Replay already holds the typed state derived from the verified checkpoint.
+pub(crate) fn validate_store_history(
+    store: &ContextStore,
+    history: &mut History,
+) -> Result<(), CoreError> {
     let mut current = BTreeMap::new();
     for (id, artifact) in &store.artifacts {
         remember(&mut current, "artifact", id, artifact)?;

@@ -575,7 +575,7 @@ async fn settled_optional_usage_reloads_under_same_owner_but_not_a_new_owner()
 }
 
 #[tokio::test]
-async fn accepted_retry_can_be_overloaded_without_rejecting_the_original_input()
+async fn unloaded_accepted_retry_can_be_overloaded_without_rejecting_the_original_input()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let service = ThreadService::new(app(vec![final_turn()])?, &[workspace.path().into()])?;
@@ -590,6 +590,8 @@ async fn accepted_retry_can_be_overloaded_without_rejecting_the_original_input()
         .start_turn(&target(&thread), &caller, input("work", "same-key"))
         .await?;
     wait_for(&service, &original.turn_id, TurnStatus::Completed).await?;
+    joined(&service, &original.turn_id).await?;
+    service.unload_thread(&target(&thread), &caller).await?;
     let readers = service
         .inner
         .recovery_readers

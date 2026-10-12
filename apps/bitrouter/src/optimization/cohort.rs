@@ -29,6 +29,7 @@ pub struct ArmAssessment {
     pub hard_violations: u32,
     pub pass_rate_ppm: Option<u32>,
     pub mean_cost_micro_usd: Option<i64>,
+    pub mean_latency_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub struct CohortAssessment {
     pub evaluator_config_digest: Option<String>,
     pub classifier_digest: Option<String>,
     pub cost_delta_micro_usd: Option<i64>,
+    pub latency_delta_ms: Option<i64>,
     pub verdict: CohortGateVerdict,
 }
 
@@ -220,6 +222,8 @@ pub fn assess_cohort(
     let mut challenger = ArmAssessment::default();
     let mut control_cost = CostAggregate::default();
     let mut challenger_cost = CostAggregate::default();
+    let mut control_latency = CostAggregate::default();
+    let mut challenger_latency = CostAggregate::default();
     for group in groups.values_mut() {
         sort_records_by_submitted_at(&mut group.records)?;
         let arm = group.arm;
@@ -294,6 +298,17 @@ pub fn assess_cohort(
             .conclusive
             .checked_add(1)
             .context("counting conclusive experiment units")?;
+        // Only the same conclusive evaluator's complete-unit wall time may
+        // justify latency promotion. Operational `latency.ms` is per request,
+        // even on an episode subject, and must never stand in for a task total.
+        if let Some(latency) =
+            latest_complete_latency(&group.records, &result.evaluator.config_digest)
+        {
+            match arm {
+                ExperimentArm::Control => control_latency.add(latency)?,
+                ExperimentArm::Challenger => challenger_latency.add(latency)?,
+            }
+        }
         match result.verdict {
             EvalVerdict::Pass => {
                 assessment.pass = assessment
@@ -315,6 +330,16 @@ pub fn assess_cohort(
     challenger.pass_rate_ppm = pass_rate(&challenger)?;
     control.mean_cost_micro_usd = control_cost.mean();
     challenger.mean_cost_micro_usd = challenger_cost.mean();
+    control.mean_latency_ms = (control_latency.count == control.eligible)
+        .then(|| control_latency.mean())
+        .flatten();
+    challenger.mean_latency_ms = (challenger_latency.count == challenger.eligible)
+        .then(|| challenger_latency.mean())
+        .flatten();
+    let latency_delta_ms = match (control.mean_latency_ms, challenger.mean_latency_ms) {
+        (Some(control), Some(challenger)) => challenger.checked_sub(control),
+        _ => None,
+    };
     let cost_delta_micro_usd = match (control.mean_cost_micro_usd, challenger.mean_cost_micro_usd) {
         (Some(control), Some(challenger)) => challenger.checked_sub(control),
         _ => None,
@@ -345,6 +370,7 @@ pub fn assess_cohort(
             .then(|| classifier_cohorts.first().cloned())
             .flatten(),
         cost_delta_micro_usd,
+        latency_delta_ms,
         verdict,
     })
 }
@@ -429,6 +455,29 @@ fn pass_rate(assessment: &ArmAssessment) -> Result<Option<u32>> {
         .checked_div(assessment.conclusive)
         .map(Some)
         .context("computing cohort pass-rate denominator")
+}
+
+fn latest_complete_latency(
+    records: &[&EvalEvidenceRecord],
+    evaluator_config_digest: &str,
+) -> Option<i64> {
+    // A complete Task covers its episodes. Once a conclusive Task exists, a
+    // missing Task measurement cannot be replaced by a shorter Episode.
+    for scope in [EvalScope::Task, EvalScope::Episode] {
+        if let Some(record) = records.iter().rev().find(|record| {
+            record.subject.scope == scope
+                && record.result.verdict != EvalVerdict::Inconclusive
+                && record.result.evaluator.config_digest == evaluator_config_digest
+        }) {
+            return record
+                .result
+                .metrics
+                .get("latency.wall_ms")
+                .filter(|metric| metric.unit == MetricUnit::Milliseconds && metric.value >= 0)
+                .map(|metric| metric.value);
+        }
+    }
+    None
 }
 
 fn latest_complete_cost(records: &[&EvalEvidenceRecord]) -> Option<i64> {
@@ -526,6 +575,7 @@ mod tests {
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 500_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,

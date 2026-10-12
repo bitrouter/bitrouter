@@ -4,6 +4,70 @@ use bitrouter_ai::auth::CredentialAuthority;
 use bitrouter_ai::types::{ApiProtocol, AuthScheme, FinishReason, Message, Role, Usage};
 
 struct FailAfterWrite;
+
+#[tokio::test]
+async fn portable_rebuild_requires_capability_source_validation_and_nonpreserve_policy()
+-> Result<()> {
+    use crate::routing::{ContextCapability, ContextStrategy, preparation::Prepared};
+    for (grant, preserve, valid_policy, rewrite_public, allowed) in [
+        (true, false, true, false, true),
+        (false, false, true, false, false),
+        (true, true, true, false, false),
+        (true, false, false, false, false),
+        (true, false, true, true, false),
+    ] {
+        let mut ctx = context();
+        let mut prompt = ctx.require_generation_prompt()?.clone();
+        prompt.messages = vec![Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Reasoning {
+                    text: "private summary".into(),
+                    native: Some(bitrouter_ai::types::NativeReasoning::Responses(
+                        serde_json::json!({"type":"reasoning","summary":[],"encrypted_content":"sealed"}),
+                    )),
+                    provider_metadata: Default::default(),
+                },
+                Content::Text {
+                    text: "public answer".into(),
+                    provider_metadata: Default::default(),
+                },
+            ],
+        }];
+        let mut projected = super::super::native_projection::responses_reasoning(&prompt.messages)?
+            .ok_or_else(|| BitrouterError::internal("missing test projection"))?
+            .messages;
+        if rewrite_public {
+            projected[0] = Message::text(Role::Assistant, "forged public answer");
+        }
+        let mut prepared = Prepared::from_prompt(&prompt, None, "portable-test").await;
+        if grant {
+            prepared
+                .capabilities
+                .insert(ContextCapability::OmitPrivateReasoning);
+        }
+        ctx.apply_routing_prompt(prompt.clone())?;
+        ctx.insert_extension(Arc::new(prepared));
+        ctx.insert_extension(Arc::new(if preserve {
+            ContextStrategy::Preserve
+        } else {
+            ContextStrategy::Evidence
+        }));
+        ctx.insert_extension(Arc::new(NativePrivateContextRuntime::new(
+            if valid_policy {
+                Some(Arc::new(FailAfterWrite))
+            } else {
+                None
+            },
+        )));
+        assert_eq!(ctx.replace_managed_messages(projected).is_ok(), allowed);
+        if !allowed {
+            assert_eq!(ctx.require_generation_prompt()?, &prompt);
+        }
+    }
+    Ok(())
+}
+
 impl NativePrivateContextPolicy for FailAfterWrite {
     fn validate_history(
         &self,

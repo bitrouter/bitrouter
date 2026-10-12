@@ -3397,7 +3397,7 @@ impl ModelSelector for PolicyRuntime {
             }
             let route_projection = decision.route_projection.clone();
             let selected = router.record_bound_policy_decision(
-                &correlated.request_id,
+                (&correlated.request_id, ctx.request_id()),
                 invocation.as_ref(),
                 input_model,
                 input_effort,
@@ -3433,7 +3433,7 @@ impl ModelSelector for PolicyRuntime {
         }
         let route_projection = decision.route_projection.clone();
         let selected = router.record_bound_policy_decision(
-            ctx.request_id(),
+            (ctx.request_id(), ctx.request_id()),
             invocation.as_ref(),
             input_model,
             input_effort,
@@ -3605,6 +3605,7 @@ mod tests {
                 challenger_tier: "economy".into(),
                 challenger_exposure_ppm: 0,
                 gate: OptimizationGate {
+                    objective: Default::default(),
                     minimum_tasks_per_arm: 0,
                     maximum_challenger_tasks: 0,
                     minimum_pass_rate_ppm: 0,
@@ -3647,6 +3648,7 @@ mod tests {
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 100_000,
             gate: OptimizationGate {
+                objective: Default::default(),
                 minimum_tasks_per_arm: 3,
                 maximum_challenger_tasks: 20,
                 minimum_pass_rate_ppm: 900_000,
@@ -4758,6 +4760,14 @@ presets:
             Some(baseline_correlation.request_id.as_str())
         );
         assert!(!baseline_correlation.request_id.contains("request-stable"));
+        assert_eq!(
+            guarded_record.ingress_request_id_sha256.as_deref(),
+            Some(
+                crate::workflow_state::decision::ingress_request_id_sha256("request-stable")
+                    .as_str()
+            )
+        );
+        assert!(!serde_json::to_string(guarded_record)?.contains("request-stable"));
 
         let metadata_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&metadata_db).await?;

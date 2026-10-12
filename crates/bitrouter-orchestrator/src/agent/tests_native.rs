@@ -77,6 +77,55 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
     assert_eq!(body.len() as u64, reference.bytes);
     assert_eq!(crate::core::checkpoint::sha256(&body), reference.sha256);
     assert!(String::from_utf8(body)?.contains("retained-evidence-tail"));
+    // Reusing a verified decode must not turn replay into latest-state-only
+    // recovery. Corrupt an early immutable fact, leaving later snapshots intact.
+    let mut rewritten = facts.clone();
+    let mut changed = false;
+    for fact in &mut rewritten {
+        if let ExecutionRecord::CoreCheckpoint { batch, limits } = fact {
+            let mut payload = batch.decode(limits)?;
+            if let Some(work) = payload.checkpoint.state["context_store"]["work"]
+                .as_object_mut()
+                .and_then(|work| work.values_mut().next())
+            {
+                work["text"] = serde_json::json!("rewritten earlier task");
+                *batch = crate::core::checkpoint::CheckpointBatch::encode(&payload, limits)?;
+                changed = true;
+                break;
+            }
+        }
+    }
+    assert!(changed);
+    let mut rejected = None;
+    let failure = rewritten
+        .iter()
+        .find_map(|fact| crate::agent::native::Saved::replay(&mut rejected, fact).err())
+        .ok_or("early immutable rewrite was accepted")?;
+    assert!(failure.contains("immutable fact"), "{failure}");
+
+    let mut missing_artifact = None;
+    assert!(
+        facts
+            .iter()
+            .filter(|fact| !matches!(fact, ExecutionRecord::CoreArtifact { .. }))
+            .any(|fact| crate::agent::native::Saved::replay(&mut missing_artifact, fact).is_err())
+    );
+
+    let mut wrong_projection = facts.clone();
+    let response = wrong_projection
+        .iter_mut()
+        .find_map(|fact| match fact {
+            ExecutionRecord::ModelResponse { message, .. } => Some(message),
+            _ => None,
+        })
+        .ok_or("model projection missing")?;
+    response.content.push(text("uncommitted display content"));
+    let mut rejected = None;
+    let failure = wrong_projection
+        .iter()
+        .find_map(|fact| crate::agent::native::Saved::replay(&mut rejected, fact).err())
+        .ok_or("altered display projection was accepted")?;
+    assert!(failure.contains("display projection"), "{failure}");
     let read = call(
         "artifact-page",
         "context_read_artifact",

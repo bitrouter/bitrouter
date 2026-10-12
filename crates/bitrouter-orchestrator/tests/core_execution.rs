@@ -40,6 +40,8 @@ mod responses;
 mod restore_decode;
 #[path = "core_execution/root_queue.rs"]
 mod root_queue;
+#[path = "core_execution/routing_identity.rs"]
+mod routing_identity;
 #[path = "core_execution/steering.rs"]
 mod steering;
 mod support;
@@ -1384,6 +1386,16 @@ async fn bind_app_with_features(
     limits: Limits,
     features: Vec<String>,
 ) -> Result<CoreSession, Box<dyn std::error::Error>> {
+    bind_app_with_headers(app, harness, limits, features, http::HeaderMap::new()).await
+}
+
+async fn bind_app_with_headers(
+    app: Arc<App>,
+    harness: Arc<dyn HarnessPort>,
+    limits: Limits,
+    features: Vec<String>,
+    headers: http::HeaderMap,
+) -> Result<CoreSession, Box<dyn std::error::Error>> {
     let tools = vec![HarnessTool {
         name: "read".into(),
         description: "Read a file".into(),
@@ -1421,7 +1433,7 @@ async fn bind_app_with_features(
         max_sessions: 16,
         max_host_model_attempts: 16,
     };
-    let session = CoreSession::bind(
+    let session = CoreSession::bind_with_headers(
         Bind {
             grant: grant(),
             durable_head: DurableHead::default(),
@@ -1432,6 +1444,7 @@ async fn bind_app_with_features(
         &caps,
         app,
         CallerContext::local(),
+        headers,
         harness,
     )
     .await?;

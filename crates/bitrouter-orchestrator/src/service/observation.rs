@@ -318,6 +318,7 @@ impl ThreadService {
         thread_id: &str,
         version: u64,
         facts: &[ExecutionRecord],
+        previous_context: Option<&(String, crate::core::context_router::inspection::Inspection)>,
     ) -> Result<(Vec<ExecutionRecord>, ThreadEvent), ServiceError> {
         let framed = super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
         let seq = version
@@ -336,12 +337,32 @@ impl ThreadService {
         for record in &records {
             project(record, thread_id, None, &mut changes);
         }
+        // Core checkpoints also acknowledge private admission/accounting work.
+        // Publish routing only when its public observation changes; retain every
+        // checkpoint and cursor for recovery and authoritative history.
+        let mut previous =
+            previous_context.map(|(turn_id, inspection)| (turn_id.as_str(), inspection));
+        let mut filtered = Vec::new();
+        for change in &changes {
+            if let ThreadChange::ContextRouting {
+                turn_id,
+                inspection,
+            } = change
+            {
+                let current = (turn_id.as_str(), inspection.as_ref());
+                if previous == Some(current) {
+                    continue;
+                }
+                previous = Some(current);
+            }
+            filtered.push(change.clone());
+        }
         let event = ThreadEvent {
             server_instance_id: self.inner.instance_id.clone(),
             thread_id: thread_id.into(),
             seq,
             timestamp_ms: now_ms(),
-            changes,
+            changes: filtered,
         };
         if serde_json::to_vec(&event)
             .map_err(|error| error.to_string())?
@@ -368,20 +389,36 @@ pub(crate) fn project(
     turn_id: Option<&str>,
     changes: &mut Vec<ThreadChange>,
 ) {
+    project_with_native(record, thread_id, turn_id, None, changes);
+}
+
+/// Recovery has already decoded and validated this native checkpoint. Reuse
+/// that transient view without changing the public projection or its authority.
+pub(super) fn project_with_native(
+    record: &ExecutionRecord,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    native_snapshot: Option<&crate::core::session::SessionSnapshot>,
+    changes: &mut Vec<ThreadChange>,
+) {
     let turn = turn_id.map_or_else(String::new, str::to_owned);
     let change = match record {
         ExecutionRecord::CoreCheckpoint { batch, limits } => {
-            let Some(inspection) = batch
-                .decode(limits)
-                .ok()
-                .and_then(|payload| {
-                    serde_json::from_value::<crate::core::session::SessionSnapshot>(
-                        payload.checkpoint.state,
-                    )
-                    .ok()
-                })
-                .as_ref()
-                .and_then(crate::core::context_router::inspection::Inspection::capture)
+            let decoded;
+            let snapshot = match native_snapshot {
+                Some(snapshot) => Some(snapshot),
+                None => {
+                    decoded = batch.decode(limits).ok().and_then(|payload| {
+                        serde_json::from_value::<crate::core::session::SessionSnapshot>(
+                            payload.checkpoint.state,
+                        )
+                        .ok()
+                    });
+                    decoded.as_ref()
+                }
+            };
+            let Some(inspection) =
+                snapshot.and_then(crate::core::context_router::inspection::Inspection::capture)
             else {
                 return;
             };
@@ -441,7 +478,7 @@ pub(crate) fn project(
             snapshot: snapshot.clone(),
         },
         ExecutionRecord::TurnRecord { turn_id, fact } => {
-            project(fact, thread_id, Some(turn_id), changes);
+            project_with_native(fact, thread_id, Some(turn_id), native_snapshot, changes);
             return;
         }
         ExecutionRecord::TurnLifecycle { turn_id, lifecycle } => ThreadChange::TurnLifecycle {

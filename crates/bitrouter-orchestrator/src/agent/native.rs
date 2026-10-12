@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{Agent, RunChannels, RunReport, RunStatus};
-use crate::core::checkpoint::DurableHead;
+use crate::core::checkpoint::{CheckpointBatch, DurableHead, VerifiedBatch};
 use crate::core::context_router::FEATURE;
 use crate::core::protocol::{
     Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
@@ -36,6 +36,26 @@ pub(crate) struct Saved {
     verification_calls: std::collections::BTreeSet<String>,
 }
 
+/// Kept for one replayed record only. Both views derive from the same verified
+/// bytes; callers cannot supply an unrelated typed snapshot to the journal.
+struct DecodedCheckpoint<'a> {
+    verified: VerifiedBatch<'a>,
+    snapshot: SessionSnapshot,
+}
+
+impl<'a> DecodedCheckpoint<'a> {
+    fn new(batch: &'a CheckpointBatch, limits: &'a Limits) -> Result<Self, String> {
+        limits.validate().map_err(|error| error.message)?;
+        let verified = batch.verified(limits).map_err(|error| error.message)?;
+        let snapshot: SessionSnapshot =
+            serde_json::from_value(verified.payload().checkpoint.state.clone())
+                .map_err(|error| error.to_string())?;
+        crate::core::context_router::validation::validate(&snapshot)
+            .map_err(|error| error.message)?;
+        Ok(Self { verified, snapshot })
+    }
+}
+
 impl Saved {
     pub(crate) fn complete_projection(&self) -> bool {
         self.projections.is_empty()
@@ -48,7 +68,7 @@ impl Saved {
     pub(crate) fn replay(
         saved: &mut Option<Self>,
         record: &crate::store::ExecutionRecord,
-    ) -> Result<Option<SessionSnapshot>, String> {
+    ) -> Result<Option<(SessionSnapshot, bool)>, String> {
         use crate::store::ExecutionRecord;
         use base64::Engine;
         if let Some(saved) = saved {
@@ -107,13 +127,9 @@ impl Saved {
                 Ok(None)
             }
             ExecutionRecord::CoreCheckpoint { batch, limits } => {
-                limits.validate().map_err(|error| error.message)?;
-                let payload = batch.decode(limits).map_err(|error| error.message)?;
-                let snapshot: SessionSnapshot =
-                    serde_json::from_value(payload.checkpoint.state.clone())
-                        .map_err(|error| error.to_string())?;
-                crate::core::context_router::validation::validate(&snapshot)
-                    .map_err(|error| error.message)?;
+                let decoded = DecodedCheckpoint::new(batch, limits)?;
+                let payload = decoded.verified.payload();
+                let snapshot = &decoded.snapshot;
                 if saved.is_none() {
                     *saved = Some(Self {
                         journal: Arc::new(journal::Journal::new(
@@ -165,9 +181,10 @@ impl Saved {
                     journal.grant.execution_epoch = batch.identity.execution_epoch;
                     journal.grant.core_instance_id = batch.identity.core_instance_id.clone();
                 }
-                let ack = journal.prepare(batch).map_err(|error| error.message)?;
-                let projection =
-                    projection::project(&snapshot, &journal.presented, &payload.events);
+                let ack = journal
+                    .prepare_verified(&decoded.verified)
+                    .map_err(|error| error.message)?;
+                let projection = projection::project(snapshot, &journal.presented, &payload.events);
                 for record in &projection.records {
                     saved.projections.push_back(crate::core::checkpoint::sha256(
                         &serde_json::to_vec(record).map_err(|error| error.to_string())?,
@@ -175,12 +192,16 @@ impl Saved {
                 }
                 journal.presented.extend(projection.keys);
                 journal
-                    .apply(batch.clone(), &ack)
+                    .apply_replayed(&decoded, &ack)
                     .map_err(|error| error.message)?;
                 if let Some(run) = &snapshot.run {
                     saved.task_text.clone_from(&run.input.text);
                 }
-                Ok(Some(snapshot))
+                let input_accepted = payload
+                    .events
+                    .iter()
+                    .any(|event| event.kind == "input.accepted");
+                Ok(Some((decoded.snapshot, input_accepted)))
             }
             _ => Ok(None),
         }
@@ -286,6 +307,7 @@ impl Agent {
             operations: vec![
                 FEATURE.into(),
                 crate::core::context_router::NATIVE_TOOLS.into(),
+                crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
             ],
             transports: vec!["native".into()],
             unsupported_features: Vec::new(),
@@ -340,6 +362,7 @@ impl Agent {
             required_features: vec![
                 FEATURE.into(),
                 crate::core::context_router::NATIVE_TOOLS.into(),
+                crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
             ],
         };
         let (output, mut commands) = mpsc::channel(64);

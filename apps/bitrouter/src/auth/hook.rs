@@ -139,10 +139,23 @@ pub(crate) fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn embedding_caller(ctx: &PipelineContext) -> bool {
+    !ctx.caller().is_anonymous()
+        && !ctx.caller().is_local()
+        && ctx.headers().keys().all(|name| {
+            matches!(
+                name.as_str(),
+                "x-bitrouter-parent-session-id"
+                    | "x-bitrouter-agent-session-id"
+                    | "x-bitrouter-workflow-session"
+            )
+        })
+}
+
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
-        if ctx.headers().is_empty() && !ctx.caller().is_anonymous() && !ctx.caller().is_local() {
+        if embedding_caller(ctx) {
             // Managed callers remain under their embedding controller's live
             // authorization gate; content removal cannot establish a new caller.
             return Ok(HookDecision::Allow);
@@ -179,11 +192,11 @@ impl PreRequestHook for AuthHook {
     }
 
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        // The native App entry has no HTTP headers and receives a caller only
+        // The native App entry has only optional trace headers and receives a caller only
         // after the embedding task adapter established its own authority.
         // HTTP ingress instead starts anonymous or local, and ordinary MCP
         // requests still pass through `authenticate` below.
-        if ctx.headers().is_empty() && !ctx.caller().is_anonymous() && !ctx.caller().is_local() {
+        if embedding_caller(ctx) {
             let caller = ctx.caller().clone();
             ctx.set_metadata(
                 &plugin_id(),

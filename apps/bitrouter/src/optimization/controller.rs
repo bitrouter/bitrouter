@@ -9,20 +9,22 @@ use crate::eval::store::EvalSnapshot;
 use crate::eval::types::{EvalScope, EvalSubject};
 use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
 use crate::optimization::exploration::{
-    OptimizationGate, PolicyOptimizationState, RouteExploration, RouteRejection,
+    OptimizationGate, OptimizationObjective, PolicyOptimizationState, RouteExploration,
+    RouteRejection,
 };
 use crate::optimization::identity::{
     HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, canonical_digest, experiment_id,
     explore_compiler_config_digest, retreat_compiler_config_digest, treatment_context_digest,
 };
 use crate::policy_lock::{
-    CertificateSource, CompilerIdentity, EconomicsSummary, PolicyArtifact, PolicyCertificate,
-    PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, validate_document,
+    CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, PolicyArtifact,
+    PolicyCertificate, PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, validate_document,
 };
 use crate::workflow_state::predictive::compiled_predictor_contract;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OptimizationOptions {
+    pub objective: OptimizationObjective,
     pub policy: String,
     pub candidate_tier: Option<String>,
     pub challenger_exposure_ppm: u32,
@@ -35,6 +37,7 @@ pub struct OptimizationOptions {
 impl Default for OptimizationOptions {
     fn default() -> Self {
         Self {
+            objective: OptimizationObjective::Cost,
             policy: "auto".into(),
             candidate_tier: None,
             challenger_exposure_ppm: 100_000,
@@ -49,6 +52,7 @@ impl Default for OptimizationOptions {
 impl OptimizationOptions {
     fn gate(&self) -> OptimizationGate {
         OptimizationGate {
+            objective: self.objective,
             minimum_tasks_per_arm: self.minimum_tasks_per_arm,
             maximum_challenger_tasks: self.maximum_challenger_tasks,
             minimum_pass_rate_ppm: self.minimum_pass_rate_ppm,
@@ -425,8 +429,7 @@ fn prepare_active_step(
     let action = match assessment.verdict {
         CohortGateVerdict::HardViolation => ControllerAction::Retreat,
         CohortGateVerdict::Pass
-            if assessment
-                .cost_delta_micro_usd
+            if objective_delta(&assessment, exploration.gate.objective)
                 .is_some_and(|delta| delta < 0) =>
         {
             ControllerAction::Promote
@@ -542,7 +545,7 @@ fn active_successor(
                 experiment_parent_digest: Some(experiment_parent_digest),
                 source_policy_digest: Some(input.active_policy_digest.into()),
                 evidence_root: input.eval.evidence_root.clone(),
-                reason: rejection_reason(assessment).into(),
+                reason: rejection_reason(assessment, exploration.gate.objective).into(),
             });
             (exploration.champion_tier.clone(), PromotionVerdict::Blocked)
         }
@@ -627,7 +630,14 @@ fn cohort_certificate(
     let baseline_pass_rate_ppm = i64::from(assessment.control.pass_rate_ppm.unwrap_or_default());
     let candidate_pass_rate_ppm =
         i64::from(assessment.challenger.pass_rate_ppm.unwrap_or_default());
-    let normalized_cost_delta_ppm = normalized_cost_delta(assessment)?;
+    let normalized_cost_delta_ppm = normalized_delta(
+        assessment.control.mean_cost_micro_usd,
+        assessment.cost_delta_micro_usd,
+    )?;
+    let normalized_latency_delta_ppm = normalized_delta(
+        assessment.control.mean_latency_ms,
+        assessment.latency_delta_ms,
+    )?;
     Ok(PolicyCertificate {
         classifier_digest: assessment.classifier_digest.clone(),
         owner: RouteOwner::Compiler,
@@ -647,7 +657,9 @@ fn cohort_certificate(
         economics: normalized_cost_delta_ppm.map(|value| EconomicsSummary {
             normalized_cost_delta_ppm: value,
         }),
-        latency: None,
+        latency: normalized_latency_delta_ppm.map(|value| LatencySummary {
+            normalized_latency_delta_ppm: value,
+        }),
         critical_violations: assessment.challenger.hard_violations,
         verdict,
         evaluator_config_digest: assessment.evaluator_config_digest.clone(),
@@ -656,11 +668,8 @@ fn cohort_certificate(
     })
 }
 
-fn normalized_cost_delta(assessment: &CohortAssessment) -> Result<Option<i64>> {
-    let (Some(control), Some(delta)) = (
-        assessment.control.mean_cost_micro_usd,
-        assessment.cost_delta_micro_usd,
-    ) else {
+fn normalized_delta(control: Option<i64>, delta: Option<i64>) -> Result<Option<i64>> {
+    let (Some(control), Some(delta)) = (control, delta) else {
         return Ok(None);
     };
     if control == 0 {
@@ -668,22 +677,36 @@ fn normalized_cost_delta(assessment: &CohortAssessment) -> Result<Option<i64>> {
     }
     let scaled = i128::from(delta)
         .checked_mul(1_000_000)
-        .context("scaling certificate cost delta")?
+        .context("scaling certificate metric delta")?
         .checked_div(i128::from(control))
-        .context("computing certificate cost delta")?;
+        .context("computing certificate metric delta")?;
     Ok(i64::try_from(scaled).ok())
 }
 
-fn rejection_reason(assessment: &CohortAssessment) -> &'static str {
+fn objective_delta(assessment: &CohortAssessment, objective: OptimizationObjective) -> Option<i64> {
+    match objective {
+        OptimizationObjective::Cost => assessment.cost_delta_micro_usd,
+        OptimizationObjective::Latency => assessment.latency_delta_ms,
+    }
+}
+
+fn rejection_reason(
+    assessment: &CohortAssessment,
+    objective: OptimizationObjective,
+) -> &'static str {
     if assessment.challenger.hard_violations > 0 {
         "challenger hard violation"
     } else if assessment.verdict == CohortGateVerdict::QualityFailed {
         "challenger quality gate failed at sample budget"
-    } else if assessment
-        .cost_delta_micro_usd
-        .is_some_and(|delta| delta >= 0)
-    {
-        "challenger did not lower complete unit cost at sample budget"
+    } else if objective_delta(assessment, objective).is_some_and(|delta| delta >= 0) {
+        match objective {
+            OptimizationObjective::Cost => {
+                "challenger did not lower complete unit cost at sample budget"
+            }
+            OptimizationObjective::Latency => {
+                "challenger did not lower complete unit latency at sample budget"
+            }
+        }
     } else {
         "challenger evidence remained insufficient at sample budget"
     }
@@ -1063,7 +1086,7 @@ pub async fn read_status(config_path: &Path, policy_name: &str) -> Result<Optimi
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use bitrouter_sdk::config::PolicyModelTarget;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
@@ -1100,6 +1123,7 @@ mod tests {
 
     fn options() -> OptimizationOptions {
         OptimizationOptions {
+            objective: Default::default(),
             policy: "auto".into(),
             candidate_tier: Some("economy".into()),
             challenger_exposure_ppm: 100_000,
@@ -1332,6 +1356,7 @@ mod tests {
                     challenger_tier: "economy".into(),
                     challenger_exposure_ppm: 100_000,
                     gate: OptimizationGate {
+                        objective: Default::default(),
                         minimum_tasks_per_arm: 3,
                         maximum_challenger_tasks: 20,
                         minimum_pass_rate_ppm: 900_000,
@@ -1420,6 +1445,7 @@ mod tests {
     fn cold_start_ranks_cost_then_coverage_then_key_and_excludes_unsafe_routes() -> Result<()> {
         let mut lock = lock();
         let gate = OptimizationGate {
+            objective: Default::default(),
             minimum_tasks_per_arm: 3,
             maximum_challenger_tasks: 20,
             minimum_pass_rate_ppm: 900_000,
@@ -1919,6 +1945,133 @@ mod tests {
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Promote)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn latency_objective_requires_complete_measured_units_and_retains_quality_gate() -> Result<()> {
+        use crate::optimization::exploration::OptimizationObjective;
+
+        let mut lock = active_lock();
+        lock.policies
+            .get_mut("auto")
+            .and_then(|policy| policy.optimization.as_mut())
+            .and_then(|state| state.active.as_mut())
+            .context("missing exploration")?
+            .gate
+            .objective = OptimizationObjective::Latency;
+        let mut snapshot = active_snapshot(3, 3, EvalVerdict::Pass, 1_000, 700);
+        for record in &mut snapshot.records {
+            let duration = record.result.metrics["trajectory.cost.usd_micros"].value;
+            record.result.metrics = BTreeMap::from([(
+                "latency.wall_ms".into(),
+                MetricValue::new(duration, MetricUnit::Milliseconds),
+            )]);
+            record.subject.requested_dimensions = record.result.metrics.keys().cloned().collect();
+        }
+        let options = options();
+        let run = |lock: &PolicyLock, snapshot: &EvalEvidenceSnapshot| {
+            prepare_step(OptimizationStepInput {
+                eval: snapshot,
+                active_policy: lock,
+                active_policy_digest: ACTIVE_DIGEST,
+                policy_name: "auto",
+                options: &options,
+            })
+        };
+        let step = run(&lock, &snapshot)?;
+        assert_eq!(step.action, ControllerAction::Promote);
+        let successor = step.successor.context("missing latency successor")?;
+        let certificate = successor
+            .certificate("auto", "semantic_route/v1|unknown|implement|normal")
+            .context("missing latency certificate")?;
+        assert!(certificate.economics.is_none());
+        assert_eq!(
+            certificate
+                .latency
+                .as_ref()
+                .map(|value| value.normalized_latency_delta_ppm),
+            Some(-300_000)
+        );
+        // A CLI option cannot reinterpret an already signed cost experiment.
+        assert_eq!(
+            run(&active_lock(), &snapshot)?.action,
+            ControllerAction::Hold
+        );
+
+        for variant in [
+            "missing",
+            "wrong_unit",
+            "request_latency",
+            "negative",
+            "quality_fail",
+            "slower",
+        ] {
+            let mut changed = snapshot.clone();
+            let record = changed.records.last_mut().context("missing challenger")?;
+            match variant {
+                "missing" => {
+                    record.result.metrics.clear();
+                }
+                "wrong_unit" => {
+                    record.result.metrics.insert(
+                        "latency.wall_ms".into(),
+                        MetricValue::new(1, MetricUnit::MicroUsd),
+                    );
+                }
+                "request_latency" => {
+                    record.result.metrics = BTreeMap::from([(
+                        "latency.ms".into(),
+                        MetricValue::new(1, MetricUnit::Milliseconds),
+                    )]);
+                }
+                "negative" => {
+                    record.result.metrics.insert(
+                        "latency.wall_ms".into(),
+                        MetricValue::new(-1, MetricUnit::Milliseconds),
+                    );
+                }
+                "quality_fail" => {
+                    record.result.verdict = EvalVerdict::Fail;
+                }
+                "slower" => {
+                    record.result.metrics.insert(
+                        "latency.wall_ms".into(),
+                        MetricValue::new(5_000, MetricUnit::Milliseconds),
+                    );
+                }
+                _ => anyhow::bail!("unknown test variant"),
+            }
+            record.subject.requested_dimensions = record.result.metrics.keys().cloned().collect();
+            assert_eq!(
+                run(&lock, &changed)?.action,
+                ControllerAction::Hold,
+                "{variant}"
+            );
+        }
+        for missing_task_time in [false, true] {
+            let mut changed = snapshot.clone();
+            let task = changed.records.last_mut().context("missing challenger")?;
+            task.result.metrics.insert(
+                "latency.wall_ms".into(),
+                MetricValue::new(5_000, MetricUnit::Milliseconds),
+            );
+            let mut episode = task.clone();
+            episode.subject.scope = EvalScope::Episode;
+            episode.subject.subject_id = "shorter-overlapping-episode".into();
+            episode.result_id = "later-episode-result".into();
+            episode.result.submitted_at = "2026-08-17T00:00:02Z".into();
+            episode.result.metrics.insert(
+                "latency.wall_ms".into(),
+                MetricValue::new(1, MetricUnit::Milliseconds),
+            );
+            if missing_task_time {
+                task.result.metrics.clear();
+            }
+            task.subject.requested_dimensions = task.result.metrics.keys().cloned().collect();
+            changed.records.push(episode);
+            assert_eq!(run(&lock, &changed)?.action, ControllerAction::Hold);
+        }
         Ok(())
     }
 

@@ -388,21 +388,34 @@ impl ThreadService {
         thread_id: &str,
         facts: &[ExecutionRecord],
     ) -> Result<(), ServiceError> {
-        let version = {
+        let (version, previous_context) = {
             let state = self.lock_state();
             let thread = state.threads.get(thread_id).ok_or_else(unknown_thread)?;
             if let Some(error) = &thread.storage_error {
                 return Err(ServiceError::new(ErrorCode::StorageUnavailable, error));
             }
-            thread.store_version
+            (
+                thread.store_version,
+                thread
+                    .presentation
+                    .view
+                    .latest_turn
+                    .as_ref()
+                    .and_then(|turn| {
+                        turn.context_routing
+                            .as_ref()
+                            .map(|inspection| (turn.turn_id.clone(), inspection.clone()))
+                    }),
+            )
         };
-        let result = match self.thread_transaction(thread_id, version, facts) {
-            Ok((facts, event)) => self
-                .commit_fenced(thread_id, version, &facts)
-                .await
-                .map(|version| (version, event)),
-            Err(error) => Err(error.to_string()),
-        };
+        let result =
+            match self.thread_transaction(thread_id, version, facts, previous_context.as_ref()) {
+                Ok((facts, event)) => self
+                    .commit_fenced(thread_id, version, &facts)
+                    .await
+                    .map(|version| (version, event)),
+                Err(error) => Err(error.to_string()),
+            };
         match result {
             Ok((version, event)) => {
                 let mut state = self.lock_state();
@@ -463,6 +476,22 @@ impl ThreadService {
             .collect::<Vec<_>>();
         self.commit_thread_serialized(thread_id, &facts).await?;
         let mut state = self.lock_state();
+        if records
+            .iter()
+            .any(|record| matches!(record, ExecutionRecord::CoreCheckpoint { .. }))
+        {
+            // Reuse the committed projection instead of decoding the complete
+            // Core checkpoint a second time for the legacy Turn snapshot.
+            let inspection = state
+                .threads
+                .get(thread_id)
+                .and_then(|thread| thread.presentation.view.latest_turn.as_ref())
+                .filter(|turn| turn.turn_id == turn_id)
+                .and_then(|turn| turn.context_routing.clone());
+            if let Some(turn) = state.turns.get_mut(turn_id) {
+                turn.snapshot.context_routing = inspection;
+            }
+        }
         if records.iter().any(|fact| {
             matches!(
                 fact,
@@ -477,18 +506,6 @@ impl ThreadService {
         }
         for record in records {
             match record {
-                ExecutionRecord::CoreCheckpoint { .. } => {
-                    let mut changes = Vec::new();
-                    super::observation::project(record, thread_id, Some(turn_id), &mut changes);
-                    for change in changes {
-                        if let crate::thread::ThreadChange::ContextRouting { inspection, .. } =
-                            change
-                            && let Some(task) = state.turns.get_mut(turn_id)
-                        {
-                            task.snapshot.context_routing = Some(*inspection);
-                        }
-                    }
-                }
                 ExecutionRecord::InstructionContext { snapshot, .. } => {
                     if let Some(thread) = state.threads.get_mut(thread_id) {
                         thread.instructions = Some(snapshot.as_ref().clone());

@@ -261,7 +261,7 @@ impl ThreadService {
             },
             ExecutionRecord::AcceptedKey { entry: key.clone() },
         ];
-        let (facts, event) = self.thread_transaction(&thread_id, 0, &facts)?;
+        let (facts, event) = self.thread_transaction(&thread_id, 0, &facts, None)?;
         let version = match self.commit_fenced(&thread_id, 0, &facts).await {
             Ok(version) => version,
             Err(error) => {

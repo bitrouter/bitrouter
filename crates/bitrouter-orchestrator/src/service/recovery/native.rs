@@ -22,21 +22,13 @@ pub(super) fn is_projection(fact: &ExecutionRecord, calls: &[RecoveredCall]) -> 
 pub(super) fn observe(
     active: &mut Active,
     snapshot: &SessionSnapshot,
-    fact: &ExecutionRecord,
+    input_accepted: bool,
 ) -> Result<(), String> {
     active.native = true;
     let Some(run) = &snapshot.run else {
         return Ok(());
     };
-    let ExecutionRecord::CoreCheckpoint { batch, limits } = fact else {
-        return Err("native state has no checkpoint".into());
-    };
-    let payload = batch.decode(limits).map_err(|error| error.message)?;
-    if payload
-        .events
-        .iter()
-        .any(|event| event.kind == "input.accepted")
-    {
+    if input_accepted {
         active.native_runs.insert(run.run_id.clone(), (0, 0));
     }
     // A restore/seed checkpoint can still describe the previous native Turn.

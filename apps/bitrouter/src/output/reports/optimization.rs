@@ -5,6 +5,7 @@ use crate::output::human::{Health, Human};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TreatmentReport {
+    pub objective: crate::optimization::exploration::OptimizationObjective,
     pub target_request_key: String,
     pub champion_tier: String,
     pub challenger_tier: String,
@@ -27,6 +28,8 @@ pub struct ArmReport {
     pub pass_rate_ppm: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mean_cost_micro_usd: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_latency_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -50,6 +53,8 @@ pub struct OptimizationControllerReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_delta_micro_usd: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_delta_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluator_config_digest: Option<String>,
     pub published: bool,
     pub reload_attempted: bool,
@@ -69,6 +74,13 @@ impl CliReport for OptimizationControllerReport {
         human.field("decision", self.decision)?;
         human.field("policy", &self.active_policy_digest)?;
         if let Some(treatment) = &self.treatment {
+            human.field(
+                "objective",
+                match treatment.objective {
+                    crate::optimization::exploration::OptimizationObjective::Cost => "cost",
+                    crate::optimization::exploration::OptimizationObjective::Latency => "latency",
+                },
+            )?;
             human.field("route", &treatment.target_request_key)?;
             human.field(
                 "tiers",

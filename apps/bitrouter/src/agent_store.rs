@@ -709,10 +709,16 @@ async fn compact_legacy_records(tx: &sea_orm::DatabaseTransaction) -> Result<(),
     let mut packed = 0_u64;
     let mut saved = 0_usize;
     loop {
-        let mut query = record::Entity::find()
-            .filter(record::Column::Payload.starts_with("{\"record\":"))
-            .filter(record::Column::Payload.not_like("{\"record\":\"thread_event\",%"))
-            .filter(sea_orm::sea_query::Expr::cust("length(payload) >= 4096"));
+        let mut query = record::Entity::find().filter(
+            sea_orm::Condition::any()
+                .add(record::Column::Payload.starts_with(codec::LEGACY_PREFIX))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(record::Column::Payload.starts_with("{\"record\":"))
+                        .add(record::Column::Payload.not_like("{\"record\":\"thread_event\",%"))
+                        .add(sea_orm::sea_query::Expr::cust("length(payload) >= 4096")),
+                ),
+        );
         if let Some((id, sequence)) = &cursor {
             query = query.filter(
                 sea_orm::Condition::any()
@@ -743,11 +749,12 @@ async fn compact_legacy_records(tx: &sea_orm::DatabaseTransaction) -> Result<(),
             continue;
         }
         let original_bytes = row.payload.len();
-        let payload = codec::encode(row.payload)?;
-        if payload.len() >= original_bytes {
+        let legacy = row.payload.starts_with(codec::LEGACY_PREFIX);
+        let payload = codec::encode(codec::decode(&row.payload)?.into_owned())?;
+        if !legacy && payload.len() >= original_bytes {
             continue;
         }
-        saved = saved.saturating_add(original_bytes - payload.len());
+        saved = saved.saturating_add(original_bytes.saturating_sub(payload.len()));
         record::ActiveModel {
             execution_id: Set(row.execution_id),
             sequence: Set(row.sequence),
@@ -816,6 +823,95 @@ impl DatabaseExecutionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn v1_upgrade_rolls_back_corruption_and_preserves_bytes_after_reopen()
+    -> anyhow::Result<()> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use bitrouter_orchestrator::core::checkpoint::sha256;
+
+        let directory = tempfile::tempdir()?;
+        let url = format!("sqlite://{}/upgrade.db", directory.path().display());
+        let db = crate::db::connect(&url).await?;
+        crate::db::run_migrations(&db).await?;
+        let store = DatabaseExecutionStore::new(db.clone());
+        let content = "retained native checkpoint evidence ".repeat(4000);
+        let fact = ExecutionRecord::CoreCheckpointPart {
+            sha256: sha256(content.as_bytes()),
+            bytes: content.len() as u64,
+            offset: 0,
+            content_base64: STANDARD.encode(content),
+        };
+        let raw = serde_json::to_string(&fact)?;
+        let legacy = format!(
+            "{}{}",
+            codec::LEGACY_PREFIX,
+            serde_json::json!({
+                "bytes": raw.len(), "sha256": sha256(raw.as_bytes()),
+                "body": STANDARD.encode(zstd::bulk::compress(raw.as_bytes(), 3)?)
+            })
+        );
+        store
+            .commit("thread", 0, &[fact.clone(), fact])
+            .await
+            .map_err(anyhow::Error::msg)?;
+        for sequence in [1, 2] {
+            record::ActiveModel {
+                execution_id: Set("thread".into()),
+                sequence: Set(sequence),
+                payload: Set(if sequence == 1 {
+                    legacy.clone()
+                } else {
+                    format!("{}invalid", codec::LEGACY_PREFIX)
+                }),
+            }
+            .update(&db)
+            .await?;
+        }
+        let tx = db.begin().await?;
+        assert!(compact_legacy_records(&tx).await.is_err());
+        tx.rollback().await?;
+        let first = record::Entity::find_by_id(("thread".to_string(), 1))
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("legacy row missing"))?;
+        assert_eq!(
+            first.payload, legacy,
+            "later corruption must not partially upgrade history"
+        );
+        record::ActiveModel {
+            execution_id: Set("thread".into()),
+            sequence: Set(2),
+            payload: Set(legacy),
+        }
+        .update(&db)
+        .await?;
+        let tx = db.begin().await?;
+        compact_legacy_records(&tx)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        tx.commit().await?;
+        for row in record::Entity::find().all(&db).await? {
+            assert!(!row.payload.starts_with(codec::LEGACY_PREFIX));
+            assert_eq!(
+                codec::decode(&row.payload).map_err(anyhow::Error::msg)?,
+                raw
+            );
+        }
+        drop(store);
+        db.close().await?;
+        let reopened = DatabaseExecutionStore::new(crate::db::connect(&url).await?);
+        let saved = reopened
+            .load("thread")
+            .await
+            .map_err(anyhow::Error::msg)?
+            .ok_or_else(|| anyhow::anyhow!("upgraded execution missing"))?;
+        assert_eq!(saved.records.len(), 2);
+        for record in saved.records {
+            assert_eq!(serde_json::to_string(&record)?, raw);
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn compressed_rows_and_legacy_upgrade_preserve_facts_and_page_bounds()
