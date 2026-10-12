@@ -50,249 +50,8 @@ mod background;
 /// A deliberately small ACP agent. Its responses are protocol-shaped JSON, not
 /// terminal snapshots, so test failures describe lifecycle behavior instead of
 /// an incidental escape-sequence layout.
-const MOCK_ACP_SCRIPT: &str = r###"
-import json
-import os
-import socket
-import sys
-import threading
-
-scenario = os.environ.get("BITROUTER_PTY_SCENARIO", "minimal")
-capture_path = os.environ["BITROUTER_PTY_CAPTURE"]
-control_path = os.environ.get("BITROUTER_PTY_CONTROL")
-pending_prompt = None
-permission_ids = set()
-prompt_count = 0
-current_session_id = "pty-native"
-state_lock = threading.Lock()
-output_lock = threading.Lock()
-
-def send(value):
-    with output_lock:
-        sys.stdout.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n")
-        sys.stdout.flush()
-
-def respond(request_id, result):
-    send({"jsonrpc": "2.0", "id": request_id, "result": result})
-
-def update(text, session_id=None):
-    send({
-        "jsonrpc": "2.0",
-        "method": "session/update",
-        "params": {
-            "sessionId": session_id or current_session_id,
-            "update": {
-                "sessionUpdate": "agent_message_chunk",
-                "content": {"type": "text", "text": text},
-            },
-        },
-    })
-
-def settings_options(current):
-    return [{
-        "id": "a12-setting",
-        "name": "A12 setting",
-        "description": "Fixture setting for confirmation coverage",
-        "type": "select",
-        "currentValue": current,
-        "options": [
-            {"value": "a12-old", "name": "A12 old"},
-            {"value": "a12-confirmed", "name": "A12 confirmed"},
-        ],
-    }]
-
-def finish(prompt_id, reason="end_turn"):
-    respond(prompt_id, {"stopReason": reason})
-
-def take_pending():
-    global pending_prompt
-    with state_lock:
-        prompt = pending_prompt
-        pending_prompt = None
-    return prompt
-
-def settle_pending(reason, text):
-    prompt = take_pending()
-    if prompt is not None:
-        update(text)
-        finish(prompt, reason)
-
-def emit_permissions():
-    global permission_ids
-    with state_lock:
-        permission_ids = {"permission-1", "permission-2"}
-    for number in (1, 2):
-        send({
-            "jsonrpc": "2.0",
-            "id": "permission-" + str(number),
-            "method": "session/request_permission",
-            "params": {
-                "sessionId": "pty-native",
-                "toolCall": {
-                    "toolCallId": "tool-" + str(number),
-                    "title": "fixture permission " + str(number),
-                },
-                "options": [
-                    {
-                        "optionId": "allow-" + str(number),
-                        "name": "Allow fixture " + str(number),
-                        "kind": "allow_once",
-                    },
-                    {
-                        "optionId": "deny-" + str(number),
-                        "name": "Deny fixture " + str(number),
-                        "kind": "reject_once",
-                    },
-                ],
-            },
-        })
-
-def control_loop(server):
-    while True:
-        connection, _ = server.accept()
-        try:
-            # A stream read can end between the command and its newline. Wait
-            # for the complete frame before acknowledging and closing it.
-            with connection.makefile("rb") as control_input:
-                command = control_input.readline(128).decode("utf-8").strip()
-            if command == "release":
-                settle_pending("end_turn", "FXRL")
-            elif command == "refusal":
-                settle_pending("refusal", "FXST")
-            elif command == "permission":
-                emit_permissions()
-            elif command == "backlog":
-                prompt = take_pending()
-                if prompt is not None:
-                    for number in range(90):
-                        update("BG" + str(number).zfill(3) + "\n")
-                    finish(prompt)
-            connection.sendall(b"ok\n")
-            if command == "disconnect":
-                os._exit(0)
-        finally:
-            connection.close()
-
-if control_path:
-    try:
-        os.unlink(control_path)
-    except FileNotFoundError:
-        pass
-    control_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    control_server.bind(control_path)
-    control_server.listen()
-    threading.Thread(target=control_loop, args=(control_server,), daemon=True).start()
-
-with open(capture_path, "ab") as capture:
-    for raw in sys.stdin.buffer:
-        capture.write(raw)
-        capture.flush()
-        message = json.loads(raw)
-        method = message.get("method")
-        request_id = message.get("id")
-
-        if method == "initialize":
-            capabilities = {}
-            if scenario in ("settings-confirmed", "settings-failure", "session-lifecycle"):
-                capabilities = {
-                    "loadSession": True,
-                    "sessionCapabilities": {"list": {}, "resume": {}},
-                }
-            respond(request_id, {
-                "protocolVersion": 1,
-                "agentCapabilities": capabilities,
-                "agentInfo": {"name": "pty-minimal", "version": "1"},
-            })
-        elif method == "session/new":
-            if scenario == "hanging-session":
-                continue
-            if scenario == "fresh-sessions":
-                current_session_id = "pty-fresh-" + str(os.getpid())
-            if scenario in ("settings-confirmed", "settings-failure"):
-                respond(request_id, {
-                    "sessionId": "pty-native",
-                    "configOptions": settings_options("a12-old"),
-                    "_meta": {"agentSessionId": "agent-a12-settings"},
-                })
-                update("FXSET")
-            else:
-                respond(request_id, {"sessionId": current_session_id})
-            update("FXRD " + current_session_id if scenario == "fresh-sessions" else "FXRD")
-        elif method == "session/load":
-            if scenario == "session-lifecycle":
-                session_id = message["params"].get("sessionId", "native-a12-load")
-                update("FXLOAD", session_id)
-                respond(request_id, {
-                    "configOptions": settings_options("a12-old"),
-                    "_meta": {"agentSessionId": "agent-a12-load"},
-                })
-            else:
-                respond(request_id, {"_meta": {"loadedBy": "pty-fixture"}})
-        elif method == "session/resume":
-            respond(request_id, {
-                "configOptions": settings_options("a12-old"),
-                "_meta": {"agentSessionId": "agent-a12-resume"},
-            })
-        elif method == "session/set_config_option":
-            if scenario == "settings-confirmed":
-                respond(request_id, {"configOptions": settings_options("a12-confirmed")})
-            elif scenario == "settings-failure":
-                send({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32000, "message": "FXSF"},
-                })
-            else:
-                respond(request_id, {"configOptions": []})
-        elif method == "session/prompt":
-            prompt_count += 1
-            if "background-isolation-fixture" in json.dumps(message):
-                update("BACKGROUND_PRIVATE_OUTPUT")
-                finish(request_id)
-            elif scenario == "fresh-sessions" and "wait-for-timeout" in json.dumps(message):
-                with state_lock:
-                    pending_prompt = request_id
-                update("FXWAIT")
-            elif scenario == "delayed-cancel":
-                with state_lock:
-                    pending_prompt = request_id
-                update("FXCN")
-            elif scenario == "delayed-normal":
-                with state_lock:
-                    pending_prompt = request_id
-                update("FXW" + str(prompt_count))
-            elif scenario == "delayed-refusal":
-                with state_lock:
-                    pending_prompt = request_id
-                update("FXRF")
-            elif scenario == "overlapping-permissions":
-                with state_lock:
-                    pending_prompt = request_id
-                emit_permissions()
-            elif scenario == "permission-during-inspector":
-                with state_lock:
-                    pending_prompt = request_id
-                update("FXPD")
-            elif scenario == "detached-backlog":
-                with state_lock:
-                    pending_prompt = request_id
-                update("FXBG")
-            else:
-                update("FXRP" + str(prompt_count))
-                finish(request_id)
-        elif method == "session/cancel":
-            if request_id is not None:
-                respond(request_id, {})
-            settle_pending("cancelled", "FXCS")
-        elif request_id in permission_ids:
-            with state_lock:
-                permission_ids.remove(request_id)
-                should_finish = not permission_ids and pending_prompt is not None
-            if should_finish:
-                prompt = take_pending()
-                if prompt is not None:
-                    finish(prompt)
-"###;
+#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+mod example_binary;
 
 /// The mode an isolated mock agent should exercise.
 #[derive(Debug, Clone, Copy)]
@@ -339,8 +98,7 @@ struct MockAcp {
     home_path: PathBuf,
     bitrouter_home_path: PathBuf,
     temporary_path: PathBuf,
-    python: PathBuf,
-    script_path: PathBuf,
+    fixture_binary: PathBuf,
     scenario: MockScenario,
 }
 
@@ -418,8 +176,7 @@ impl MockAcp {
 
     fn new(scenario: MockScenario) -> Result<Self> {
         let directory = tempfile::tempdir().context("creating PTY fixture directory")?;
-        let python = python_executable()?;
-        let script_path = directory.path().join("mock-acp.py");
+        let fixture_binary = acp_fixture_executable()?;
         let config_path = directory.path().join("bitrouter.yaml");
         let capture_path = directory.path().join("acp-input.ndjson");
         let control_path = directory.path().join("acp-control.sock");
@@ -432,9 +189,7 @@ impl MockAcp {
                 .with_context(|| format!("creating isolated directory {}", path.display()))?;
         }
 
-        std::fs::write(&script_path, MOCK_ACP_SCRIPT).context("writing mock ACP script")?;
-        let command = yaml_string(&python)?;
-        let script = yaml_string(&script_path)?;
+        let command = yaml_string(&fixture_binary)?;
         let capture = yaml_string(&capture_path)?;
         let control = yaml_string(&control_path)?;
         let config = format!(
@@ -444,7 +199,7 @@ impl MockAcp {
              \u{20} \u{20} transport:\n\
              \u{20} \u{20} \u{20} type: stdio\n\
              \u{20} \u{20} \u{20} command: {command}\n\
-             \u{20} \u{20} \u{20} args: [{script}]\n\
+             \u{20} \u{20} \u{20} args: []\n\
              \u{20} \u{20} \u{20} env:\n\
              \u{20} \u{20} \u{20} \u{20} BITROUTER_PTY_SCENARIO: {}\n\
              \u{20} \u{20} \u{20} \u{20} BITROUTER_PTY_CAPTURE: {capture}\n\
@@ -462,16 +217,14 @@ impl MockAcp {
             home_path,
             bitrouter_home_path,
             temporary_path,
-            python,
-            script_path,
+            fixture_binary,
             scenario,
         })
     }
 
     fn start(&self) -> Result<MockProcess> {
-        let mut command = Command::new(&self.python);
+        let mut command = Command::new(&self.fixture_binary);
         command
-            .arg(&self.script_path)
             .env_clear()
             .env("PATH", inherited_path()?)
             .env("HOME", &self.home_path)
@@ -1722,30 +1475,13 @@ fn shell_word(path: &Path) -> String {
     format!("'{}'", path.replace('\'', "'\"'\"'"))
 }
 
-fn python_executable() -> Result<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(configured) = std::env::var_os("PYTHON") {
-        candidates.push(configured);
-    }
-    candidates.extend([
-        OsString::from("python3"),
-        OsString::from("/usr/bin/python3"),
-        OsString::from("python"),
-    ]);
-
-    for candidate in candidates {
-        let available = Command::new(&candidate)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success());
-        if available {
-            return Ok(PathBuf::from(candidate));
-        }
-    }
-    bail!("a Python 3 executable is required for the isolated mock ACP fixture")
+fn acp_fixture_executable() -> Result<PathBuf> {
+    static BINARY: std::sync::OnceLock<std::result::Result<PathBuf, String>> =
+        std::sync::OnceLock::new();
+    BINARY
+        .get_or_init(|| example_binary::build("bitrouter", "pty_acp_fixture"))
+        .clone()
+        .map_err(anyhow::Error::msg)
 }
 
 fn yaml_string(path: &Path) -> Result<String> {

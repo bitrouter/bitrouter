@@ -16,6 +16,10 @@ use wiremock::{Mock, Request, ResponseTemplate};
 #[path = "../../../tests/harness_resources/mcp_fixture.rs"]
 mod fixture;
 
+#[cfg(unix)]
+#[path = "../../../tests/support/example_binary.rs"]
+mod example_binary;
+
 fn config(server: &wiremock::MockServer) -> HarnessConfig {
     HarnessConfig {
         servers: vec![fixture::configuration(server)],
@@ -301,24 +305,27 @@ async fn cancellation_after_observed_mcp_dispatch_blocks_replay()
 }
 
 #[cfg(unix)]
-fn stdio_config() -> HarnessConfig {
+fn stdio_config() -> Result<HarnessConfig, String> {
     use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
-    HarnessConfig {
+    static BINARY: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
+        std::sync::OnceLock::new();
+    let binary = BINARY
+        .get_or_init(|| example_binary::build("bitrouter-orchestrator", "harness_mcp_fixture"))
+        .as_ref()
+        .map_err(Clone::clone)?;
+    Ok(HarnessConfig {
         servers: vec![McpServerConfig::with_defaults(
             "stdio",
             McpTransport::Stdio {
-                command: "python3".into(),
-                args: vec![format!(
-                    "{}/tests/fixtures/harness_mcp.py",
-                    env!("CARGO_MANIFEST_DIR")
-                )],
+                command: binary.to_string_lossy().into_owned(),
+                args: Vec::new(),
                 env: Default::default(),
             },
         )],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
         instructions: Default::default(),
-    }
+    })
 }
 
 #[cfg(unix)]
@@ -326,7 +333,7 @@ fn stdio_config() -> HarnessConfig {
 async fn stdio_turn_binds_workspace_and_joins_process_before_settlement()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let mut config = stdio_config();
+    let mut config = stdio_config()?;
     if let bitrouter_sdk::mcp::transport::McpTransport::Stdio { args, .. } =
         &mut config.servers[0].transport
     {
@@ -400,7 +407,7 @@ async fn stdio_turn_binds_workspace_and_joins_process_before_settlement()
 async fn cancelled_handshake_joins_process_before_stopped_owner()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let mut config = stdio_config();
+    let mut config = stdio_config()?;
     if let bitrouter_sdk::mcp::transport::McpTransport::Stdio { args, .. } =
         &mut config.servers[0].transport
     {
@@ -614,7 +621,7 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resources()
 async fn changed_mcp_catalog_rejects_old_dispatch_without_retry()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let mut configuration = stdio_config();
+    let mut configuration = stdio_config()?;
     if let bitrouter_sdk::mcp::transport::McpTransport::Stdio { args, .. } =
         &mut configuration.servers[0].transport
     {

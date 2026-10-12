@@ -6,26 +6,37 @@ use super::*;
 #[path = "coding/publication.rs"]
 mod publication;
 
-const PROMPT: &str = "NATIVE_CODE_EXERCISE: implement add(a, b) in native_sum.py and run two unit tests, covering positive and negative inputs. Do not request a review or create a PR. Finish with a brief result.";
+const PROMPT: &str = "NATIVE_CODE_EXERCISE: implement add(a, b) in native_sum.rs and run two unit tests, covering positive and negative inputs. Do not request a review or create a PR. Finish with a brief result.";
 
-fn command() -> &'static str {
-    r#"python3 - <<'PY'
-from pathlib import Path
-import unittest
-Path('native_sum.py').write_text('def add(a, b):\n    return a + b\n')
-from native_sum import add
-class SumTests(unittest.TestCase):
-    def test_positive(self): self.assertEqual(add(2, 3), 5)
-    def test_negative(self): self.assertEqual(add(-4, 1), -3)
-unittest.main()
-PY"#
+fn command() -> Result<String> {
+    // Workers have an isolated HOME. Invoke the toolchain binary rather than
+    // asking a rustup proxy to find the developer's toolchain from that home.
+    let output = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()?;
+    ensure!(output.status.success(), "Rust toolchain unavailable");
+    let sysroot = String::from_utf8(output.stdout)?;
+    let compiler = Path::new(sysroot.trim()).join("bin/rustc");
+    Ok(r#"cat > native_sum.rs <<'RS'
+fn add(a: i32, b: i32) -> i32 { a + b }
+#[test]
+fn positive() { assert_eq!(add(2, 3), 5); }
+#[test]
+fn negative() { assert_eq!(add(-4, 1), -3); }
+RS
+rustc --test native_sum.rs -o native_sum_tests && ./native_sum_tests"#
+        .replace(
+            "\nrustc --test",
+            &format!("\n{} --test", shell_word(&compiler)),
+        ))
 }
 
 fn tool_call(body: &Value) -> Result<Value> {
+    let command = command()?;
     let command = if body.to_string().contains("NATIVE_FAILING_IMPLEMENTATION") {
-        command().replace("return a + b", "return a - b")
+        command.replace("a + b", "a - b")
     } else {
-        command().into()
+        command
     };
     let functions = body["tools"]
         .as_array()
@@ -69,7 +80,7 @@ fn judge(body: &Value) -> Result<String> {
         .iter()
         .filter(|item| {
             item.kind == EvidenceKind::ToolObservation
-                && item.content.to_string().contains("Ran 2 tests")
+                && item.content.to_string().contains("running 2 tests")
         })
         .map(|item| item.citation.clone())
         .collect::<Vec<_>>();
@@ -85,7 +96,10 @@ fn judge(body: &Value) -> Result<String> {
     );
     let failed = packet.items.iter().any(|item| {
         item.kind == EvidenceKind::ToolObservation
-            && item.content.to_string().contains("FAILED (failures=2)")
+            && item
+                .content
+                .to_string()
+                .contains("test result: FAILED. 0 passed; 2 failed;")
     });
     ensure!(
         failed
@@ -93,7 +107,10 @@ fn judge(body: &Value) -> Result<String> {
                 .items
                 .iter()
                 .any(|item| item.kind == EvidenceKind::ToolObservation
-                    && item.content.to_string().contains("OK")),
+                    && item
+                        .content
+                        .to_string()
+                        .contains("test result: ok. 2 passed; 0 failed;")),
         "unit-test outcome missing"
     );
     let obligations = packet
@@ -119,6 +136,52 @@ fn judge(body: &Value) -> Result<String> {
         diagnostics: vec![], severe_violation: false, violation_evidence: vec![],
         summary: "Recorded unit tests executed against the controlled coding artifact.".into(),
     }).map_err(Into::into)
+}
+
+#[test]
+fn rust_coding_judge_uses_executed_pass_and_fail_results() -> Result<()> {
+    for failed in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let home = directory.path().join("home");
+        std::fs::create_dir(&home)?;
+        let command = command()?;
+        let command = if failed {
+            command.replace("a + b", "a - b")
+        } else {
+            command
+        };
+        let output = Command::new("sh")
+            .args(["-c", &command])
+            .env_clear()
+            .env("PATH", inherited_path()?)
+            .env("HOME", home)
+            .current_dir(directory.path())
+            .output()?;
+        ensure!(
+            output.status.success() != failed,
+            "unexpected Rust test exit status"
+        );
+        let evidence = json!({
+            "checkpoint_id": "rust-coding-fixture", "prefix_digest": "fixture", "gaps": [],
+            "items": [
+                {"citation": {"node_id": "fixture:1", "digest": "user"}, "kind": "user_message", "method": "session/prompt", "call_id": null, "content": PROMPT},
+                {"citation": {"node_id": "fixture:2", "digest": "tests"}, "kind": "tool_observation", "method": "terminal/output", "call_id": 1,
+                 "content": {"stdout": String::from_utf8(output.stdout)?, "stderr": String::from_utf8(output.stderr)?, "exitCode": output.status.code()}}
+            ]
+        });
+        let body = json!({"messages": [{"content": json!({"evidence": evidence}).to_string()}]});
+        let evaluation: RubricEvaluation = serde_json::from_str(&judge(&body)?)?;
+        let verification = evaluation
+            .items
+            .iter()
+            .find(|item| item.criterion_id == "verification")
+            .context("verification criterion missing")?;
+        ensure!(
+            matches!(verification.score, CriterionScore::Scored { value_ppm } if value_ppm == if failed { 100_000 } else { 950_000 }),
+            "judge did not use the executed test outcome"
+        );
+    }
+    Ok(())
 }
 
 fn response(request: &Request) -> Result<ResponseTemplate> {
@@ -204,7 +267,7 @@ fn finish_coding_turn(code: &mut CodeFixture, before: &PtyCheckpoint) -> Result<
         let options = code.pty.wait_for_text("Enter confirms selection")?;
         ensure!(
             (options.contains("[1] Yes") || options.contains("[1] Allow"))
-                && (options.contains("python3") || options.contains("native_sum.py")),
+                && (options.contains("rustc") || options.contains("native_sum.rs")),
             "unexpected permission request: {options}"
         );
         let answered = code.pty.checkpoint();
@@ -324,12 +387,12 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
             .items
             .iter()
             .any(|item| item.kind == EvidenceKind::ToolObservation
-                && item.content.to_string().contains("Ran 2 tests")),
+                && item.content.to_string().contains("running 2 tests")),
         "canonical checkpoint lost executed tests"
     );
     ensure!(
-        std::fs::read_to_string(code.mock._directory.path().join("native_sum.py"))?
-            .contains("return a + b"),
+        std::fs::read_to_string(code.mock._directory.path().join("native_sum.rs"))?
+            .contains("a + b"),
         "worker did not write the coding artifact"
     );
     let executions = runtime.block_on(service.evolution.executions(&identity))?;

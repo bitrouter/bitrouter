@@ -59,14 +59,20 @@ Full-content telemetry now redacts continuity values while durable canonical rec
 
 ## Reproduction commands
 
-Install `google-antigravity==0.1.20` in a separate Python >=3.10 environment, then run:
+The fixed-version SDK migration probe has been retired from the current tree.
+[Its historical source](https://github.com/bitrouter/bitrouter/blob/f29be9d45d6202f65f8d2aa7a50bfa2ee7a5611d/scripts/validate_gemini_retirement_sdk.py)
+requires that checkout, Python >=3.10 and `google-antigravity==0.1.20` to reproduce
+the SDK evidence recorded above. Current protocol regression coverage uses:
 
 ```sh
-python scripts/validate_gemini_retirement_sdk.py --bro target/debug/bro
-python scripts/validate_gemini_retirement_sdk.py --bro target/debug/bro --signed
+cargo nextest run -p bitrouter-ai --all-features --test google_chat --test retirement
 ```
 
-The unsigned run must complete a tool task; the signed run verifies the known client limitation and pre-upstream rejection. Its successful exit means that the limitation was reproduced, not that Google tool interoperability passed. Both runs use fixture credentials and loopback upstreams.
+The Rust tests cover continuity and pre-upstream rejection. They do not execute
+the Python SDK or renew its compatibility evidence. In the historical probe,
+the unsigned run completed a tool task; the signed run reproduced the known
+client limitation, rather than proving Google tool interoperability. Both used
+fixture credentials and loopback upstreams.
 
 The first full workspace build exhausted local disk while linking. Only this worktree's generated incremental cache was removed. The completed local verification used `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, two build jobs and two test threads. These are build-storage settings; no test behavior or checks were disabled.
 

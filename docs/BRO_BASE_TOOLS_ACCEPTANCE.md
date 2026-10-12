@@ -87,22 +87,23 @@ did not reduce the measured first-step prompt size.
 
 ## Reproduce
 
-Use a configured inference gateway, a fresh short output directory and a rebuilt
-binary. Provider calls consume real usage; offline archive verification does not.
+The one-off real-inference probe was retired after the acceptance campaign.
+[Its historical source](https://github.com/bitrouter/bitrouter/blob/f29be9d45d6202f65f8d2aa7a50bfa2ee7a5611d/scripts/probe-bro-base-tools.py)
+and archived results retain the original Python workload. Reproducing that
+campaign requires the historical checkout and its configured inference gateway;
+provider calls consume real usage.
+
+Current regression coverage uses Rust tool-profile, permission, pagination and
+interpreter tests, plus separate-process CLI/daemon verification:
 
 ```sh
-cargo build -p bitrouter --bin bro --all-features
-python3 scripts/probe-bro-base-tools.py --binary target/debug/bro \
-  --output-dir /tmp/bro6-review-coding \
-  --upstream-model openai/gpt-5.4-mini --scenario coding
+cargo nextest run -p bitrouter-orchestrator --all-features
+cargo nextest run -p bitrouter --all-features --test native_agent_process
 ```
 
-The default gateway is `127.0.0.1:4356`; set `--api-base` for another unprotected
-gateway and choose an upstream model selector that gateway accepts. Repeat with
-`--scenario readonly` or `natural`. For historical before/after comparison, build
-in separate target directories and verify declarations rather than trusting cache
-reuse. The probe creates the tiny Python fixture; archived final files are outputs,
-not additional source fixtures that must be maintained.
+These controlled Rust fixtures establish regression coverage. The historical
+archives remain the evidence for the named real-inference runs; archived final
+files are outputs rather than source fixtures to maintain.
 
 ## Raw exports and remaining gates
 

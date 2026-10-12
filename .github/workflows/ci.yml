@@ -28,6 +28,16 @@ jobs:
             exit 1
           fi
 
+      - name: reject standalone Python files
+        shell: bash
+        run: |
+          python_files="$(git ls-files -- '*.py' '*.pyi' '*.pyw' '*.pyc')"
+          if [[ -n "$python_files" ]]; then
+            echo "::error::Use Rust for executable source and test fixtures:"
+            printf '%s\n' "$python_files"
+            exit 1
+          fi
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest
