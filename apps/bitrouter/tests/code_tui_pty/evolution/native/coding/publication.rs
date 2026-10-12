@@ -145,13 +145,13 @@ async fn verify_checkpoint(
         .map(|item| item.content.to_string())
         .collect::<Vec<_>>();
     ensure!(
-        observations.iter().any(|s| s.contains("Ran 2 tests")),
+        observations.iter().any(|s| s.contains("running 2 tests")),
         "executed unit tests were not recorded"
     );
     ensure!(
         observations
             .iter()
-            .any(|s| s.contains("FAILED (failures=2)"))
+            .any(|s| s.contains("test result: FAILED. 0 passed; 2 failed;"))
             == failed,
         "unexpected executed test outcome"
     );

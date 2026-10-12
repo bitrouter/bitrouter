@@ -381,7 +381,8 @@ calibration or a terminal-driven adoption and quality-rollback campaign.
 ## Maintained-worker coding acceptance
 
 The opt-in `native::coding` terminal tests use actual maintained workers to write
-`native_sum.py` inside the fixture directory and execute two Python unit tests.
+`native_sum.rs` inside the fixture directory, compile it with `rustc --test` and
+execute two Rust unit tests. The worker environment requires a Rust toolchain.
 The upstream fixture supplies tool calls through each worker's advertised shell
 tool; required command permissions are answered through the terminal. The judge
 fixture reads the resulting canonical tool observations and cites them for the

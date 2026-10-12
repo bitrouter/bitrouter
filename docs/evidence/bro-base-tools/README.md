@@ -74,11 +74,13 @@ The index fixes archive bytes for the checked-in copies.
 
 ## Reproduce and add evidence
 
-[The existing probe](../../../scripts/probe-bro-base-tools.py) generates a fresh
-workspace/database, runs real inference, verifies the code or read-only file
-hashes, records results and stops its daemon. The [reproduction instructions](../../BRO_BASE_TOOLS_ACCEPTANCE.md#reproduce)
-require a configured gateway and a fresh short output directory. Paid provider
-runs are separate from offline archive verification and deterministic Rust tests.
+[The historical probe](https://github.com/bitrouter/bitrouter/blob/f29be9d45d6202f65f8d2aa7a50bfa2ee7a5611d/scripts/probe-bro-base-tools.py)
+generated a fresh workspace/database, ran real inference, verified code or
+read-only file hashes, recorded results and stopped its daemon. It has been
+retired from the current tree. The [reproduction instructions](../../BRO_BASE_TOOLS_ACCEPTANCE.md#reproduce)
+identify the historical checkout and current Rust regression coverage. Paid
+provider runs remain separate from offline archive verification and controlled
+Rust tests.
 
 For a new accepted run, keep its source/environment, prompt, binary identity,
 result summary and unresolved failures readable. Archive committed raw exports

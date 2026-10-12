@@ -11,6 +11,7 @@ See `README.md` and `docs/DEVELOPMENT.md` for full project introduction and arch
 3. **NEVER** use `.unwrap`, `.expect` or `panic!` to make the Rust program panic.
 4. **NEVER** over-design types, functions and methods that is never used in the feature or fix you are working on. We don't allow dead code.
 5. **Registry data changes do not require TDD.** For changes confined to `registry/`, do not add model- or provider-specific Rust tests that freeze catalog entries or counts. Validate the data with `cargo run -p dist-helper -- registry validate`, `cargo run -p dist-helper -- registry build`, and `cargo run -p dist-helper -- check` instead.
+6. Keep executable source and test fixtures free of Python files and Python interpreter requirements. Use Cargo-built Rust fixtures for protocol and process tests. Historical evidence and Python client examples may retain their original language.
 
 ## Agent Skill
 
