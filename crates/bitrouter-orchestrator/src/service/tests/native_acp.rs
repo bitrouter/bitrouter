@@ -19,6 +19,7 @@ struct Peer {
     read: BufReader<ReadHalf<DuplexStream>>,
     server: tokio::task::JoinHandle<Result<(), agent_client_protocol::Error>>,
     seen: Vec<Value>,
+    response_timeout: Duration,
 }
 
 impl Peer {
@@ -35,6 +36,7 @@ impl Peer {
             read: BufReader::new(read),
             server: task,
             seen: Vec::new(),
+            response_timeout: Duration::from_secs(10),
         };
         let initialize = peer.request(1, "initialize", json!({"protocolVersion":version,"info":{"name":"test","version":"1"},"clientInfo":{"name":"test","version":"1"}})).await?;
         assert_eq!(initialize["protocolVersion"], version);
@@ -57,7 +59,7 @@ impl Peer {
         &mut self,
         matches: impl Fn(&Value) -> bool,
     ) -> Result<Value, Box<dyn std::error::Error>> {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(self.response_timeout, async {
             loop {
                 let mut line = String::new();
                 if self.read.read_line(&mut line).await? == 0 {
@@ -772,6 +774,10 @@ async fn unicode_stream_reconciles_once_and_replays_beyond_hot_history()
         config.max_context_bytes = service.capabilities().limits.context_bytes_per_thread;
         let server = server(&service, true).with_agent_config(config);
         let mut peer = Peer::connect(server.clone(), version).await?;
+        // Persisting the retained Core context can exceed ten seconds on a
+        // two-core CI host. This client deadline does not change the five-second
+        // output-stall bound exercised separately by the stalled replay test.
+        peer.response_timeout = Duration::from_secs(30);
         let session = peer.request(2, "session/new", setup(&workspace)).await?["sessionId"]
             .as_str()
             .ok_or("session missing")?
@@ -812,6 +818,7 @@ async fn unicode_stream_reconciles_once_and_replays_beyond_hot_history()
         }
         peer.disconnect().await?;
         let mut peer = Peer::connect(server.clone(), 3 - version).await?;
+        peer.response_timeout = Duration::from_secs(30);
         let mut reopen = setup(&workspace);
         reopen["sessionId"] = json!(session);
         if version == 1 {
