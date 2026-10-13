@@ -14,7 +14,7 @@ use crate::actions::models::ModelsQuery;
 use crate::actions::route::{RouteInput, RouteQuery};
 use crate::actions::status::StatusQuery;
 use crate::actions::{ACTIONS, Requires};
-use bitrouter_sdk::acp::client::{AcpClient, RouteMethod};
+use bitrouter_orchestrator::acp::client::{AcpClient, RouteMethod};
 use bitrouter_tui::machine::Command;
 
 use crate::output::CliReport;

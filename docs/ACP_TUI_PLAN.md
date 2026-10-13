@@ -235,12 +235,12 @@ TUI; ACP v2.
 
 - [x] **2.2 Capture both stderr streams to a session log**
   - Depends on: —
-  - Files: `crates/bitrouter-sdk/src/acp/up.rs`, `apps/bitrouter/src/main.rs`
+  - Files: `crates/bitrouter-orchestrator/src/acp/up.rs`, `apps/bitrouter/src/main.rs`
   - Do: change the agent child from `Stdio::inherit()` to a captured pipe; add a
     **fourth** tracing-subscriber initializer that writes to a file, alongside
     `basic` / `stderr` / `serve`. Both streams interleave into one per-session
     log under `~/.bitrouter/logs/` (§8.2).
-  - Done when: `rg -n 'Stdio::inherit' crates/bitrouter-sdk/src/acp/up.rs`
+  - Done when: `rg -n 'Stdio::inherit' crates/bitrouter-orchestrator/src/acp/up.rs`
     returns nothing, and a file-writing subscriber initializer exists.
   - Verify: `cargo nextest run --all-features 2>&1 | tail -20`
   - Commit: `feat(acp): capture agent stderr to a session log`
@@ -262,7 +262,7 @@ TUI; ACP v2.
 
 - [x] **3.1 Stop dropping session updates**
   - Depends on: —
-  - Files: `crates/bitrouter-sdk/src/acp/translate.rs`
+  - Files: `crates/bitrouter-orchestrator/src/acp/translate.rs`
   - Do: `translate`'s `_ => None` arm discards `Plan` and every variant the
     gateway does not itself act on. Forward `PlanUpdate`, `PlanRemoved`,
     `AvailableCommandsUpdate`, `ConfigOptionUpdate`, and `StateUpdate` to the

@@ -4,9 +4,41 @@ How BitRouter's ACP surfaces divide ownership. For CLI flags see
 `references/cli.md` §ACP sessions; for adapter config see
 `references/providers.md` §ACP agents.
 
-## Controller and supervisor ownership
+## Native BRO ACP
 
-`bro acp serve` is a connection-level ACP controller:
+Bare `bro acp serve --model MODEL` joins the local daemon and bridges protocol-pure
+stdio to its single ThreadService. `chat.model` is the fallback; `--read-only`
+removes writes, shell and MCP, and `--turn-timeout SECS` sets the native execution
+deadline. `--no-start` requires an existing daemon. `--direct` and `--base-url`
+apply only to an explicit external agent. Native ACP has no remote endpoint.
+
+Each connection negotiates v1 or draft v2. Session IDs are native Thread IDs.
+v1 prompts return after durable completion; v2 returns the native user message
+ID after acceptance and reports completion through state updates. Losing the
+bridge preserves accepted execution. A reconnect in the same daemon restores
+the same pending approval; a newer connection replaces ACP approval delivery.
+Transport-style permission cancellation keeps the input pending. Explicit
+`reject_once` is a negative native answer.
+
+`session/cancel` cancels active work and leaves accepted queued inputs durably
+paused. Load/resume reattaches only. `_bitrouter/session/resume_queue` explicitly
+starts retained work. A fresh prompt may clear a settled empty pause; it cannot
+overtake queued inputs or recovery. `session/close` cancels all accepted inputs,
+joins native cleanup, retires attachments and preserves history. Reopen before
+further use. Retrying an operation uses `_meta.bitrouter.idempotencyKey`; wire
+RPC IDs do not identify durable actions. A daemon restart cannot restore an old
+approval sender; native recovery rules apply.
+
+MCP descriptors must exactly match host-configured bindings; clients cannot
+introduce executables or credentials. Bindings are immutable per Thread and
+private in execution storage. Discovery, skills and AGENTS.md run through the
+native Harness during execution. Images/audio and client filesystem/terminal
+callbacks are unsupported. A v2 cancelled idle update is followed by the latest
+paused-queue state; clients must consume that latest state.
+
+## External controller and supervisor ownership
+
+`bro acp serve <agent>` is a connection-level external ACP controller:
 
 ```text
 manager -- ACP --> BitRouter controller -- ACP --> one harness process

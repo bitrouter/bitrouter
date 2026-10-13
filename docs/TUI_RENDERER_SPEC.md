@@ -84,7 +84,7 @@ Two channels, and they are not equivalent — rev 2 conflated them:
 - **A grouping key.** v1's `ContentChunk` carries
   `message_id: Option<MessageId>` (`v1/client.rs:417`, type at `:468`). It is
   optional, no agent is obliged to send it, and nothing in
-  `crates/bitrouter-sdk/src/acp/` sets it. So it is a hint for grouping chunks
+  `crates/bitrouter-orchestrator/src/acp/` sets it. So it is a hint for grouping chunks
   into a message, not a guarantee — §3 specifies the fallback.
 
 ACP **v2** makes the message key required and gives it patch semantics. §10 of

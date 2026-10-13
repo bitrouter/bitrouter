@@ -116,7 +116,7 @@ async fn setup_with_reply(
     worker_env: &str,
     responder: fn(&Request) -> Result<ResponseTemplate>,
 ) -> Result<NativeService> {
-    use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
+    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
     use std::collections::HashMap;
     use std::os::unix::fs::PermissionsExt;
 

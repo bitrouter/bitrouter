@@ -1244,7 +1244,7 @@ Before Phases 0–2, the relay had these limitations:
 - [`down.rs`](../crates/bitrouter-sdk/src/acp/down.rs) deliberately prevents the
   upstream ID from crossing the manager boundary and masks native load
   semantics.
-- [`up.rs`](../crates/bitrouter-sdk/src/acp/up.rs) initializes the harness with
+- [`up.rs`](../crates/bitrouter-orchestrator/src/acp/up.rs) initializes the harness with
   default client capabilities before the manager's capabilities are known and
   looks only for optional `_meta.agentSessionId` as the provider-native ID.
 - [`harness.rs`](../apps/bitrouter/src/harness.rs) launches the deprecated
@@ -1294,9 +1294,9 @@ The implementation is divided along these boundaries:
 
 | Area | Current files | Phase 3 status |
 |---|---|---|
-| Controller lifecycle and capabilities | `crates/bitrouter-sdk/src/acp/controller.rs` | Implemented: manager-first stable-v1 controller, native-ID lifecycle forwarding, stable auth/elicitation/filesystem/terminal callbacks, and lifecycle-gated cleanup on schema 1.7.0 |
+| Controller lifecycle and capabilities | `crates/bitrouter-orchestrator/src/acp/controller.rs` | Implemented: manager-first stable-v1 controller, native-ID lifecycle forwarding, stable auth/elicitation/filesystem/terminal callbacks, and lifecycle-gated cleanup on schema 1.7.0 |
 | Harness configuration | `apps/bitrouter/src/harness.rs`, `acp_cli.rs` | Implemented: maintained Claude/Codex pins and one provider/fallback endpoint plan using the normal API key or `skip_auth` local principal |
-| Route extensions | `crates/bitrouter-sdk/src/acp/controller.rs`, `apps/bitrouter/src/acp_cli.rs`, `daemon.rs`, `acp_runtime.rs` | Implemented locally: typed `_bitrouter/route/*`, daemon-confirmed mutations, and independent leases keyed by `(api_principal, controller claim, session claim)` |
+| Route extensions | `crates/bitrouter-orchestrator/src/acp/controller.rs`, `apps/bitrouter/src/acp_cli.rs`, `daemon.rs`, `acp_runtime.rs` | Implemented locally: typed `_bitrouter/route/*`, daemon-confirmed mutations, and independent leases keyed by `(api_principal, controller claim, session claim)` |
 | Request session normalization | `apps/bitrouter/src/session_identity.rs`, hook assembly | Implemented after auth; legacy pure API projection remains separate and unchanged |
 | Session observability | `session_identity.rs`, `workflow_state/real_trace.rs`, `metering`, OTel exporter | Implemented: reviewed headers, typed event, span attributes, nullable metering correlation, no identifier metric labels |
 | Hosted route control | Core HTTP control surface plus an app-owned `RouteControl` backend | Not implemented: explicit remote `--base-url` routes model traffic but has no normal-API-authenticated session-route surface |

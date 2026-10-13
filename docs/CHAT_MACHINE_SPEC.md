@@ -7,7 +7,7 @@ Author: Claude (with Spikel) · Date: 2026-09-01, revised 2026-09-02
 > §2.3 and §4.2 were written against `engine::Session` — a `PendingPermission`
 > in `acp::up`, and a `Session::prompt(&self)` that borrowed the session.
 > [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md) retired that
-> stack for `bitrouter_sdk::acp::client::AcpClient`, so both sections were
+> stack for `bitrouter_orchestrator::acp::client::AcpClient`, so both sections were
 > re-derived from what is actually there before this plan was executed. **Both
 > conclusions survived, for different reasons than the ones originally given**
 > — see the "re-derived" notes in each section.
@@ -164,7 +164,7 @@ driver left to move, which is the part that genuinely needs `tokio`.
 ### 2.3 The machine must not hold a `PendingPermission`
 
 **Re-derived 2026-09-02.** The type moved — it is
-`bitrouter_sdk::acp::client::PendingPermission` now — and its shape changed:
+`bitrouter_orchestrator::acp::client::PendingPermission` now — and its shape changed:
 it grew a public `request_id`, its `tool_call`/`options` fields are public, and
 it carries a shared `Arc<PermissionResolver>` so `resolve(&self)` is
 idempotent across clones. Three of the four things that made the original

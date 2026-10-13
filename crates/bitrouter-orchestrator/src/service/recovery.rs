@@ -74,6 +74,8 @@ struct Active {
 struct Rebuild {
     checkpoint_pages: super::checkpoint_pages::Reader,
     native: Option<crate::agent::native::Saved>,
+    unfinished_close: Option<String>,
+    servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
     caller: CallerContext,
     view: ThreadView,
     messages: Vec<Message>,
@@ -995,6 +997,8 @@ impl Rebuild {
         view.thread.cursor = 0;
         Ok(Self {
             checkpoint_pages: Default::default(),
+            unfinished_close: None,
+            servers: None,
             caller: caller.clone(),
             source_epoch: snapshot.server_instance_id.clone(),
             source_owner: None,
@@ -1176,6 +1180,46 @@ impl Rebuild {
             ExecutionRecord::QueuedTurnCancelled { turn_id } => {
                 self.queued.retain(|entry| &entry.turn_id != turn_id)
             }
+            ExecutionRecord::ThreadCloseRequested { idempotency_key } => {
+                if self.unfinished_close.is_some() || idempotency_key.is_empty() {
+                    self.invalid("invalid or overlapping close intent");
+                }
+                self.unfinished_close = Some(idempotency_key.clone());
+            }
+            ExecutionRecord::ThreadCloseCompleted {
+                idempotency_key,
+                snapshot,
+            } => {
+                if self.unfinished_close.as_ref() != Some(idempotency_key)
+                    || snapshot.thread_id != self.view.thread.thread_id
+                    || snapshot.status != ThreadStatus::Paused
+                    || snapshot.active_turn_id.is_some()
+                    || !snapshot.queued.is_empty()
+                {
+                    self.invalid("close completion has no matching settled intent");
+                }
+                self.unfinished_close = None;
+            }
+            ExecutionRecord::ThreadResources { servers } => {
+                let mut names = std::collections::HashSet::new();
+                if self.servers.is_some()
+                    || servers.len() > 32
+                    || self.active.is_some()
+                    || serde_json::to_vec(servers)
+                        .map_or(true, |bytes| bytes.len() > self.limits.request_bytes)
+                {
+                    self.invalid("invalid or repeated Thread resource binding");
+                }
+                for server in servers {
+                    if !names.insert(&server.name) {
+                        self.invalid("duplicate Thread resource binding");
+                    }
+                    if let Err(error) = server.validate() {
+                        self.invalid(error.to_string());
+                    }
+                }
+                self.servers = Some(servers.clone());
+            }
             ExecutionRecord::ThreadRecovered {
                 source_server_instance_id,
                 source_cursor,
@@ -1333,6 +1377,9 @@ impl Rebuild {
             self.invalid("native checkpoint is missing its committed display projections");
         }
         let stored_status = self.view.thread.status;
+        if self.unfinished_close.is_some() {
+            self.invalid("unfinished session close requires inspected recovery");
+        }
         let stored_pause_reason = self.view.thread.pause_reason.clone();
         let mut context_valid = crate::context::validate_history(&self.messages).is_ok();
         let mut report_turn = None;
@@ -1533,6 +1580,7 @@ impl Rebuild {
         }
         let thread = state::ThreadRecord {
             native: self.native,
+            servers: self.servers,
             presentation: super::observation::Presentation::recovered(self.view.clone(), limits),
             snapshot: self.view.thread,
             caller: self.caller,
@@ -1557,6 +1605,7 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
     cancel.cancel();
     TurnRecord {
         queue_order: None,
+        user_item_id: None,
         fence: Arc::new(crate::control::LaunchFence::default()),
         native: Default::default(),
         steering: Vec::new(),

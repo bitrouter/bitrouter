@@ -928,6 +928,7 @@ async fn thread_keys_return_original_identities_after_restart_without_starting_w
         .start_turn(&self::target(&same), &caller, input("original", "turn"))
         .await?;
     assert_eq!(receipt.turn_id, first.turn_id);
+    assert_eq!(receipt.user_item_id, first.user_item_id);
     assert_eq!(receipt.status, TurnStatus::Completed);
     assert!(
         reopened
@@ -1163,6 +1164,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         .answer_thread_input(&target, &caller, answer())
         .await?;
     assert_eq!(approved.queue_order, receipt.queue_order);
+    assert_eq!(approved.user_item_id, receipt.user_item_id);
     assert_eq!(
         wait_for(&service, &receipt.turn_id, TurnStatus::Completed)
             .await?

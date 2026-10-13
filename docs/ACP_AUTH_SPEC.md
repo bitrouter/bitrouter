@@ -66,9 +66,9 @@ and may be removed or changed at any point," and Zed's client does not
 implement it. BitRouter nonetheless uses it, correctly and in advance: the
 controller sends `providers/set` downstream to the harness, verifies the result
 with `providers/list`, and fails initialize on a mismatch
-([`controller.rs:713`](../crates/bitrouter-sdk/src/acp/controller.rs)); it
+([`controller.rs:713`](../crates/bitrouter-orchestrator/src/acp/controller.rs)); it
 rejects the same methods upstream from a manager as "not manager-facing"
-([`controller.rs:845`](../crates/bitrouter-sdk/src/acp/controller.rs)) and
+([`controller.rs:845`](../crates/bitrouter-orchestrator/src/acp/controller.rs)) and
 strips `agentCapabilities.providers` from the response it passes up.
 
 That boundary is correct and this spec does not touch it. Configuring an
@@ -181,7 +181,7 @@ terminal* is the precedent for §7.3.
 `AcpClient` retains only what it acts on. The doc comment is explicit that the
 `initialize` response "is **not** retained: everything this client acts on is
 read out of it here, at handshake, and keeping the rest would be state with no
-reader" ([`client.rs:528`](../crates/bitrouter-sdk/src/acp/client.rs)). Only
+reader" ([`client.rs:528`](../crates/bitrouter-orchestrator/src/acp/client.rs)). Only
 `route_control` survives. `authMethods` arrives and is dropped, so no surface
 above can name what a harness offers.
 
@@ -190,7 +190,7 @@ reader (§9.1), not to retain the response.
 
 ### 5.2 The capability is declined for a reason that does not apply
 
-[`client.rs:1017`](../crates/bitrouter-sdk/src/acp/client.rs):
+[`client.rs:1017`](../crates/bitrouter-orchestrator/src/acp/client.rs):
 
 > Client capabilities are deliberately left at their defaults (no fs / no
 > terminal): ACP v2 removes that client surface, and a manager provides such

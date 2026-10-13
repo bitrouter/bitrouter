@@ -1,13 +1,14 @@
-//! ACP upstream-transport descriptors.
+//! Agent configuration descriptors for `bitrouter.yaml`.
 //!
 //! The ACP spec defines stdio as the canonical client-→-agent transport: the
 //! client launches the agent as a child process and exchanges
 //! newline-delimited JSON-RPC messages over its stdio pipes. Spec:
 //! <https://agentclientprotocol.com/protocol/transports>.
 //!
-//! These types are always available (no `acp` feature required) so a consumer
-//! can read an agent's configured transport — to launch it, or to validate a
-//! `bitrouter.yaml` — without pulling in the ACP stack that dials it.
+//! These are configuration data only, available with `config_file` and without
+//! any ACP runtime dependencies. They stay beside [`super::Config`] while the
+//! product configuration is shared with the SDK; the protocol runtime lives in
+//! `crates/bitrouter-orchestrator/src/acp/`.
 
 use std::collections::HashMap;
 
@@ -99,7 +100,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stdio_round_trips_through_serde() {
+    fn stdio_round_trips_through_serde() -> Result<(), serde_json::Error> {
         let cfg = AcpAgentConfig {
             name: "claude-acp".into(),
             transport: AcpTransport::Stdio {
@@ -108,11 +109,13 @@ mod tests {
                 env: Default::default(),
             },
         };
-        let json = serde_json::to_value(&cfg).unwrap();
+        let json = serde_json::to_value(&cfg)?;
         assert_eq!(json["transport"]["type"], "stdio");
         assert_eq!(json["transport"]["command"], "npx");
-        let back: AcpAgentConfig = serde_json::from_value(json).unwrap();
+        let back: AcpAgentConfig = serde_json::from_value(json)?;
         assert_eq!(back.name, "claude-acp");
+        assert_eq!(back.transport, cfg.transport);
+        Ok(())
     }
 
     #[test]

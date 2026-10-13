@@ -30,6 +30,7 @@ use crate::language_model::types::OutboundHeaderRule;
 use bitrouter_ai::client::HttpTimeouts;
 use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
+pub mod agent;
 pub mod checker;
 pub mod decision;
 pub mod pattern;
@@ -134,7 +135,7 @@ pub struct Config {
     pub server_tools: crate::language_model::server_tools::config::ServerToolsConfig,
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bro agents` CLI (list / check / install). Empty by default.
-    pub agents: HashMap<String, crate::acp::transport::AcpAgentConfig>,
+    pub agents: HashMap<String, agent::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
     /// Public registry integration: whether to fetch + merge the registry's

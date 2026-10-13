@@ -2,6 +2,17 @@ use super::*;
 use crate::thread::ThreadChange;
 use crate::turn::TurnReceipt;
 
+#[test]
+fn runtime_format_preserves_supported_reads_and_rejects_unknown_versions() -> Result<(), String> {
+    for version in 2..=RUNTIME_FORMAT_VERSION {
+        validate_runtime_format(version)?;
+    }
+    for version in [0, 1, RUNTIME_FORMAT_VERSION + 1] {
+        assert!(validate_runtime_format(version).is_err());
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn record_pages_bound_bytes_and_count_without_changing_captured_cutoff() -> Result<(), String>
 {
@@ -64,6 +75,7 @@ fn event(seq: u64, text: &str) -> ExecutionRecord {
             timestamp_ms: 1,
             changes: vec![ThreadChange::TurnQueued {
                 receipt: TurnReceipt {
+                    user_item_id: String::new(),
                     thread_id: "thread".into(),
                     turn_id: format!("turn-{seq}"),
                     queue_order: seq,
