@@ -4,6 +4,10 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 ## Workspace Architecture
 
+The table below describes the current implementation. The accepted next
+architecture and migration gates are in the
+[service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
+
 BitRouter is a Cargo workspace organized into `crates/` for shared libraries and contracts, `apps/` for product hosts, and `extensions/` for independently delivered capabilities. Each extension groups its related Cargo packages in one directory; `helpers/` contains contributor tooling.
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
