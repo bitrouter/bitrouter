@@ -13,17 +13,6 @@ rate_limits:
   - "*":
       requests_per_minute: 60
 models:
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek-v4-pro
-    pricing:
-      input_tokens:
-        no_cache: 1.5
-      output_tokens:
-        text: 5.25
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
   - id: z-ai/glm-5.2
     provider_model_id: glm-5-2
     pricing:
@@ -39,14 +28,6 @@ models:
         no_cache: 2
       output_tokens:
         text: 6
-  - id: deepseek/deepseek-v4-flash
-    provider_model_id: deepseek-v4-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.7
-        cache_read: 0.125
-      output_tokens:
-        text: 1.9
   - id: z-ai/glm-5.3-flash
     provider_model_id: glm-5-3-flash
     pricing:

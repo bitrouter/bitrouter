@@ -1,5 +1,6 @@
 # Official model: https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash
 - id: google/gemini-3.7-flash
+  deprecation_date: 2026-11-13
   name: 'Google: Gemini 3.7 Flash'
   input_modalities:
   - audio
@@ -25,3 +26,16 @@
   max_input_tokens: 1048576
   max_output_tokens: 65536
   release_date: 2026-09-02
+- id: google/gemini-4-argon
+  name: 'Google: Gemini 4 Argon'
+  input_modalities:
+  - audio
+  - file
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 65536
+  release_date: 2026-10-13

@@ -12,32 +12,7 @@ kind: gateway
 # api=https://api.novita.ai/openai). OpenAI-compatible inference cloud; USD
 # pricing per 1M tokens. Refreshed by the daily models_dev auto_sync.
 models:
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek/deepseek-v4-pro
-    pricing:
-      input_tokens:
-        no_cache: 1.6
-        cache_read: 0.135
-      output_tokens:
-        text: 3.2
-  - id: deepseek/deepseek-v4-flash
-    provider_model_id: deepseek/deepseek-v4-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.028
-      output_tokens:
-        text: 0.28
   # Dated revision in the live catalog: https://api.novita.ai/openai/models
-  - id: deepseek/deepseek-v4-flash-0731
-    provider_model_id: deepseek/deepseek-v4-flash-0731
-    api_protocol: [openai, responses, anthropic]
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.028
-      output_tokens:
-        text: 0.28
   - id: qwen/qwen3.7-max
     provider_model_id: qwen/qwen3.7-max
     pricing:
@@ -86,14 +61,6 @@ models:
         cache_read: 0.3
       output_tokens:
         text: 15
-  - id: deepseek/deepseek-v4-pro-0813
-    provider_model_id: deepseek/deepseek-v4-pro-0813
-    pricing:
-      input_tokens:
-        no_cache: 1.32
-        cache_read: 0.044
-      output_tokens:
-        text: 3.96
   - id: deepseek/deepseek-v4.1-flash
     provider_model_id: deepseek/deepseek-v4.1-flash
     pricing:
