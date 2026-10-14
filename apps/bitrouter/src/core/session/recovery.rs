@@ -2,8 +2,10 @@
 //! occurs until the reconciled snapshot is acknowledged under the current grant.
 
 use super::*;
+use crate::core::checkpoint::CheckpointBatchExt;
 use crate::core::checkpoint::serialized_bytes;
-use crate::core::protocol::{ArtifactRef, Restore, ToolObservation, ToolStatus};
+use crate::core::protocol::HarnessManifestExt;
+use bitrouter_ai::core::protocol::{ArtifactRef, Restore, ToolObservation, ToolStatus};
 
 impl CoreSession {
     /// The host must authenticate the durable harness and current ownership
@@ -277,7 +279,7 @@ async fn restore_snapshot(
                 "restore chain has a gap or conflicting ownership",
             ));
         }
-        head = Some(CheckpointAck::for_batch(batch, &payload).head());
+        head = Some(crate::core::checkpoint::ack_for_batch(batch, &payload).head());
         owner = Some(batch.identity.core_instance_id.clone());
     }
     if head.as_ref() != Some(&binding.durable_head) {
@@ -320,7 +322,7 @@ async fn restore_snapshot(
         super::super::context_router::validation::validate_history(&payload, &mut context_history)?;
         recovery_time::validate_history(
             &payload,
-            CheckpointAck::for_batch(batch, &payload).head(),
+            crate::core::checkpoint::ack_for_batch(batch, &payload).head(),
             &mut activity_history,
         )?;
         // Validators retain their own historical facts. Earlier hydrated
@@ -694,7 +696,7 @@ fn reconcile_tools(
                 if call.result.is_none() {
                     reconciled = true;
                     invalidate_workspace |= result.status == ToolOutcome::EffectUnknown
-                        || (call.effect != super::super::protocol::ToolEffect::Read
+                        || (call.effect != bitrouter_ai::core::protocol::ToolEffect::Read
                             && !matches!(
                                 result.status,
                                 ToolOutcome::NotExecuted | ToolOutcome::Denied
@@ -797,7 +799,7 @@ pub(super) fn artifact_map(
     let mut artifacts = BTreeMap::new();
     for reference in references {
         validate_id(&reference.artifact_id)?;
-        super::super::checkpoint::validate_digest(&reference.sha256)?;
+        bitrouter_ai::core::checkpoint::validate_digest(&reference.sha256)?;
         if artifacts
             .insert(reference.artifact_id.clone(), reference.clone())
             .is_some_and(|previous| previous != reference)

@@ -18,6 +18,9 @@ schema = ["dep:schemars"]
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+# Managed pricing evidence must retain its finite f64 bits in SDK-only builds,
+# independently of the application's feature unification.
+# https://github.com/serde-rs/json/blob/v1.0.150/tests/test.rs
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror.workspace = true
 schemars = { workspace = true, optional = true }

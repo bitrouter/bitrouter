@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::core::accounting::work::{CostWorkKind, CostWorkState, report_digest};
-use crate::core::protocol::{OwnershipGrant, PendingProviderEvidence, ProviderAttemptEvidence};
+use bitrouter_ai::core::protocol::{
+    OwnershipGrant, PendingProviderEvidence, ProviderAttemptEvidence,
+};
 
 impl CoreSession {
     /// Fence a retained local owner before replacing it through authenticated
@@ -12,7 +14,7 @@ impl CoreSession {
     pub async fn fence_for_restoration(
         &self,
         durable: &DurableHead,
-    ) -> Result<Option<super::super::protocol::RunActivityReconciliation>, CoreError> {
+    ) -> Result<Option<bitrouter_ai::core::protocol::RunActivityReconciliation>, CoreError> {
         self.disconnect().await;
         let _input = self.shared.inputs.lock().await;
         let _driver =
@@ -51,11 +53,13 @@ impl CoreSession {
             .run
             .as_ref()
             .filter(|run| !run.status.terminal())
-            .map(|run| super::super::protocol::RunActivityReconciliation {
-                run_id: run.run_id.clone(),
-                durable_head: durable.clone(),
-                active_ms: live.activity.elapsed_ms(),
-            }))
+            .map(
+                |run| bitrouter_ai::core::protocol::RunActivityReconciliation {
+                    run_id: run.run_id.clone(),
+                    durable_head: durable.clone(),
+                    active_ms: live.activity.elapsed_ms(),
+                },
+            ))
     }
 
     /// The host authenticates/reconnects the existing HarnessPort first. A new

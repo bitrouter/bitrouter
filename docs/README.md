@@ -9,7 +9,8 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   **accepted direction; P0 implementation in progress.** Complete package/module
   migration inventory, lightweight AI contracts, HTTP SDK, application-owned
   telemetry, feature dependencies, P0 single-instance delivery and acceptance,
-  and the separate P1 gateway multi-instance milestone.
+  capability-aware daemon compatibility, profile-preserving updates, and the
+  separate P1 gateway multi-instance milestone.
 - [`BITROUTER_SERVICE_REFACTOR_PROGRESS.md`](BITROUTER_SERVICE_REFACTOR_PROGRESS.md)
   — P0 baseline, implementation stages, review evidence and acceptance ledger.
 - [`ORCHESTRATOR_CORE_SPEC.md`](ORCHESTRATOR_CORE_SPEC.md) — **v1.0, frozen

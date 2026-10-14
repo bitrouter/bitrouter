@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::evidence::SourceSpan;
 use super::{ContextStore, digest, invalid};
-use crate::core::protocol::{CoreError, ErrorCode, HarnessManifest};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode, HarnessManifest};
 
 /// Revision commitment excludes unrelated workers, but binds all prompt inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

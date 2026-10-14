@@ -1,7 +1,8 @@
 use super::*;
 use bitrouter::core::accounting::work::CostWorkState;
-use bitrouter::core::protocol::ProviderAttemptEvidence;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::AgentStatus;
+use bitrouter_ai::core::protocol::ProviderAttemptEvidence;
 
 pub(super) struct FaultPort {
     harness: Arc<Harness>,

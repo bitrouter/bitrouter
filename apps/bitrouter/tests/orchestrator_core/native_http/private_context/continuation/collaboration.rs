@@ -2,7 +2,9 @@
 
 use super::*;
 use bitrouter::core::allocation::ContextKind;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::collaboration::{Action, Work};
+use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::core::session::SessionSnapshot;
 use bitrouter_ai::core::evidence::ContinuationFailure;
 

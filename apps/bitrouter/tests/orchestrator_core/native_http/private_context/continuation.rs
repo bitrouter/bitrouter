@@ -5,6 +5,8 @@
 mod collaboration;
 
 use super::*;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::gateway::pipeline::native_context::metadata;
 use bitrouter::gateway::pipeline::native_continuation::CONTINUATION_FIELD;
 use bitrouter::gateway::pipeline::native_continuation::REQUIRED_STATE_FIELD;

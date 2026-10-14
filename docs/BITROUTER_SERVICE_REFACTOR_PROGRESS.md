@@ -59,7 +59,7 @@ the contract move must preserve its bytes.
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
-| P0 1 Public contracts | In progress | Observation/event/request-check, control, eval and managed-attempt evidence contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; core protocol/checkpoint contracts remain before the final service/client split |
+| P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control and eval clients verified; core streaming client extraction and independent official-service process consumer remain |
@@ -612,3 +612,73 @@ unavailable. Custom feature builds must not silently receive the full artifact.
 These requirements were checked against baseline build, handoff and updater
 paths and independently reviewed. They remain open P0 5/P0 6, A08 and A14 work;
 no implementation or packaged-update validation is claimed here.
+
+## Managed core protocol and checkpoint contracts
+
+The 42 existing public protocol/checkpoint data types now live in
+`bitrouter_ai::core::protocol` and `bitrouter_ai::core::checkpoint`. The existing
+HTTP error response also uses a typed `ErrorEnvelope`. Requests, responses,
+capabilities, limits, ownership references, exact-byte checkpoint envelopes and
+ACK data import their actual AI owner throughout the application and tests.
+No forwarding module or new protocol was introduced.
+
+The application retains manifest hashing, authenticated-grant checks, tool
+result enforcement, checkpoint encoding/digest verification, durable append
+admission, verified payload reuse and the commit gate. Application extension
+traits attach those existing methods to the shared data types. Intrinsic
+identity/digest grammar, declared-limit checks, defaults and data projections
+remain with the contracts; parsing an envelope or constructing an ACK does not
+establish durable authority. Private scheduler snapshots and shared recovery
+codec feature isolation remain application work.
+
+An isolated regression test reproduced a finite pricing value changing one bit
+when decoded without the application's serde_json feature unification. AI now
+enables `float_roundtrip` itself. That feature adds no dependency; the full
+application already enabled it. Four new contract tests cover the regression,
+opaque checkpoint byte preservation, command tags/revisions and HTTP unknown
+commit status.
+
+Validation against code baseline `2a1ef62`:
+
+- Exact declaration comparison passed for all 42 moved types, including fields,
+  serde attributes and derives. Five intrinsic protocol implementation blocks,
+  including limit defaults/negotiation, compare unchanged.
+- Workspace all-feature/all-target `cargo check` passed. Strict workspace
+  all-feature/all-target Clippy passed on Rust 1.97.0, including after the review
+  correction described below. Strict workspace Rustdoc passed on Rust 1.97.0.
+- The targeted nextest run passed **618 tests**, with six slow tests and 3,789
+  tests outside the filter. It exercised core contracts/execution, managed
+  HTTP/WebSocket and process recovery, native harness journals, ThreadService
+  ownership/approval/recovery, managed resources/storage and AI contracts.
+- AI without default features passed **42 tests**. The pinned public-API guard
+  passed with new protocol/checkpoint sentinels and explicit rejection of
+  application validators, codecs and commit-barrier types. Public foreign
+  dependency manifests remain unchanged.
+- Configuration-schema generation/check passed; configuration and observation
+  schema SHA-256 values remain the baseline hashes recorded above. Formatting
+  and patch whitespace checks passed.
+- Independent review identified one misplaced Unix attribute on an inserted
+  test trait import. The trait import is now unconditional and the original
+  `Path` import is Unix-only again. A scan found no other newly inserted trait
+  import with this issue; independent re-review confirmed the fix. Local
+  execution remains on the macOS environment recorded above.
+
+The targeted command used the same local debug/incremental settings as the
+preceding stage:
+
+```sh
+cargo nextest run -p bitrouter -p bitrouter-ai --all-features \
+  --build-jobs 2 --test-threads 2 \
+  -E 'package(bitrouter-ai) | binary(core_contract) | binary(core_execution) | binary(orchestrator_core) | binary(managed_native) | test(core::) | test(harness::agent::) | test(harness::resources::managed::) | test(harness::service::) | test(managed_store::)'
+```
+
+After the import correction, the focused ThreadService thread suite passed
+**15 tests** (`cargo nextest run -p bitrouter --all-features --lib
+--build-jobs 2 --test-threads 2 -E 'test(harness::service::tests::thread::)'`).
+The final strict all-target Clippy run also passed.
+
+This completes the core wire-data extraction. The SDK's core HTTP/WebSocket
+client, remaining public-consumer migration, isolated feature/runtime profiles,
+historical payload fixtures, packaged independent-process delivery, performance
+comparison, full P0 validation and PR remain open. A01–A16 retain their final
+milestone status; this stage does not substitute for those complete gates.

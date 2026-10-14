@@ -1,8 +1,9 @@
 //! Cancellation fences the durable start boundary before tool.cancel delivery.
 
 use super::*;
-use bitrouter::core::checkpoint::ToolStartFence;
-use bitrouter::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
+use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug)]

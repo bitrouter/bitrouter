@@ -1,6 +1,8 @@
 //! Production settlement evidence imported into durable run ownership.
 use super::*;
 use bitrouter::cloud::settlement::{SettlementReceipt, SettlementState, SettlementUsage};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostBasis;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostScope;
 use bitrouter::metering::store::MeteringStore;
@@ -16,19 +18,19 @@ struct TimingHarness {
 impl bitrouter::core::session::HarnessPort for TimingHarness {
     async fn read_artifact(
         &self,
-        reference: &bitrouter::core::protocol::ArtifactRef,
+        reference: &bitrouter_ai::core::protocol::ArtifactRef,
         offset: u64,
         max_bytes: u64,
-    ) -> std::result::Result<Vec<u8>, bitrouter::core::protocol::CoreError> {
+    ) -> std::result::Result<Vec<u8>, bitrouter_ai::core::protocol::CoreError> {
         self.inner.read_artifact(reference, offset, max_bytes).await
     }
 
     async fn commit(
         &self,
-        batch: bitrouter::core::checkpoint::CheckpointBatch,
+        batch: bitrouter_ai::core::checkpoint::CheckpointBatch,
     ) -> std::result::Result<
-        bitrouter::core::checkpoint::CheckpointAck,
-        bitrouter::core::protocol::CoreError,
+        bitrouter_ai::core::checkpoint::CheckpointAck,
+        bitrouter_ai::core::protocol::CoreError,
     > {
         let payload = batch.decode(&Limits::default())?;
         if payload.events.iter().any(|event| {
@@ -41,8 +43,8 @@ impl bitrouter::core::session::HarnessPort for TimingHarness {
                 .acquire()
                 .await
                 .map_err(|_| {
-                    bitrouter::core::protocol::CoreError::rejected(
-                        bitrouter::core::protocol::ErrorCode::CheckpointUnavailable,
+                    bitrouter_ai::core::protocol::CoreError::rejected(
+                        bitrouter_ai::core::protocol::ErrorCode::CheckpointUnavailable,
                         "fixture stopped",
                     )
                 })?
@@ -53,8 +55,8 @@ impl bitrouter::core::session::HarnessPort for TimingHarness {
 
     async fn send(
         &self,
-        message: bitrouter::core::protocol::ServerMessage,
-    ) -> std::result::Result<(), bitrouter::core::protocol::CoreError> {
+        message: bitrouter_ai::core::protocol::ServerMessage,
+    ) -> std::result::Result<(), bitrouter_ai::core::protocol::CoreError> {
         self.inner.send(message).await
     }
 }
@@ -408,7 +410,7 @@ async fn monetary_claims_unknown_usage_and_conflicting_receipts_never_become_fre
     let conflict = session.refresh_costs("conflict", &run_id).await;
     assert_eq!(
         conflict.err().map(|error| error.code),
-        Some(bitrouter::core::protocol::ErrorCode::OperationConflict)
+        Some(bitrouter_ai::core::protocol::ErrorCode::OperationConflict)
     );
     assert_eq!(session.head().await, head);
     assert_eq!(session.snapshot().await.cost_work, before.cost_work);

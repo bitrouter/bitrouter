@@ -253,8 +253,9 @@ impl CoreSession {
         let mut decision_id = None;
         let mut response = None;
         let mut reason = "conservative_context";
-        let needs_assessment = turn.input.routing.model == crate::core::protocol::ModelMode::Policy
-            || (turn.input.routing.context == crate::core::protocol::ContextMode::Auto
+        let needs_assessment = turn.input.routing.model
+            == bitrouter_ai::core::protocol::ModelMode::Policy
+            || (turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto
                 && !candidates.candidates.is_empty());
         if needs_assessment
             && let Some(runtime) = runtime
@@ -474,7 +475,8 @@ impl CoreSession {
             policy,
             previous,
             hard_limit_bytes,
-            capabilities: if turn.input.routing.context == super::super::protocol::ContextMode::Auto
+            capabilities: if turn.input.routing.context
+                == bitrouter_ai::core::protocol::ContextMode::Auto
             {
                 let mut capabilities = std::collections::BTreeSet::from([
                     crate::gateway::routing::ContextCapability::OmitEvidence,
@@ -569,7 +571,7 @@ impl CoreSession {
 }
 
 fn portable_reasoning(state: &SessionSnapshot, turn: &AgentTurn) -> bool {
-    turn.input.routing.context == super::super::protocol::ContextMode::Auto
+    turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto
         && state
             .manifest
             .required_features

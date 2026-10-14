@@ -2,6 +2,7 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::SessionSnapshot;
 
 #[tokio::test]

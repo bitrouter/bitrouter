@@ -1,14 +1,15 @@
 //! Task-scoped, lossless tool bodies with bounded UTF-8 page reads.
 
+use crate::core::protocol::ToolResultLimitsExt;
 use base64::Engine;
 use bitrouter_ai::types::ToolResultOutput;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::core::protocol::{
+use crate::core::session::{CoreSession, HarnessPort};
+use bitrouter_ai::core::protocol::{
     ArtifactRef, HarnessTool, ServerMessage, ToolEffect, ToolExecute, ToolResult,
 };
-use crate::core::session::{CoreSession, HarnessPort};
 
 use super::port::Port;
 

@@ -6,7 +6,7 @@ use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput};
 use serde::{Deserialize, Serialize};
 
 use super::{ContextStore, digest, invalid};
-use crate::core::protocol::{CoreError, HarnessManifest};
+use bitrouter_ai::core::protocol::{CoreError, HarnessManifest};
 
 /// Provenance is immutable even if the workspace subsequently changes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,7 +141,7 @@ pub struct EvidenceExtract {
 /// A complete tool body, retained independently of its bounded prompt preview.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceArtifact {
-    pub reference: crate::core::protocol::ArtifactRef,
+    pub reference: bitrouter_ai::core::protocol::ArtifactRef,
     pub source: EvidenceSource,
 }
 

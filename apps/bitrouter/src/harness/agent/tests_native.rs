@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::checkpoint::CheckpointBatchExt;
 use crate::gateway::model::decision::DecisionRuntime;
 use crate::gateway::model::decision::policy::DecisionPolicy;
 use crate::gateway::model::decision::typesafe::TypeSafeExecutor;
@@ -44,7 +45,7 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
         )
         .await;
     assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
-    let reference: crate::core::protocol::ArtifactRef = report
+    let reference: bitrouter_ai::core::protocol::ArtifactRef = report
         .events
         .iter()
         .find_map(|event| match event {
@@ -89,7 +90,7 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
                 .and_then(|work| work.values_mut().next())
             {
                 work["text"] = serde_json::json!("rewritten earlier task");
-                *batch = crate::core::checkpoint::CheckpointBatch::encode(&payload, limits)?;
+                *batch = bitrouter_ai::core::checkpoint::CheckpointBatch::encode(&payload, limits)?;
                 changed = true;
                 break;
             }
@@ -542,7 +543,7 @@ async fn native_agent_executes_context_decision_through_core_and_thread_commit_c
         .iter()
         .filter_map(|record| match record {
             ExecutionRecord::CoreCheckpoint { batch, .. } => {
-                Some(batch.decode(&crate::core::protocol::Limits {
+                Some(batch.decode(&bitrouter_ai::core::protocol::Limits {
                     input_bytes: 1024 * 1024,
                     checkpoint_bytes: 16 * 1024 * 1024,
                     unacknowledged_bytes: 32 * 1024 * 1024,

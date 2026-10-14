@@ -1,10 +1,10 @@
 //! Recover native execution from Core facts, retaining unselected evidence.
 
 use super::{Active, RecoveredCall, Step};
-use crate::core::protocol::ToolOutcome;
 use crate::core::session::SessionSnapshot;
 use crate::harness::item::{CallOrigin, CallRecord};
 use crate::harness::storage::{EffectStatus, ExecutionRecord};
+use bitrouter_ai::core::protocol::ToolOutcome;
 
 pub(super) fn is_projection(fact: &ExecutionRecord, calls: &[RecoveredCall]) -> bool {
     match fact {
@@ -143,8 +143,8 @@ pub(super) fn observe(
                     .any(|observation| {
                         matches!(
                             observation.status,
-                            crate::core::protocol::ToolStatus::Running
-                                | crate::core::protocol::ToolStatus::Stopped
+                            bitrouter_ai::core::protocol::ToolStatus::Running
+                                | bitrouter_ai::core::protocol::ToolStatus::Stopped
                         )
                     }),
                 result: invocation.result.as_ref().map(|result| {

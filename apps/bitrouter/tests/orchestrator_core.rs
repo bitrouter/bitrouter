@@ -1,17 +1,20 @@
 //! The managed core exercised through the shipped App and its production hooks.
 
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::core::protocol::HarnessManifestExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bitrouter::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, sha256};
-use bitrouter::core::protocol::{
+use bitrouter::core::checkpoint::sha256;
+use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus};
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
+use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, CoreError, DiscardableHistory, ErrorCode, HarnessManifest,
     Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate, TaskInput,
 };
-use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus};
-use bitrouter::gateway::caller::CallerContext;
 use bitrouter_ai::types::Role;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -45,7 +48,7 @@ struct Harness {
 impl HarnessPort for Harness {
     async fn read_artifact(
         &self,
-        _reference: &bitrouter::core::protocol::ArtifactRef,
+        _reference: &bitrouter_ai::core::protocol::ArtifactRef,
         _offset: u64,
         _max_bytes: u64,
     ) -> std::result::Result<Vec<u8>, CoreError> {
@@ -394,8 +397,8 @@ models:
 #[tokio::test]
 async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<()> {
     use bitrouter::core::context_router::FEATURE;
-    use bitrouter::core::protocol::ModelMode;
     use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
+    use bitrouter_ai::core::protocol::ModelMode;
     use bitrouter_ai::eval::EvalScope;
     let home = tempfile::tempdir()?;
     let upstream = MockServer::start().await;

@@ -1,6 +1,7 @@
 //! One CoreSession drives the native harness. Workspace tools and approvals
 //! remain local, with their start ledger serialized against checkpoint fences.
 
+use crate::core::checkpoint::CheckpointBatchExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -12,15 +13,16 @@ use tokio_util::sync::CancellationToken;
 
 use super::store::{Journal, MAX_STORE_BYTES, NativePort, NativeStore, StartedTool, error};
 use super::{super::HarnessConfig, NativeResources};
-use crate::core::checkpoint::{ToolStartFence, sha256};
-use crate::core::protocol::{
-    Bind, Capabilities, CoreError, ErrorCode, OwnershipGrant, Restore, ServerMessage, TaskInput,
-    ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult, ToolStatus, VERSION,
-};
+use crate::core::checkpoint::sha256;
 use crate::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
 use crate::harness::agent::ToolMode;
 use crate::harness::service::workspace::WorkspaceFence;
 use crate::harness::storage::ExecutionOwner;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
+use bitrouter_ai::core::protocol::{
+    Bind, Capabilities, CoreError, ErrorCode, OwnershipGrant, Restore, ServerMessage, TaskInput,
+    ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult, ToolStatus, VERSION,
+};
 
 #[async_trait]
 pub trait NativeApproval: Send + Sync {
@@ -354,7 +356,8 @@ async fn cancel_current_run(core: &CoreSession) -> Result<(), CoreError> {
             Ok(_) => return Ok(()),
             Err(err)
                 if err.code == ErrorCode::StaleRevision
-                    && err.commit_status == crate::core::protocol::CommitStatus::NotCommitted =>
+                    && err.commit_status
+                        == bitrouter_ai::core::protocol::CommitStatus::NotCommitted =>
             {
                 continue;
             }

@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
 use crate::core::session::RunStatus;
 use crate::gateway::caller::CallerContext;
 use crate::harness::agent::ToolMode;
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession};
+use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
 use bitrouter_ai::types::ReasoningEffort;
 use tokio_util::sync::CancellationToken;
 
@@ -99,7 +99,7 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         effort: options.effort.map(|effort| effort.to_string()),
         max_output_tokens: options.max_output_tokens,
         context_limit_bytes: None,
-        routing: crate::core::protocol::RoutingSettings {
+        routing: bitrouter_ai::core::protocol::RoutingSettings {
             model: model_mode,
             ..Default::default()
         },

@@ -79,7 +79,7 @@ struct CreateBody {
     workspace: PathBuf,
     model: String,
     #[serde(default)]
-    model_mode: crate::core::protocol::ModelMode,
+    model_mode: bitrouter_ai::core::protocol::ModelMode,
     effort: Option<ReasoningEffort>,
     #[serde(default)]
     max_output_tokens: Option<u32>,

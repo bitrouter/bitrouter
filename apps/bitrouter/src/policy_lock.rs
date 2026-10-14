@@ -11,21 +11,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::commands::invocation;
+use crate::config::{
+    AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
+    TrajectoryConfig, validate_policy_table_config,
+};
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::routing::ModelSelector;
 use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result};
+use bitrouter_ai::routing::PolicyModelTarget;
 #[cfg(test)]
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use {
-    crate::config::AdequacyConfig, crate::config::Config, crate::config::PolicyKeyStrategy,
-    crate::config::PolicyRuntimeMode, crate::config::PolicyTableConfig,
-    crate::config::TrajectoryConfig, crate::config::validate_policy_table_config,
-    bitrouter_ai::routing::PolicyModelTarget,
-};
 
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
@@ -95,11 +94,14 @@ pub fn native_default_model(config: &Config) -> Option<&str> {
 }
 
 /// Named policy selectors opt into policy routing; physical model pins stay fixed.
-pub fn native_model_mode(config: &Config, model: &str) -> Result<crate::core::protocol::ModelMode> {
+pub fn native_model_mode(
+    config: &Config,
+    model: &str,
+) -> Result<bitrouter_ai::core::protocol::ModelMode> {
     Ok(if config.resolve_router(model)?.policy.is_some() {
-        crate::core::protocol::ModelMode::Policy
+        bitrouter_ai::core::protocol::ModelMode::Policy
     } else {
-        crate::core::protocol::ModelMode::Fixed
+        bitrouter_ai::core::protocol::ModelMode::Fixed
     })
 }
 pub const POLICY_LOCKFILE_VERSION: u32 = 4;
@@ -3508,11 +3510,11 @@ mod tests {
         assert_eq!(native_default_model(&config), Some(DEFAULT_NATIVE_MODEL));
         assert_eq!(
             native_model_mode(&config, DEFAULT_NATIVE_MODEL)?,
-            crate::core::protocol::ModelMode::Policy
+            bitrouter_ai::core::protocol::ModelMode::Policy
         );
         assert_eq!(
             native_model_mode(&config, "provider:model")?,
-            crate::core::protocol::ModelMode::Fixed
+            bitrouter_ai::core::protocol::ModelMode::Fixed
         );
         let loaded = load_for_config(&config, None)
             .await?
@@ -3543,7 +3545,7 @@ mod tests {
         assert_eq!(native_default_model(&config), Some("@auto"));
         assert_eq!(
             native_model_mode(&config, "@auto")?,
-            crate::core::protocol::ModelMode::Fixed
+            bitrouter_ai::core::protocol::ModelMode::Fixed
         );
         config.chat.model = Some("external-default".into());
         apply_defaults(&mut config, None);

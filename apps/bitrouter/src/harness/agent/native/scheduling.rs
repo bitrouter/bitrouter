@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::tools;
-use crate::core::protocol::ToolExecute;
+use bitrouter_ai::core::protocol::ToolExecute;
 
 #[derive(Default)]
 pub(super) struct Tools {

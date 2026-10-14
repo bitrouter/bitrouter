@@ -1,7 +1,9 @@
 use super::*;
-use bitrouter::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::core::protocol::ToolResultLimitsExt;
 use bitrouter::core::session::AgentStatus;
 use bitrouter::gateway::pipeline::hooks::HopOutcome;
+use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[derive(Clone)]
 struct HeldHop {

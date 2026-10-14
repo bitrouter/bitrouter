@@ -1,5 +1,6 @@
 use super::*;
-use bitrouter::core::checkpoint::ToolStartFence;
+use bitrouter::core::protocol::ToolResultLimitsExt;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
 
 pub(super) async fn full_result(
     harness: &Harness,

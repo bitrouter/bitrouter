@@ -1,14 +1,18 @@
 mod support;
 
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::core::protocol::ClientMessageExt;
+use bitrouter::core::protocol::HarnessManifestExt;
 use std::collections::BTreeMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use bitrouter::core::checkpoint::{
-    BatchIdentity, Checkpoint, CheckpointBatch, CheckpointPayload, CommitGate, DurableEvent,
-    DurableHead, ToolStartFence, sha256,
+use bitrouter::core::checkpoint::{CommitGate, sha256};
+use bitrouter_ai::core::checkpoint::{
+    BatchIdentity, Checkpoint, CheckpointBatch, CheckpointPayload, DurableEvent, DurableHead,
+    ToolStartFence,
 };
-use bitrouter::core::protocol::{
+use bitrouter_ai::core::protocol::{
     ArtifactRef, Capabilities, ClientMessage, Command, CoreError, ErrorCode, HarnessManifest,
     HarnessTool, Limits, OwnershipGrant, RoutingSettings, ToolEffect, VERSION,
 };
@@ -707,7 +711,7 @@ fn base64_and_envelope_count_toward_unacknowledged_bound() -> TestResult {
     assert!(batch.wire_bytes()? > 8192);
     assert_eq!(
         batch.wire_bytes()?,
-        serde_json::to_vec(&bitrouter::core::protocol::ServerMessage::Checkpoint(
+        serde_json::to_vec(&bitrouter_ai::core::protocol::ServerMessage::Checkpoint(
             batch.clone()
         ))?
         .len() as u64
@@ -728,7 +732,7 @@ fn base64_wire_admission_matches_the_actual_message_at_the_exact_boundary() -> T
         let mut payload = proposal(&DurableHead::default(), "batch_1");
         payload.checkpoint.state = json!({"content":"x".repeat(length)});
         let batch = CheckpointBatch::encode(&payload, &Limits::default())?;
-        let wire = serde_json::to_vec(&bitrouter::core::protocol::ServerMessage::Checkpoint(
+        let wire = serde_json::to_vec(&bitrouter_ai::core::protocol::ServerMessage::Checkpoint(
             batch.clone(),
         ))?;
         assert_eq!(batch.wire_bytes()?, wire.len() as u64);
@@ -762,7 +766,7 @@ fn malformed_base64_keeps_exact_wire_limit_error_precedence() -> TestResult {
     for invalid in ["\"\"\"\"", "\\\\", "\0", "%%%%", "AAAA=", "A", "é"] {
         let mut batch = original.clone();
         batch.payload_bytes = invalid.into();
-        let wire = serde_json::to_vec(&bitrouter::core::protocol::ServerMessage::Checkpoint(
+        let wire = serde_json::to_vec(&bitrouter_ai::core::protocol::ServerMessage::Checkpoint(
             batch.clone(),
         ))?;
         assert_eq!(batch.wire_bytes()?, wire.len() as u64);
@@ -804,7 +808,7 @@ fn base64_wire_admission_counts_escaped_untrusted_envelope_fields() -> TestResul
             value["identity"][field] = json!("\"\\\0é");
         }
         let batch: CheckpointBatch = serde_json::from_value(value)?;
-        let wire = serde_json::to_vec(&bitrouter::core::protocol::ServerMessage::Checkpoint(
+        let wire = serde_json::to_vec(&bitrouter_ai::core::protocol::ServerMessage::Checkpoint(
             batch.clone(),
         ))?;
         assert_eq!(batch.wire_bytes()?, wire.len() as u64);

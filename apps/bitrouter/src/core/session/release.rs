@@ -2,7 +2,7 @@
 //! grant; only authenticated restoration under a higher epoch can do that.
 
 use super::*;
-use crate::core::protocol::OwnershipGrant;
+use bitrouter_ai::core::protocol::OwnershipGrant;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseRecord {

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::FEATURE;
-use crate::core::protocol::{CoreError, ErrorCode};
 use crate::core::session::SessionSnapshot;
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 pub const NAMES: &[&str] = &[
     "context_search",

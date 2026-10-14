@@ -19,7 +19,7 @@ use crate::gateway::model::decision::types::DecisionResponse;
 use crate::gateway::pipeline::native::NativePlan;
 use serde::{Deserialize, Serialize};
 
-use super::protocol::{CoreError, ErrorCode};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 /// Explicit protocol negotiation is required before legacy history can be viewed.
 pub const FEATURE: &str = "context_views_v1";

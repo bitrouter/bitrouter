@@ -1,8 +1,9 @@
 //! Exercise the default graph, concurrency and outstanding-tool bounds together.
 
 use super::*;
-use bitrouter::core::protocol::OperationDisposition;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::AgentStatus;
+use bitrouter_ai::core::protocol::OperationDisposition;
 
 struct BoundedExecutor {
     inner: RecordingExecutor,

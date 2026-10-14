@@ -29,7 +29,7 @@ pub struct EstimateRates {
 pub struct AgentConfig {
     pub model: String,
     #[serde(default, skip_serializing_if = "fixed_model_mode")]
-    pub model_mode: crate::core::protocol::ModelMode,
+    pub model_mode: bitrouter_ai::core::protocol::ModelMode,
     pub effort: Option<ReasoningEffort>,
     /// Per-step output reservation, retained with the Thread configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,8 +44,8 @@ pub struct AgentConfig {
     tool_mode: ToolMode,
 }
 
-fn fixed_model_mode(mode: &crate::core::protocol::ModelMode) -> bool {
-    *mode == crate::core::protocol::ModelMode::Fixed
+fn fixed_model_mode(mode: &bitrouter_ai::core::protocol::ModelMode) -> bool {
+    *mode == bitrouter_ai::core::protocol::ModelMode::Fixed
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -60,7 +60,7 @@ impl AgentConfig {
     pub fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self {
         Self {
             model: model.into(),
-            model_mode: crate::core::protocol::ModelMode::Fixed,
+            model_mode: bitrouter_ai::core::protocol::ModelMode::Fixed,
             effort,
             max_output_tokens: None,
             instructions: DEFAULT_INSTRUCTIONS.into(),
@@ -80,7 +80,7 @@ impl AgentConfig {
         self
     }
 
-    pub fn with_model_mode(mut self, mode: crate::core::protocol::ModelMode) -> Self {
+    pub fn with_model_mode(mut self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self {
         self.model_mode = mode;
         self
     }

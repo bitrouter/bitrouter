@@ -1,20 +1,18 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::protocol::ModelMode;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::gateway::pipeline::hooks::{HookDecision, PreRequestHook, RouteHook};
 use bitrouter::gateway::pipeline::native_accounting::{NativeCostObservation, NativeCostSource};
 use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind as Kind;
 use bitrouter::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
-use bitrouter_ai::extension::request_check::{Decision, Input};
-use {
-    bitrouter::gateway::pipeline::routing::ModelResolution,
-    bitrouter::gateway::pipeline::routing::ModelSelector,
-    bitrouter::gateway::pipeline::routing::RoutingPrefs,
-    bitrouter::gateway::pipeline::routing::RoutingTable, bitrouter_ai::routing::ModelInfo,
-    bitrouter_ai::routing::RouterRequestIdentity,
+use bitrouter::gateway::pipeline::routing::{
+    ModelResolution, ModelSelector, RoutingPrefs, RoutingTable,
 };
+use bitrouter_ai::core::protocol::ModelMode;
+use bitrouter_ai::extension::request_check::{Decision, Input};
+use bitrouter_ai::routing::{ModelInfo, RouterRequestIdentity};
 
 struct Probe {
     calls: Mutex<Vec<Kind>>,

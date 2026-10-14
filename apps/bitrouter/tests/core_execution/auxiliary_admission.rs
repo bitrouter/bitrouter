@@ -1,4 +1,5 @@
 use super::*;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::gateway::pipeline::hooks::DenyReason;
 use bitrouter::gateway::pipeline::hooks::HookDecision;
 use bitrouter::gateway::pipeline::hooks::PreRequestHook;

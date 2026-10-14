@@ -1,9 +1,10 @@
+use crate::core::checkpoint::CheckpointBatchExt;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::core::checkpoint::{
-    CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence, VerifiedBatch, sha256,
-};
-use crate::core::protocol::{ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant};
+use crate::core::checkpoint::{VerifiedBatch, sha256};
+
+use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
+use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant};
 
 fn artifact_error() -> CoreError {
     CoreError::rejected(
@@ -22,7 +23,8 @@ pub(super) fn quiescent(snapshot: &crate::core::session::SessionSnapshot) -> boo
                 && turn.invocations.iter().all(|call| {
                     call.consumed
                         && call.result.as_ref().is_some_and(|result| {
-                            result.status != crate::core::protocol::ToolOutcome::EffectUnknown
+                            result.status
+                                != bitrouter_ai::core::protocol::ToolOutcome::EffectUnknown
                         })
                 })
                 && turn
@@ -39,7 +41,7 @@ pub(super) fn quiescent(snapshot: &crate::core::session::SessionSnapshot) -> boo
 
 pub(super) fn continuation_boundary(
     snapshot: &crate::core::session::SessionSnapshot,
-    events: &[crate::core::checkpoint::DurableEvent],
+    events: &[bitrouter_ai::core::checkpoint::DurableEvent],
 ) -> bool {
     quiescent(snapshot)
         && events.iter().any(|event| {
@@ -127,10 +129,12 @@ impl Journal {
     pub(super) fn restore(
         &mut self,
         instance_id: &str,
-        manifest: crate::core::protocol::HarnessManifest,
-    ) -> Result<crate::core::protocol::Restore, CoreError> {
-        use crate::core::protocol::{Bind, Restore, ToolObservation, ToolOutcome, ToolStatus};
+        manifest: bitrouter_ai::core::protocol::HarnessManifest,
+    ) -> Result<bitrouter_ai::core::protocol::Restore, CoreError> {
         use crate::core::session::{RunStatus, SessionSnapshot};
+        use bitrouter_ai::core::protocol::{
+            Bind, Restore, ToolObservation, ToolOutcome, ToolStatus,
+        };
         let checkpoint = self.checkpoint.clone().ok_or_else(|| {
             CoreError::rejected(ErrorCode::RecoveryRequired, "native checkpoint is missing")
         })?;
@@ -155,14 +159,13 @@ impl Journal {
             ));
         }
         let active_time = if active {
-            snapshot
-                .run
-                .as_ref()
-                .map(|run| crate::core::protocol::RunActivityReconciliation {
+            snapshot.run.as_ref().map(|run| {
+                bitrouter_ai::core::protocol::RunActivityReconciliation {
                     run_id: run.run_id.clone(),
                     durable_head: self.head.clone(),
                     active_ms: run.active_ms,
-                })
+                }
+            })
         } else {
             None
         };
@@ -238,7 +241,10 @@ impl Journal {
     }
 
     pub(super) fn prepare(&self, batch: &CheckpointBatch) -> Result<CheckpointAck, CoreError> {
-        self.prepare_verified(&batch.verified(&self.limits)?)
+        self.prepare_verified(&crate::core::checkpoint::verified_batch(
+            batch,
+            &self.limits,
+        )?)
     }
 
     pub(super) fn prepare_verified(
@@ -253,7 +259,7 @@ impl Journal {
             .map(|known| {
                 known
                     .decode(&self.limits)
-                    .map(|payload| CheckpointAck::for_batch(known, &payload))
+                    .map(|payload| crate::core::checkpoint::ack_for_batch(known, &payload))
             })
             .transpose()?;
         let available = self

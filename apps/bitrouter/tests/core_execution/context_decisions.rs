@@ -1,11 +1,11 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::core::context_router::FEATURE;
-use bitrouter::core::protocol::ContextMode;
 use bitrouter::gateway::model::decision::DecisionRuntime;
 use bitrouter::gateway::model::decision::policy::DecisionPolicy;
 use bitrouter::gateway::model::decision::policy::DecisionPricing;
 use bitrouter::gateway::model::decision::typesafe::TypeSafeExecutor;
+use bitrouter_ai::core::protocol::ContextMode;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -711,7 +711,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     )
     .await?;
     let mut task = input();
-    task.routing.model = bitrouter::core::protocol::ModelMode::Policy;
+    task.routing.model = bitrouter_ai::core::protocol::ModelMode::Policy;
     task.routing.context = ContextMode::Auto;
     session
         .start("work", session.head().await.state_revision, task)

@@ -5,6 +5,8 @@
 //! https://developers.openai.com/api/docs/guides/reasoning
 
 use super::*;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::core::protocol::HarnessManifestExt;
 #[path = "private_context/continuation.rs"]
 mod continuation;
 #[path = "private_context/stream_bridge.rs"]
@@ -663,7 +665,7 @@ async fn private_history_redirect_is_not_followed_or_claimed_as_success() -> Res
 
 #[tokio::test]
 async fn private_history_core_changes_model_only_after_authorized_context_rebuild() -> Result<()> {
-    use bitrouter::core::protocol::DiscardableHistory;
+    use bitrouter_ai::core::protocol::DiscardableHistory;
     for protocol in ["messages", "responses"] {
         for (discard, portable) in [(false, false), (true, false), (false, true)] {
             let rebuild = discard || (portable && protocol == "responses");
@@ -893,7 +895,7 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
                 let restored: bitrouter::core::session::SessionSnapshot = serde_json::from_value(
                     checkpoint.decode(&Limits::default())?.checkpoint.state,
                 )?;
-                let request = bitrouter::core::protocol::Restore {
+                let request = bitrouter_ai::core::protocol::Restore {
                     binding: Bind {
                         grant: harness.grant.clone(),
                         durable_head: store.head.clone(),

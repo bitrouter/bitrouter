@@ -8,7 +8,6 @@ mod responses;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
-use crate::core::protocol::{Capabilities, CoreError, ErrorCode, Limits, VERSION};
 use crate::core::session::CoreSession;
 use crate::gateway::assembly::App;
 use axum::extract::State;
@@ -16,6 +15,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use bitrouter_ai::core::protocol::{Capabilities, CoreError, ErrorCode, Limits, VERSION};
 use sea_orm::DatabaseConnection;
 use tokio::sync::{Mutex, Semaphore};
 
@@ -25,12 +25,12 @@ type OutputBudgets = (Weak<output::Budget>, Weak<output::Budget>);
 struct Entry {
     session: Option<CoreSession>,
     port: Arc<channel::RemotePort>,
-    grant: crate::core::protocol::OwnershipGrant,
+    grant: bitrouter_ai::core::protocol::OwnershipGrant,
     limits: Limits,
     connected: bool,
     ready: bool,
     job: Option<responses::Job>,
-    recovery_evidence: Vec<crate::core::protocol::ProviderAttemptEvidence>,
+    recovery_evidence: Vec<bitrouter_ai::core::protocol::ProviderAttemptEvidence>,
 }
 
 struct Shared {
@@ -233,6 +233,10 @@ impl IntoResponse for ApiError {
             }
             _ => StatusCode::BAD_REQUEST,
         };
-        (status, Json(serde_json::json!({"error":self.0}))).into_response()
+        (
+            status,
+            Json(bitrouter_ai::core::protocol::ErrorEnvelope { error: self.0 }),
+        )
+            .into_response()
     }
 }

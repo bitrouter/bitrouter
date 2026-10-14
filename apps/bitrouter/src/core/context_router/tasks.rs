@@ -4,8 +4,8 @@ use bitrouter_ai::types::{Content, Message, Role};
 
 use super::evidence::{EvidenceBlock, EvidenceSource};
 use super::{FEATURE, invalid};
-use crate::core::protocol::CoreError;
 use crate::core::session::{AgentTurn, SessionSnapshot};
+use bitrouter_ai::core::protocol::CoreError;
 
 pub(crate) fn enabled(state: &SessionSnapshot) -> bool {
     state

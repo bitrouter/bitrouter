@@ -2,125 +2,23 @@
 //! Persistence is supplied by the harness. A proposal is never an execution
 //! authorization; only a matching durable acknowledgement advances the head.
 
+use bitrouter_ai::core::checkpoint::{
+    BatchIdentity, CheckpointAck, CheckpointBatch, CheckpointPayload, DurableHead, ToolStartFence,
+    validate_digest,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::protocol::{
+use bitrouter_ai::core::protocol::{
     ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant, VERSION, validate_id,
 };
 
 pub fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-pub fn validate_digest(value: &str) -> Result<(), CoreError> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(CoreError::rejected(
-            ErrorCode::CheckpointConflict,
-            "expected lowercase SHA-256 digest",
-        ));
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DurableHead {
-    pub execution_epoch: u64,
-    pub state_revision: u64,
-    pub event_seq: u64,
-    pub batch_id: Option<String>,
-    pub payload_sha256: Option<String>,
-}
-
-impl DurableHead {
-    pub fn validate(&self) -> Result<(), CoreError> {
-        if self.state_revision == 0 {
-            if self != &Self::default() {
-                return Err(conflict(
-                    "an empty durable head must have all-zero versions and no batch",
-                ));
-            }
-        } else {
-            if self.execution_epoch == 0 || self.event_seq < self.state_revision {
-                return Err(conflict("durable head has inconsistent versions"));
-            }
-            validate_id(
-                self.batch_id
-                    .as_deref()
-                    .ok_or_else(|| conflict("durable head has no batch"))?,
-            )?;
-            validate_digest(
-                self.payload_sha256
-                    .as_deref()
-                    .ok_or_else(|| conflict("durable head has no digest"))?,
-            )?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BatchIdentity {
-    pub batch_id: String,
-    pub session_id: String,
-    pub execution_epoch: u64,
-    pub core_instance_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DurableEvent {
-    pub event_seq: u64,
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub run_id: Option<String>,
-    pub agent_id: Option<String>,
-    pub payload: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Checkpoint {
-    pub schema_version: u32,
-    pub state_revision: u64,
-    pub artifact_refs: Vec<ArtifactRef>,
-    /// Versioned core-owned snapshot. Harnesses store it without editing it;
-    /// the scheduler decodes and validates its concrete state during restore.
-    pub state: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckpointPayload {
-    pub identity: BatchIdentity,
-    pub base_event_seq: u64,
-    pub base_state_revision: u64,
-    pub events: Vec<DurableEvent>,
-    /// Persist with the append, serialized against the harness's actual tool
-    /// start. Block late execute/approval for these exact identities, including
-    /// identities absent from the local ledger. Already started work continues;
-    /// this fence is not a tool outcome. An ACK covers both records atomically.
-    #[serde(default)]
-    pub tool_start_fences: Vec<ToolStartFence>,
-    pub checkpoint: Checkpoint,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolStartFence {
-    pub invocation_id: String,
-    pub attempt_id: String,
 }
 
 pub(crate) fn validate_tool_start_fences(fences: &[ToolStartFence]) -> Result<(), CoreError> {
@@ -133,15 +31,6 @@ pub(crate) fn validate_tool_start_fences(fences: &[ToolStartFence]) -> Result<()
         }
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckpointBatch {
-    pub identity: BatchIdentity,
-    pub payload_encoding: String,
-    pub payload_bytes: String,
-    pub payload_sha256: String,
 }
 
 /// A verified decode tied to immutable bytes and the limits used to admit them.
@@ -174,288 +63,14 @@ impl VerifiedBatch<'_> {
         }
         grant.validate()?;
         head.validate()?;
-        self.batch
-            .validate_decoded_append(&self.payload, grant, head, available, retained_ack)
-    }
-}
-
-impl CheckpointBatch {
-    pub(crate) fn verified<'a>(
-        &'a self,
-        limits: &'a Limits,
-    ) -> Result<VerifiedBatch<'a>, CoreError> {
-        Ok(VerifiedBatch {
-            batch: self,
-            limits,
-            payload: self.decode(limits)?,
-        })
-    }
-
-    /// Check a projected payload length without allocating its base64 bytes.
-    /// Base64 contains no JSON-escaped characters, so the empty wire envelope
-    /// plus its encoded length gives the exact transport size.
-    pub(crate) fn check_projected_size(
-        identity: &BatchIdentity,
-        payload_bytes: u64,
-        limits: &Limits,
-    ) -> Result<(), CoreError> {
-        if payload_bytes > limits.checkpoint_bytes {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "checkpoint cleanup capacity exhausted",
-            ));
-        }
-        let encoded = payload_bytes
-            .checked_add(2)
-            .and_then(|bytes| (bytes / 3).checked_mul(4))
-            .ok_or_else(|| {
-                CoreError::rejected(ErrorCode::LimitExceeded, "checkpoint size exhausted")
-            })?;
-        let envelope = Self {
-            identity: identity.clone(),
-            payload_encoding: "base64-json".into(),
-            payload_bytes: String::new(),
-            payload_sha256: "0".repeat(64),
-        };
-        if envelope
-            .wire_bytes()?
-            .checked_add(encoded)
-            .is_none_or(|bytes| bytes > limits.unacknowledged_bytes)
-        {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "checkpoint cleanup wire capacity exhausted",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Serialize exactly once. Retain this object for retransmission; neither
-    /// endpoint computes a digest from a reserialized/reordered JSON object.
-    pub fn encode(payload: &CheckpointPayload, limits: &Limits) -> Result<Self, CoreError> {
-        validate_payload(payload)?;
-        let bytes = serde_json::to_vec(payload).map_err(|error| conflict(error.to_string()))?;
-        if bytes.len() as u64 > limits.checkpoint_bytes {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "serialized checkpoint exceeds negotiated bound",
-            ));
-        }
-        let batch = Self {
-            identity: payload.identity.clone(),
-            payload_encoding: "base64-json".into(),
-            payload_bytes: STANDARD.encode(&bytes),
-            payload_sha256: sha256(&bytes),
-        };
-        batch.check_base64_wire_limit(limits)?;
-        Ok(batch)
-    }
-
-    pub fn decode(&self, limits: &Limits) -> Result<CheckpointPayload, CoreError> {
-        if self.payload_encoding != "base64-json" {
-            return Err(CoreError::rejected(
-                ErrorCode::UnsupportedVersion,
-                "unsupported checkpoint encoding",
-            ));
-        }
-        let max_encoded = limits
-            .checkpoint_bytes
-            .saturating_add(2)
-            .saturating_div(3)
-            .saturating_mul(4);
-        if self.payload_bytes.len() as u64 > max_encoded {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "encoded checkpoint exceeds negotiated bound",
-            ));
-        }
-        self.check_base64_wire_limit(limits)?;
-        let bytes = match STANDARD.decode(&self.payload_bytes) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                // Invalid base64 may contain JSON escapes. Preserve the exact
-                // wire-limit error before reporting malformed payload bytes.
-                self.check_wire_limit(limits)?;
-                return Err(conflict(error.to_string()));
-            }
-        };
-        if bytes.len() as u64 > limits.checkpoint_bytes {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "decoded checkpoint exceeds negotiated bound",
-            ));
-        }
-        if sha256(&bytes) != self.payload_sha256 {
-            return Err(conflict("checkpoint digest mismatch"));
-        }
-        let payload: CheckpointPayload =
-            serde_json::from_slice(&bytes).map_err(|error| conflict(error.to_string()))?;
-        if payload.identity != self.identity {
-            return Err(conflict(
-                "checkpoint envelope does not match hashed identity",
-            ));
-        }
-        validate_payload(&payload)?;
-        Ok(payload)
-    }
-
-    /// Count the complete `checkpoint.proposed` wire message, including base64
-    /// expansion and the transport envelope, without allocating another copy.
-    pub fn wire_bytes(&self) -> Result<u64, CoreError> {
-        #[derive(Serialize)]
-        struct Envelope<'a> {
-            #[serde(rename = "type")]
-            kind: &'static str,
-            payload: &'a CheckpointBatch,
-        }
-        serialized_bytes(&Envelope {
-            kind: "checkpoint.proposed",
-            payload: self,
-        })
-    }
-
-    fn check_wire_limit(&self, limits: &Limits) -> Result<(), CoreError> {
-        if self.wire_bytes()? > limits.unacknowledged_bytes {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "checkpoint wire envelope exceeds unacknowledged output bound",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Valid base64 needs no JSON escaping. Count only the small envelope and
-    /// add the encoded length instead of rescanning a potentially multi-MiB
-    /// string at every admission. For untrusted input this is a lower bound;
-    /// decode must still strictly validate base64 before accepting the batch.
-    fn check_base64_wire_limit(&self, limits: &Limits) -> Result<(), CoreError> {
-        #[derive(Serialize)]
-        struct EmptyBatch<'a> {
-            identity: &'a BatchIdentity,
-            payload_encoding: &'a str,
-            payload_bytes: &'static str,
-            payload_sha256: &'a str,
-        }
-        #[derive(Serialize)]
-        struct Envelope<'a> {
-            #[serde(rename = "type")]
-            kind: &'static str,
-            payload: EmptyBatch<'a>,
-        }
-        let overhead = serialized_bytes(&Envelope {
-            kind: "checkpoint.proposed",
-            payload: EmptyBatch {
-                identity: &self.identity,
-                payload_encoding: &self.payload_encoding,
-                payload_bytes: "",
-                payload_sha256: &self.payload_sha256,
-            },
-        })?;
-        if overhead
-            .checked_add(self.payload_bytes.len() as u64)
-            .is_none_or(|bytes| bytes > limits.unacknowledged_bytes)
-        {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "checkpoint wire envelope exceeds unacknowledged output bound",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Harness-side admission checks. The caller must perform these checks and
-    /// the append atomically under its durable ownership grant. Artifact
-    /// availability means verified durable bytes, not a staging upload.
-    pub fn validate_append(
-        &self,
-        grant: &OwnershipGrant,
-        head: &DurableHead,
-        limits: &Limits,
-        available: &BTreeMap<String, ArtifactRef>,
-        retained_ack: Option<&CheckpointAck>,
-    ) -> Result<CheckpointAck, CoreError> {
-        self.validate_append_with_payload(grant, head, limits, available, retained_ack)
-            .map(|(ack, _)| ack)
-    }
-
-    /// Apply the same admission checks as [`Self::validate_append`] and return
-    /// the verified payload for artifact checks, tool fences and event storage.
-    /// Keep validation and persistence in the same durable transaction; the
-    /// returned ACK does not establish that the append has been persisted.
-    pub fn validate_append_with_payload(
-        &self,
-        grant: &OwnershipGrant,
-        head: &DurableHead,
-        limits: &Limits,
-        available: &BTreeMap<String, ArtifactRef>,
-        retained_ack: Option<&CheckpointAck>,
-    ) -> Result<(CheckpointAck, CheckpointPayload), CoreError> {
-        grant.validate()?;
-        head.validate()?;
-        let payload = self.decode(limits)?;
-        let ack = self.validate_decoded_append(&payload, grant, head, available, retained_ack)?;
-        Ok((ack, payload))
-    }
-
-    // Only call with a validated grant/head and a payload decoded from this
-    // batch. External callers must validate the hashed bytes.
-    fn validate_decoded_append(
-        &self,
-        payload: &CheckpointPayload,
-        grant: &OwnershipGrant,
-        head: &DurableHead,
-        available: &BTreeMap<String, ArtifactRef>,
-        retained_ack: Option<&CheckpointAck>,
-    ) -> Result<CheckpointAck, CoreError> {
-        if self.identity.session_id != grant.session_id
-            || self.identity.core_instance_id != grant.core_instance_id
-        {
-            return Err(CoreError::rejected(
-                ErrorCode::UnauthorizedScope,
-                "batch belongs to another session or core instance",
-            ));
-        }
-        if self.identity.execution_epoch != grant.execution_epoch
-            || head.execution_epoch > grant.execution_epoch
-        {
-            return Err(CoreError::rejected(
-                ErrorCode::StaleEpoch,
-                "batch is fenced by current ownership grant",
-            ));
-        }
-        if let Some(previous) = retained_ack {
-            let expected = CheckpointAck::for_batch(self, payload);
-            if previous != &expected
-                || previous.state_revision > head.state_revision
-                || previous.through_event_seq > head.event_seq
-            {
-                return Err(conflict(
-                    "retained batch identity has different content or is ahead of durable head",
-                ));
-            }
-            return Ok(previous.clone());
-        }
-        if head.batch_id.as_deref() == Some(&self.identity.batch_id) {
-            let ack = CheckpointAck::for_batch(self, payload);
-            if ack.head() == *head {
-                return Ok(ack);
-            }
-            return Err(conflict("same batch identity has different content"));
-        }
-        if payload.base_state_revision != head.state_revision
-            || payload.base_event_seq != head.event_seq
-        {
-            return Err(conflict("checkpoint append does not match durable base"));
-        }
-        for reference in &payload.checkpoint.artifact_refs {
-            if available.get(&reference.artifact_id) != Some(reference) {
-                return Err(CoreError::rejected(
-                    ErrorCode::ArtifactUnavailable,
-                    format!("artifact {} is not durable", reference.artifact_id),
-                ));
-            }
-        }
-        Ok(CheckpointAck::for_batch(self, payload))
+        validate_decoded_append(
+            self.batch,
+            &self.payload,
+            grant,
+            head,
+            available,
+            retained_ack,
+        )
     }
 }
 
@@ -503,41 +118,6 @@ fn validate_payload(payload: &CheckpointPayload) -> Result<(), CoreError> {
         }
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckpointAck {
-    pub batch_id: String,
-    pub payload_sha256: String,
-    pub through_event_seq: u64,
-    pub state_revision: u64,
-    pub execution_epoch: u64,
-}
-
-impl CheckpointAck {
-    pub(crate) fn for_batch(batch: &CheckpointBatch, payload: &CheckpointPayload) -> Self {
-        Self {
-            batch_id: batch.identity.batch_id.clone(),
-            payload_sha256: batch.payload_sha256.clone(),
-            through_event_seq: payload
-                .events
-                .last()
-                .map_or(payload.base_event_seq, |event| event.event_seq),
-            state_revision: payload.checkpoint.state_revision,
-            execution_epoch: batch.identity.execution_epoch,
-        }
-    }
-
-    pub fn head(&self) -> DurableHead {
-        DurableHead {
-            execution_epoch: self.execution_epoch,
-            state_revision: self.state_revision,
-            event_seq: self.through_event_seq,
-            batch_id: Some(self.batch_id.clone()),
-            payload_sha256: Some(self.payload_sha256.clone()),
-        }
-    }
 }
 
 /// Pure core-side barrier. Provider/tool I/O must run outside scheduler locks
@@ -667,7 +247,7 @@ impl CommitGate {
             .as_ref()
             .ok_or_else(|| conflict("no pending batch matches acknowledgement"))?;
         let payload = batch.decode(&self.limits)?;
-        if *ack != CheckpointAck::for_batch(batch, &payload) {
+        if *ack != ack_for_batch(batch, &payload) {
             return Err(conflict(
                 "acknowledgement does not match the complete pending batch",
             ));
@@ -731,5 +311,323 @@ impl std::io::Write for ByteCounter {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// Application checkpoint codecs and durable append checks over public envelopes.
+/// A returned ACK is only a proposal: persistence and ownership checks must be
+/// serialized by the harness before it sends that ACK to the core.
+pub trait CheckpointBatchExt: Sized {
+    fn encode(payload: &CheckpointPayload, limits: &Limits) -> Result<Self, CoreError>;
+    fn decode(&self, limits: &Limits) -> Result<CheckpointPayload, CoreError>;
+    fn wire_bytes(&self) -> Result<u64, CoreError>;
+    fn validate_append(
+        &self,
+        grant: &OwnershipGrant,
+        head: &DurableHead,
+        limits: &Limits,
+        available: &BTreeMap<String, ArtifactRef>,
+        retained_ack: Option<&CheckpointAck>,
+    ) -> Result<CheckpointAck, CoreError>;
+    fn validate_append_with_payload(
+        &self,
+        grant: &OwnershipGrant,
+        head: &DurableHead,
+        limits: &Limits,
+        available: &BTreeMap<String, ArtifactRef>,
+        retained_ack: Option<&CheckpointAck>,
+    ) -> Result<(CheckpointAck, CheckpointPayload), CoreError>;
+}
+
+impl CheckpointBatchExt for CheckpointBatch {
+    /// Serialize exactly once. Retain this object for retransmission; neither
+    /// endpoint computes a digest from a reserialized/reordered JSON object.
+    fn encode(payload: &CheckpointPayload, limits: &Limits) -> Result<Self, CoreError> {
+        validate_payload(payload)?;
+        let bytes = serde_json::to_vec(payload).map_err(|error| conflict(error.to_string()))?;
+        if bytes.len() as u64 > limits.checkpoint_bytes {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "serialized checkpoint exceeds negotiated bound",
+            ));
+        }
+        let batch = Self {
+            identity: payload.identity.clone(),
+            payload_encoding: "base64-json".into(),
+            payload_bytes: STANDARD.encode(&bytes),
+            payload_sha256: sha256(&bytes),
+        };
+        check_base64_wire_limit(&batch, limits)?;
+        Ok(batch)
+    }
+
+    fn decode(&self, limits: &Limits) -> Result<CheckpointPayload, CoreError> {
+        if self.payload_encoding != "base64-json" {
+            return Err(CoreError::rejected(
+                ErrorCode::UnsupportedVersion,
+                "unsupported checkpoint encoding",
+            ));
+        }
+        let max_encoded = limits
+            .checkpoint_bytes
+            .saturating_add(2)
+            .saturating_div(3)
+            .saturating_mul(4);
+        if self.payload_bytes.len() as u64 > max_encoded {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "encoded checkpoint exceeds negotiated bound",
+            ));
+        }
+        check_base64_wire_limit(self, limits)?;
+        let bytes = match STANDARD.decode(&self.payload_bytes) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                // Invalid base64 may contain JSON escapes. Preserve the exact
+                // wire-limit error before reporting malformed payload bytes.
+                check_wire_limit(self, limits)?;
+                return Err(conflict(error.to_string()));
+            }
+        };
+        if bytes.len() as u64 > limits.checkpoint_bytes {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "decoded checkpoint exceeds negotiated bound",
+            ));
+        }
+        if sha256(&bytes) != self.payload_sha256 {
+            return Err(conflict("checkpoint digest mismatch"));
+        }
+        let payload: CheckpointPayload =
+            serde_json::from_slice(&bytes).map_err(|error| conflict(error.to_string()))?;
+        if payload.identity != self.identity {
+            return Err(conflict(
+                "checkpoint envelope does not match hashed identity",
+            ));
+        }
+        validate_payload(&payload)?;
+        Ok(payload)
+    }
+
+    /// Count the complete `checkpoint.proposed` wire message, including base64
+    /// expansion and the transport envelope, without allocating another copy.
+    fn wire_bytes(&self) -> Result<u64, CoreError> {
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            payload: &'a CheckpointBatch,
+        }
+        serialized_bytes(&Envelope {
+            kind: "checkpoint.proposed",
+            payload: self,
+        })
+    }
+
+    /// Harness-side admission checks. The caller must perform these checks and
+    /// the append atomically under its durable ownership grant. Artifact
+    /// availability means verified durable bytes, not a staging upload.
+    fn validate_append(
+        &self,
+        grant: &OwnershipGrant,
+        head: &DurableHead,
+        limits: &Limits,
+        available: &BTreeMap<String, ArtifactRef>,
+        retained_ack: Option<&CheckpointAck>,
+    ) -> Result<CheckpointAck, CoreError> {
+        self.validate_append_with_payload(grant, head, limits, available, retained_ack)
+            .map(|(ack, _)| ack)
+    }
+
+    /// Apply the same admission checks as [`Self::validate_append`] and return
+    /// the verified payload for artifact checks, tool fences and event storage.
+    /// Keep validation and persistence in the same durable transaction; the
+    /// returned ACK does not establish that the append has been persisted.
+    fn validate_append_with_payload(
+        &self,
+        grant: &OwnershipGrant,
+        head: &DurableHead,
+        limits: &Limits,
+        available: &BTreeMap<String, ArtifactRef>,
+        retained_ack: Option<&CheckpointAck>,
+    ) -> Result<(CheckpointAck, CheckpointPayload), CoreError> {
+        grant.validate()?;
+        head.validate()?;
+        let payload = self.decode(limits)?;
+        let ack = validate_decoded_append(self, &payload, grant, head, available, retained_ack)?;
+        Ok((ack, payload))
+    }
+}
+
+pub(crate) fn verified_batch<'a>(
+    batch: &'a CheckpointBatch,
+    limits: &'a Limits,
+) -> Result<VerifiedBatch<'a>, CoreError> {
+    Ok(VerifiedBatch {
+        batch,
+        limits,
+        payload: batch.decode(limits)?,
+    })
+}
+
+/// Check a projected payload length without allocating its base64 bytes.
+/// Base64 contains no JSON-escaped characters, so the empty wire envelope
+/// plus its encoded length gives the exact transport size.
+pub(crate) fn check_projected_size(
+    identity: &BatchIdentity,
+    payload_bytes: u64,
+    limits: &Limits,
+) -> Result<(), CoreError> {
+    if payload_bytes > limits.checkpoint_bytes {
+        return Err(CoreError::rejected(
+            ErrorCode::LimitExceeded,
+            "checkpoint cleanup capacity exhausted",
+        ));
+    }
+    let encoded = payload_bytes
+        .checked_add(2)
+        .and_then(|bytes| (bytes / 3).checked_mul(4))
+        .ok_or_else(|| {
+            CoreError::rejected(ErrorCode::LimitExceeded, "checkpoint size exhausted")
+        })?;
+    let envelope = CheckpointBatch {
+        identity: identity.clone(),
+        payload_encoding: "base64-json".into(),
+        payload_bytes: String::new(),
+        payload_sha256: "0".repeat(64),
+    };
+    if envelope
+        .wire_bytes()?
+        .checked_add(encoded)
+        .is_none_or(|bytes| bytes > limits.unacknowledged_bytes)
+    {
+        return Err(CoreError::rejected(
+            ErrorCode::LimitExceeded,
+            "checkpoint cleanup wire capacity exhausted",
+        ));
+    }
+    Ok(())
+}
+
+fn check_wire_limit(batch: &CheckpointBatch, limits: &Limits) -> Result<(), CoreError> {
+    if batch.wire_bytes()? > limits.unacknowledged_bytes {
+        return Err(CoreError::rejected(
+            ErrorCode::LimitExceeded,
+            "checkpoint wire envelope exceeds unacknowledged output bound",
+        ));
+    }
+    Ok(())
+}
+
+/// Valid base64 needs no JSON escaping. Count only the small envelope and
+/// add the encoded length instead of rescanning a potentially multi-MiB
+/// string at every admission. For untrusted input this is a lower bound;
+/// decode must still strictly validate base64 before accepting the batch.
+fn check_base64_wire_limit(batch: &CheckpointBatch, limits: &Limits) -> Result<(), CoreError> {
+    #[derive(Serialize)]
+    struct EmptyBatch<'a> {
+        identity: &'a BatchIdentity,
+        payload_encoding: &'a str,
+        payload_bytes: &'static str,
+        payload_sha256: &'a str,
+    }
+    #[derive(Serialize)]
+    struct Envelope<'a> {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        payload: EmptyBatch<'a>,
+    }
+    let overhead = serialized_bytes(&Envelope {
+        kind: "checkpoint.proposed",
+        payload: EmptyBatch {
+            identity: &batch.identity,
+            payload_encoding: &batch.payload_encoding,
+            payload_bytes: "",
+            payload_sha256: &batch.payload_sha256,
+        },
+    })?;
+    if overhead
+        .checked_add(batch.payload_bytes.len() as u64)
+        .is_none_or(|bytes| bytes > limits.unacknowledged_bytes)
+    {
+        return Err(CoreError::rejected(
+            ErrorCode::LimitExceeded,
+            "checkpoint wire envelope exceeds unacknowledged output bound",
+        ));
+    }
+    Ok(())
+}
+
+// Only call with a validated grant/head and a payload decoded from this
+// batch. External callers must validate the hashed bytes.
+fn validate_decoded_append(
+    batch: &CheckpointBatch,
+    payload: &CheckpointPayload,
+    grant: &OwnershipGrant,
+    head: &DurableHead,
+    available: &BTreeMap<String, ArtifactRef>,
+    retained_ack: Option<&CheckpointAck>,
+) -> Result<CheckpointAck, CoreError> {
+    if batch.identity.session_id != grant.session_id
+        || batch.identity.core_instance_id != grant.core_instance_id
+    {
+        return Err(CoreError::rejected(
+            ErrorCode::UnauthorizedScope,
+            "batch belongs to another session or core instance",
+        ));
+    }
+    if batch.identity.execution_epoch != grant.execution_epoch
+        || head.execution_epoch > grant.execution_epoch
+    {
+        return Err(CoreError::rejected(
+            ErrorCode::StaleEpoch,
+            "batch is fenced by current ownership grant",
+        ));
+    }
+    if let Some(previous) = retained_ack {
+        let expected = ack_for_batch(batch, payload);
+        if previous != &expected
+            || previous.state_revision > head.state_revision
+            || previous.through_event_seq > head.event_seq
+        {
+            return Err(conflict(
+                "retained batch identity has different content or is ahead of durable head",
+            ));
+        }
+        return Ok(previous.clone());
+    }
+    if head.batch_id.as_deref() == Some(&batch.identity.batch_id) {
+        let ack = ack_for_batch(batch, payload);
+        if ack.head() == *head {
+            return Ok(ack);
+        }
+        return Err(conflict("same batch identity has different content"));
+    }
+    if payload.base_state_revision != head.state_revision
+        || payload.base_event_seq != head.event_seq
+    {
+        return Err(conflict("checkpoint append does not match durable base"));
+    }
+    for reference in &payload.checkpoint.artifact_refs {
+        if available.get(&reference.artifact_id) != Some(reference) {
+            return Err(CoreError::rejected(
+                ErrorCode::ArtifactUnavailable,
+                format!("artifact {} is not durable", reference.artifact_id),
+            ));
+        }
+    }
+    Ok(ack_for_batch(batch, payload))
+}
+
+pub(crate) fn ack_for_batch(batch: &CheckpointBatch, payload: &CheckpointPayload) -> CheckpointAck {
+    CheckpointAck {
+        batch_id: batch.identity.batch_id.clone(),
+        payload_sha256: batch.payload_sha256.clone(),
+        through_event_seq: payload
+            .events
+            .last()
+            .map_or(payload.base_event_seq, |event| event.event_seq),
+        state_revision: payload.checkpoint.state_revision,
+        execution_epoch: batch.identity.execution_epoch,
     }
 }

@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use bitrouter_ai::core::evidence::NativeTokenCost;
 use serde::{Deserialize, Serialize};
 
-use crate::core::protocol::{CoreError, ErrorCode};
 use crate::core::session::{AgentStatus, AgentTurn, ModelStep, SessionSnapshot};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 /// Frozen, credential-free admission retained after the original turn retires.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

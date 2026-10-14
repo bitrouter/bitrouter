@@ -1,6 +1,7 @@
 //! Independent HTTP clients reconstruct complete output above transport limits.
 
 use super::*;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 
 #[tokio::test]
 async fn concurrent_json_and_sse_replays_preserve_output_above_the_byte_window() -> Result<()> {

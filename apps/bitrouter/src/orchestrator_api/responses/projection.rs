@@ -1,8 +1,8 @@
 //! Borrowed Responses wire views; output text is never copied into JSON values.
 
-use crate::core::protocol::{ToolExecute, VERSION};
 use crate::core::session::RunStatus;
 use crate::core::session::responses::{ResponseEvent, ResponseExchange};
+use bitrouter_ai::core::protocol::{ToolExecute, VERSION};
 use bitrouter_ai::types::Content;
 use serde::Serialize;
 use serde::ser::{SerializeSeq, Serializer};
@@ -330,7 +330,7 @@ impl<'a> Items<'a> {
                         } => {
                             item.kind = if *provider_executed {
                                 "bitrouter.provider_call"
-                            } else if crate::core::protocol::COLLABORATION_TOOLS
+                            } else if bitrouter_ai::core::protocol::COLLABORATION_TOOLS
                                 .contains(&name.as_str())
                             {
                                 "bitrouter.collaboration_call"

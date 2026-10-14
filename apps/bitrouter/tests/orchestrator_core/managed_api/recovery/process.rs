@@ -2,7 +2,9 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::protocol::{
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::core::protocol::HarnessManifestExt;
+use bitrouter_ai::core::protocol::{
     RunActivityReconciliation, ToolEffect, ToolObservation, ToolStatus,
 };
 use std::io::Write;

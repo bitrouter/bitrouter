@@ -7,8 +7,8 @@ use bitrouter_ai::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
 use serde::{Deserialize, Serialize};
 
 use super::checkpoint::sha256;
-use super::protocol::{CoreError, ErrorCode, MaterialRef, RoutingSettings};
 use super::session::SessionSnapshot;
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode, MaterialRef, RoutingSettings};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextManifest {

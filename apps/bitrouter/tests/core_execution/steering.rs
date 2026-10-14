@@ -1,7 +1,8 @@
 use super::*;
-use bitrouter::core::checkpoint::ToolStartFence;
-use bitrouter::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::steering::SteeringDisposition;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
+use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 struct Barrier {
     seen: Semaphore,
@@ -742,7 +743,7 @@ async fn steering_receipt_and_application_have_separate_ack_barriers() -> TestRe
         let receipt = receiving.await??;
         assert_eq!(
             receipt.disposition,
-            bitrouter::core::protocol::OperationDisposition::Accepted
+            bitrouter_ai::core::protocol::OperationDisposition::Accepted
         );
         let driving = tokio::spawn({
             let session = session.clone();

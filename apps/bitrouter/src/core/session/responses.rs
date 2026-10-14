@@ -3,6 +3,7 @@
 //! Reference: <https://developers.openai.com/api/docs/guides/responses-multi-agent>
 
 use super::*;
+use crate::core::protocol::ToolResultLimitsExt;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -490,7 +491,7 @@ impl CoreSession {
                         "tool result has no dispatched invocation",
                     ));
                 }
-                super::super::protocol::ToolResultLimits::for_input(
+                crate::core::protocol::tool_result_limits(
                     self.shared.limits.input_bytes,
                     u64::MAX,
                 )?
@@ -838,10 +839,10 @@ pub(super) fn validate(state: &SessionSnapshot, binding: &Bind) -> Result<(), Co
                         )
                     }) || tool_status::observed(
                         call,
-                        super::super::protocol::ToolStatus::Running,
+                        bitrouter_ai::core::protocol::ToolStatus::Running,
                     ) || tool_status::observed(
                         call,
-                        super::super::protocol::ToolStatus::Stopped,
+                        bitrouter_ai::core::protocol::ToolStatus::Stopped,
                     )))
             {
                 return Err(conflict("tool executed before its exchange completion"));

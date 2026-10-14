@@ -229,7 +229,7 @@ async fn inflight_crash(complete_json: bool) -> Result<()> {
         assert_eq!(error.code, ErrorCode::RecoveryRequired);
         assert_eq!(
             error.commit_status,
-            bitrouter::core::protocol::CommitStatus::NotCommitted
+            bitrouter_ai::core::protocol::CommitStatus::NotCommitted
         );
         assert!(
             error

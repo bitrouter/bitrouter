@@ -2,7 +2,8 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::checkpoint::ToolStartFence;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
 use bitrouter_ai::types::ToolResultOutput;
 
 pub(super) fn failed_capacity(state: &SessionSnapshot) -> TestResult {

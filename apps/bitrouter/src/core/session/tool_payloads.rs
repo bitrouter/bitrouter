@@ -2,7 +2,7 @@
 //! limits prevent later signals or host policy from enlarging an admitted reply.
 
 use super::*;
-use crate::core::protocol::ToolResultLimits;
+use bitrouter_ai::core::protocol::ToolResultLimits;
 
 pub(super) fn admit(
     state: &SessionSnapshot,
@@ -12,7 +12,7 @@ pub(super) fn admit(
     let input_bytes = state.run.as_ref().map_or(host.input_bytes, |run| {
         run.limits.input_bytes.min(host.input_bytes)
     });
-    let mut limits = ToolResultLimits::for_input(input_bytes, output_bytes)?;
+    let mut limits = crate::core::protocol::tool_result_limits(input_bytes, output_bytes)?;
     if state
         .manifest
         .required_features
@@ -63,7 +63,7 @@ pub(super) fn limits(
     let input_bytes = retained.map_or(host.input_bytes, |limits| {
         limits.input_bytes.min(host.input_bytes)
     });
-    let ceiling = ToolResultLimits::for_input(input_bytes, call.result_limit_bytes)?;
+    let ceiling = crate::core::protocol::tool_result_limits(input_bytes, call.result_limit_bytes)?;
     let minimum = super::super::checkpoint::serialized_bytes(&ToolResult {
         invocation_id: call.dispatch.invocation_id.clone(),
         attempt_id: call.dispatch.attempt_id.clone(),
@@ -125,7 +125,7 @@ pub(super) fn validate_result(
 /// Each first essential status and each uncertain/definite result has an
 /// independent evidence allowance. Repeated optional reports need fresh room.
 pub(super) fn remaining_artifact_slots(call: &Invocation) -> u64 {
-    use super::super::protocol::ToolStatus;
+    use bitrouter_ai::core::protocol::ToolStatus;
     if call
         .result
         .as_ref()

@@ -1,6 +1,7 @@
 use super::*;
-use bitrouter::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::ResourceConstraint;
+use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "capacity/tree_limits.rs"]
 mod tree_limits;
@@ -771,7 +772,7 @@ async fn cleanup_capacity_preserves_running_recovery_at_saturation() -> TestResu
 
 #[tokio::test]
 async fn capacity_failure_resolves_signal_fence_after_ack_or_reconnect() -> TestResult {
-    use bitrouter::core::checkpoint::ToolStartFence;
+    use bitrouter_ai::core::checkpoint::ToolStartFence;
     for lost_ack in [None, Some(false), Some(true)] {
         let mut fixture = Harness::new(None, None);
         fixture.wait_for_approval = true;
@@ -997,7 +998,7 @@ async fn capacity_failure_history_cannot_be_erased_or_reclassified() -> TestResu
             "cause" => run["resource_constraint"] = json!("active_time"),
             "event" => first.events[0].payload["message"] = json!("changed"),
             "repeat" => {
-                final_payload.events[0] = bitrouter::core::checkpoint::DurableEvent {
+                final_payload.events[0] = bitrouter_ai::core::checkpoint::DurableEvent {
                     event_seq: final_payload.events[0].event_seq,
                     ..first.events[0].clone()
                 }

@@ -10,8 +10,8 @@ use bitrouter_ai::types::{Message, Prompt, Role};
 use serde::{Deserialize, Serialize};
 
 use super::checkpoint::sha256;
-use super::protocol::{ContextMode, CoreError, ErrorCode};
 use super::session::{ModelStep, SessionSnapshot, selected_materials};
+use bitrouter_ai::core::protocol::{ContextMode, CoreError, ErrorCode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebuildRecord {

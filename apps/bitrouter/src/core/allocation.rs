@@ -5,9 +5,9 @@ use bitrouter_ai::types::Message;
 use serde::{Deserialize, Serialize};
 
 use super::collaboration::{Assignment, Work};
-use super::protocol::{CoreError, ErrorCode, MaterialRef, TaskInput};
 use super::routing::ContextManifest;
 use super::session::{AgentState, SessionSnapshot};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode, MaterialRef, TaskInput};
 
 /// Facts on which retained history depends. Keep all distinct sources across
 /// turns: a later model step cannot certify older evidence as newly observed.

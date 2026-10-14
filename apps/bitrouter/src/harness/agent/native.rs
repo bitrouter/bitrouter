@@ -8,6 +8,8 @@ mod projection;
 mod scheduling;
 mod tools;
 
+use crate::core::checkpoint::CheckpointBatchExt;
+use crate::core::protocol::HarnessManifestExt;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -17,13 +19,14 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{Agent, RunChannels, RunReport, RunStatus};
-use crate::core::checkpoint::{CheckpointBatch, DurableHead, VerifiedBatch};
+use crate::core::checkpoint::VerifiedBatch;
 use crate::core::context_router::FEATURE;
-use crate::core::protocol::{
+use crate::core::session::{CoreSession, RunStatus as CoreStatus, SessionSnapshot};
+use bitrouter_ai::core::checkpoint::{CheckpointBatch, DurableHead};
+use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
     RoutingSettings, ServerMessage, TaskInput, ToolEffect,
 };
-use crate::core::session::{CoreSession, RunStatus as CoreStatus, SessionSnapshot};
 
 /// Published only after the native driver and all workspace workers joined.
 /// Core restoration still validates the checkpoint and every artifact before
@@ -46,7 +49,8 @@ struct DecodedCheckpoint<'a> {
 impl<'a> DecodedCheckpoint<'a> {
     fn new(batch: &'a CheckpointBatch, limits: &'a Limits) -> Result<Self, String> {
         limits.validate().map_err(|error| error.message)?;
-        let verified = batch.verified(limits).map_err(|error| error.message)?;
+        let verified = crate::core::checkpoint::verified_batch(batch, limits)
+            .map_err(|error| error.message)?;
         let snapshot: SessionSnapshot =
             serde_json::from_value(verified.payload().checkpoint.state.clone())
                 .map_err(|error| error.to_string())?;
@@ -302,7 +306,7 @@ impl Agent {
             execution_epoch: 1,
         };
         let mut capabilities = Capabilities {
-            version: crate::core::protocol::VERSION,
+            version: bitrouter_ai::core::protocol::VERSION,
             core_instance_id: grant.core_instance_id.clone(),
             operations: vec![
                 FEATURE.into(),
@@ -580,7 +584,7 @@ impl Agent {
                     loop {
                         let revision = core.head().await.state_revision;
                         match core.cancel_run(&uuid::Uuid::new_v4().to_string(), revision, &run_id).await {
-                            Err(error) if error.code == crate::core::protocol::ErrorCode::StaleRevision => continue,
+                            Err(error) if error.code == bitrouter_ai::core::protocol::ErrorCode::StaleRevision => continue,
                             result => { result.map_err(|error| error.message)?; break; }
                         }
                     }
@@ -727,7 +731,7 @@ async fn initialization_failed(
             .flat_map(|turn| &turn.invocations)
             .all(|call| {
                 call.result.as_ref().is_some_and(|result| {
-                    result.status != crate::core::protocol::ToolOutcome::EffectUnknown
+                    result.status != bitrouter_ai::core::protocol::ToolOutcome::EffectUnknown
                 })
             })
     }) {
@@ -792,7 +796,9 @@ async fn apply_inputs(
                 )
                 .await
             {
-                Err(error) if error.code == crate::core::protocol::ErrorCode::StaleRevision => {
+                Err(error)
+                    if error.code == bitrouter_ai::core::protocol::ErrorCode::StaleRevision =>
+                {
                     continue;
                 }
                 result => {

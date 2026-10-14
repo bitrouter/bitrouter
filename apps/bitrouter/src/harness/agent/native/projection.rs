@@ -17,7 +17,7 @@ pub(super) struct Projection {
 pub(super) fn project(
     state: &SessionSnapshot,
     presented: &BTreeSet<String>,
-    events: &[crate::core::checkpoint::DurableEvent],
+    events: &[bitrouter_ai::core::checkpoint::DurableEvent],
 ) -> Projection {
     let mut projection = Projection::default();
     let Some(root) = state.agents.get(&state.agent_id) else {
@@ -190,7 +190,7 @@ pub(super) fn project(
             && invocation
                 .tool_observations
                 .values()
-                .any(|status| status.status == crate::core::protocol::ToolStatus::Running)
+                .any(|status| status.status == bitrouter_ai::core::protocol::ToolStatus::Running)
         {
             projection.keys.push(intent_key);
             projection.records.push(ExecutionRecord::ToolIntent {
@@ -213,7 +213,7 @@ pub(super) fn project(
         }
         let output =
             serde_json::from_str::<ToolResultOutput>(&result.output).unwrap_or_else(|_| {
-                if result.status == crate::core::protocol::ToolOutcome::Succeeded {
+                if result.status == bitrouter_ai::core::protocol::ToolOutcome::Succeeded {
                     ToolResultOutput::Text {
                         value: result.output.clone(),
                     }
@@ -241,9 +241,9 @@ pub(super) fn project(
                 }],
             },
             effect: match result.status {
-                crate::core::protocol::ToolOutcome::EffectUnknown => EffectStatus::Unknown,
-                crate::core::protocol::ToolOutcome::NotExecuted
-                | crate::core::protocol::ToolOutcome::Denied => EffectStatus::NotExecuted,
+                bitrouter_ai::core::protocol::ToolOutcome::EffectUnknown => EffectStatus::Unknown,
+                bitrouter_ai::core::protocol::ToolOutcome::NotExecuted
+                | bitrouter_ai::core::protocol::ToolOutcome::Denied => EffectStatus::NotExecuted,
                 _ => EffectStatus::Completed,
             },
         });

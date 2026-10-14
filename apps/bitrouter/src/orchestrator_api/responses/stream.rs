@@ -96,10 +96,10 @@ impl Writer {
         Ok(())
     }
 
-    fn failure(&mut self, error: crate::core::protocol::CoreError) -> io::Result<()> {
+    fn failure(&mut self, error: bitrouter_ai::core::protocol::CoreError) -> io::Result<()> {
         #[derive(Serialize)]
         struct Failure {
-            error: crate::core::protocol::CoreError,
+            error: bitrouter_ai::core::protocol::CoreError,
         }
         self.event("error", &Failure { error })
     }
@@ -373,7 +373,7 @@ pub(super) fn sse(
                             #[derive(Serialize)]
                             struct Retained<'a> {
                                 agent: Agent<'a>,
-                                event: &'a crate::core::checkpoint::DurableEvent,
+                                event: &'a bitrouter_ai::core::checkpoint::DurableEvent,
                             }
                             writer.event(
                                 &format!("bitrouter.{}", retained.event.kind),

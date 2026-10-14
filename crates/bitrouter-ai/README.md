@@ -9,6 +9,7 @@ use bitrouter_ai::protocol::chat_completions::ChatRequest;
 use bitrouter_ai::conversion::ConversionReport;
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::control::{CapabilitiesReport, StateReport};
+use bitrouter_ai::core::protocol::{ClientMessage, ServerMessage};
 ```
 
 The crate contains model content and decision semantics, public wire requests, responses and stream events, gateway discovery/errors,
@@ -22,6 +23,15 @@ reports. `control::reload` defines configuration-state evidence and guarded
 reload inputs/results. Generation and instance identifiers retain their wire
 meaning; timestamp capture, admission, operation ownership and execution remain
 in the service. A report does not grant a client authority to change state.
+
+`core::protocol`, `core::checkpoint` and `core::evidence` contain the existing
+managed service messages, opaque checkpoint envelopes and provider-attempt
+reports. Intrinsic grammar and declared-limit checks accompany the data;
+authenticated ownership checks, checkpoint codecs and durable commit admission
+remain application responsibilities. Parsing an ACK does not prove persistence,
+and decoding an opaque checkpoint envelope does not verify its payload hash.
+JSON decoding preserves finite pricing values independently of application
+feature unification.
 
 Protocol conversion, history admission, provider calls, authentication, catalog
 refresh and persistence belong to the application gateway. Telemetry batching,

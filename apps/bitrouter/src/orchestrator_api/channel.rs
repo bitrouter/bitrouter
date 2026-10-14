@@ -2,12 +2,12 @@
 //! injection. Axum's bounded upgrade and message API is documented at
 //! <https://docs.rs/axum/latest/axum/extract/ws/index.html>.
 
+use crate::core::protocol::ClientMessageExt;
+use crate::core::protocol::HarnessManifestExt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::checkpoint::{CheckpointAck, CheckpointBatch};
 use crate::core::collaboration::Action;
-use crate::core::protocol::{ArtifactRef, BETA, ClientMessage, Command, ServerMessage, ToolStatus};
 use crate::core::session::HarnessPort;
 use async_trait::async_trait;
 use axum::extract::State;
@@ -15,6 +15,10 @@ use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch};
+use bitrouter_ai::core::protocol::{
+    ArtifactRef, BETA, ClientMessage, Command, ServerMessage, ToolStatus,
+};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -84,7 +88,7 @@ pub(super) struct RemotePort {
     pub(super) output: Arc<output::Scope>,
     control: Arc<output::Scope>,
     principal: Principal,
-    grant: crate::core::protocol::OwnershipGrant,
+    grant: bitrouter_ai::core::protocol::OwnershipGrant,
     limits: Limits,
     connection: Mutex<Option<Connection>>,
     ack: Mutex<Option<PendingAck>>,
@@ -95,7 +99,7 @@ pub(super) struct RemotePort {
 impl RemotePort {
     pub(super) fn new(
         principal: Principal,
-        grant: crate::core::protocol::OwnershipGrant,
+        grant: bitrouter_ai::core::protocol::OwnershipGrant,
         limits: Limits,
         output: Arc<output::Scope>,
         control: Arc<output::Scope>,

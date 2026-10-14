@@ -5,8 +5,9 @@
 //! separate admission obligations.
 
 use super::*;
-use crate::core::checkpoint::{ToolStartFence, serialized_bytes};
-use crate::core::protocol::{OwnershipGrant, RunActivityReconciliation, ToolStatus};
+use crate::core::checkpoint::serialized_bytes;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
+use bitrouter_ai::core::protocol::{OwnershipGrant, RunActivityReconciliation, ToolStatus};
 
 #[derive(Default)]
 struct Reservation {
@@ -170,7 +171,7 @@ pub(super) fn check(
             .unacknowledged_bytes
             .min(run.limits.unacknowledged_bytes);
     }
-    CheckpointBatch::check_projected_size(
+    crate::core::checkpoint::check_projected_size(
         &proposed.identity,
         serialized_bytes(proposed)?,
         &limits,
@@ -430,12 +431,13 @@ pub(super) fn check(
         sum(sum(bytes, event_bytes)?, reserve.event_extra)?,
         reserve.extra,
     )?;
-    CheckpointBatch::check_projected_size(&payload.identity, bytes, &limits)
+    crate::core::checkpoint::check_projected_size(&payload.identity, bytes, &limits)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::protocol::{HarnessManifestExt, ToolResultLimitsExt};
 
     fn proposal(
         state: &SessionSnapshot,
@@ -1081,8 +1083,7 @@ mod tests {
             ..Limits::default()
         };
         state.run.as_mut().ok_or("run")?.limits = limits.clone();
-        let result_limits =
-            crate::core::protocol::ToolResultLimits::for_input(limits.input_bytes, 1024)?;
+        let result_limits = crate::core::protocol::tool_result_limits(limits.input_bytes, 1024)?;
         let call: Invocation = serde_json::from_value(json!({
             "dispatch":{"invocation_id":"verification","attempt_id":"tool-attempt","run_id":"run","agent_id":"child",
                 "agent_turn_id":"child-turn","step_id":"settled-step","context_revision":0,"tool":"verify","arguments":{},

@@ -1,6 +1,8 @@
 //! Managed session transitions. Provider calls and harness commits run outside
 //! the state lock. A separate commit serializer preserves the one-batch rule.
 
+use crate::core::protocol::HarnessManifestExt;
+use crate::core::protocol::ToolResultLimitsExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -24,20 +26,21 @@ use tokio_util::sync::CancellationToken;
 
 use super::activity::Activity;
 use super::allocation::{ContextAllocation, ContextSource};
-use super::checkpoint::{
-    BatchIdentity, Checkpoint, CheckpointAck, CheckpointBatch, CheckpointPayload, CommitGate,
-    DurableEvent, DurableHead, ToolStartFence, sha256,
-};
+use super::checkpoint::{CommitGate, sha256};
 use super::collaboration::{self, Action, Applied, Assignment, Call, Mail, RuntimeWait};
-use super::protocol::{
-    Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest, Limits, MaterialRef,
-    OperationDisposition, OperationReceipt, ServerMessage, SignalUpdate, TaskInput, ToolExecute,
-    ToolOutcome, ToolResult, VERSION, validate_id,
-};
 use super::routing::{
     ApplicationDisposition, ContextManifest, DecisionApplied, ExecutionReceipt, RoutingDecision,
 };
 use super::signals::{self, MaterialRequest, SignalState};
+use bitrouter_ai::core::checkpoint::{
+    BatchIdentity, Checkpoint, CheckpointAck, CheckpointBatch, CheckpointPayload, DurableEvent,
+    DurableHead, ToolStartFence,
+};
+use bitrouter_ai::core::protocol::{
+    Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest, Limits, MaterialRef,
+    OperationDisposition, OperationReceipt, ServerMessage, SignalUpdate, TaskInput, ToolExecute,
+    ToolOutcome, ToolResult, VERSION, validate_id,
+};
 
 mod archive;
 mod artifact_storage;
@@ -111,7 +114,7 @@ pub trait HarnessPort: Send + Sync {
     /// durable. Checkpoint ACKs must retain that same dependency closure.
     async fn read_artifact(
         &self,
-        reference: &super::protocol::ArtifactRef,
+        reference: &bitrouter_ai::core::protocol::ArtifactRef,
         offset: u64,
         max_bytes: u64,
     ) -> Result<Vec<u8>, CoreError>;
@@ -261,7 +264,7 @@ pub struct Invocation {
     /// Absence preserves an already authorized legacy reply contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_archive_allowance: Option<u64>,
-    pub effect: super::protocol::ToolEffect,
+    pub effect: bitrouter_ai::core::protocol::ToolEffect,
     pub signal_revision: u64,
     /// Workspace version used to authorize this invocation, including explicit
     /// unknown. Legacy snapshots are additionally fenced by restoration.
@@ -274,18 +277,18 @@ pub struct Invocation {
     /// Fresh harness evidence retained by the latest restoration, not an
     /// authorization to infer the outcome of a later crash.
     #[serde(default)]
-    pub recovery_observation: Option<super::protocol::ToolObservation>,
+    pub recovery_observation: Option<bitrouter_ai::core::protocol::ToolObservation>,
     /// Revision at which restoration accepted the fresh harness observation.
     #[serde(default)]
     pub recovery_observation_revision: u64,
     /// Superseded restore evidence remains available for irreversible execution
     /// facts and artifact retention. The snapshot byte limit bounds this list.
     #[serde(default)]
-    pub prior_recovery_observations: Vec<super::protocol::ToolObservation>,
+    pub prior_recovery_observations: Vec<bitrouter_ai::core::protocol::ToolObservation>,
     /// Immutable observations keyed by operation ID, including new uncertainty
     /// episodes. The complete snapshot remains bounded by checkpoint limits.
     #[serde(default)]
-    pub tool_observations: BTreeMap<String, super::protocol::ToolObservation>,
+    pub tool_observations: BTreeMap<String, bitrouter_ai::core::protocol::ToolObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,7 +306,7 @@ pub struct RootRun {
     /// Immutable authenticated clock handoffs for this run. Each source head
     /// precedes the session.restored checkpoint that accepted the measurement.
     #[serde(default)]
-    pub activity_reconciliations: Vec<super::protocol::RunActivityReconciliation>,
+    pub activity_reconciliations: Vec<bitrouter_ai::core::protocol::RunActivityReconciliation>,
     /// A committed resource failure stops new work while outcomes and cleanup
     /// remain admissible. It does not turn unknown effects into known results.
     #[serde(default)]
@@ -411,7 +414,7 @@ pub struct SessionSnapshot {
     pub cost_work: BTreeMap<String, super::accounting::work::RunCostWork>,
     /// Late results are retained as evidence, never injected into agent history.
     #[serde(default)]
-    pub provider_evidence: BTreeMap<String, super::protocol::ProviderAttemptEvidence>,
+    pub provider_evidence: BTreeMap<String, bitrouter_ai::core::protocol::ProviderAttemptEvidence>,
     #[serde(default)]
     pub root_queue: root_queue::RootQueue,
     #[serde(default)]
@@ -422,7 +425,7 @@ pub struct SessionSnapshot {
     /// Wire checkpoints may replace recovery histories with this immutable
     /// object. Public snapshots and scheduler state are always fully hydrated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery_archive: Option<super::protocol::ArtifactRef>,
+    pub recovery_archive: Option<bitrouter_ai::core::protocol::ArtifactRef>,
     /// Managed HTTP exchanges retain their own immutable completion boundary.
     #[serde(default, skip_serializing_if = "responses::ResponseState::is_empty")]
     pub responses: responses::ResponseState,
@@ -451,11 +454,11 @@ struct LiveSession {
     connection_generation: u64,
     activity: Activity,
     model_controls: Vec<std::sync::Weak<StepControl>>,
-    provider_evidence: super::protocol::PendingProviderEvidence,
+    provider_evidence: bitrouter_ai::core::protocol::PendingProviderEvidence,
     reconnecting: bool,
     budget_watching: bool,
     restoration_started: Option<Instant>,
-    restoration_stops: BTreeMap<String, (String, super::protocol::ToolObservation)>,
+    restoration_stops: BTreeMap<String, (String, bitrouter_ai::core::protocol::ToolObservation)>,
 }
 
 #[derive(Clone)]
@@ -2665,8 +2668,8 @@ impl CoreSession {
             agent_turn_id: turn.agent_turn_id.clone(),
             provider_cancellation: self.shared.live.lock().await.disconnected.child_token(),
             model_selection: match turn.input.routing.model {
-                super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
-                super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
+                bitrouter_ai::core::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
+                bitrouter_ai::core::protocol::ModelMode::Policy => NativeModelSelection::Policy,
             },
         });
         {
@@ -2827,7 +2830,7 @@ impl CoreSession {
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
-        super::protocol::ToolResultLimits::for_input(self.shared.limits.input_bytes, u64::MAX)?
+        crate::core::protocol::tool_result_limits(self.shared.limits.input_bytes, u64::MAX)?
             .validate_result(&result)?;
         let fingerprint = digest(&result)?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
@@ -2960,7 +2963,7 @@ impl CoreSession {
                                 _ => true,
                             }
                     });
-                    let core_owned = super::protocol::COLLABORATION_TOOLS.contains(&name.as_str())
+                    let core_owned = bitrouter_ai::core::protocol::COLLABORATION_TOOLS.contains(&name.as_str())
                         || super::context_router::tools::NAMES.contains(&name.as_str());
                     if *provider_executed || !planned || (!core_owned && !manifest.tools.iter().any(|tool| tool.name == *name)) {
                         return Err(reject(
@@ -4285,7 +4288,7 @@ impl NativeExecutionControl for StepControl {
                         "frozen_model_after_context_rebuild".into()
                     } else if joint_model.is_some() {
                         "decision_context_model_policy".into()
-                    } else if modes.model == super::protocol::ModelMode::Fixed {
+                    } else if modes.model == bitrouter_ai::core::protocol::ModelMode::Fixed {
                         "fixed_override".into()
                     } else {
                         "named_model_policy".into()
@@ -5193,7 +5196,7 @@ fn record_tool_result(
         .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
     let limits = tool_payloads::limits(call, limits, run, turn.input.limits.as_ref())?;
     tool_payloads::validate_result(call, result, limits)?;
-    let may_change_workspace = (call.effect != super::protocol::ToolEffect::Read
+    let may_change_workspace = (call.effect != bitrouter_ai::core::protocol::ToolEffect::Read
         && !matches!(
             result.status,
             ToolOutcome::Denied | ToolOutcome::NotExecuted

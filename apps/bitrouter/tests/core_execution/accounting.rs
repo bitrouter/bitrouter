@@ -1,5 +1,6 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostBasis;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostClaim;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostEstimator;

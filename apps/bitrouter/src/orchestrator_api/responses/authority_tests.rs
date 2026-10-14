@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::auth::{db, entities::api_keys, keys};
-use crate::core::protocol::OwnershipGrant;
 use crate::orchestrator_api::{Entry, channel::RemotePort, output};
+use bitrouter_ai::core::protocol::OwnershipGrant;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde_json::json;
 

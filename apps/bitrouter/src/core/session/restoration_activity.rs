@@ -1,7 +1,7 @@
 //! A bounded stop-report bridge while the restored session awaits its ACKs.
 
 use super::*;
-use crate::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 /// The authenticated host installs this observer before the first restoration
 /// commit. It must report actual stops concurrently with commit waits. The

@@ -72,7 +72,7 @@ impl Reader {
             }
             return Ok(Some(record));
         };
-        crate::core::checkpoint::validate_digest(&sha256).map_err(|error| error.message)?;
+        bitrouter_ai::core::checkpoint::validate_digest(&sha256).map_err(|error| error.message)?;
         if bytes == 0
             || bytes > MAX_RECORD_BYTES as u64
             || content_base64.len() > MAX_RECORD_BYTES * 2
@@ -123,8 +123,8 @@ mod tests {
         let record = ExecutionRecord::TurnRecord {
             turn_id: "turn".into(),
             fact: Box::new(ExecutionRecord::CoreCheckpoint {
-                batch: crate::core::checkpoint::CheckpointBatch {
-                    identity: crate::core::checkpoint::BatchIdentity {
+                batch: bitrouter_ai::core::checkpoint::CheckpointBatch {
+                    identity: bitrouter_ai::core::checkpoint::BatchIdentity {
                         batch_id: "batch".into(),
                         session_id: "session".into(),
                         core_instance_id: "core".into(),

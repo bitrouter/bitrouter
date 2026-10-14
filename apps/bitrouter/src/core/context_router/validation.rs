@@ -6,9 +6,9 @@ use serde::Serialize;
 
 use super::planner::ContextRepresentation;
 use super::{ContextStore, FEATURE, digest, invalid};
-use crate::core::checkpoint::CheckpointPayload;
-use crate::core::protocol::CoreError;
 use crate::core::session::SessionSnapshot;
+use bitrouter_ai::core::checkpoint::CheckpointPayload;
+use bitrouter_ai::core::protocol::CoreError;
 
 pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
     let store = &state.context_store;
@@ -35,7 +35,7 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
         }
     }
     for (id, artifact) in &store.artifacts {
-        crate::core::checkpoint::validate_digest(&artifact.reference.sha256)?;
+        bitrouter_ai::core::checkpoint::validate_digest(&artifact.reference.sha256)?;
         if *id
             != format!(
                 "{}:{}",

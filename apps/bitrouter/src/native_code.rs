@@ -36,7 +36,7 @@ enum SubmissionMode {
 }
 #[derive(Default)]
 struct Session {
-    model_mode: crate::core::protocol::ModelMode,
+    model_mode: bitrouter_ai::core::protocol::ModelMode,
     max_output_tokens: Option<u32>,
     model_config: Option<crate::config::Config>,
     thread_id: Option<String>,
@@ -191,9 +191,9 @@ pub async fn run(
     let mut session = Session {
         max_output_tokens: options.max_output_tokens,
         model_mode: if options.model_policy {
-            crate::core::protocol::ModelMode::Policy
+            bitrouter_ai::core::protocol::ModelMode::Policy
         } else if state.model.is_empty() || reattach.is_some() {
-            crate::core::protocol::ModelMode::Fixed
+            bitrouter_ai::core::protocol::ModelMode::Fixed
         } else {
             crate::policy_lock::native_model_mode(&cfg, &state.model)?
         },
@@ -455,7 +455,7 @@ async fn handle_event(
             && !editor.text().trim().is_empty()
         {
             let model = editor.text().trim().to_owned();
-            if session.model_mode == crate::core::protocol::ModelMode::Fixed
+            if session.model_mode == bitrouter_ai::core::protocol::ModelMode::Fixed
                 && let Some(config) = &session.model_config
             {
                 match crate::policy_lock::native_model_mode(config, &model) {

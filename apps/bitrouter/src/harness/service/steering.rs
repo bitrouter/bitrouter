@@ -1,3 +1,4 @@
+use crate::core::checkpoint::CheckpointBatchExt;
 use std::sync::Arc;
 
 use crate::gateway::caller::CallerContext;

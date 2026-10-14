@@ -424,8 +424,12 @@ jobs:
                 'pub struct bitrouter_ai::eval::AdmissionOutcome'
                 'pub struct bitrouter_ai::core::evidence::NativeAttemptReport'
                 'pub enum bitrouter_ai::core::evidence::NativeTokenCost'
+                'pub struct bitrouter_ai::core::protocol::ClientMessage'
+                'pub enum bitrouter_ai::core::protocol::ServerMessage'
+                'pub struct bitrouter_ai::core::protocol::ErrorEnvelope'
+                'pub struct bitrouter_ai::core::checkpoint::CheckpointBatch'
               )
-              forbidden='NativeExecutionControl|NativePrivateContextRuntime|::capture_cache|::commitment\(|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+              forbidden='NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else
               sentinels=(
                 'pub struct bitrouter_sdk::gateway::GatewayClient'

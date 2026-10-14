@@ -1,9 +1,9 @@
 //! Native run limits use the Core ledger, including retired child work.
 
 use crate::core::accounting::work::{CostWorkKind, CostWorkState};
-use crate::core::protocol::{CoreError, ErrorCode};
 use crate::core::session::SessionSnapshot;
 use crate::harness::agent::{AgentConfig, RunReport};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 #[derive(Clone)]
 pub(super) struct Budget {

@@ -18,13 +18,12 @@ fn generation(
         .ok_or_else(|| anyhow::anyhow!("generation fixture returned another operation"))
 }
 
+use bitrouter::core::protocol::HarnessManifestExt;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum_test::TestServer;
-use bitrouter::core::checkpoint::DurableHead;
-use bitrouter::core::protocol::{Bind, Capabilities, HarnessManifest, Limits, OwnershipGrant};
 use bitrouter::core::session::{CoreSession, RunStatus};
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::http::{AppState, build_router};
@@ -33,8 +32,10 @@ use bitrouter::gateway::pipeline::native::{
 };
 use bitrouter::metering::entities::requests;
 use bitrouter::metering::pricing::ChargeEvidence;
+use bitrouter_ai::core::checkpoint::DurableHead;
 use bitrouter_ai::core::evidence::NativeTokenCost;
 use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeProtocolValidation};
+use bitrouter_ai::core::protocol::{Bind, Capabilities, HarnessManifest, Limits, OwnershipGrant};
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::{
     GenerationParams, Message, Prompt, ReasoningEffort, ReasoningEffortSource, ResponseFormat,

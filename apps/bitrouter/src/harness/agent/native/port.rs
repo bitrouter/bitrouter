@@ -1,3 +1,4 @@
+use crate::core::checkpoint::CheckpointBatchExt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -6,11 +7,11 @@ use bitrouter_ai::types::StreamPart;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::core::checkpoint::{CheckpointAck, CheckpointBatch, ToolStartFence};
-use crate::core::protocol::{ArtifactRef, CoreError, ErrorCode, ServerMessage};
 use crate::core::session::HarnessPort;
 use crate::harness::agent::{RunEvent, commit_execution};
 use crate::harness::storage::{CommitRequest, ExecutionRecord};
+use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, ToolStartFence};
+use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, ServerMessage};
 
 use super::journal::Journal;
 

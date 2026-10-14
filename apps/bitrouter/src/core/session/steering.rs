@@ -2,7 +2,8 @@
 //! provider output and workspace effects retain their original attribution.
 
 use super::*;
-use crate::core::checkpoint::{ToolStartFence, validate_tool_start_fences};
+use crate::core::checkpoint::validate_tool_start_fences;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -1,7 +1,8 @@
 use super::*;
-use bitrouter::core::checkpoint::ToolStartFence;
-use bitrouter::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::AgentStatus;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
+use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 fn task() -> TaskInput {
     TaskInput {

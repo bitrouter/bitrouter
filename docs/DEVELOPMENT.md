@@ -73,7 +73,19 @@ route/usage evidence and private-context/continuation observations there.
 These data structures confer no ownership or execution authority. The gateway
 still validates provider provenance, projects raw usage, computes commitments
 and enforces report limits; the core still decides whether evidence may be
-admitted. Core protocol/checkpoint extraction is a separate remaining step.
+admitted.
+
+Existing managed wire commands, responses, limits and HTTP error envelopes live
+in `bitrouter_ai::core::protocol`; durable checkpoint envelopes and ACK data live
+in `bitrouter_ai::core::checkpoint`. The application retains exact-byte encoding,
+digest verification, append admission and the commit barrier. Trusted host
+consumers import `CheckpointBatchExt` from `bitrouter::core::checkpoint` for
+the existing codec/admission methods, and `HarnessManifestExt`,
+`ClientMessageExt` and `ToolResultLimitsExt` from `bitrouter::core::protocol`
+for application validation. These traits add methods to the shared data; they
+do not provide a plugin interface or transfer persistence authority. Shared
+internal recovery codecs still need feature isolation, and the SDK's managed
+channel client remains a separate migration step.
 
 Trusted application hosts that previously called
 `NativeEvidenceCommitment::capture` use

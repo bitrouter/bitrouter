@@ -2,8 +2,8 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::checkpoint::ToolStartFence;
-use bitrouter::core::protocol::OperationReceipt;
+use bitrouter_ai::core::checkpoint::ToolStartFence;
+use bitrouter_ai::core::protocol::OperationReceipt;
 use bitrouter_ai::types::ToolResultOutput;
 
 #[path = "later_prompt/expanded.rs"]

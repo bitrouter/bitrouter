@@ -1,4 +1,5 @@
 use super::*;
+use bitrouter::core::checkpoint::CheckpointBatchExt;
 
 async fn reached(semaphore: &Semaphore) -> TestResult {
     tokio::time::timeout(Duration::from_secs(30), semaphore.acquire())
@@ -98,7 +99,7 @@ async fn release_ack_fences_new_intents_but_preserves_reads_and_exact_replay() -
     let receipt = releasing.await??;
     assert_eq!(
         receipt.disposition,
-        bitrouter::core::protocol::OperationDisposition::Applied
+        bitrouter_ai::core::protocol::OperationDisposition::Applied
     );
     assert_eq!(
         starting

@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::allocation::{self, ContextKind, ContextSource, Intent};
-use super::protocol::{CoreError, ErrorCode, TaskInput};
 use super::session::{AgentState, AgentStatus, AgentTurn, RunStatus, SessionSnapshot};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode, TaskInput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -509,7 +509,7 @@ fn assignment(
     input.text = task.text.clone();
     input.model = task.model.clone().unwrap_or(input.model);
     if task.model.is_some() {
-        input.routing.model = super::protocol::ModelMode::Fixed;
+        input.routing.model = bitrouter_ai::core::protocol::ModelMode::Fixed;
     }
     if task.effort.is_some() {
         input.effort = task.effort.clone();
