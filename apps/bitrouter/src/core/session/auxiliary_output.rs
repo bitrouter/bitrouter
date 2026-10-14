@@ -3,10 +3,10 @@
 
 use super::*;
 use crate::core::checkpoint::serialized_bytes;
-use crate::gateway::pipeline::native::NativeEvidenceCommitment;
-use crate::gateway::pipeline::native::NativeInputCount;
 use crate::gateway::pipeline::native::NativeInputCountRejection;
 use crate::gateway::pipeline::native::auxiliary_report_allowance;
+use bitrouter_ai::core::evidence::NativeEvidenceCommitment;
+use bitrouter_ai::core::evidence::NativeInputCount;
 
 pub(super) const VERSION: u32 = 1;
 const FAILURE_BYTES: u64 = 1024;
@@ -168,7 +168,7 @@ pub(super) fn failure(step: Option<&mut ModelStep>, reason: &str) -> Result<Stri
         return Ok(reason.into());
     }
     step.failure_diagnostic =
-        Some(NativeEvidenceCommitment::capture(&reason).map_err(|_| invalid())?);
+        Some(crate::gateway::pipeline::native_report::commitment(&reason).map_err(|_| invalid())?);
     Ok(FAILURE_OMITTED.into())
 }
 

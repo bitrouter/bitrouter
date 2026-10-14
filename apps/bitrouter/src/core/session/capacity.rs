@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn saturated_auxiliary_reports_keep_admitted_capacity() -> Result<(), Box<dyn std::error::Error>>
     {
-        use crate::gateway::pipeline::native::NativeRouteConstraints;
+        use bitrouter_ai::core::evidence::NativeRouteConstraints;
         for kind in ["preparation", "count", "validation", "provider"] {
             let mut state = fixture()?;
             let limits = state.run.as_ref().ok_or("run")?.limits.clone();
@@ -629,8 +629,8 @@ mod tests {
     fn saturated_complete_report_and_error_handoffs_keep_frozen_capacity()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::gateway::pipeline::native::NativePlan;
-        use crate::gateway::pipeline::native::NativeRouteConstraints;
-        use crate::gateway::pipeline::native_accounting::NativeTokenCost;
+        use bitrouter_ai::core::evidence::NativeRouteConstraints;
+        use bitrouter_ai::core::evidence::NativeTokenCost;
         for failed in [false, true] {
             let mut state = fixture()?;
             let mut child = state.agents.get("root").ok_or("root")?.clone();
@@ -912,7 +912,7 @@ mod tests {
         let receipt = json!({"decision_id":"decision","attempt_id":"attempt","cost_source":"unknown","cache_observation_source":"unknown",
             "report":{"request_id":"request","attempt_index":0,"elapsed_ms":0,"result":result,
                 "route":{"provider":"provider","model":"model","protocol":"chat_completions",
-                    "constraints":crate::gateway::pipeline::native::NativeRouteConstraints::default()}}});
+                    "constraints":bitrouter_ai::core::evidence::NativeRouteConstraints::default()}}});
         let step: ModelStep = serde_json::from_value(json!({
             "step_id":"step", "decision_id":"decision", "context_revision":0,"signal_revision":0,
             "manifest":state.manifest,"materials":[],"context":context,"input_state_revision":1,"input_history":[],

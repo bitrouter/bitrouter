@@ -28,7 +28,7 @@ impl RoutingTable for RebuildTable {
             .await?;
         for route in &mut routes {
             route.model_constraints.input_token_counting =
-                Some(native::InputTokenCounting::Responses);
+                Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses);
         }
         Ok(routes)
     }
@@ -142,7 +142,7 @@ impl native::NativeExecutionControl for RebuildControl {
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: native::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
 }
 
 #[derive(Default)]
@@ -158,9 +158,9 @@ impl Executor for RebuildExecutor {
         _: &RoutingTarget,
         prompt: &Prompt,
         _: &PipelineContext,
-    ) -> Result<native::NativeInputCount> {
+    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
         self.counts.lock().await.push(prompt.clone());
-        Ok(native::NativeInputCount::Counted {
+        Ok(bitrouter_ai::core::evidence::NativeInputCount::Counted {
             input_tokens: 100,
             request_sha256: "fixture".into(),
             source: "fixture".into(),

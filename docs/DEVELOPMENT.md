@@ -15,7 +15,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation and catalog contracts; optional schema derives; no service runtime or transport |
+| `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation, catalog and managed-attempt evidence contracts; optional schema derives; no service runtime or transport |
 | `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control and evaluation service clients using AI wire contracts; core streaming clients remain in migration |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, terminal UI, optional OTLP and management commands |
@@ -66,6 +66,21 @@ workspace locks/markers and bounded startup discovery preserve execution barrier
 Cold queries do not execute. Safe same-owner reload and explicit stopped-owner
 checkpoint recovery preserve identities and budgets without replaying completed
 effects; lost owners, unknown effects and uncertain accounting remain blocked.
+
+Managed attempt evidence used by the core's existing `model.evidence` command
+now lives in `bitrouter_ai::core::evidence`. Import `NativeAttemptReport`, its
+route/usage evidence and private-context/continuation observations there.
+These data structures confer no ownership or execution authority. The gateway
+still validates provider provenance, projects raw usage, computes commitments
+and enforces report limits; the core still decides whether evidence may be
+admitted. Core protocol/checkpoint extraction is a separate remaining step.
+
+Trusted application hosts that previously called
+`NativeEvidenceCommitment::capture` use
+`bitrouter::gateway::pipeline::native_report::commitment`.
+`NativeCacheObservation::capture` becomes
+`bitrouter::gateway::pipeline::native_accounting::capture_cache`.
+Those algorithms are application APIs, not AI helpers or SDK transport code.
 
 Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
 requirements, including root format 2 and local v17/HTTP v2. The

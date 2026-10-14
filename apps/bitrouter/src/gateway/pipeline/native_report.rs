@@ -4,14 +4,14 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::native::{
+use crate::gateway::error::{BitrouterError, Result};
+use bitrouter_ai::core::evidence::{
     NativeAttemptReport, NativeEvidenceCommitment, NativeReportRejection,
     NativeReportRejectionReason, NativeRoute,
 };
-use super::native_accounting::{NativeTokenCost, NativeTokenRateBits};
-use crate::gateway::error::{BitrouterError, Result};
+use bitrouter_ai::core::evidence::{NativeTokenCost, NativeTokenRateBits};
 
-pub(super) fn rejection_byte_reserve(request_id: &str, route: &NativeRoute) -> Result<u64> {
+pub(crate) fn rejection_byte_reserve(request_id: &str, route: &NativeRoute) -> Result<u64> {
     // Covers every fixed-schema field at maximum numeric width, two output
     // rejection summaries, three evidence commitments and pricing-rate bits.
     // Request/route bytes are counted verbatim, including their JSON escaping.
@@ -152,7 +152,9 @@ fn committed_cost(cost: &NativeTokenCost) -> Result<NativeTokenCost> {
     })
 }
 
-pub(super) fn commitment(value: &impl Serialize) -> Result<NativeEvidenceCommitment> {
+/// Hash the exact serde JSON representation without allocating an encoded copy.
+/// The commitment contains no readable diagnostic or provider wire payload.
+pub fn commitment(value: &impl Serialize) -> Result<NativeEvidenceCommitment> {
     let mut writer = HashCounter {
         bytes: 0,
         hash: Sha256::new(),
@@ -192,14 +194,14 @@ impl std::io::Write for HashCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::pipeline::native::{
-        NativeOutputRejection, NativeOutputUsage, NativeRouteConstraints,
-    };
-    use crate::gateway::pipeline::native_accounting::NativeTokenRates;
-    use crate::gateway::pipeline::native_context::{PrivateContextEvidence, PrivateContextFailure};
-    use crate::gateway::pipeline::native_continuation::{
+    use bitrouter_ai::core::evidence::NativeTokenRates;
+    use bitrouter_ai::core::evidence::{
         ContinuationFailure, NativeContinuationInput, NativeContinuationOutput,
     };
+    use bitrouter_ai::core::evidence::{
+        NativeOutputRejection, NativeOutputUsage, NativeRouteConstraints,
+    };
+    use bitrouter_ai::core::evidence::{PrivateContextEvidence, PrivateContextFailure};
     use bitrouter_ai::types::{NormalizedUsage, UsageOrigin};
     use serde_json::json;
 

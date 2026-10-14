@@ -1,10 +1,10 @@
 use super::*;
-use crate::gateway::pipeline::native::NativeAttemptReport;
 use crate::gateway::pipeline::native::NativeExecutionControl;
 use crate::gateway::pipeline::native::NativePlan;
 use crate::gateway::pipeline::native::NativePlanAdmission;
 use crate::gateway::pipeline::stream::UsagePricing;
 use crate::gateway::pipeline::stream::UsagePricingBracket;
+use bitrouter_ai::core::evidence::NativeAttemptReport;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 

@@ -1,107 +1,30 @@
 //! Host-authenticated provenance for private parts in managed agent history.
 
+use bitrouter_ai::core::evidence::{
+    NativePrivateContextObservation, PrivateContextEvidence, PrivateContextFailure,
+};
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::context::PipelineContext;
 use super::native_continuation::{
-    ContinuationFailure, FullHistoryReason, NativeContinuationBinding,
-    NativeContinuationObservation, NativeContinuationOutput, NativeContinuationPlan,
-    NativeContinuationSource, clear_continuations, has_continuation, requires_stored_state,
+    NativeContinuationBinding, NativeContinuationPlan, NativeContinuationSource,
+    clear_continuations, has_continuation, requires_stored_state,
 };
 use super::types::RoutingTarget;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::providers::auth::ContinuationAuthority;
+use bitrouter_ai::core::evidence::{
+    ContinuationFailure, FullHistoryReason, NativeContinuationObservation, NativeContinuationOutput,
+};
 use bitrouter_ai::types::{Content, GenerateResult, Prompt, ProviderMetadata};
 
 /// The only reserved SDK-owned field used for private-history provenance.
 pub const ORIGIN_NAMESPACE: &str = "bitrouter";
 /// Opaque host-authenticated proof; never forwarded to a provider.
 pub const ORIGIN_FIELD: &str = "nativePrivateOrigin";
-
-/// Controlled rejection/uncertainty reasons, without private identifiers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PrivateContextFailure {
-    /// No host policy is installed for private history.
-    PolicyUnavailable,
-    /// The installation key cannot be loaded.
-    KeyUnavailable,
-    /// A private part has no origin proof.
-    ProofMissing,
-    /// The proof, message content or part position is invalid.
-    ProofInvalid,
-    /// The authenticated owner differs from the origin owner.
-    OwnerMismatch,
-    /// The selected provider/model/endpoint/account differs from the origin.
-    TargetMismatch,
-    /// Final authentication cannot prove its credential principal.
-    AuthorityUnavailable,
-    /// Final authentication differs from the origin credential principal.
-    AuthorityMismatch,
-    /// Private parts must belong to an assistant message.
-    InvalidRole,
-    /// No successful HTTP result supplies provenance for this output.
-    AttemptUnverified,
-    /// Content could not be committed or sealed.
-    ContentUnavailable,
-}
-
-impl PrivateContextFailure {
-    /// Stable protocol feasibility diagnostic.
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::PolicyUnavailable => "private_context_policy_unavailable",
-            Self::KeyUnavailable => "private_context_key_unavailable",
-            Self::ProofMissing => "private_context_proof_missing",
-            Self::ProofInvalid => "private_context_proof_invalid",
-            Self::OwnerMismatch => "private_context_owner_mismatch",
-            Self::TargetMismatch => "private_context_target_mismatch",
-            Self::AuthorityUnavailable => "private_context_authority_unavailable",
-            Self::AuthorityMismatch => "private_context_authority_mismatch",
-            Self::InvalidRole => "private_context_invalid_role",
-            Self::AttemptUnverified => "private_context_attempt_unverified",
-            Self::ContentUnavailable => "private_context_content_unavailable",
-        }
-    }
-
-    pub(crate) fn error(self) -> BitrouterError {
-        BitrouterError::bad_request(self.reason())
-    }
-}
-
-/// Explicit evidence; old receipts without this field remain unknown.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum PrivateContextEvidence {
-    /// No observation is available, including an attempt stopped before send.
-    #[default]
-    Unknown,
-    /// The observed input/output contains no private parts.
-    NotPresent,
-    /// The observed private parts have verified source bindings.
-    Verified {
-        /// Number of authenticated private parts.
-        parts: u64,
-    },
-    /// The result is retained, but its private context cannot be safely reused.
-    Unverified {
-        /// Controlled reason for missing provenance.
-        reason: PrivateContextFailure,
-    },
-}
-
-/// Private context actually sent and returned by one managed attempt.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativePrivateContextObservation {
-    /// Set only immediately before a generation request is dispatched.
-    pub input: PrivateContextEvidence,
-    /// Set before the attempt report and core history receive the result.
-    pub output: PrivateContextEvidence,
-}
 
 /// Host-owned installation-key policy. Validation is local and read-only;
 /// it must not resolve credentials, perform provider I/O or mutate the prompt.
@@ -698,14 +621,16 @@ pub fn validate_managed_history(ctx: &PipelineContext) -> Result<()> {
         Some(runtime) => {
             runtime
                 .validate_history(ctx)
-                .map_err(PrivateContextFailure::error)?;
+                .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
             match runtime.policy.as_deref() {
                 Some(policy) => policy
                     .validate_continuation_history(ctx.require_generation_prompt()?, ctx.caller())
-                    .map_err(ContinuationFailure::error),
-                None if has_continuation(ctx.require_generation_prompt()?) => {
-                    Err(ContinuationFailure::PolicyUnavailable.error())
-                }
+                    .map_err(crate::gateway::pipeline::native_continuation::continuation_error),
+                None if has_continuation(ctx.require_generation_prompt()?) => Err(
+                    crate::gateway::pipeline::native_continuation::continuation_error(
+                        ContinuationFailure::PolicyUnavailable,
+                    ),
+                ),
                 None => Ok(()),
             }
         }
@@ -715,3 +640,7 @@ pub fn validate_managed_history(ctx: &PipelineContext) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn private_context_error(reason: PrivateContextFailure) -> BitrouterError {
+    BitrouterError::bad_request(reason.reason())
+}

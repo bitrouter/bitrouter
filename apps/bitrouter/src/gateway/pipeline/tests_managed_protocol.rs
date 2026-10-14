@@ -1,6 +1,6 @@
 use super::*;
 use crate::gateway::model::protocol::OutboundDispatch;
-use crate::gateway::pipeline::native::NativeProtocolValidation;
+use bitrouter_ai::core::evidence::NativeProtocolValidation;
 use bitrouter_ai::types::{DataContent, ToolResultContentPart, ToolResultOutput};
 use serde_json::json;
 

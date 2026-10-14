@@ -23,9 +23,7 @@ use crate::gateway::pipeline::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
-use crate::gateway::pipeline::native::{
-    NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan, NativeRoute,
-};
+use crate::gateway::pipeline::native::{NativeExecutionControl, NativeModelSelection, NativePlan};
 use crate::gateway::pipeline::operations::{HookRegistration, applicable};
 use crate::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
@@ -39,6 +37,7 @@ use crate::gateway::pipeline::settlement::{
     DeliveryAcknowledgement, RequiredDeliveryHandshake, RequiredFinalizationContext,
     RequiredFinalizationReceipt, RequiredFinalizer, SettlementContext, SettlementRecorder,
 };
+use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeRoute};
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::OperationScope;
 
@@ -653,7 +652,7 @@ impl Pipeline {
             chain
                 .iter()
                 .map(|target| {
-                    let mut route = NativeRoute::from_target(target);
+                    let mut route = crate::gateway::pipeline::native::route_from_target(target);
                     route.output_token_limit_supported =
                         self.executor.output_token_limit_support(target);
                     route
@@ -866,9 +865,8 @@ impl Pipeline {
         routes: &mut [NativeRoute],
         control: &dyn NativeExecutionControl,
     ) -> Result<crate::gateway::pipeline::native::NativePlanAdmission> {
-        use crate::gateway::pipeline::native::{
-            NativeCountedRequests, NativeInputCount, NativeInputCountReport,
-        };
+        use crate::gateway::pipeline::native::{NativeCountedRequests, NativeInputCountReport};
+        use bitrouter_ai::core::evidence::NativeInputCount;
         let prompt = ctx.require_generation_prompt()?;
         let can_rebuild = ctx
             .extension::<crate::gateway::pipeline::context::ProviderContinuation>()
@@ -1021,7 +1019,7 @@ impl Pipeline {
             if admission.route_indices.iter().any(|index| {
                 matches!(
                     routes[*index as usize].protocol_validation,
-                    crate::gateway::pipeline::native::NativeProtocolValidation::Rejected { .. }
+                    bitrouter_ai::core::evidence::NativeProtocolValidation::Rejected { .. }
                 )
             }) {
                 return Err(BitrouterError::bad_request(
@@ -2348,7 +2346,10 @@ impl Pipeline {
                     let limit = control.attempt_report_byte_limit(ctx.request_id(), route)?;
                     if let Some(limit) = limit
                         && limit
-                            < NativeAttemptReport::rejection_byte_reserve(ctx.request_id(), route)?
+                            < crate::gateway::pipeline::native_report::rejection_byte_reserve(
+                                ctx.request_id(),
+                                route,
+                            )?
                     {
                         return Err(BitrouterError::bad_request(
                             "attempt report limit cannot hold rejection evidence",
@@ -2481,7 +2482,7 @@ impl Pipeline {
                         .unwrap_or_default(),
                     cache: Default::default(),
                 };
-                report.cache = super::native_accounting::NativeCacheObservation::capture(
+                report.cache = super::native_accounting::capture_cache(
                     &route.protocol,
                     report
                         .result

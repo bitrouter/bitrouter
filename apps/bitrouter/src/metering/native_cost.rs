@@ -1,10 +1,9 @@
 //! Per-attempt estimates share settlement's frozen price table and calculator.
 //! They are audit evidence only and never write or reconcile a metering row.
 
-use crate::gateway::pipeline::native::NativeAttemptReport;
-use crate::gateway::pipeline::native_accounting::{
-    NativeCostEstimator, NativeTokenCost, NativeTokenRates, validated_provider_usage,
-};
+use crate::gateway::pipeline::native_accounting::{NativeCostEstimator, validated_provider_usage};
+use bitrouter_ai::core::evidence::NativeAttemptReport;
+use bitrouter_ai::core::evidence::{NativeTokenCost, NativeTokenRates};
 
 use super::pricing::{MAX_TRUSTED_TOKENS, PricingSource, PricingTable};
 
@@ -121,7 +120,7 @@ mod tests {
     use super::super::pricing::calculate_charge_evidence;
     use super::super::pricing::{ContextTier, ModelPricing};
     use super::*;
-    use crate::gateway::pipeline::native::NativeRoute;
+    use bitrouter_ai::core::evidence::NativeRoute;
     use bitrouter_ai::types::{ApiProtocol, GenerateResult, Usage, UsageOrigin};
     use serde_json::json;
 

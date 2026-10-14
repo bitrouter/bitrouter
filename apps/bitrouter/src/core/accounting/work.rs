@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::gateway::pipeline::native_accounting::NativeTokenCost;
+use bitrouter_ai::core::evidence::NativeTokenCost;
 use serde::{Deserialize, Serialize};
 
 use crate::core::protocol::{CoreError, ErrorCode};
@@ -13,7 +13,7 @@ use crate::core::session::{AgentStatus, AgentTurn, ModelStep, SessionSnapshot};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderAttemptSource {
     pub attempt_index: u32,
-    pub route: crate::gateway::pipeline::native::NativeRoute,
+    pub route: bitrouter_ai::core::evidence::NativeRoute,
     /// Canonical output contract remains live after the original turn retires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_bytes: Option<u64>,
@@ -400,7 +400,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
 }
 
 pub(crate) fn report_digest(
-    report: &crate::gateway::pipeline::native::NativeAttemptReport,
+    report: &bitrouter_ai::core::evidence::NativeAttemptReport,
 ) -> Result<String, CoreError> {
     serde_json::to_vec(report)
         .map(|bytes| crate::core::checkpoint::sha256(&bytes))

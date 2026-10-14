@@ -462,8 +462,16 @@ async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry
                 u32::from(index == 6)
             );
             if index == 2 {
-                assert_eq!(attempt.receipt.as_ref().ok_or("receipt")?.report.continuation.input,
-                bitrouter::gateway::pipeline::native_continuation::NativeContinuationInput::Unknown);
+                assert_eq!(
+                    attempt
+                        .receipt
+                        .as_ref()
+                        .ok_or("receipt")?
+                        .report
+                        .continuation
+                        .input,
+                    bitrouter_ai::core::evidence::NativeContinuationInput::Unknown
+                );
             }
         }
     }

@@ -110,7 +110,7 @@ impl native::NativeExecutionControl for SemanticControl {
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: native::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
 }
 
 #[derive(Default, Clone)]

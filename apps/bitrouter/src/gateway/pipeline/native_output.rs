@@ -1,7 +1,7 @@
 //! Canonical output admission before durable-report copies. Executor-owned
 //! allocations and the original settlement evidence retain their own lifetimes.
 
-use super::native::{NativeOutputRejection, NativeOutputUsage};
+use bitrouter_ai::core::evidence::{NativeOutputRejection, NativeOutputUsage};
 use bitrouter_ai::types::GenerateResult;
 
 pub(super) fn fits(result: &impl serde::Serialize, limit: u64) -> bool {

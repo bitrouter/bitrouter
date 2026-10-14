@@ -2,11 +2,12 @@
 //! it never turns rejected metadata into a verified input fit.
 
 use super::native::{
-    NativeEvidenceCommitment, NativeExecutionControl, NativeInputCount, NativeInputCountRejection,
-    NativeInputCountReport, auxiliary_report_allowance,
+    NativeExecutionControl, NativeInputCountRejection, NativeInputCountReport,
+    auxiliary_report_allowance,
 };
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
+use bitrouter_ai::core::evidence::NativeInputCount;
 
 pub(super) fn limit(control: &dyn NativeExecutionControl, request_id: &str) -> Result<Option<u64>> {
     let limit = control.auxiliary_report_byte_limit(request_id)?;
@@ -28,7 +29,7 @@ pub(super) fn count(report: &mut NativeInputCountReport, limit: Option<u64>) -> 
     report.report_rejection = Some(NativeInputCountRejection {
         version: 1,
         byte_limit: limit,
-        original: NativeEvidenceCommitment::capture(report)?,
+        original: crate::gateway::pipeline::native_report::commitment(report)?,
         input_tokens: match report.outcome {
             NativeInputCount::Counted { input_tokens, .. } => Some(input_tokens),
             NativeInputCount::Unavailable { .. } => None,
@@ -47,9 +48,10 @@ pub(super) fn count(report: &mut NativeInputCountReport, limit: Option<u64>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::super::native::{NativeAttemptReport, NativePlan, NativePlanAdmission};
+    use super::super::native::{NativePlan, NativePlanAdmission};
     use super::super::native_preparation::{NativePreparationWork, NativePreparationWorkKind};
     use super::*;
+    use bitrouter_ai::core::evidence::NativeAttemptReport;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     struct Control(Option<u64>);
@@ -117,13 +119,17 @@ mod tests {
                 report_rejection: None,
             };
             let limit = auxiliary_report_allowance(&report.request_id)?;
-            let padding = limit - NativeEvidenceCommitment::capture(&report)?.bytes;
+            let padding =
+                limit - crate::gateway::pipeline::native_report::commitment(&report)?.bytes;
             let field = match &mut report.outcome {
                 NativeInputCount::Counted { source, .. } => source,
                 NativeInputCount::Unavailable { reason } => reason,
             };
             *field = "x".repeat(padding as usize);
-            assert_eq!(NativeEvidenceCommitment::capture(&report)?.bytes, limit);
+            assert_eq!(
+                crate::gateway::pipeline::native_report::commitment(&report)?.bytes,
+                limit
+            );
             let original = report.clone();
             count(&mut report, Some(limit))?;
             assert_eq!(report, original);
@@ -132,7 +138,7 @@ mod tests {
                 NativeInputCount::Unavailable { reason } => reason,
             };
             field.push('x');
-            let expected = NativeEvidenceCommitment::capture(&report)?;
+            let expected = crate::gateway::pipeline::native_report::commitment(&report)?;
             count(&mut report, Some(limit))?;
             let rejection = report
                 .report_rejection

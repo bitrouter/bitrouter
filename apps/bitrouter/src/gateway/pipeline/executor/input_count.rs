@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 use super::{HttpExecutor, RequestBuildInput, apply_provider_continuation};
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::native::{InputTokenCounting, NativeInputCount};
 use crate::gateway::pipeline::types::RoutingTarget;
+use bitrouter_ai::core::evidence::{InputTokenCounting, NativeInputCount};
 use bitrouter_ai::types::{ApiProtocol, Prompt};
 use tokio_util::sync::CancellationToken;
 

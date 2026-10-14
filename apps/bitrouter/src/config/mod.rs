@@ -1488,12 +1488,12 @@ pub struct ProviderModel {
     /// Concrete route token limits. Missing fields remain unknown. In
     /// particular, an input limit does not imply a combined context window.
     #[serde(default)]
-    pub token_limits: crate::gateway::pipeline::native::ModelTokenLimits,
+    pub token_limits: bitrouter_ai::core::evidence::ModelTokenLimits,
     /// Explicit support for a provider input-token counting endpoint. Managed
     /// requests require a successful count when enabled; ordinary calls do not
     /// invoke it. API wire compatibility alone does not enable counting.
     #[serde(default)]
-    pub input_token_counting: Option<crate::gateway::pipeline::native::InputTokenCounting>,
+    pub input_token_counting: Option<bitrouter_ai::core::evidence::InputTokenCounting>,
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]

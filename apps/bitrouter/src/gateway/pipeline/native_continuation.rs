@@ -1,6 +1,8 @@
 //! Host-authenticated Responses continuation for managed canonical history.
 
-use serde::{Deserialize, Serialize};
+use bitrouter_ai::core::evidence::{
+    ContinuationFailure, FullHistoryReason, NativeContinuationInput,
+};
 
 use super::native_context::{ORIGIN_NAMESPACE, metadata, metadata_mut};
 use crate::gateway::error::BitrouterError;
@@ -29,130 +31,6 @@ pub const CONTINUATION_FIELD: &str = "nativeContinuation";
 /// Source-proven marker for output whose full provider state is not represented
 /// locally. Removing the encrypted handle must not make such output replayable.
 pub const REQUIRED_STATE_FIELD: &str = "nativeContextRequired";
-
-/// Stable diagnostics without provider IDs, keys or content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContinuationFailure {
-    /// No installation policy is configured.
-    PolicyUnavailable,
-    /// The installation key could not be loaded.
-    KeyUnavailable,
-    /// The artifact, owner or message binding is invalid.
-    ArtifactInvalid,
-    /// The authenticated owner differs from the artifact owner.
-    OwnerMismatch,
-    /// Provider state is required but the visible prefix has changed.
-    PrefixMismatch,
-    /// Provider state is required but the candidate target differs.
-    TargetMismatch,
-    /// Provider state is required but the requested effort differs.
-    EffortMismatch,
-    /// Actual authentication has no stable principal proof.
-    AuthorityUnavailable,
-    /// Actual authentication differs from the successful source principal.
-    AuthorityMismatch,
-    /// No authenticated successful HTTP attempt supplied this result.
-    AttemptUnverified,
-    /// The output cannot carry an authenticated artifact.
-    ContentUnavailable,
-    /// A request attempted to inject or replace a native provider handle.
-    BindingChanged,
-    /// Locally retained output needs stored state that no selected handle covers.
-    Required,
-}
-
-impl ContinuationFailure {
-    /// Stable feasibility/error reason, suitable for a redacted receipt.
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::PolicyUnavailable => "native_continuation_policy_unavailable",
-            Self::KeyUnavailable => "native_continuation_key_unavailable",
-            Self::ArtifactInvalid => "native_continuation_artifact_invalid",
-            Self::OwnerMismatch => "native_continuation_owner_mismatch",
-            Self::PrefixMismatch => "native_continuation_prefix_mismatch",
-            Self::TargetMismatch => "native_continuation_target_mismatch",
-            Self::EffortMismatch => "native_continuation_effort_mismatch",
-            Self::AuthorityUnavailable => "native_continuation_authority_unavailable",
-            Self::AuthorityMismatch => "native_continuation_authority_mismatch",
-            Self::AttemptUnverified => "native_continuation_attempt_unverified",
-            Self::ContentUnavailable => "native_continuation_content_unavailable",
-            Self::BindingChanged => "native_continuation_binding_changed",
-            Self::Required => "native_continuation_required",
-        }
-    }
-
-    pub(crate) fn error(self) -> BitrouterError {
-        BitrouterError::bad_request(self.reason())
-    }
-}
-
-/// Why complete canonical history is sent instead of a stored provider handle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FullHistoryReason {
-    /// No authenticated handle is present in the input.
-    NoHandle,
-    /// The candidate has a different provider/model/endpoint/account/protocol.
-    TargetChanged,
-    /// The requested reasoning effort changed.
-    EffortChanged,
-    /// The artifact no longer describes the exact ordered history prefix.
-    PrefixChanged,
-}
-
-/// Credential-free planned or observed provider context use.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum NativeContinuationInput {
-    /// No observation, including an attempt stopped before dispatch.
-    #[default]
-    Unknown,
-    /// Complete history is sent through the serving adapter.
-    FullHistory {
-        /// Local reason for sending complete history.
-        reason: FullHistoryReason,
-    },
-    /// The provider receives only the suffix after this many canonical messages.
-    Resumed {
-        /// Number of messages represented by the provider's stored state.
-        prefix_messages: u64,
-    },
-    /// Local candidate preparation failed before dispatch.
-    Rejected {
-        /// Stable local rejection, without private values.
-        reason: ContinuationFailure,
-    },
-}
-
-/// Evidence for the handle attached to this complete output.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum NativeContinuationOutput {
-    /// No output observation exists.
-    #[default]
-    Unknown,
-    /// The protocol has no Responses handle.
-    NotSupported,
-    /// The actual response did not confirm stored state.
-    NotStored,
-    /// An encrypted owner/source/prefix-bound artifact was issued.
-    Issued,
-    /// Output and usage survive, but no reusable artifact could be issued.
-    Unverified {
-        /// Why provenance or stored state could not be established.
-        reason: ContinuationFailure,
-    },
-}
-
-/// Actual generation evidence; counting alone never populates this observation.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeContinuationObservation {
-    /// Actual generation dispatch, separately from planned/count work.
-    pub input: NativeContinuationInput,
-    /// Artifact attached to the complete output before its receipt is emitted.
-    pub output: NativeContinuationOutput,
-}
 
 /// An ephemeral host resolution. Never serialize the raw provider ID into plans.
 pub struct NativeContinuationBinding {
@@ -309,4 +187,8 @@ pub fn history_commitment(messages: &[Message]) -> Result<Vec<u8>, ContinuationF
     serde_json::to_vec(&messages)
         .map(|bytes| Sha256::digest(bytes).to_vec())
         .map_err(|_| ContinuationFailure::ContentUnavailable)
+}
+
+pub(crate) fn continuation_error(reason: ContinuationFailure) -> BitrouterError {
+    BitrouterError::bad_request(reason.reason())
 }

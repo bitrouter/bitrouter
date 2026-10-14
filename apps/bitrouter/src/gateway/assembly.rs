@@ -413,7 +413,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for TransformCheck
     fn attempt_report_byte_limit(
         &self,
         request_id: &str,
-        route: &crate::gateway::pipeline::native::NativeRoute,
+        route: &bitrouter_ai::core::evidence::NativeRoute,
     ) -> Result<Option<u64>> {
         self.inner.attempt_report_byte_limit(request_id, route)
     }
@@ -495,7 +495,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for TransformCheck
     async fn before_attempt(&self, request_id: &str, index: u32) -> Result<()> {
         self.inner.before_attempt(request_id, index).await
     }
-    async fn after_attempt(&self, report: crate::gateway::pipeline::native::NativeAttemptReport) {
+    async fn after_attempt(&self, report: bitrouter_ai::core::evidence::NativeAttemptReport) {
         self.inner.after_attempt(report).await
     }
     async fn before_provider_work(

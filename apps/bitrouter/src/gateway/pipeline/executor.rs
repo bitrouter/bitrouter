@@ -45,10 +45,9 @@ use stream_bridge::BridgeCapture;
 #[derive(Default)]
 pub(super) struct NativeStreamCapture(Mutex<Option<Arc<BridgeCapture>>>);
 
-use super::native_continuation::{
-    ContinuationFailure, NativeContinuationInput, NativeContinuationPlan,
-};
+use super::native_continuation::NativeContinuationPlan;
 use super::native_work::{self, NativeProviderWorkKind};
+use bitrouter_ai::core::evidence::{ContinuationFailure, NativeContinuationInput};
 
 fn native_continuation_plan(
     target: &RoutingTarget,
@@ -59,7 +58,7 @@ fn native_continuation_plan(
         .map(|runtime| {
             runtime
                 .continuation_plan(prompt, ctx.caller(), target)
-                .map_err(ContinuationFailure::error)
+                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)
         })
         .transpose()
 }
@@ -72,11 +71,11 @@ fn record_native_dispatch(
     if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
         let plan = runtime
             .continuation_plan(prompt, ctx.caller(), target)
-            .map_err(ContinuationFailure::error)?;
+            .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?;
         runtime.dispatched(
             &plan
                 .execution_prompt(prompt)
-                .map_err(ContinuationFailure::error)?,
+                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?,
         );
         runtime.continuation_dispatched(&plan);
     }
@@ -122,7 +121,7 @@ pub trait Executor: Send + Sync {
         _target: &RoutingTarget,
         _prompt: &Prompt,
         _ctx: &PipelineContext,
-    ) -> crate::gateway::pipeline::native::NativeProtocolValidation {
+    ) -> bitrouter_ai::core::evidence::NativeProtocolValidation {
         Default::default()
     }
 
@@ -133,7 +132,7 @@ pub trait Executor: Send + Sync {
         _target: &RoutingTarget,
         _prompt: &Prompt,
         _ctx: &PipelineContext,
-    ) -> Result<crate::gateway::pipeline::native::NativeInputCount> {
+    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
         Err(BitrouterError::bad_request(
             "input token counting is unsupported",
         ))
@@ -560,7 +559,11 @@ fn apply_provider_continuation(
         if ctx.extension::<ProviderContinuation>().is_some()
             || ctx.extension::<SuppressProviderContinuation>().is_some()
         {
-            return Err(ContinuationFailure::BindingChanged.error());
+            return Err(
+                crate::gateway::pipeline::native_continuation::continuation_error(
+                    ContinuationFailure::BindingChanged,
+                ),
+            );
         }
         match plan {
             NativeContinuationPlan::Resume(binding) => {
@@ -577,9 +580,17 @@ fn apply_provider_continuation(
                         != serde_json::to_value(
                             ctx.require_generation_prompt()?.params.reasoning_effort,
                         )
-                        .map_err(|_| ContinuationFailure::BindingChanged.error())?
+                        .map_err(|_| {
+                            crate::gateway::pipeline::native_continuation::continuation_error(
+                                ContinuationFailure::BindingChanged,
+                            )
+                        })?
                 {
-                    return Err(ContinuationFailure::BindingChanged.error());
+                    return Err(
+                        crate::gateway::pipeline::native_continuation::continuation_error(
+                            ContinuationFailure::BindingChanged,
+                        ),
+                    );
                 }
                 return Ok(Some(ProviderContinuationSubstitution {
                     native: binding.response_id().to_owned(),
@@ -591,7 +602,11 @@ fn apply_provider_continuation(
                     .get("previous_response_id")
                     .is_some_and(|value| !value.is_null())
                 {
-                    return Err(ContinuationFailure::BindingChanged.error());
+                    return Err(
+                        crate::gateway::pipeline::native_continuation::continuation_error(
+                            ContinuationFailure::BindingChanged,
+                        ),
+                    );
                 }
             }
         }
@@ -653,7 +668,7 @@ fn validate_continuation_authority(
     if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
         runtime
             .validate_continuation_authority(ctx, target, actual)
-            .map_err(ContinuationFailure::error)?;
+            .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?;
     }
     if target.api_protocol == ApiProtocol::Responses
         && ctx.extension::<RequireContinuationAuthority>().is_some()
@@ -1000,7 +1015,7 @@ impl HttpExecutor {
         let mut upstream = match plan.as_ref() {
             Some(plan) => plan
                 .execution_prompt(prompt)
-                .map_err(ContinuationFailure::error)?,
+                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?,
             None => prompt.clone(),
         };
         upstream.model = target.service_id.clone();
@@ -1010,10 +1025,10 @@ impl HttpExecutor {
         {
             runtime
                 .validate_history(ctx)
-                .map_err(super::native_context::PrivateContextFailure::error)?;
+                .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
             runtime
                 .validate_target(prompt, ctx, target)
-                .map_err(super::native_context::PrivateContextFailure::error)?;
+                .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
             adapter.render_managed_request_for_target(&upstream, &target.model_target())?
         } else {
             let report = adapter.admission(&upstream);
@@ -1028,10 +1043,18 @@ impl HttpExecutor {
                 .get("previous_response_id")
                 .is_some_and(|value| !value.is_null())
             {
-                return Err(ContinuationFailure::BindingChanged.error());
+                return Err(
+                    crate::gateway::pipeline::native_continuation::continuation_error(
+                        ContinuationFailure::BindingChanged,
+                    ),
+                );
             }
             body.as_object_mut()
-                .ok_or_else(|| ContinuationFailure::BindingChanged.error())?
+                .ok_or_else(|| {
+                    crate::gateway::pipeline::native_continuation::continuation_error(
+                        ContinuationFailure::BindingChanged,
+                    )
+                })?
                 .insert("previous_response_id".into(), binding.response_id().into());
         }
         Ok((body, report))
@@ -1161,7 +1184,7 @@ impl HttpExecutor {
             {
                 runtime
                     .validate_authority(input.ctx, input.target, credential_authority.as_ref())
-                    .map_err(super::native_context::PrivateContextFailure::error)?;
+                    .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
             }
             let expected = input.managed_expected.ok_or_else(|| {
                 BitrouterError::bad_request("managed request baseline unavailable")
@@ -1555,14 +1578,14 @@ impl Executor for HttpExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> crate::gateway::pipeline::native::NativeProtocolValidation {
+    ) -> bitrouter_ai::core::evidence::NativeProtocolValidation {
         let validate = || -> std::result::Result<(), &'static str> {
             if let Some(runtime) =
                 ctx.extension::<super::native_context::NativePrivateContextRuntime>()
             {
                 runtime
                     .validate_target(prompt, ctx, target)
-                    .map_err(super::native_context::PrivateContextFailure::reason)?;
+                    .map_err(bitrouter_ai::core::evidence::PrivateContextFailure::reason)?;
             }
             let (adapter, _) = self
                 .dispatch
@@ -1595,8 +1618,8 @@ impl Executor for HttpExecutor {
             Ok(())
         };
         match validate() {
-            Ok(()) => crate::gateway::pipeline::native::NativeProtocolValidation::Compatible,
-            Err(reason) => crate::gateway::pipeline::native::NativeProtocolValidation::Rejected {
+            Ok(()) => bitrouter_ai::core::evidence::NativeProtocolValidation::Compatible,
+            Err(reason) => bitrouter_ai::core::evidence::NativeProtocolValidation::Rejected {
                 reason: reason.into(),
             },
         }
@@ -1607,7 +1630,7 @@ impl Executor for HttpExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> Result<crate::gateway::pipeline::native::NativeInputCount> {
+    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
         self.count_managed_input(target, prompt, ctx).await
     }
 
@@ -1684,8 +1707,12 @@ impl Executor for HttpExecutor {
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let mut attempted_auth_refresh = false;
-        let requested_effort = serde_json::to_value(prompt.params.reasoning_effort)
-            .map_err(|_| ContinuationFailure::BindingChanged.error())?;
+        let requested_effort =
+            serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
+                crate::gateway::pipeline::native_continuation::continuation_error(
+                    ContinuationFailure::BindingChanged,
+                )
+            })?;
         let (text, successful_authority, storage_allowed, effort_bound) = loop {
             let mut body = self.render_execution_request(
                 adapter.as_ref(),
@@ -2516,9 +2543,8 @@ mod beta_forward_tests {
     #[tokio::test]
     async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
     -> crate::gateway::error::Result<()> {
-        use crate::gateway::pipeline::native::{
-            InputTokenCounting, NativeCountedRequests, NativeInputCount,
-        };
+        use crate::gateway::pipeline::native::NativeCountedRequests;
+        use bitrouter_ai::core::evidence::{InputTokenCounting, NativeInputCount};
         let mut ctx = ctx_with_headers(http::HeaderMap::new());
         let mut target = target(ApiProtocol::Responses);
         target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);

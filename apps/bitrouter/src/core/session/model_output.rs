@@ -286,10 +286,11 @@ fn validate_limit(
 pub(super) fn report_allowance(
     canonical: u64,
     request_id: &str,
-    route: &crate::gateway::pipeline::native::NativeRoute,
+    route: &bitrouter_ai::core::evidence::NativeRoute,
 ) -> Result<u64, CoreError> {
-    let envelope = NativeAttemptReport::rejection_byte_reserve(request_id, route)
-        .map_err(|error| reject(ErrorCode::LimitExceeded, &error.to_string()))?;
+    let envelope =
+        crate::gateway::pipeline::native_report::rejection_byte_reserve(request_id, route)
+            .map_err(|error| reject(ErrorCode::LimitExceeded, &error.to_string()))?;
     sum(canonical, envelope)
 }
 
@@ -297,7 +298,7 @@ fn validate_report_allowance(
     contract: (Option<u64>, Option<u32>, Option<u64>),
     bytes: u64,
     request_id: &str,
-    route: &crate::gateway::pipeline::native::NativeRoute,
+    route: &bitrouter_ai::core::evidence::NativeRoute,
 ) -> Result<(), CoreError> {
     if contract.1 != Some(CURRENT_VERSION)
         || contract
@@ -352,9 +353,9 @@ fn validate_complete_report(
     limit: Option<u64>,
     report: &NativeAttemptReport,
 ) -> Result<(), CoreError> {
-    use crate::gateway::pipeline::native::NativeEvidenceCommitment;
-    use crate::gateway::pipeline::native::NativeReportRejectionReason;
-    use crate::gateway::pipeline::native_accounting::NativeTokenCost;
+    use bitrouter_ai::core::evidence::NativeEvidenceCommitment;
+    use bitrouter_ai::core::evidence::NativeReportRejectionReason;
+    use bitrouter_ai::core::evidence::NativeTokenCost;
     let invalid = || {
         reject(
             ErrorCode::CheckpointConflict,
@@ -435,7 +436,7 @@ fn validate_complete_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::pipeline::native::NativeRouteConstraints;
+    use bitrouter_ai::core::evidence::NativeRouteConstraints;
 
     #[test]
     fn report_rejection_contract_rejects_inconsistent_evidence()

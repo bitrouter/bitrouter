@@ -59,7 +59,7 @@ the contract move must preserve its bytes.
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
-| P0 1 Public contracts | In progress | Observation/event/request-check, control and eval contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; core protocol/checkpoint contracts remain before the final service/client split |
+| P0 1 Public contracts | In progress | Observation/event/request-check, control, eval and managed-attempt evidence contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; core protocol/checkpoint contracts remain before the final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control and eval clients verified; core streaming client extraction and independent official-service process consumer remain |
@@ -545,3 +545,55 @@ The documentation review checked these splits against the baseline and found no
 remaining material issue after revision. P1 separately includes shared
 correlation-key/epoch authority and coordinated episode/guard updates; those
 requirements do not add distributed work to P0.
+
+## Managed attempt evidence contracts
+
+The existing `model.evidence` command carries a complete managed provider-attempt
+report. Its 24 reachable report, route, token/cache, private-context and
+continuation data types now live in `bitrouter_ai::core::evidence`. All service,
+core, harness and test consumers import their actual owner. No forwarding
+re-export or new dependency was added.
+
+Provider usage projection, exact-byte commitment generation, report admission,
+private-context authentication and execution callbacks remain application code.
+Only intrinsic data constructors/defaults and field queries accompany the moved
+types. The two existing configuration-schema derives remain available through
+AI's optional `schema` feature. Application helper replacements are documented
+in the development guide.
+
+Validation against the source immediately following `a45eaff`:
+
+- A declaration comparison verified all 24 field sets, serde attributes and
+  trait derives; only ownership paths and optional schema gating changed.
+- Workspace all-features/all-targets `cargo check` completed. The final strict
+  workspace all-features/all-targets Clippy run on Rust 1.97.0 passed after one
+  unused test import was removed. No lint suppression was added.
+- The targeted nextest run passed **1,110 tests**, including core contract and
+  execution, the managed HTTP/WebSocket gateway, native provider/history,
+  continuation, token accounting, configuration and AI contracts. Three tests
+  were slow; 3,293 tests were outside the filter. The final cleanup removed only
+  an unused import and was covered by the subsequent strict all-targets check.
+- AI without default features passed **38 tests** on Rust 1.97.0. Strict
+  workspace rustdoc and the pinned public-API guard passed. The public-dependency
+  manifests remain unchanged; positive managed-evidence sentinels and negative
+  execution/runtime/helper sentinels now protect the boundary.
+- `cargo run -p dist-helper -- generate-schema --check` passed. The configuration
+  and observation schema hashes remain the baseline hashes recorded above.
+- Independent read-only review found no actionable issue with serde/default
+  behavior, helper extraction, migrated callers, test assertions or the public
+  dependency/authority boundary.
+
+The nextest invocation used `CARGO_INCREMENTAL=0`,
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, and:
+
+```sh
+cargo nextest run -p bitrouter -p bitrouter-ai --all-features \
+  --build-jobs 2 --test-threads 2 \
+  -E 'package(bitrouter-ai) | binary(core_contract) | binary(core_execution) | binary(orchestrator_core) | test(gateway::pipeline::) | test(continuation::) | test(metering::native_cost::) | test(config::)'
+```
+
+This removes a dependency of the public core wire messages on gateway report
+implementations. Core protocol/checkpoint extraction and the SDK's existing
+core streaming transport still remain. Feature isolation, historical persisted
+fixtures, packaged independent-process delivery, full P0 validation and the PR
+remain open; this stage does not complete any broader gate by itself.

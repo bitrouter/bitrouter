@@ -372,7 +372,7 @@ models:
             "SELECT estimated_charge_micro_usd, charge_status, charge_evidence_json FROM requests",
         ))
         .await?;
-    let bitrouter::gateway::pipeline::native_accounting::NativeTokenCost::ConfiguredEstimate {
+    let bitrouter_ai::core::evidence::NativeTokenCost::ConfiguredEstimate {
         pricing_version,
         normalized_usage,
         ..

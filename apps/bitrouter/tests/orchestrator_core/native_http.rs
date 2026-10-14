@@ -29,12 +29,12 @@ use bitrouter::core::session::{CoreSession, RunStatus};
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::http::{AppState, build_router};
 use bitrouter::gateway::pipeline::native::{
-    NativeAttemptReport, NativeExecutionControl, NativePlan, NativePlanAdmission,
-    NativeProtocolValidation,
+    NativeExecutionControl, NativePlan, NativePlanAdmission,
 };
-use bitrouter::gateway::pipeline::native_accounting::NativeTokenCost;
 use bitrouter::metering::entities::requests;
 use bitrouter::metering::pricing::ChargeEvidence;
+use bitrouter_ai::core::evidence::NativeTokenCost;
+use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeProtocolValidation};
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::{
     GenerationParams, Message, Prompt, ReasoningEffort, ReasoningEffortSource, ResponseFormat,

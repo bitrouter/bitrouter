@@ -1,6 +1,6 @@
 use super::*;
 use bitrouter::gateway::pipeline::executor::HttpExecutor;
-use bitrouter::gateway::pipeline::native::NativeInputCount;
+use bitrouter_ai::core::evidence::NativeInputCount;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -504,12 +504,12 @@ async fn managed_protocol_filters_lossy_candidate_before_count_or_attempt() -> T
         first.api_base = counter.base.clone();
         first.api_key = "count-fixture-key".into();
         first.model_constraints.input_token_counting =
-            Some(bitrouter::gateway::pipeline::native::InputTokenCounting::Responses);
+            Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses);
         let mut second = first.clone();
         second.provider_name = "b-compatible-responses".into();
         second.api_protocol = ApiProtocol::Responses;
         second.model_constraints.input_token_counting = if count_good {
-            Some(bitrouter::gateway::pipeline::native::InputTokenCounting::Responses)
+            Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses)
         } else {
             None
         };

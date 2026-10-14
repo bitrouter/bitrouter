@@ -1,8 +1,8 @@
 //! Prepared prompt bytes must be admitted before counting or model execution.
 
 use super::*;
-use bitrouter::gateway::pipeline::native::{InputTokenCounting, NativeInputCount};
 use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind;
+use bitrouter_ai::core::evidence::{InputTokenCounting, NativeInputCount};
 use bitrouter_ai::types::{Message, Role};
 
 const EXPANSION_BYTES: usize = 512 * 1024;

@@ -242,7 +242,7 @@ fn build_targets(
     let model_constraints = provider
         .model_config(model_id)
         .map(
-            |model| crate::gateway::pipeline::native::NativeRouteConstraints {
+            |model| bitrouter_ai::core::evidence::NativeRouteConstraints {
                 capabilities: model.capabilities.clone(),
                 token_limits: model.token_limits.clone(),
                 input_token_counting: model.input_token_counting,

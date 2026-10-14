@@ -79,7 +79,7 @@ pub mod native_continuation;
 mod native_output;
 pub mod native_preparation;
 pub mod native_projection;
-mod native_report;
+pub mod native_report;
 mod native_stream;
 pub mod native_work;
 pub mod operations;

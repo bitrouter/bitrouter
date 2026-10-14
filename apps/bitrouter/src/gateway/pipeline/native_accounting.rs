@@ -1,9 +1,10 @@
 //! Accounting evidence for individual managed provider attempts. Configured
 //! token estimates are separate from authoritative invoices and cache evidence.
 
+use bitrouter_ai::core::evidence::{NativeCacheObservation, NativeTokenCost};
 use serde::{Deserialize, Serialize};
 
-use super::native::NativeAttemptReport;
+use bitrouter_ai::core::evidence::NativeAttemptReport;
 use bitrouter_ai::types::{ApiProtocol, NormalizedUsage, Usage, UsageOrigin};
 
 /// Distinct observations of the same bill; never add these bases together.
@@ -78,105 +79,6 @@ pub trait NativeCostSource: Send + Sync {
     ) -> crate::gateway::error::Result<Vec<NativeCostObservation>>;
 }
 
-/// Frozen rates used to reproduce a configured token estimate.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NativeTokenRates {
-    /// Micro-USD per uncached input token.
-    pub uncached_input: Option<f64>,
-    /// Micro-USD per cache-read input token.
-    pub cache_read: Option<f64>,
-    /// Micro-USD per cache-write input token.
-    pub cache_write: Option<f64>,
-    /// Micro-USD per output token, including reasoning.
-    pub output: Option<f64>,
-}
-
-/// Lossless pricing floats in a bounded report-rejection summary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NativeTokenRateBits {
-    /// Uncached-input rate as f64::to_bits.
-    pub uncached_input: Option<u64>,
-    /// Cache-read rate as f64::to_bits.
-    pub cache_read: Option<u64>,
-    /// Cache-write rate as f64::to_bits.
-    pub cache_write: Option<u64>,
-    /// Output rate as f64::to_bits.
-    pub output: Option<u64>,
-}
-
-/// Model-token estimate only: excludes provider tools, storage, counter fees,
-/// taxes and account-specific adjustments. It is not a final provider invoice.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum NativeTokenCost {
-    /// The host has insufficient evidence to estimate this actual attempt.
-    Unknown {
-        /// Stable local reason, never upstream diagnostic text.
-        reason: String,
-    },
-    /// The estimate remains unknown; its original diagnostic is committed.
-    UnknownCommitment {
-        /// Commitment to the original reason string or prior commitment.
-        reason: super::native::NativeEvidenceCommitment,
-    },
-    /// The amount and numeric evidence remain available after metadata rejection.
-    /// This is still an estimate, never a provider-reported or reconciled bill.
-    ConfiguredEstimateCommitment {
-        /// Host-estimated micro-USD, including an explicitly estimated zero.
-        micro_usd: u64,
-        /// Provenance of the counters used by the estimator.
-        usage_origin: UsageOrigin,
-        /// Non-overlapping input and output counters used for the estimate.
-        normalized_usage: NormalizedUsage,
-        /// Exact IEEE-754 bits, preserving non-finite evidence without JSON nulls.
-        rates: NativeTokenRateBits,
-        /// Commitment to original pricing identity fields or a prior commitment.
-        pricing_metadata: super::native::NativeEvidenceCommitment,
-    },
-    /// The host applied a frozen configured price to canonical usage.
-    ConfiguredEstimate {
-        /// Rounded integer micro-USD from the host's shared metering calculation.
-        micro_usd: u64,
-        /// Origin of the canonical counters used by that calculation.
-        usage_origin: UsageOrigin,
-        /// Non-overlapping counters used for the estimate.
-        normalized_usage: NormalizedUsage,
-        /// Effective rates after context-tier inheritance.
-        rates: NativeTokenRates,
-        /// Digest identifying the complete pricing entry.
-        pricing_version: String,
-        /// Provider key used to resolve the price.
-        pricing_provider: String,
-        /// Served model key used to resolve the price.
-        pricing_model: String,
-    },
-}
-
-impl NativeTokenCost {
-    /// Make an explicitly unavailable token estimate.
-    pub fn unknown(reason: impl Into<String>) -> Self {
-        Self::Unknown {
-            reason: reason.into(),
-        }
-    }
-
-    /// Known configured token estimate, never a claim of an authoritative bill.
-    pub fn estimated_micro_usd(&self) -> Option<u64> {
-        match self {
-            Self::ConfiguredEstimate { micro_usd, .. }
-            | Self::ConfiguredEstimateCommitment { micro_usd, .. } => Some(*micro_usd),
-            Self::Unknown { .. } | Self::UnknownCommitment { .. } => None,
-        }
-    }
-}
-
-impl Default for NativeTokenCost {
-    fn default() -> Self {
-        Self::unknown("accounting_unavailable")
-    }
-}
-
 /// Host-owned, local accounting using the same price snapshot as settlement.
 /// This must not perform I/O, charge the caller, modify routing or repeat a
 /// settlement write. It runs after every actual managed attempt, before its
@@ -198,97 +100,64 @@ pub trait NativeCostEstimator: Send + Sync {
     }
 }
 
-/// Cache counters explicitly present in the serving protocol's raw usage.
-/// Missing counters remain `None`, even when the canonical compatibility field
-/// defaults to zero. These counters do not establish KV transfer or cost savings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeCacheObservation {
-    /// Raw observed cache-read tokens, including an explicit observed zero.
-    pub read_tokens: Option<u64>,
-    /// Raw observed cache-write tokens, including an explicit observed zero.
-    pub write_tokens: Option<u64>,
-    /// Controlled protocol/provenance label, or `unknown`.
-    pub source: String,
-    /// Stable reason when no reliable observation can be retained.
-    pub unknown_reason: Option<String>,
-}
-
-impl Default for NativeCacheObservation {
-    fn default() -> Self {
-        Self::unknown("cache_usage_unavailable")
+/// Project explicit provider counters only after checking canonical bounds.
+pub fn capture_cache(protocol: &ApiProtocol, usage: Option<&Usage>) -> NativeCacheObservation {
+    let Some(usage) = usage.filter(|usage| usage.origin == UsageOrigin::ProviderReported) else {
+        return NativeCacheObservation::unknown("provider_cache_usage_unavailable");
+    };
+    if usage.normalized_buckets().is_err() {
+        return NativeCacheObservation::unknown("invalid_usage_buckets");
     }
-}
-
-impl NativeCacheObservation {
-    fn unknown(reason: &str) -> Self {
-        Self {
-            read_tokens: None,
-            write_tokens: None,
-            source: "unknown".into(),
-            unknown_reason: Some(reason.into()),
-        }
+    let Some(raw) = usage.raw.as_deref() else {
+        return NativeCacheObservation::unknown("raw_usage_unavailable");
+    };
+    if let Err(reason) = validate_usage_containers(protocol, raw) {
+        return NativeCacheObservation::unknown(reason);
     }
-
-    /// Project explicit provider counters only after checking canonical bounds.
-    pub fn capture(protocol: &ApiProtocol, usage: Option<&Usage>) -> Self {
-        let Some(usage) = usage.filter(|usage| usage.origin == UsageOrigin::ProviderReported)
-        else {
-            return Self::unknown("provider_cache_usage_unavailable");
-        };
-        if usage.normalized_buckets().is_err() {
-            return Self::unknown("invalid_usage_buckets");
-        }
-        let Some(raw) = usage.raw.as_deref() else {
-            return Self::unknown("raw_usage_unavailable");
-        };
-        if let Err(reason) = validate_usage_containers(protocol, raw) {
-            return Self::unknown(reason);
-        }
-        // Use serving wire schemas, never fields inferred from the requested model.
-        // https://developers.openai.com/api/docs/guides/prompt-caching
-        // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
-        // https://ai.google.dev/api/generate-content#UsageMetadata
-        let (read_path, write_path, source) = match protocol {
-            ApiProtocol::Responses => (
-                "/input_tokens_details/cached_tokens",
-                Some("/input_tokens_details/cache_write_tokens"),
-                "responses_usage",
-            ),
-            ApiProtocol::ChatCompletions => (
-                "/prompt_tokens_details/cached_tokens",
-                Some("/prompt_tokens_details/cache_write_tokens"),
-                "chat_completions_usage",
-            ),
-            ApiProtocol::Messages => (
-                "/cache_read_input_tokens",
-                Some("/cache_creation_input_tokens"),
-                "messages_usage",
-            ),
-            _ => return Self::unknown("unsupported_cache_usage_protocol"),
-        };
-        let read = usage_field(protocol, raw, read_path);
-        let write = write_path.and_then(|path| usage_field(protocol, raw, path));
-        if read.is_some_and(|value| value.as_u64().is_none())
-            || write.is_some_and(|value| value.as_u64().is_none())
-        {
-            return Self::unknown("invalid_raw_cache_counter");
-        }
-        let read_tokens = read.and_then(serde_json::Value::as_u64);
-        let write_tokens = write.and_then(serde_json::Value::as_u64);
-        if read_tokens.is_some_and(|value| value != usage.cache_read_tokens)
-            || write_tokens.is_some_and(|value| value != usage.cache_write_tokens)
-        {
-            return Self::unknown("raw_cache_counter_mismatch");
-        }
-        if read_tokens.is_none() && write_tokens.is_none() {
-            return Self::unknown("cache_counters_unreported");
-        }
-        Self {
-            read_tokens,
-            write_tokens,
-            source: source.into(),
-            unknown_reason: None,
-        }
+    // Use serving wire schemas, never fields inferred from the requested model.
+    // https://developers.openai.com/api/docs/guides/prompt-caching
+    // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+    // https://ai.google.dev/api/generate-content#UsageMetadata
+    let (read_path, write_path, source) = match protocol {
+        ApiProtocol::Responses => (
+            "/input_tokens_details/cached_tokens",
+            Some("/input_tokens_details/cache_write_tokens"),
+            "responses_usage",
+        ),
+        ApiProtocol::ChatCompletions => (
+            "/prompt_tokens_details/cached_tokens",
+            Some("/prompt_tokens_details/cache_write_tokens"),
+            "chat_completions_usage",
+        ),
+        ApiProtocol::Messages => (
+            "/cache_read_input_tokens",
+            Some("/cache_creation_input_tokens"),
+            "messages_usage",
+        ),
+        _ => return NativeCacheObservation::unknown("unsupported_cache_usage_protocol"),
+    };
+    let read = usage_field(protocol, raw, read_path);
+    let write = write_path.and_then(|path| usage_field(protocol, raw, path));
+    if read.is_some_and(|value| value.as_u64().is_none())
+        || write.is_some_and(|value| value.as_u64().is_none())
+    {
+        return NativeCacheObservation::unknown("invalid_raw_cache_counter");
+    }
+    let read_tokens = read.and_then(serde_json::Value::as_u64);
+    let write_tokens = write.and_then(serde_json::Value::as_u64);
+    if read_tokens.is_some_and(|value| value != usage.cache_read_tokens)
+        || write_tokens.is_some_and(|value| value != usage.cache_write_tokens)
+    {
+        return NativeCacheObservation::unknown("raw_cache_counter_mismatch");
+    }
+    if read_tokens.is_none() && write_tokens.is_none() {
+        return NativeCacheObservation::unknown("cache_counters_unreported");
+    }
+    NativeCacheObservation {
+        read_tokens,
+        write_tokens,
+        source: source.into(),
+        unknown_reason: None,
     }
 }
 
@@ -476,7 +345,8 @@ mod tests {
                     .normalized_buckets()
                     .map_err(|_| "invalid_usage_buckets")
             );
-            let cache = NativeCacheObservation::capture(&protocol, Some(&input));
+            let cache =
+                crate::gateway::pipeline::native_accounting::capture_cache(&protocol, Some(&input));
             assert_eq!(cache.read_tokens, Some(3));
             assert_eq!(cache.write_tokens, (write == 2).then_some(2));
             assert!(cache.unknown_reason.is_none());
@@ -491,7 +361,10 @@ mod tests {
         input.prompt_tokens = 7;
         input.cache_read_tokens = 0;
         assert!(validated_provider_usage(&ApiProtocol::Messages, &input).is_ok());
-        let cache = NativeCacheObservation::capture(&ApiProtocol::Messages, Some(&input));
+        let cache = crate::gateway::pipeline::native_accounting::capture_cache(
+            &ApiProtocol::Messages,
+            Some(&input),
+        );
         assert_eq!(cache.read_tokens, Some(0));
         assert_eq!(cache.write_tokens, Some(2));
         if let Some(raw) = input.raw.as_mut() {
@@ -499,7 +372,11 @@ mod tests {
         }
         assert!(validated_provider_usage(&ApiProtocol::Messages, &input).is_err());
         assert_eq!(
-            NativeCacheObservation::capture(&ApiProtocol::Messages, Some(&input)).source,
+            crate::gateway::pipeline::native_accounting::capture_cache(
+                &ApiProtocol::Messages,
+                Some(&input)
+            )
+            .source,
             "unknown"
         );
     }
@@ -511,14 +388,22 @@ mod tests {
         input.cache_write_tokens = 0;
         assert!(validated_provider_usage(&ApiProtocol::Responses, &input).is_ok());
         assert_eq!(
-            NativeCacheObservation::capture(&ApiProtocol::Responses, Some(&input)).read_tokens,
+            crate::gateway::pipeline::native_accounting::capture_cache(
+                &ApiProtocol::Responses,
+                Some(&input)
+            )
+            .read_tokens,
             None
         );
         input.raw = Some(Box::new(
             json!({"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}),
         ));
         assert_eq!(
-            NativeCacheObservation::capture(&ApiProtocol::Responses, Some(&input)).read_tokens,
+            crate::gateway::pipeline::native_accounting::capture_cache(
+                &ApiProtocol::Responses,
+                Some(&input)
+            )
+            .read_tokens,
             Some(0)
         );
         for origin in [
@@ -529,7 +414,11 @@ mod tests {
             input.origin = origin;
             assert!(validated_provider_usage(&ApiProtocol::Responses, &input).is_err());
             assert_eq!(
-                NativeCacheObservation::capture(&ApiProtocol::Responses, Some(&input)).source,
+                crate::gateway::pipeline::native_accounting::capture_cache(
+                    &ApiProtocol::Responses,
+                    Some(&input)
+                )
+                .source,
                 "unknown"
             );
         }
@@ -552,7 +441,11 @@ mod tests {
         );
         input.cache_read_tokens = 30;
         assert_eq!(
-            NativeCacheObservation::capture(&ApiProtocol::Responses, Some(&input)).source,
+            crate::gateway::pipeline::native_accounting::capture_cache(
+                &ApiProtocol::Responses,
+                Some(&input)
+            )
+            .source,
             "unknown"
         );
         assert!(validated_provider_usage(&ApiProtocol::Responses, &input).is_err());
@@ -600,7 +493,11 @@ mod tests {
                 Err("invalid_raw_usage_shape")
             );
             assert_eq!(
-                NativeCacheObservation::capture(&ApiProtocol::Responses, Some(&input)).source,
+                crate::gateway::pipeline::native_accounting::capture_cache(
+                    &ApiProtocol::Responses,
+                    Some(&input)
+                )
+                .source,
                 "unknown"
             );
         }

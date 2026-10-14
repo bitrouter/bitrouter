@@ -172,11 +172,9 @@ impl StepControl {
                 if retry && let Some(accounting) = &mut run.token_accounting {
                     // The outer attempt's usage can describe only its terminal result.
                     // No usage evidence establishes the earlier HTTP request as free.
-                    accounting.record(
-                        &crate::gateway::pipeline::native_accounting::NativeTokenCost::unknown(
-                            "internal_http_retry_usage_unavailable",
-                        ),
-                    );
+                    accounting.record(&bitrouter_ai::core::evidence::NativeTokenCost::unknown(
+                        "internal_http_retry_usage_unavailable",
+                    ));
                 }
                 encode(&report)
             })

@@ -1,14 +1,14 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::gateway::pipeline::native::NativeAttemptReport;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostBasis;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostClaim;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostEstimator;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostObservation;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostScope;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostSource;
-use bitrouter::gateway::pipeline::native_accounting::NativeTokenCost;
-use bitrouter::gateway::pipeline::native_accounting::NativeTokenRates;
+use bitrouter_ai::core::evidence::NativeAttemptReport;
+use bitrouter_ai::core::evidence::NativeTokenCost;
+use bitrouter_ai::core::evidence::NativeTokenRates;
 use bitrouter_ai::types::UsageOrigin;
 
 pub(super) struct FixtureCost;

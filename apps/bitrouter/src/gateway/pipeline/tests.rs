@@ -858,7 +858,7 @@ impl native::NativeExecutionControl for AdmittedRoutes {
         Ok(())
     }
 
-    async fn after_attempt(&self, _: native::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
 }
 
 #[tokio::test]
@@ -886,7 +886,7 @@ async fn managed_admission_cannot_add_duplicate_or_reorder_frozen_routes() -> Re
 struct ManagedSelectionControl {
     selection: native::NativeModelSelection,
     plans: tokio::sync::Mutex<Vec<native::NativePlan>>,
-    reports: tokio::sync::Mutex<Vec<native::NativeAttemptReport>>,
+    reports: tokio::sync::Mutex<Vec<bitrouter_ai::core::evidence::NativeAttemptReport>>,
 }
 
 #[async_trait]
@@ -905,7 +905,7 @@ impl native::NativeExecutionControl for ManagedSelectionControl {
         Ok(())
     }
 
-    async fn after_attempt(&self, report: native::NativeAttemptReport) {
+    async fn after_attempt(&self, report: bitrouter_ai::core::evidence::NativeAttemptReport) {
         self.reports.lock().await.push(report);
     }
 }
@@ -921,7 +921,7 @@ impl Executor for FailedCounter {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> Result<native::NativeInputCount> {
+    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
         Err(BitrouterError::bad_request(
             "SECRET_RAW_CREDENTIAL and NATIVE_CONTINUATION_ID",
         ))
@@ -952,7 +952,8 @@ async fn count_errors_are_redacted_and_cannot_be_admitted_as_unknown() -> Result
     let calls = Arc::new(AtomicUsize::new(0));
     let table = Arc::new(StaticRoutingTable::new());
     let mut route = target("first");
-    route.model_constraints.input_token_counting = Some(native::InputTokenCounting::Responses);
+    route.model_constraints.input_token_counting =
+        Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses);
     table.insert("test-model", vec![route]);
     let mut builder = PipelineBuilder::new();
     builder

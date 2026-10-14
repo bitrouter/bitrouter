@@ -10,8 +10,9 @@ mod continuation;
 #[path = "private_context/stream_bridge.rs"]
 mod stream_bridge;
 use bitrouter::gateway::pipeline::native_context::{
-    ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextEvidence, is_private, metadata_mut,
+    ORIGIN_FIELD, ORIGIN_NAMESPACE, is_private, metadata_mut,
 };
+use bitrouter_ai::core::evidence::PrivateContextEvidence;
 use bitrouter_ai::types::{Content, ToolResultOutput};
 
 struct PrivateFixture {
@@ -946,7 +947,8 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
 
 #[tokio::test]
 async fn private_history_seal_failure_retains_real_output_usage_and_settlement() -> Result<()> {
-    use bitrouter::gateway::pipeline::native_context::{PrivateContextFailure, metadata};
+    use bitrouter::gateway::pipeline::native_context::metadata;
+    use bitrouter_ai::core::evidence::PrivateContextFailure;
     let fixture = PrivateFixture::new("messages").await?;
     std::fs::write(fixture.home.path().join("continuation.key"), "invalid-key")?;
     let capture = Arc::new(Capture::default());

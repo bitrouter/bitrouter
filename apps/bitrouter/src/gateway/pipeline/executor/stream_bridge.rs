@@ -81,8 +81,11 @@ impl BridgeCapture {
             .body()
             .and_then(reqwest::Body::as_bytes)
             .and_then(|bytes| serde_json::from_slice(bytes).ok());
-        let effort = serde_json::to_value(prompt.params.reasoning_effort)
-            .map_err(|_| ContinuationFailure::BindingChanged.error())?;
+        let effort = serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
+            crate::gateway::pipeline::native_continuation::continuation_error(
+                ContinuationFailure::BindingChanged,
+            )
+        })?;
         let mut source = self.source();
         source.authority = authority;
         source.storage_allowed = wire

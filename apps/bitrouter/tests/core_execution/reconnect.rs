@@ -713,12 +713,11 @@ async fn retired_attempt_keeps_output_capacity_and_contract_for_late_evidence() 
         let mut invalid = evidence.clone();
         if rejection {
             invalid.report.result = None;
-            invalid.report.output_rejection = Some(
-                bitrouter::gateway::pipeline::native::NativeOutputRejection {
+            invalid.report.output_rejection =
+                Some(bitrouter_ai::core::evidence::NativeOutputRejection {
                     byte_limit: bound + 1,
                     usage: None,
-                },
-            );
+                });
         } else if let Some(result) = &mut invalid.report.result {
             result.content.push(text("one byte too many"));
         }

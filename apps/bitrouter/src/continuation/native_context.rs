@@ -8,14 +8,14 @@ use crate::gateway::model::target::AuthScheme;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use crate::gateway::pipeline::native_context::{
-    NativePrivateContextPolicy, ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextFailure, is_private,
-    message_commitment, metadata, metadata_mut, requires_origin_validation,
-    validate_managed_history,
+    NativePrivateContextPolicy, ORIGIN_FIELD, ORIGIN_NAMESPACE, is_private, message_commitment,
+    metadata, metadata_mut, requires_origin_validation, validate_managed_history,
 };
 use crate::gateway::pipeline::types::RoutingTarget;
 use crate::gateway::providers::auth::ContinuationAuthority;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use bitrouter_ai::core::evidence::PrivateContextFailure;
 use bitrouter_ai::types::{Content, Prompt, Role};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};

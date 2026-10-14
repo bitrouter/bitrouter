@@ -2,9 +2,8 @@ use super::*;
 use bitrouter::gateway::pipeline::hooks::DenyReason;
 use bitrouter::gateway::pipeline::hooks::HookDecision;
 use bitrouter::gateway::pipeline::hooks::PreRequestHook;
-use bitrouter::gateway::pipeline::native::InputTokenCounting;
-use bitrouter::gateway::pipeline::native::NativeEvidenceCommitment;
-use bitrouter::gateway::pipeline::native::NativeInputCount;
+use bitrouter_ai::core::evidence::InputTokenCounting;
+use bitrouter_ai::core::evidence::NativeInputCount;
 
 struct FailedPreparation {
     calls: AtomicUsize,
@@ -287,7 +286,10 @@ async fn oversized_auxiliary_failures_survive_ack_loss_without_reexecution() -> 
                         "preparation\0\"".repeat(100_000),
                     )
                     .to_string();
-                    assert_eq!(*diagnostic, NativeEvidenceCommitment::capture(&error)?);
+                    assert_eq!(
+                        *diagnostic,
+                        bitrouter::gateway::pipeline::native_report::commitment(&error)?
+                    );
                     assert!(
                         state
                             .root_turn()

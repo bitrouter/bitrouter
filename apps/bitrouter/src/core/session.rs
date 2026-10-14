@@ -8,10 +8,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::native::{
-    NativeAttemptReport, NativeContextValidationReport, NativeExecutionControl,
-    NativeInputCountReport, NativeModelSelection, NativePlan, NativePlanAdmission,
+    NativeContextValidationReport, NativeExecutionControl, NativeInputCountReport,
+    NativeModelSelection, NativePlan, NativePlanAdmission,
 };
 use async_trait::async_trait;
+use bitrouter_ai::core::evidence::NativeAttemptReport;
 use bitrouter_ai::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
     ToolChoice,
@@ -212,7 +213,7 @@ pub struct ModelStep {
     /// Oversized terminal diagnostic, hashed as a serde JSON string. The
     /// readable original is not retained; terminal_reason explains the omission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_diagnostic: Option<crate::gateway::pipeline::native::NativeEvidenceCommitment>,
+    pub failure_diagnostic: Option<bitrouter_ai::core::evidence::NativeEvidenceCommitment>,
     pub step_id: String,
     pub decision_id: String,
     pub context_revision: u64,
@@ -3905,7 +3906,7 @@ impl NativeExecutionControl for StepControl {
     fn attempt_report_byte_limit(
         &self,
         request_id: &str,
-        route: &crate::gateway::pipeline::native::NativeRoute,
+        route: &bitrouter_ai::core::evidence::NativeRoute,
     ) -> crate::gateway::error::Result<Option<u64>> {
         model_output::report_allowance(self.canonical_output_bytes, request_id, route)
             .map(Some)

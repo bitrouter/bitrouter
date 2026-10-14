@@ -21,6 +21,7 @@ macro_rules! redacted_contract_debug {
 pub mod catalog;
 pub mod control;
 pub mod conversion;
+pub mod core;
 pub mod decisions;
 pub mod error;
 pub mod eval;

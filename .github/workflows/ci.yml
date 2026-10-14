@@ -422,8 +422,10 @@ jobs:
                 'pub struct bitrouter_ai::control::error::ErrorEnvelope'
                 'pub struct bitrouter_ai::eval::EvalSubject'
                 'pub struct bitrouter_ai::eval::AdmissionOutcome'
+                'pub struct bitrouter_ai::core::evidence::NativeAttemptReport'
+                'pub enum bitrouter_ai::core::evidence::NativeTokenCost'
               )
-              forbidden='bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+              forbidden='NativeExecutionControl|NativePrivateContextRuntime|::capture_cache|::commitment\(|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else
               sentinels=(
                 'pub struct bitrouter_sdk::gateway::GatewayClient'

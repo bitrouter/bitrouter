@@ -1123,9 +1123,9 @@ struct MetadataCost {
 impl bitrouter::gateway::pipeline::native_accounting::NativeCostEstimator for MetadataCost {
     fn estimate(
         &self,
-        report: &bitrouter::gateway::pipeline::native::NativeAttemptReport,
-    ) -> bitrouter::gateway::pipeline::native_accounting::NativeTokenCost {
-        use bitrouter::gateway::pipeline::native_accounting::NativeTokenCost;
+        report: &bitrouter_ai::core::evidence::NativeAttemptReport,
+    ) -> bitrouter_ai::core::evidence::NativeTokenCost {
+        use bitrouter_ai::core::evidence::NativeTokenCost;
         let mut cost = accounting::FixtureCost.estimate(report);
         if let NativeTokenCost::ConfiguredEstimate {
             micro_usd,

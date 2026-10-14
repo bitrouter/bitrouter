@@ -1,7 +1,8 @@
 //! Immutable context evidence and model-step routing records. Estimates are
 //! distinct from observed usage; unknown token capacity is never a verified fit.
 
-use crate::gateway::pipeline::native::{NativeAttemptReport, NativeInputCount, NativePlan};
+use crate::gateway::pipeline::native::NativePlan;
+use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeInputCount};
 use bitrouter_ai::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
 use serde::{Deserialize, Serialize};
 
@@ -146,13 +147,11 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                 unverified_constraints: Vec::new(),
             };
             match &route.protocol_validation {
-                crate::gateway::pipeline::native::NativeProtocolValidation::Compatible => {}
-                crate::gateway::pipeline::native::NativeProtocolValidation::Unverified => {
-                    assessment
-                        .unverified_constraints
-                        .push("protocol_compatibility_unknown".into())
-                }
-                crate::gateway::pipeline::native::NativeProtocolValidation::Rejected { reason } => {
+                bitrouter_ai::core::evidence::NativeProtocolValidation::Compatible => {}
+                bitrouter_ai::core::evidence::NativeProtocolValidation::Unverified => assessment
+                    .unverified_constraints
+                    .push("protocol_compatibility_unknown".into()),
+                bitrouter_ai::core::evidence::NativeProtocolValidation::Rejected { reason } => {
                     assessment
                         .rejection_reasons
                         .push(format!("protocol_incompatible:{reason}"))

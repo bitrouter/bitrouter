@@ -4,7 +4,7 @@ use super::*;
 use bitrouter::core::allocation::ContextKind;
 use bitrouter::core::collaboration::{Action, Work};
 use bitrouter::core::session::SessionSnapshot;
-use bitrouter::gateway::pipeline::native_continuation::ContinuationFailure;
+use bitrouter_ai::core::evidence::ContinuationFailure;
 
 #[derive(Clone)]
 struct Wire {
