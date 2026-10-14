@@ -1,22 +1,9 @@
 //! Explicit control exposure, independent of the cloud MCP profile.
 
 use bitrouter_ai::control::ControlScope;
+use bitrouter_ai::control::action::Action;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    Status,
-    Models,
-    Route,
-    Requests,
-    Providers,
-    Observe,
-    PolicyStatus,
-    PolicyShow,
-    Agents,
-    Reload,
-}
 
 pub struct ControlActionSpec {
     pub action: Action,
@@ -59,16 +46,16 @@ fn output_schema<T: JsonSchema>() -> serde_json::Value {
 }
 
 macro_rules! action {
-    ($variant:ident, $id:literal, $legacy:literal, $shared:expr, $method:literal, $path:literal, $cli:literal, $panel:literal, $admin:literal, $input:ty, $output:ty) => {
+    ($variant:ident, $shared:expr, $method:literal, $path:literal, $cli:literal, $panel:literal, $admin:literal, $input:ty, $output:ty) => {
         ControlActionSpec {
             action: Action::$variant,
-            id: $id,
-            legacy_name: $legacy,
+            id: Action::$variant.id(),
+            legacy_name: Action::$variant.legacy_name(),
             shared_id: $shared,
-            version: 1,
+            version: Action::$variant.version(),
             method: $method,
             path: concat!("/control/v1", $path),
-            scope: ControlScope::Read,
+            scope: Action::$variant.required_scope(),
             cli_leaf: $cli,
             dashboard: $panel,
             requires_administration: $admin,
@@ -82,13 +69,13 @@ macro_rules! action {
 pub const ACTIONS: &[ControlActionSpec] = &[
     ControlActionSpec {
         action: Action::Reload,
-        id: "reload",
-        legacy_name: "reload",
+        id: Action::Reload.id(),
+        legacy_name: Action::Reload.legacy_name(),
         shared_id: None,
-        version: 1,
+        version: Action::Reload.version(),
         method: "POST",
         path: "/control/v1/reload",
-        scope: ControlScope::Reload,
+        scope: Action::Reload.required_scope(),
         cli_leaf: "reload",
         dashboard: "reload",
         requires_administration: false,
@@ -98,8 +85,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     },
     action!(
         Status,
-        "status",
-        "status",
         Some("status"),
         "GET",
         "/status",
@@ -111,8 +96,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Models,
-        "list_models",
-        "models",
         Some("list_models"),
         "GET",
         "/models",
@@ -124,8 +107,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Route,
-        "route",
-        "route_preview",
         Some("route"),
         "POST",
         "/route/preview",
@@ -137,8 +118,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Requests,
-        "requests",
-        "requests",
         None,
         "GET",
         "/requests",
@@ -150,8 +129,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Providers,
-        "providers_list",
-        "providers_list",
         None,
         "GET",
         "/providers",
@@ -163,8 +140,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Observe,
-        "observe_status",
-        "observe_status",
         None,
         "GET",
         "/observe/status",
@@ -176,8 +151,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         PolicyStatus,
-        "policy_status",
-        "policy_status",
         None,
         "GET",
         "/policy/status",
@@ -189,8 +162,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         PolicyShow,
-        "policy_show",
-        "policy_show",
         None,
         "GET",
         "/policy/show",
@@ -202,8 +173,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Agents,
-        "agents_list",
-        "agents_list",
         None,
         "GET",
         "/agents",

@@ -54,6 +54,7 @@ otel-grpc = [
 ]
 
 [dependencies]
+bitrouter-sdk.workspace = true
 async-stream.workspace = true
 eventsource-stream.workspace = true
 httpdate.workspace = true

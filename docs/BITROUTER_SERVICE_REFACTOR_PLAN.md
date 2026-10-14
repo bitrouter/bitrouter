@@ -610,7 +610,7 @@ to reintroduce retired Gemini protocol support or finish unrelated fidelity work
 | `app` | `host` and `gateway` application/pipeline assembly; legacy trusted-host builder API stays application-owned during migration |
 | `caller` | Shared identity DTOs to AI; transport extraction, authentication and internal context to gateway |
 | `config` | `config`, including `agent/checker/decision/pattern/presets/router/routing_table`; pure shared API/artifact types extracted individually |
-| `decision_model` | `gateway::model::decision` executor and Typesafe/provider adapter; `policy` caller policy to core where used; public request/result/error data to AI, preserving existing distinct operation semantics |
+| `decision_model` | `gateway::model::decision` executor, Typesafe/provider adapter and shared `policy` definitions/validation; `DecisionPolicy` and `DecisionPricing` remain available without core; core owns its planning/accounting consumers; public request/result/error data to AI, preserving existing distinct operation semantics |
 | `error` | Public error payloads to AI; server and internal error types to gateway; SDK transport errors newly client-owned |
 | `event` | Public lifecycle/event DTOs to AI; EventBus, subscription and dispatch runtime to gateway/core as used |
 | `extension` | Capability input/decision/callback types to AI; registry collection/activation to `gateway::extensions` |
@@ -639,6 +639,15 @@ Within `language_model`:
 The gateway's server-tool loop is not the durable harness or the agent
 scheduler. Its existing `sub_agent` nested inference call does not justify
 enabling `core` or workspace shell/file tools in a gateway build.
+
+Likewise, `decision_model::policy` is not exclusively a core concern.
+Ordinary generation uses `routing::preparation::Prepared::from_prompt`, including
+the policy bounds and confidence thresholds, while configuration validates both
+`DecisionPolicy` and `DecisionPricing`. Keep those definitions and validation in
+the always-available application/gateway layer, consumed by core as needed.
+Core's cost-estimation consumer does not turn declared planning prices into
+gateway settlement facts. These shared internal settings do not move to AI
+solely because both gateway and core use them.
 
 ### Current bitrouter-orchestrator
 
@@ -891,6 +900,15 @@ recompile merely to obtain the supported gateway profile. Optional trusted custo
 extensions still require their own build. Default installations keep the full
 product and its existing binary name.
 
+The P0 delivery set includes the full-product artifact and the minimum gateway
+artifact. Record each artifact's source revision, target platform, enabled
+features and checksum. Feature selection happens when building an artifact;
+configuration cannot enable a capability that was omitted from it. The optional
+gateway profile above is a supported build profile, not an implied commitment to
+publish every feature combination. Test the packaged gateway executable in the
+independent-process acceptance scenario, so development-tree builds alone do not
+stand in for the service an operator will install.
+
 ### Configuration and runtime isolation
 
 Configuration schema can describe disabled features without compiling their
@@ -1026,6 +1044,9 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
   their identity/certificate checks, plus progress-guard evaluation and its
   required trajectory health/state checks; only learning and scheduling depend
   on core.
+- Keep ordinary request preparation and decision-policy/pricing validation
+  available without core. Preserve configured decision assessment and its bounds;
+  core-only planning/accounting consumers must not own the shared settings.
 - Split DTOs from implementation within mixed files; keep public API errors and
   observation views free of credentials and internal runtime objects.
 - Move runtime tests and fixtures with their implementations. Preserve protocol
@@ -1092,6 +1113,11 @@ TUI dependency, and a gateway starts with agent/UI resources unavailable.
   within the migration rather than rewriting fixtures to accept new behavior.
 - Update release/package manifests, gateway artifacts, CI package names,
   install/container examples and public API guards.
+- Produce the full-product and minimum-gateway candidate artifacts with build
+  identity and feature manifests. Run the independent SDK consumer against the
+  packaged gateway executable; verify installation, configuration discovery and
+  capability reporting for that artifact. Preserve the normal publication
+  process rather than treating an implementation test as a public release.
 - Prepare release order so the AI contract package precedes dependent packages,
   and the repurposed SDK carries explicit breaking migration notes. Remove
   retired packages from future release automation without yanking previous
@@ -1127,7 +1153,7 @@ refactor has already been implemented or tested.
 | A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui |
 | A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
 | A13 Extensions | Matcher needs only contracts; real plugin installation preserves legacy global/output behavior and rule isolation; native checker fail-closed, revision/binding and permit lifetime tests pass; default activation is unchanged |
-| A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct |
+| A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct; full-product and minimum-gateway candidate artifacts identify their features/revision, and the packaged gateway passes the independent SDK consumer scenario |
 | A15 External migration | Every consumer migration path above has an explicit replacement example or documented local-only boundary; old SDK builder, AI ModelClient, telemetry imports and guardrails SDK adapter are covered; no claim that HTTP transparently replaces arbitrary custom hooks |
 | A16 Performance | Compare size, normal dependency graph, idle memory and bounded throughput/stream behavior against P0 0; explain and resolve regressions outside the agreed budget |
 
@@ -1158,7 +1184,7 @@ coverage that justifies a profile.
 
 | Profile or boundary | Required behavior evidence |
 | --- | --- |
-| Minimum gateway | Real-process inference/control, configured authentication, published-policy load/validation and equivalent routing including published experiment assignment, certificate rejection and progress-guard escalation/tool safety floors with persisted-history validation, usage finalization and shutdown without agent resources or a terminal |
+| Minimum gateway | Real-process inference/control, configured authentication, decision-policy/pricing validation and bounded decision assessment, published-policy load/validation and equivalent routing including published experiment assignment, certificate rejection and progress-guard escalation/tool safety floors with persisted-history validation, usage finalization and shutdown without agent resources or a terminal |
 | Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness; existing eval HTTP subject/result/snapshot/status behavior and tenant isolation |
 | Harness only | ThreadService ownership/queue/approval/recovery, historical native snapshot decoding and corruption rejection, and supported headless execution tests, without production core or terminal drawing |
 | Core and harness | Existing managed execution, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
@@ -1175,7 +1201,7 @@ fixtures where available and record any unsupported evidence claim as an open
 acceptance item. Likewise, a PostgreSQL/MySQL driver build does not establish
 that migrations or reads have been exercised against that backend.
 
-The independent process test starts the official gateway with a Rust mock
+The independent process test starts the packaged official gateway with a Rust mock
 provider and a private temporary server configuration/database directory.
 A separate SDK consumer uses a different working directory and receives only
 the endpoint and credential. Verify stream/nonstream generation, supported

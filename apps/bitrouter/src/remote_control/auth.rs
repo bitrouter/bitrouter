@@ -5,12 +5,11 @@ use std::collections::BTreeSet;
 use crate::config::ControlConfig;
 use crate::config::ControlCredentialConfig;
 use anyhow::{Result, ensure};
-use bitrouter_ai::control::ControlScope;
+use bitrouter_ai::control::{ControlScope, MIN_TOKEN_BYTES};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 const COMPARE_KEY: &[u8] = b"bitrouter-control-token-compare-v1";
-pub const MIN_TOKEN_BYTES: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct ControlCaller {

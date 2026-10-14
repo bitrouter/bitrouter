@@ -2,7 +2,9 @@
 //!
 //! These credentials and scopes are independent of inference authorization.
 
+pub mod action;
 pub mod administration;
+pub mod error;
 pub mod models;
 pub mod reload;
 pub mod requests;
@@ -13,6 +15,9 @@ use serde::{Deserialize, Serialize};
 
 /// Current HTTP control protocol version.
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Minimum UTF-8 byte length accepted for a control bearer credential.
+pub const MIN_TOKEN_BYTES: usize = 32;
 
 /// Authority granted by a host operator, independently of inference credentials.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

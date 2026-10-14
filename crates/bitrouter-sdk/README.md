@@ -53,8 +53,47 @@ buckets are not added into `input_tokens`, and Decisions retains its required
 native usage object. Protocol adaptation, conversion admission and provider
 execution remain in the service.
 
+`control::ControlClient` uses the separately enabled administration listener and
+its scoped control bearer, not an inference API key. Pass an origin or
+`/control/v1` endpoint explicitly. Plain HTTP is allowed only for loopback;
+remote endpoints require HTTPS or a local tunnel. The application remains
+responsible for saved profiles, environment variables and local daemon discovery.
+
+```rust,no_run
+use bitrouter_ai::control::action::Action;
+use bitrouter_sdk::control::ControlClient;
+
+async fn inspect_control(endpoint: &str, bearer: &str) -> bitrouter_sdk::error::Result<()> {
+    let client = ControlClient::new(endpoint, bearer)?;
+    if client.can_action(Action::Status).await? {
+        let report = client.status().await?;
+        println!("running: {}", report.running);
+    }
+    Ok(())
+}
+```
+
+Control calls perform protocol/version/capability checks before dispatch.
+Successful discovery is cached for thirty seconds; server instance changes and
+401/403/404 responses invalidate it. A legacy action list grants only its four
+original read actions. Status, models, route previews, request inspection,
+provider/agent inventory, policy, observation, configuration state and reload
+operations use the shared AI contracts. Capability discovery never bypasses
+server authorization.
+
+`ControlOptions` defaults to a three-second connect timeout, a fifteen-second
+request timeout and an 8 MiB response limit. Proxies require explicit opt-in.
+Redirects and retries are disabled. `Error::Control` preserves HTTP status,
+headers and the optional typed error envelope even if the body cannot be read.
+`reload()` submits once, then polls for up to thirty seconds; a still-running
+report is not a completed reload. If submission or polling fails,
+`Error::ReloadUnknown` retains the original input and source error. Recover with
+`operation(&input.request_id, &input.expected_server_instance_id)` rather than
+starting another reload with a new identity. Callers that persist their own
+request identity can use `submit_reload` and `operation` directly.
+
 This package replaces the former server-framework SDK in an alpha breaking
 migration. Server assembly and advanced trusted host adapters have moved to the
-`bitrouter` application. Remote-control, evaluation and existing core transport
-clients are still pending migration in P0; the current gateway client does not
-claim those methods or complete core HTTP coverage.
+`bitrouter` application. Evaluation and existing core transport clients remain
+pending migration in P0; gateway/control clients do not establish complete core
+HTTP coverage.

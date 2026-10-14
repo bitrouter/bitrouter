@@ -62,7 +62,7 @@ the contract move must preserve its bytes.
 | P0 1 Public contracts | In progress | Observation/event/request-check contracts, operation scopes and control lifecycle/inspection contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; eval/core DTO extraction remains before their final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
-| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE client and public wire response contracts verified; control/eval/core client extraction and independent official-service process consumer remain |
+| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE and control clients verified; eval/core client extraction and independent official-service process consumer remain |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
@@ -414,3 +414,55 @@ that fixtures have already been generated or replayed:
 | 5 | No writer found in the inspected lineage; `a68c215` advances 4 directly to 6 while accepting 5. Its payload provenance remains an open evidence item. |
 | 6 | `a68c215f0b579aeb34dd15baf1670ef037c310f8` (PR 961, core checkpoints/artifacts) |
 | 7 | Frozen baseline `9956a427bd5d4316b3bf2359f88e293b158781d5` (PR 963, native ACP) |
+
+
+### P0 4 Control HTTP client migration
+
+Starting from `6256262`, portable control transport now lives in
+`bitrouter_sdk::control::ControlClient`. AI owns action IDs/version/scope metadata,
+the minimum credential length and the public control error envelope. The server
+inventory consumes that same metadata. The application client adapter retains
+saved-profile/environment credential selection, its previous proxy behavior and
+CLI error classification; it no longer implements HTTP dispatch or capability
+caching. Standalone SDK callers provide endpoint and credential values explicitly
+and opt into system proxies only when needed.
+
+Capability/version/scope checks, legacy read-only discovery, boot/error cache
+invalidation and guarded reload recovery retain their previous behavior. Reload
+submission is never retried; a failed receipt or poll retains the original
+request and instance IDs. Non-success HTTP status and headers survive malformed,
+oversized and truncated bodies. The SDK guide now includes a compiled control
+example and explicit recovery guidance, and CI guards both new public surfaces.
+
+Validation used `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0` and
+`CARGO_PROFILE_TEST_DEBUG=0`, with two build jobs and test threads:
+
+- `cargo nextest run -p bitrouter -p bitrouter-ai -p bitrouter-sdk --all-features
+  --build-jobs 2 --test-threads 2 -E 'package(bitrouter-ai) | package(bitrouter-sdk)
+  | test(remote_control::) | test(contexts::) | test(administration_target::)
+  | test(reload::)'`: **115 passed**, including 40 AI contracts, 25 SDK HTTP
+  cases and 50 application tests; 4,309 tests outside the stage filter.
+- `cargo nextest run -p bitrouter --all-features --build-jobs 2 --test-threads 2
+  -E 'test(code_remote_) | test(official_cli_uses_shared_host_without_extension_registrations)
+  | binary(configuration_state)'`: **7 passed**, including both remote TUI
+  paths and the official executable's service lifecycle; 4,352 outside the filter.
+- `cargo test -p bitrouter-ai --no-default-features --jobs 2`: **36 passed**.
+- `cargo test -p bitrouter-sdk --doc --jobs 2`: **2 examples compiled**.
+- `cargo +1.97.0 clippy --workspace --all-features --all-targets --jobs 2 --
+  -D warnings` and strict all-feature workspace Rustdoc: passed.
+- The pinned public API check passed with unchanged foreign-dependency
+  manifests. Isolated AI and SDK normal/build trees contain no forbidden
+  service, database, UI or OTel dependencies; AI also excludes client/async
+  runtimes. Formatting and patch whitespace checks passed.
+
+Independent review compared the migration with the prior application client and
+found no actionable issue. Known macOS development-link unwind-table and
+third-party future-incompatibility notices remain separate from source checks.
+The plan also now explicitly retains decision policy/pricing validation in the
+gateway and requires independent client acceptance against packaged artifacts.
+
+These results complete the control-client extraction, not the full P0 SDK or
+service delivery. Eval/core clients, the separate SDK consumer process fixture,
+feature isolation, historical payload/performance evidence, final validation and
+PR remain open. The existing official-executable test does not substitute for
+the planned independently built SDK consumer.

@@ -7,15 +7,15 @@ use reqwest::header::HeaderMap;
 ///
 /// Callers may inspect authentication challenges and retry hints, but the SDK
 /// never retries a request automatically. Debug output excludes headers/body.
-pub struct ServiceFailure {
+pub struct ServiceFailure<Body = GatewayErrorEnvelope> {
     pub status: u16,
     pub headers: HeaderMap,
-    pub body: Option<GatewayErrorEnvelope>,
+    pub body: Option<Body>,
     /// Reading or decoding the optional error body failed; HTTP metadata remains authoritative.
     pub body_error: Option<Error>,
 }
 
-impl std::fmt::Debug for ServiceFailure {
+impl<Body> std::fmt::Debug for ServiceFailure<Body> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServiceFailure")
             .field("status", &self.status)
@@ -35,6 +35,24 @@ pub enum Error {
     Transport(#[source] reqwest::Error),
     #[error("gateway returned HTTP status {}", .0.status)]
     Service(Box<ServiceFailure>),
+    #[error("control service returned HTTP status {}", .0.status)]
+    Control(Box<ServiceFailure<bitrouter_ai::control::error::ErrorEnvelope>>),
+    #[error(
+        "remote control protocol version {server} is incompatible with client version {client}"
+    )]
+    ControlProtocolVersion { server: u32, client: u32 },
+    #[error("remote BitRouter does not support or grant control action '{}'", .action.id())]
+    ControlActionUnavailable {
+        action: bitrouter_ai::control::action::Action,
+    },
+    #[error("remote server does not support or grant control resource '{resource}'")]
+    ControlResourceUnavailable { resource: &'static str },
+    #[error("reload outcome may be unknown; inspect operations show {} --instance {}; do not replay with a new request ID", .input.request_id, .input.expected_server_instance_id)]
+    ReloadUnknown {
+        input: bitrouter_ai::control::reload::ReloadInput,
+        #[source]
+        source: Box<Error>,
+    },
     #[error("gateway reported a stream failure")]
     Stream(Box<ServiceFailure>),
     #[error("invalid gateway response: {0}")]

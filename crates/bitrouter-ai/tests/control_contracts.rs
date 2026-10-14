@@ -4,6 +4,20 @@ use bitrouter_ai::control::reload::{OperationReport, ReloadInput, ReloadOutcome}
 use bitrouter_ai::control::{CapabilitiesReport, ControlScope, StateReport};
 use serde_json::{Value, json};
 
+#[test]
+fn control_error_payloads_preserve_wire_values_without_debug_disclosure()
+-> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::control::error::ErrorEnvelope;
+    let wire = json!({"error": {"code": "opaque-peer-code", "message": "private peer diagnostic"}});
+    let report: ErrorEnvelope = serde_json::from_value(wire.clone())?;
+    assert_eq!(serde_json::to_value(&report)?, wire);
+    for debug in [format!("{report:?}"), format!("{:?}", report.error)] {
+        assert!(!debug.contains("opaque-peer-code"));
+        assert!(!debug.contains("private peer diagnostic"));
+    }
+    Ok(())
+}
+
 fn partial_reload() -> Value {
     json!({
         "server_instance_id": "47da0290-4510-4f39-ab53-a0b09ba707c2",

@@ -32,6 +32,7 @@ pub mod assemble;
 pub mod auth;
 pub mod chat;
 pub mod claude_code;
+pub mod client;
 pub mod cloud;
 mod codex_router;
 pub mod commands;

@@ -674,6 +674,7 @@ dependencies = [
  "base64 0.22.1",
  "bitrouter-ai",
  "bitrouter-guardrails",
+ "bitrouter-sdk",
  "bytes",
  "chrono",
  "clap",
@@ -782,6 +783,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -66,7 +66,7 @@ pub enum InspectionTarget {
     },
     Remote {
         name: String,
-        client: Arc<crate::remote_control::HttpControlClient>,
+        client: Arc<crate::client::control::HttpControlClient>,
     },
 }
 
