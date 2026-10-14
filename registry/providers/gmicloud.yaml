@@ -22,40 +22,8 @@ models:
         cache_write: 3.125
       output_tokens:
         text: 7.5
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek-ai/DeepSeek-V4-Pro
-    pricing:
-      input_tokens:
-        no_cache: 1.392
-        cache_read: 0.116
-      output_tokens:
-        text: 2.784
   # Verified 2026-09-05 against https://api.gmi-serving.com/v1/models.
-  - id: deepseek/deepseek-v4-pro-0813
-    provider_model_id: deepseek-ai/DeepSeek-V4-Pro-0813
-    pricing:
-      input_tokens:
-        no_cache: 1.32
-        cache_read: 0.044
-      output_tokens:
-        text: 3.96
-  - id: deepseek/deepseek-v4-flash
-    provider_model_id: deepseek-ai/DeepSeek-V4-Flash
-    pricing:
-      input_tokens:
-        no_cache: 0.112
-        cache_read: 0.022
-      output_tokens:
-        text: 0.224
   # Verified 2026-09-05 against https://api.gmi-serving.com/v1/models.
-  - id: deepseek/deepseek-v4-flash-0731
-    provider_model_id: deepseek-ai/DeepSeek-V4-Flash-0731
-    pricing:
-      input_tokens:
-        no_cache: 0.44
-        cache_read: 0.014
-      output_tokens:
-        text: 1.32
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: moonshotai/kimi-k2.7-code-highspeed
     pricing:

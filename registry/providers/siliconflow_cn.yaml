@@ -15,22 +15,6 @@ kind: gateway
 # pricing to USD per 1M tokens. GLM / Kimi / MiniMax are served under the paid
 # `Pro/` tier on this endpoint. Refreshed by the daily models_dev auto_sync.
 models:
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek-ai/DeepSeek-V4-Pro
-    pricing:
-      input_tokens:
-        no_cache: 1.74
-        cache_read: 0.145
-      output_tokens:
-        text: 3.48
-  - id: deepseek/deepseek-v4-flash
-    provider_model_id: deepseek-ai/DeepSeek-V4-Flash
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.003
-      output_tokens:
-        text: 0.28
   - id: z-ai/glm-5.2
     provider_model_id: zai-org/GLM-5.2
     pricing:

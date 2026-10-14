@@ -17,22 +17,6 @@ rate_limits: []
 models:
   # Gemini entries require the retired native protocol in the official Zen API.
   # Live catalog moved this alias to 0731: https://opencode.ai/zen/v1/models
-  - id: deepseek/deepseek-v4-flash-0731
-    provider_model_id: deepseek-v4-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.028
-      output_tokens:
-        text: 0.28
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek-v4-pro
-    pricing:
-      input_tokens:
-        no_cache: 1.74
-        cache_read: 0.145
-      output_tokens:
-        text: 3.84
   - id: anthropic/claude-sonnet-4.5
     provider_model_id: claude-sonnet-4-5
     pricing:
@@ -334,6 +318,14 @@ models:
         cache_read: 0.15
       output_tokens:
         text: 7.5
+  - id: google/gemini-4-argon
+    provider_model_id: gemini-4-argon
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.1
+      output_tokens:
+        text: 10.0
 status: active
 weight: 1
 community: false

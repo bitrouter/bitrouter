@@ -206,31 +206,7 @@ models:
         cache_write: 0.40625
       output_tokens:
         text: 1.95
-  - id: deepseek/deepseek-v4-flash
-    provider_model_id: deepseek/deepseek-v4-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.028
-      output_tokens:
-        text: 0.28
   # Dated revision in the live catalog: https://openrouter.ai/api/v1/models
-  - id: deepseek/deepseek-v4-flash-0731
-    provider_model_id: deepseek/deepseek-v4-flash-0731
-    pricing:
-      input_tokens:
-        no_cache: 0.09
-        cache_read: 0.018
-      output_tokens:
-        text: 0.18
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek/deepseek-v4-pro
-    pricing:
-      input_tokens:
-        no_cache: 0.435
-        cache_read: 0.003625
-      output_tokens:
-        text: 0.87
   - id: minimax/minimax-m3
     provider_model_id: minimax/minimax-m3
     pricing:
@@ -333,14 +309,6 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25
-  - id: deepseek/deepseek-v4-pro-0813
-    provider_model_id: deepseek/deepseek-v4-pro-0813
-    pricing:
-      input_tokens:
-        no_cache: 0.66
-        cache_read: 0.022
-      output_tokens:
-        text: 1.98
   - id: x-ai/grok-4.6
     provider_model_id: x-ai/grok-4.6
     pricing:
@@ -601,6 +569,15 @@ models:
         cache_write: 0.125
       output_tokens:
         text: 0.5
+  - id: google/gemini-4-argon
+    provider_model_id: google/gemini-4-argon
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.1
+        cache_write: 0.1875
+      output_tokens:
+        text: 10.0
 status: active
 weight: 1
 community: false

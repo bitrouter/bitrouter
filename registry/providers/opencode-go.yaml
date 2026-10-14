@@ -30,8 +30,6 @@ auth:
   env: OPENCODE_ZEN_API_KEY
 models:
   # Live catalog moved this alias to 0731: https://opencode.ai/zen/go/v1/models
-  - id: deepseek/deepseek-v4-flash-0731
-    provider_model_id: deepseek-v4-flash
   - id: qwen/qwen3.7-plus
     provider_model_id: qwen3.7-plus
   - id: qwen/qwen3.7-max
@@ -41,8 +39,6 @@ models:
     provider_model_id: qwen3.8-max
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: kimi-k2.7-code
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek-v4-pro
   - id: z-ai/glm-5.2
     provider_model_id: glm-5.2
   - id: minimax/minimax-m3

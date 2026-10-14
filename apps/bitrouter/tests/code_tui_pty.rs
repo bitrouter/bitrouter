@@ -1320,6 +1320,31 @@ impl CodeFixture {
             status.success(),
             "delivering SIG{signal} to Code child {pid} failed with {status}"
         );
+        if signal == "TSTP" {
+            // Terminal restoration is written before the child raises SIGSTOP.
+            // Wait for the stop itself so a following SIGCONT cannot arrive early.
+            loop {
+                let output = Command::new("ps")
+                    .args(["-o", "stat=", "-p"])
+                    .arg(pid.to_string())
+                    .output()
+                    .with_context(|| format!("reading Code child {pid} process state"))?;
+                ensure!(
+                    output.status.success(),
+                    "reading Code child {pid} process state failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let state = String::from_utf8_lossy(&output.stdout);
+                if state.trim_start().starts_with('T') {
+                    break;
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for Code child {pid} to stop; state was {state:?}"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         Ok(())
     }
 
@@ -2495,9 +2520,24 @@ fn code_agents_navigation_keeps_normal_buffer_and_defers_foreground_output() -> 
         !String::from_utf8_lossy(&code.pty.output[opened.output_len..]).contains("FXRL"),
         "foreground output escaped into menu history"
     );
+    let leaving_search = code.pty.checkpoint();
     code.pty.send(b"\x1b")?;
-    let _ = code.pty.wait_for_text("Esc conversation")?;
-    code.pty.resize(100, 30)?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&leaving_search, "Esc conversation")?;
+    let resizing = code.pty.checkpoint();
+    let resized_rows = 30;
+    code.pty.resize(100, resized_rows)?;
+    // Wait for a complete frame at the new height before sending Escape.
+    // Otherwise the resize signal can race the standalone key's delivery.
+    let _ = code
+        .pty
+        .wait_for_screen_inner(Some(&resizing), "Esc conversation", |screen| {
+            screen
+                .lines()
+                .nth(usize::from(resized_rows - 1))
+                .is_some_and(|line| line.contains("Esc conversation"))
+        })?;
     let returning = code.pty.checkpoint();
     code.pty.send(b"\x1b")?;
     let output = code.pty.wait_for_text_since(&returning, "FXRL")?;
