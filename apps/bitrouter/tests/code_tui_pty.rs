@@ -1320,6 +1320,31 @@ impl CodeFixture {
             status.success(),
             "delivering SIG{signal} to Code child {pid} failed with {status}"
         );
+        if signal == "TSTP" {
+            // Terminal restoration is written before the child raises SIGSTOP.
+            // Wait for the stop itself so a following SIGCONT cannot arrive early.
+            loop {
+                let output = Command::new("ps")
+                    .args(["-o", "stat=", "-p"])
+                    .arg(pid.to_string())
+                    .output()
+                    .with_context(|| format!("reading Code child {pid} process state"))?;
+                ensure!(
+                    output.status.success(),
+                    "reading Code child {pid} process state failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let state = String::from_utf8_lossy(&output.stdout);
+                if state.trim_start().starts_with('T') {
+                    break;
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "timed out waiting for Code child {pid} to stop; state was {state:?}"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         Ok(())
     }
 
