@@ -184,51 +184,43 @@
 <text class="model" x="922.0" y="273.0">grok-4.20-multi-agent</text>
 <text class="routes" x="1162.0" y="273.0" text-anchor="end">4</text>
 <rect x="28.0" y="514.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
-<text class="lab" x="38.0" y="533.0">DEEPSEEK</text>
+<text class="lab" x="38.0" y="533.0">XIAOMI</text>
 <text class="lab-count" x="286.0" y="533.0" text-anchor="end">5</text>
 <rect x="38.0" y="552.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="552.0" width="192.6" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="567.0">deepseek-v4-pro</text>
-<text class="routes" x="286.0" y="567.0" text-anchor="end">18</text>
+<rect x="38.0" y="552.0" width="85.6" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="567.0">mimo-v2.5</text>
+<text class="routes" x="286.0" y="567.0" text-anchor="end">8</text>
 <rect x="38.0" y="578.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="578.0" width="181.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="593.0">deepseek-v4-flash</text>
-<text class="routes" x="286.0" y="593.0" text-anchor="end">17</text>
+<rect x="38.0" y="578.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="593.0">mimo-v2.5-pro</text>
+<text class="routes" x="286.0" y="593.0" text-anchor="end">7</text>
 <rect x="38.0" y="604.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="604.0" width="171.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="619.0">deepseek-v4-flash-0731</text>
-<text class="routes" x="286.0" y="619.0" text-anchor="end">16</text>
+<rect x="38.0" y="604.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="619.0">mimo-v2.6-flash</text>
+<text class="routes" x="286.0" y="619.0" text-anchor="end">7</text>
 <rect x="38.0" y="630.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="630.0" width="96.3" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="645.0">deepseek-v4-pro-0813</text>
-<text class="routes" x="286.0" y="645.0" text-anchor="end">9</text>
+<rect x="38.0" y="630.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="645.0">mimo-v2.6-pro</text>
+<text class="routes" x="286.0" y="645.0" text-anchor="end">7</text>
 <rect x="38.0" y="656.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="656.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="671.0">deepseek-v4.1-flash</text>
-<text class="routes" x="286.0" y="671.0" text-anchor="end">7</text>
+<rect x="38.0" y="656.0" width="32.1" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="671.0">mimo-v2.6-pro-ultraspeed</text>
+<text class="routes" x="286.0" y="671.0" text-anchor="end">3</text>
 <rect x="320.0" y="514.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
-<text class="lab" x="330.0" y="533.0">XIAOMI</text>
-<text class="lab-count" x="578.0" y="533.0" text-anchor="end">5</text>
+<text class="lab" x="330.0" y="533.0">GOOGLE</text>
+<text class="lab-count" x="578.0" y="533.0" text-anchor="end">3</text>
 <rect x="330.0" y="552.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="552.0" width="85.6" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="567.0">mimo-v2.5</text>
-<text class="routes" x="578.0" y="567.0" text-anchor="end">8</text>
+<rect x="330.0" y="552.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="567.0">gemini-3.7-flash</text>
+<text class="routes" x="578.0" y="567.0" text-anchor="end">5</text>
 <rect x="330.0" y="578.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="578.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="593.0">mimo-v2.5-pro</text>
-<text class="routes" x="578.0" y="593.0" text-anchor="end">7</text>
+<rect x="330.0" y="578.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="593.0">gemini-3.8-flash</text>
+<text class="routes" x="578.0" y="593.0" text-anchor="end">5</text>
 <rect x="330.0" y="604.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="604.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="619.0">mimo-v2.6-flash</text>
-<text class="routes" x="578.0" y="619.0" text-anchor="end">7</text>
-<rect x="330.0" y="630.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="630.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="645.0">mimo-v2.6-pro</text>
-<text class="routes" x="578.0" y="645.0" text-anchor="end">7</text>
-<rect x="330.0" y="656.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="656.0" width="32.1" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="671.0">mimo-v2.6-pro-ultraspeed</text>
-<text class="routes" x="578.0" y="671.0" text-anchor="end">3</text>
+<rect x="330.0" y="604.0" width="42.8" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="619.0">gemini-4-argon</text>
+<text class="routes" x="578.0" y="619.0" text-anchor="end">4</text>
 <rect x="612.0" y="514.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="622.0" y="533.0">ZHIPU</text>
 <text class="lab-count" x="870.0" y="533.0" text-anchor="end">3</text>
@@ -245,49 +237,45 @@
 <text class="model" x="630.0" y="619.0">glm-5.3-flash</text>
 <text class="routes" x="870.0" y="619.0" text-anchor="end">7</text>
 <rect x="904.0" y="514.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
-<text class="lab" x="914.0" y="533.0">GOOGLE</text>
+<text class="lab" x="914.0" y="533.0">KIMI</text>
 <text class="lab-count" x="1162.0" y="533.0" text-anchor="end">2</text>
 <rect x="914.0" y="552.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="914.0" y="552.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="922.0" y="567.0">gemini-3.7-flash</text>
-<text class="routes" x="1162.0" y="567.0" text-anchor="end">5</text>
+<rect x="914.0" y="552.0" width="149.8" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="922.0" y="567.0">kimi-k3</text>
+<text class="routes" x="1162.0" y="567.0" text-anchor="end">14</text>
 <rect x="914.0" y="578.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="914.0" y="578.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="922.0" y="593.0">gemini-3.8-flash</text>
-<text class="routes" x="1162.0" y="593.0" text-anchor="end">5</text>
+<rect x="914.0" y="578.0" width="128.4" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="922.0" y="593.0">kimi-k2.7-code</text>
+<text class="routes" x="1162.0" y="593.0" text-anchor="end">12</text>
 <rect x="28.0" y="704.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
-<text class="lab" x="38.0" y="723.0">KIMI</text>
+<text class="lab" x="38.0" y="723.0">MINIMAX</text>
 <text class="lab-count" x="286.0" y="723.0" text-anchor="end">2</text>
 <rect x="38.0" y="742.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="742.0" width="149.8" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="757.0">kimi-k3</text>
-<text class="routes" x="286.0" y="757.0" text-anchor="end">14</text>
+<rect x="38.0" y="742.0" width="107.0" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="757.0">minimax-m2.7</text>
+<text class="routes" x="286.0" y="757.0" text-anchor="end">10</text>
 <rect x="38.0" y="768.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="768.0" width="128.4" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="783.0">kimi-k2.7-code</text>
-<text class="routes" x="286.0" y="783.0" text-anchor="end">12</text>
+<rect x="38.0" y="768.0" width="107.0" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="783.0">minimax-m3</text>
+<text class="routes" x="286.0" y="783.0" text-anchor="end">10</text>
 <rect x="320.0" y="704.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
-<text class="lab" x="330.0" y="723.0">MINIMAX</text>
+<text class="lab" x="330.0" y="723.0">Z.AI</text>
 <text class="lab-count" x="578.0" y="723.0" text-anchor="end">2</text>
 <rect x="330.0" y="742.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="742.0" width="107.0" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="757.0">minimax-m2.7</text>
-<text class="routes" x="578.0" y="757.0" text-anchor="end">10</text>
+<rect x="330.0" y="742.0" width="32.1" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="757.0">glm-5.3-flashx</text>
+<text class="routes" x="578.0" y="757.0" text-anchor="end">3</text>
 <rect x="330.0" y="768.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="768.0" width="107.0" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="783.0">minimax-m3</text>
-<text class="routes" x="578.0" y="783.0" text-anchor="end">10</text>
+<rect x="330.0" y="768.0" width="10.7" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="783.0">glm-5.3-prime</text>
+<text class="routes" x="578.0" y="783.0" text-anchor="end">1</text>
 <rect x="612.0" y="704.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
-<text class="lab" x="622.0" y="723.0">Z.AI</text>
-<text class="lab-count" x="870.0" y="723.0" text-anchor="end">2</text>
+<text class="lab" x="622.0" y="723.0">DEEPSEEK</text>
+<text class="lab-count" x="870.0" y="723.0" text-anchor="end">1</text>
 <rect x="622.0" y="742.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="622.0" y="742.0" width="32.1" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="630.0" y="757.0">glm-5.3-flashx</text>
-<text class="routes" x="870.0" y="757.0" text-anchor="end">3</text>
-<rect x="622.0" y="768.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="622.0" y="768.0" width="10.7" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="630.0" y="783.0">glm-5.3-prime</text>
-<text class="routes" x="870.0" y="783.0" text-anchor="end">1</text>
+<rect x="622.0" y="742.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="630.0" y="757.0">deepseek-v4.1-flash</text>
+<text class="routes" x="870.0" y="757.0" text-anchor="end">7</text>
 <rect x="904.0" y="704.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="914.0" y="723.0">SPACEXAI</text>
 <text class="lab-count" x="1162.0" y="723.0" text-anchor="end">1</text>
@@ -295,5 +283,5 @@
 <rect x="914.0" y="742.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="922.0" y="757.0">grok-4.7</text>
 <text class="routes" x="1162.0" y="757.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="824.0">62 models · 45 providers · 439 model→provider routes · 11 providers billed by subscription</text>
+<text class="caption" x="28.0" y="824.0">59 models · 45 providers · 383 model→provider routes · 11 providers billed by subscription</text>
 </svg>
