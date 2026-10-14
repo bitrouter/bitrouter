@@ -18,6 +18,15 @@ async fn goal_artifacts_reject_changed_blob_and_foreign_path() -> Result<()> {
 async fn repository(source: &Path) -> Result<String> {
     tokio::fs::create_dir_all(source).await?;
     crate::goal_runtime::git(source, &["init".as_ref(), "-q".as_ref()]).await?;
+    crate::goal_runtime::git(
+        source,
+        &[
+            "config".as_ref(),
+            "core.autocrlf".as_ref(),
+            "false".as_ref(),
+        ],
+    )
+    .await?;
     tokio::fs::write(source.join("tracked.txt"), b"before\n").await?;
     crate::goal_runtime::git(source, &["add".as_ref(), "-A".as_ref()]).await?;
     crate::goal_runtime::git(
@@ -79,6 +88,51 @@ async fn goal_artifacts_transfer_real_tracked_and_untracked_changes() -> Result<
             .await
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_artifacts_transfer_large_binary_patch_in_a_spaced_path() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let store = root.path().join("artifact store");
+    let source = root.path().join("source repository");
+    let consumer = root.path().join("consumer workspace");
+    repository(&source).await?;
+    let original = vec![0; 192 * 1024];
+    tokio::fs::write(source.join("binary.dat"), &original).await?;
+    crate::goal_runtime::git(&source, &["add".as_ref(), "-A".as_ref()]).await?;
+    crate::goal_runtime::git(
+        &source,
+        &[
+            "-c".as_ref(),
+            "user.name=Fixture".as_ref(),
+            "-c".as_ref(),
+            "user.email=fixture@localhost".as_ref(),
+            "-c".as_ref(),
+            "commit.gpgsign=false".as_ref(),
+            "commit".as_ref(),
+            "-qm".as_ref(),
+            "test: binary artifact input".as_ref(),
+        ],
+    )
+    .await?;
+    let head = crate::goal_runtime::git(&source, &["rev-parse".as_ref(), "HEAD".as_ref()]).await?;
+    let head = String::from_utf8(head.stdout)?.trim().to_owned();
+    worktree(&source, &consumer, &head).await?;
+    let mut changed = Vec::with_capacity(original.len());
+    let mut state = 1_u32;
+    for _ in 0..original.len() {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        changed.push(state.to_le_bytes()[0]);
+    }
+    tokio::fs::write(source.join("binary.dat"), &changed).await?;
+    let reference = capture(&store, &source, &head).await?;
+    let bundle: WorkspaceBundle = serde_json::from_slice(&read(&store, &reference).await?)?;
+    assert!(bundle.patch.bytes > 64 * 1024);
+    apply(&store, &reference, &consumer, &head).await?;
+    assert_eq!(tokio::fs::read(consumer.join("binary.dat")).await?, changed);
     Ok(())
 }
 

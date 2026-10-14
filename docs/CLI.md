@@ -1019,7 +1019,14 @@ matching controller acknowledgment are required before the first prompt;
 unsupported or rejected choices stop startup and retain the reason. The branch
 view distinguishes requested and acknowledged routes; neither identifies an
 actual upstream provider model. Generic ACP execution remains available without
-this optional control. Mid-turn model replacement remains unsupported here.
+this optional control. Current-Goal input may replace a task's full resource
+selection: omitted/null preserves it, and an empty selection removes it. BRO
+validates configured IDs, skill versions, route control and scope before saving.
+Affected tasks and dependents receive new revisions; independent branches retain
+their version. Old execution is stopped and reconciled before replacement at
+the next safe boundary. Paused work stays paused. Requested resources and actual
+provided material/controller acknowledgments are shown separately. This does
+not mutate a harness's private in-flight context or prove tool/skill use.
 
 Middle Enter submits to the current Goal while workers run. Queries/hypotheses
 leave effective requirements and run intent unchanged. Runtime validates and

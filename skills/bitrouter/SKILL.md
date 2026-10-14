@@ -99,6 +99,8 @@ private skill activation or an actual provider model.
 Tasks may select a configured BRO model route when session route control is
 available. BRO requires controller confirmation before sending work; requested
 and confirmed routes remain distinct from an actual upstream model identity.
+Current-Goal input can version a task's resource selection. BRO reconciles old
+execution before providing the new selection at the next controlled boundary.
 
 ```bash
 bro                         # Goals; no Goal or agent starts from a directory read
