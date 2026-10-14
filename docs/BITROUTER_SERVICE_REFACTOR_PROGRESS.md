@@ -530,3 +530,18 @@ Core protocol/checkpoint extraction and streaming clients, the independent
 packaged-service consumer, feature isolation, historical payload/performance
 fixtures, final complete validation and PR remain required. No P1 implementation
 or new evaluation/policy behavior is included in this stage.
+
+## Serving-boundary review additions
+
+The accepted plan now explicitly retains gateway-side reserved-request replay
+checks and accounting protection when core is disabled. It also separates
+trajectory settlement, operational envelope construction and durable outbox
+writes from core evaluation admission/publication. Existing and new outbox rows
+must remain inspectable and pending without a consumer, and drain idempotently
+when core returns. These are open P0 3/P0 5 and A09 requirements, not verified
+feature-isolation results.
+
+The documentation review checked these splits against the baseline and found no
+remaining material issue after revision. P1 separately includes shared
+correlation-key/epoch authority and coordinated episode/guard updates; those
+requirements do not add distributed work to P0.

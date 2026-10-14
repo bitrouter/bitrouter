@@ -13,8 +13,13 @@ BitRouter will ship as an independently running service assembled by the `bitrou
 package. Gateway execution is always available. Core scheduling, the headless
 harness and the TUI are internal application modules selected by Cargo features.
 `bitrouter-ai` becomes the lightweight public contract library;
-`bitrouter-sdk` becomes the HTTP client. Telemetry implementation moves into the
-application.
+`bitrouter-sdk` becomes the service client for HTTP and the existing core
+WebSocket surface. Telemetry implementation moves into the application.
+
+This document records target ownership and implementation requirements. The
+source inventory is pinned to the revision above; a target path or acceptance
+criterion is not a claim that its migration has landed or passed validation.
+Track implementation evidence separately against the P0 acceptance IDs.
 
 **P0 preserves the current full product while reorganizing ownership and making
 the official gateway usable as a standalone single-instance microservice.
@@ -58,7 +63,7 @@ Navigation:
 | Harness | Internal `bitrouter::harness` module behind `harness`; includes headless execution and its CLI |
 | TUI | Internal `bitrouter::tui` module behind `tui`; `tui` enables `harness` |
 | Shared contracts | `bitrouter-ai`; no `bitrouter-protocol` package |
-| Service client | Repurpose `bitrouter-sdk` for HTTP clients after removing its server framework |
+| Service client | Repurpose `bitrouter-sdk` for HTTP and supported core streaming clients after removing its server framework |
 | Telemetry | Internal optional application module; retire `bitrouter-telemetry` |
 | Extensions | Keep concrete capability implementations where useful; no dynamic loader, stable Rust ABI or new remote checker protocol |
 | New implementation packages | Do not introduce `bitrouter-gateway`, `bitrouter-core`, `bitrouter-harness`, `bitrouter-cli` or another orchestrator package |
@@ -239,6 +244,13 @@ Public contracts include:
 Serialization, deserialization, bounded field validation and small contract
 helpers are allowed. Cross-provider mapping, conversion admission, provider
 history repair, retry/fallback decisions and stream execution are not.
+
+The admission test for a public AI API is an actual client or extension consumer,
+not reuse between two application modules. Gateway/core/harness code may share
+internal helpers without publishing them. In particular, internal checkpoint
+codecs, policy validation and provider compatibility logic stay in the
+application even when several of its features need them. A public lifecycle
+contract describes the request; it does not own or drive that request.
 
 Start with `std`, `serde`, `serde_json` and, where useful, `thiserror`.
 An optional `schema` feature may enable `schemars`. Both the default and
@@ -503,8 +515,8 @@ crate-root module declarations at the inventory baseline.
 | `dashboard` | `tui::dashboard`; data collection/report operations outside renderer |
 | `db` | `storage` connection/bootstrap and complete historical migration sequence |
 | `error_report` | `cli::error_report` and terminal-independent presentation; public API error payloads in AI only where shared |
-| `eval` | `core::eval` admission/compiler/control/storage; ordinary gateway metering retains required finalization |
-| `evolution` | `core::evolution` all catalog, evidence, scheduler, learning, job, scoring, control and store descendants; workspace execution delegates to harness |
+| `eval` | Evaluation admission/compiler/control/storage to `core::eval`; split the gateway trajectory settlement path out of `settlement`, retaining required observation snapshots and routing-evidence helpers without core; public exchange DTOs to AI |
+| `evolution` | Catalog, scheduler, learning, job, scoring and control to `core::evolution`; existing persisted request-reservation/replay enforcement and settlement-protection events from `costs/runtime`, plus their required record readers/validators, to gateway admission/metering; workspace execution delegates to harness |
 | `gateways` | `harness::gateways` launch-time integration configuration |
 | `harness` | `harness::catalog` existing generated harness metadata and lookup |
 | `host` | `host` foreground lifecycle, listeners, readiness, reload, signals and ordered shutdown |
@@ -539,7 +551,7 @@ crate-root module declarations at the inventory baseline.
 | `supervisor` | `harness::supervisor` agent process/session lifecycle |
 | `tools` | `commands::tools` existing gateway/MCP diagnostics; do not confuse this module with orchestrator workspace tools |
 | `tracing_filter` | `host::logging` basic logs independent of optional OTLP |
-| `trajectory` | Gateway request evidence/correlation/finalization, request-time progress-guard evaluation and its required health reduction/state validation; core offline analysis/evaluation/replay and policy publishing; keep current durable record semantics |
+| `trajectory` | Gateway request evidence/correlation/settlement, operational evaluation-envelope construction, durable outbox persistence, request-time progress guards and required health/state validation; core owns evaluation admission/outbox consumption, offline analysis/replay and policy publishing; preserve pending outbox rows without core |
 | `update` | `host::update` updater implementation and thin CLI entry |
 | `upgrade` | `host::upgrade` upgrade coordination and thin CLI entry |
 | `upgrade_preflight` | `storage` schema compatibility checks plus host upgrade coordination |
@@ -580,6 +592,36 @@ applying an existing policy. Core owns offline analysis and policy production;
 the shared reducer's use by those consumers does not make request-time policy
 enforcement core-only. These are gateway request facts, not harness session
 authority or a reason to start a learning worker.
+
+Two further mixed paths must be split before gating core:
+
+- `evolution::costs::JudgeCosts::admit` checks durable judge reservations before
+  authentication. Its replay-rejection event tells `MeteringRecorder` not to
+  overwrite an earlier attempt's charge. Preserve that ordering and rejection
+  behavior in gateway builds, including reads of reservations created by a full
+  build. Canonical replay-rejection markers and their existing accounting
+  protection also belong below the core feature boundary. Core owns creating
+  jobs and executing authorized evaluations; disabling it does not authorize
+  reuse of their reserved request IDs. This retains existing protection, not a
+  new general idempotency API in P0.
+- `eval::settlement::EvalSettlementRecorder` currently invokes trajectory
+  settlement, and `trajectory::settlement` builds an operational evaluation
+  envelope and persists its outbox row with the terminal fact. Extract a
+  gateway-owned settlement hook, observation snapshots, routing evidence and
+  envelope/digest validation. Keep the original ordering after authoritative
+  metering, tracked/untracked disposition and core adapter's pending-decision
+  cleanup. Missing authoritative usage must remain unknown rather than becoming
+  zero-valued evidence. The core adapter retains ordinary eval admission;
+  gateway finalization must not require `EvalService`.
+
+Without core, existing and newly produced trajectory evaluation outbox rows stay
+durable and pending. Do not construct an eval publisher, report delivery, discard
+rows, or repeatedly schedule attempts against an unavailable consumer. Pending
+state remains inspectable. Re-enabling core resumes the existing bounded,
+idempotent drain and validation; it must not append a second terminal fact or
+settle usage again. Envelope construction and validation are internal gateway
+implementation even if their serialized public DTOs come from AI. These records
+are request evidence, not authority over the harness conversation.
 
 ### Current bitrouter-ai
 
@@ -1047,6 +1089,10 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
 - Keep ordinary request preparation and decision-policy/pricing validation
   available without core. Preserve configured decision assessment and its bounds;
   core-only planning/accounting consumers must not own the shared settings.
+- Extract persisted reservation/replay checks and their accounting-protection
+  events from evolution before gating its jobs. Extract gateway trajectory
+  settlement and operational outbox construction from the eval bridge; retain
+  terminal facts and pending rows when the core consumer is unavailable.
 - Split DTOs from implementation within mixed files; keep public API errors and
   observation views free of credentials and internal runtime objects.
 - Move runtime tests and fixtures with their implementations. Preserve protocol
@@ -1103,6 +1149,10 @@ supported remote control without custom server code or access to server files.
   in sequence; no feature selection may discard another subsystem's records.
   Also test full-product → harness-only → full-product with native checkpoint
   records, including malformed snapshots and immutable-history violations.
+- Across full-product → minimum → full-product, reject reused reserved judge
+  request IDs before any provider call and preserve the original accounting.
+  Verify trajectory terminal facts, cost-based progress guards, pending outbox
+  rows and idempotent publication after core returns.
 
 Exit: all supported isolated feature combinations build, headless output has no
 TUI dependency, and a gateway starts with agent/UI resources unavailable.
@@ -1148,7 +1198,7 @@ refactor has already been implemented or tested.
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state |
 | A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; typed client serialization preserves admission and replay semantics, and response/event contracts preserve gateway output including presence/null semantics; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees |
-| A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
+| A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; reserved request-ID rejection preserves earlier accounting; trajectory terminal facts/outbox survive feature changes without duplicate settlement/publication; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
 | A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui |
 | A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
@@ -1194,6 +1244,8 @@ coverage that justifies a profile.
 | gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |
 | No telemetry | Essential request/usage facts and finalization remain available with no exporter |
 | Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full and full → harness-only → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
+| Reserved request identities | Create judge reservations and accounting in a full build; submit the reserved IDs through the minimum gateway, including an early authentication rejection; assert zero upstream calls and unchanged original attempt/charge records; retain canonical replay accounting protection where its existing scope applies |
+| Trajectory settlement and outbox | Minimum gateway records terminal facts only from authoritative metering and applies equivalent cost-based progress guards; preexisting and new outbox rows remain pending without core, with no disabled-consumer retry loop; restoring core validates and drains them idempotently without repeated settlement or duplicate admitted evidence |
 
 Historical-format compatibility requires payload fixtures with known provenance,
 not newly written data with a different version field. Reuse existing historical
@@ -1234,6 +1286,7 @@ session authority.
 | Global quota/concurrency admission records for actual shared resources | Per-instance health, logs and exporter buffers |
 | Idempotency binding, execution/attempt identity and terminal usage facts | Work already dispatched by that process, until reconciled |
 | Continuation authority and durable state needed to serve it across instances | Reconstructible caches |
+| Trajectory correlation key/epoch authority, tenant-scoped episode identity/history, progress-guard counters and holds | Cached correlation-key versions and read projections; no independent authority for guard decisions |
 | Durable delivery/outbox records for external consumers | Delivery workers |
 
 The first shared backend is PostgreSQL, enabled through a P1 `multi-instance`
@@ -1246,6 +1299,15 @@ authorize a request after the relevant authority has changed. Provider
 credentials and continuation bindings must retain the same account/resource
 identity across instances; process-local file locks are not a shared refresh
 protocol. Secret storage and operator access remain outside client DTOs.
+
+Trajectory correlation currently uses an installation-private HMAC key. Sharing
+the database while independently generating that key would fragment one logical
+conversation's episode history. P1 must coordinate key identity/epochs and
+rotation, with tenant scoping preserved, and coordinate each episode's history
+append and progress-guard decision. A stale counter or unrecognized key epoch
+cannot be treated as a new empty history to bypass escalation or an active hold.
+These are gateway routing facts; sharing them does not move harness session
+storage into the service.
 
 ### P1 implementation steps
 
@@ -1269,6 +1331,10 @@ protocol. Secret storage and operator access remain outside client DTOs.
 6. Add routing/config generation propagation, bounded backpressure, drain and
    rolling-restart behavior. In-flight streams remain attached to their original
    instance; new requests need no sticky routing for shared gateway authority.
+7. Coordinate trajectory correlation and per-episode guard updates across
+   instances. Preserve history completeness, cost/counter reductions and holds
+   under concurrent requests and key rotation, without a gateway-wide lock or
+   holding an episode transaction across inference.
 
 Choose the exact quota dimensions and acknowledgement/error responses in the P1
 implementation spec. The invariant is one authoritative decision for shared
@@ -1293,6 +1359,11 @@ billing, top-ups and ledger policy remain in the operator service.
   cancelled.
 - Auth/config/credential changes and continuation access behave consistently
   across instances, including stale cache and shared backend failure cases.
+- Alternating and concurrent requests for the same tenant-scoped trajectory
+  across instances retain one coherent episode history and equivalent guard
+  counters, cost thresholds, holds and routing decisions. Verify key-epoch
+  changes and tenant isolation; fresh local keys or stale caches cannot reset
+  the guard's effective history.
 - Slow clients, hot tenants and overload do not create unbounded queues or
   monopolize a global lock.
 - Rolling shutdown drains supported work and reports interrupted streams
