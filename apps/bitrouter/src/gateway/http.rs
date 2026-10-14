@@ -27,7 +27,7 @@ use futures::StreamExt;
 use crate::gateway::assembly::{App, prepare_model_prompt};
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
-use crate::gateway::pipeline::pipeline::Pipeline;
+use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::stream::SseKeepaliveStream;
 
 use crate::gateway::mcp;
@@ -1538,7 +1538,7 @@ async fn stream_response(
         while let Some(item) = parts.next().await {
             match item {
                 Ok(prepared) => {
-                    let crate::gateway::pipeline::pipeline::PreparedStreamPart {
+                    let crate::gateway::pipeline::execution::PreparedStreamPart {
                         part,
                         mut delivery,
                     } = prepared;

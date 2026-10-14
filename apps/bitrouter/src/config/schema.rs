@@ -39,6 +39,22 @@ pub fn render() -> Result<String> {
     Ok(out)
 }
 
+fn sort_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<_, _> = map
+                .into_iter()
+                .map(|(key, value)| (key, sort_value(value)))
+                .collect();
+            serde_json::Value::Object(sorted.into_iter().collect())
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(sort_value).collect())
+        }
+        scalar => scalar,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::render;
@@ -97,21 +113,5 @@ mod tests {
             "the schema rendered nearly empty — this test has stopped testing"
         );
         Ok(())
-    }
-}
-
-fn sort_value(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let sorted: std::collections::BTreeMap<_, _> = map
-                .into_iter()
-                .map(|(key, value)| (key, sort_value(value)))
-                .collect();
-            serde_json::Value::Object(sorted.into_iter().collect())
-        }
-        serde_json::Value::Array(values) => {
-            serde_json::Value::Array(values.into_iter().map(sort_value).collect())
-        }
-        scalar => scalar,
     }
 }

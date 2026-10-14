@@ -8,6 +8,7 @@ use bitrouter_ai::types::{GenerateResult, Prompt, StreamPart};
 use bitrouter_ai::protocol::chat_completions::ChatRequest;
 use bitrouter_ai::conversion::ConversionReport;
 use bitrouter_ai::extension::request_check::{Decision, Input};
+use bitrouter_ai::control::{CapabilitiesReport, StateReport};
 ```
 
 The crate contains model content and decision semantics, public wire requests, responses and stream events, gateway discovery/errors,
@@ -15,6 +16,12 @@ conversion reports, lifecycle events, capability contracts, observation schema
 and published catalog artifact definitions. Serde representation and intrinsic
 field validation stay beside these types. Provider metadata and native payloads
 carry data, never authority to replay it under a different account.
+
+`control` defines administration scopes, capability advertisements and state
+reports. `control::reload` defines configuration-state evidence and guarded
+reload inputs/results. Generation and instance identifiers retain their wire
+meaning; timestamp capture, admission, operation ownership and execution remain
+in the service. A report does not grant a client authority to change state.
 
 Protocol conversion, history admission, provider calls, authentication, catalog
 refresh and persistence belong to the application gateway. Telemetry batching,
@@ -38,6 +45,12 @@ conversion admission move there too; their data contracts remain here. Ordinary
 service consumers use the gateway HTTP API and the service-client SDK. Trusted
 custom hosts may use the application-owned runtime explicitly; there are no
 forwarding exports in AI.
+
+Control consumers import scopes and capability/state reports from `control`,
+and configuration-state, reload and operation DTOs from `control::reload`.
+These replace the corresponding application `config`, `remote_control`,
+`remote_control::operations` and `reload` type paths. Application coordinators,
+credential resolution and HTTP handlers remain with their service owners.
 
 See the [service plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md) and
 [implementation progress](../../docs/BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for

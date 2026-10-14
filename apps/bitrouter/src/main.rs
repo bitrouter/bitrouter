@@ -60,7 +60,7 @@ use bitrouter::output::reports::trajectory::{
     replay_report as trajectory_replay_report,
 };
 use bitrouter::output::{CliReport, Output};
-use bitrouter::remote_control::operations::{OperationReport, OperationStatus};
+use bitrouter_ai::control::reload::{OperationReport, OperationStatus};
 
 /// BitRouter — an LLM API router.
 #[derive(Parser)]

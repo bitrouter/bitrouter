@@ -59,9 +59,9 @@ the contract move must preserve its bytes.
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
-| P0 1 Public contracts | In progress | Observation/event/request-check contracts and operation scopes moved to AI; matcher detached from old SDK; legacy adapters moved to application; Observation/capability slice verified; shared control/core DTO extraction remains before their final service/client split |
+| P0 1 Public contracts | In progress | Observation/event/request-check contracts, operation scopes and control capability/reload contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; control inspection/core DTO extraction remains before their final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation verified; serving-time workflow/policy separation and final public API guards remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE client and public wire response contracts verified; control/eval/core client extraction and independent official-service process consumer remain |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
@@ -302,3 +302,46 @@ workspace-wide AI schema activation. macOS development linking emitted an
 oversized unwind-table warning for the existing full application, separate from
 source lints and the passing test results. Release performance and final P0
 validation remain open.
+
+P0 4's control-contract prerequisite moves **21 public types** into AI
+`control` and `control::reload`: scopes, capabilities, resource/action
+descriptors, configuration-state evidence, reload inputs/outcomes and operation
+reports. Application configuration, CLI reports, daemon IPC and control handlers
+now import their owning definitions directly. Runtime timestamp capture, reload
+participant mutation, capability assembly, UUID admission and operation ownership
+stay in the application. No client or execution runtime was added to AI.
+
+The contract fixtures cover legacy capability advertisements without inferred
+grants, flattened state with independently sampled generations and mixed-state
+history, strict reload input, and unknown operation outcomes with recovery IDs.
+AI default tests passed **35 cases** and all-feature tests passed **39 cases**.
+Its strict Clippy, Rustdoc, isolated dependency tree and pinned public API
+checks passed; the public foreign-dependency manifest is unchanged. CI now
+requires the reload input contract in the generated API listing as well.
+
+The initial application run passed 226 control/reload/daemon/configuration tests.
+Strict workspace Clippy exposed earlier relocation leftovers: a nested
+`pipeline::pipeline` module, a schema helper after its test module and an
+identity closure in the contributor schema launcher. The implementation file is
+now `gateway::pipeline::execution`, unchanged apart from owning paths; the two
+schema fixes preserve behavior. Compilation caught two missed alias-based
+pipeline paths, which were corrected and independently re-reviewed.
+
+Final expanded validation passed **600 application tests**, covering control,
+reload, configuration/schema, daemon, custom-host lifecycle, guardrails migration,
+model pipeline and Decisions. The other 2,815 tests were outside this stage's
+filter; this is not a full P0 test result. Strict workspace all-target/all-feature
+Clippy on Rust 1.97.0 and strict workspace Rustdoc passed. The standard
+`dist-helper generate-schema --check` passed; schema SHA-256 remains
+`d4aaacc1d5e9b162cd168c08cc4de2b495ba9fbec3b1c582999684b2a1883135`.
+Registry artifacts also match the committed baseline. The existing macOS
+development-link unwind-table and dependency future-incompatibility notices
+remain separate from the passing source lint and behavior gates.
+
+Independent review found no remaining actionable contract or relocation issue.
+The implementation plan also incorporates the reviewed gateway ownership of
+published experiment assignment and certificate validation, plus the complete
+consumer migration table and request/response/event fidelity gates. Control
+inspection DTOs and the portable HTTP client remain in the application pending
+the next P0 4 extraction; eval/core clients, final feature isolation and the
+complete P0 acceptance/PR remain open.

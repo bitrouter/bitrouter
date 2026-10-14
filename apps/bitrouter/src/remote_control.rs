@@ -10,6 +10,11 @@ pub mod inventory;
 pub mod operations;
 mod reads;
 
+#[cfg(test)]
+use crate::reload::ReloadReportRuntime;
+use bitrouter_ai::control::{
+    ActionDescriptor, CapabilitiesReport, PROTOCOL_VERSION, ResourceDescriptor, StateReport,
+};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -19,7 +24,6 @@ use crate::actions::models::ModelsReport;
 use crate::actions::route::{RouteInput, RouteReport};
 use crate::actions::status::StatusReport;
 use crate::config::ControlConfig;
-use crate::config::ControlScope;
 use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
 use axum::extract::{
@@ -31,145 +35,93 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use bitrouter_ai::control::ControlScope;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 use self::auth::{ControlAuth, ControlCaller};
-use self::operations::{OperationError, OperationReport, OperationService, ReloadInput};
+use self::operations::{OperationError, OperationService};
 use crate::actions::administration::{Administration, PolicyInput};
 use crate::actions::requests::RequestsAction;
 use crate::output::reports::requests::RequestsReport;
 use crate::paths::ConfigSource;
+use bitrouter_ai::control::reload::{OperationReport, ReloadInput};
 
 /// Environment variable containing the remote-control bearer token.
 pub const CONTROL_TOKEN_ENV: &str = "BITROUTER_CONTROL_TOKEN";
 
-/// Current HTTP control protocol version.
-pub const PROTOCOL_VERSION: u32 = 1;
-
 /// Minimum token size accepted by the server.
 const MIN_TOKEN_BYTES: usize = 32;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActionDescriptor {
-    pub version: u32,
-    pub required_scope: ControlScope,
-    pub input_schema: serde_json::Value,
-    pub output_schema: serde_json::Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CapabilitiesReport {
-    #[serde(default)]
-    pub resources: std::collections::BTreeMap<String, ResourceDescriptor>,
-    #[serde(default)]
-    pub limits: std::collections::BTreeMap<String, u64>,
-    pub protocol: String,
-    pub protocol_version: u32,
-    pub server_version: String,
-    pub actions: Vec<String>,
-    #[serde(default)]
-    pub action_descriptors: std::collections::BTreeMap<String, ActionDescriptor>,
-    #[serde(default)]
-    pub server_instance_id: Option<String>,
-    #[serde(default)]
-    pub scopes: Vec<ControlScope>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResourceDescriptor {
-    pub version: u32,
-    pub path: String,
-    pub required_scope: ControlScope,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct StateReport {
-    /// Reload-coordinator state sampled after `config_state`. The nested
-    /// configuration evidence carries its own instance and generation; callers
-    /// must use those fields when a concurrent reload separates the samples.
-    #[serde(flatten)]
-    pub reload: crate::reload::ReloadState,
-    pub live_policy_digest: Option<String>,
-    /// Redaction-safe evidence from this server's own saved and running
-    /// configuration. Absent when an older or limited reloader cannot inspect
-    /// both sides; absence never implies that they match.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_state: Option<crate::reload::ConfigurationState>,
-}
-
-impl CapabilitiesReport {
-    fn current(state: &ControlState, caller: &ControlCaller) -> Self {
-        let rows = inventory::ACTIONS
+fn current_capabilities(state: &ControlState, caller: &ControlCaller) -> CapabilitiesReport {
+    let rows = inventory::ACTIONS
+        .iter()
+        .filter(|row| {
+            caller.permits(row.scope)
+                && (!row.requires_reload || state.operations.is_some())
+                && (!row.requires_administration || state.administration.is_some())
+        })
+        .collect::<Vec<_>>();
+    CapabilitiesReport {
+        resources: inventory::RESOURCES
             .iter()
             .filter(|row| {
-                caller.permits(row.scope)
-                    && (!row.requires_reload || state.operations.is_some())
-                    && (!row.requires_administration || state.administration.is_some())
+                caller.permits(row.scope) && (!row.requires_reload || state.operations.is_some())
             })
-            .collect::<Vec<_>>();
-        Self {
-            resources: inventory::RESOURCES
-                .iter()
-                .filter(|row| {
-                    caller.permits(row.scope)
-                        && (!row.requires_reload || state.operations.is_some())
-                })
-                .map(|row| {
-                    (
-                        row.id.into(),
-                        ResourceDescriptor {
-                            version: 1,
-                            path: row.path.into(),
-                            required_scope: row.scope,
-                        },
-                    )
-                })
-                .collect(),
-            limits: std::collections::BTreeMap::from([
-                ("max_operations".into(), operations::MAX_OPERATIONS as u64),
+            .map(|row| {
                 (
-                    "preparation_timeout_seconds".into(),
-                    crate::reload::PREPARATION_TIMEOUT_SECONDS,
-                ),
+                    row.id.into(),
+                    ResourceDescriptor {
+                        version: 1,
+                        path: row.path.into(),
+                        required_scope: row.scope,
+                    },
+                )
+            })
+            .collect(),
+        limits: std::collections::BTreeMap::from([
+            ("max_operations".into(), operations::MAX_OPERATIONS as u64),
+            (
+                "preparation_timeout_seconds".into(),
+                crate::reload::PREPARATION_TIMEOUT_SECONDS,
+            ),
+            (
+                "operation_retention_seconds".into(),
+                operations::RETENTION_SECONDS,
+            ),
+            ("max_reload_body_bytes".into(), 16 * 1024),
+            (
+                "max_request_rows".into(),
+                crate::actions::requests::MAX_REQUEST_ROWS,
+            ),
+            (
+                "max_request_window_days".into(),
+                crate::actions::requests::MAX_REQUEST_WINDOW_DAYS as u64,
+            ),
+            ("max_response_bytes".into(), 8 * 1024 * 1024),
+        ]),
+        protocol: "bitrouter-control".into(),
+        protocol_version: PROTOCOL_VERSION,
+        server_version: crate::VERSION.into(),
+        actions: rows.iter().map(|row| row.legacy_name.into()).collect(),
+        action_descriptors: rows
+            .iter()
+            .map(|row| {
                 (
-                    "operation_retention_seconds".into(),
-                    operations::RETENTION_SECONDS,
-                ),
-                ("max_reload_body_bytes".into(), 16 * 1024),
-                (
-                    "max_request_rows".into(),
-                    crate::actions::requests::MAX_REQUEST_ROWS,
-                ),
-                (
-                    "max_request_window_days".into(),
-                    crate::actions::requests::MAX_REQUEST_WINDOW_DAYS as u64,
-                ),
-                ("max_response_bytes".into(), 8 * 1024 * 1024),
-            ]),
-            protocol: "bitrouter-control".into(),
-            protocol_version: PROTOCOL_VERSION,
-            server_version: crate::VERSION.into(),
-            actions: rows.iter().map(|row| row.legacy_name.into()).collect(),
-            action_descriptors: rows
-                .iter()
-                .map(|row| {
-                    (
-                        row.id.into(),
-                        ActionDescriptor {
-                            version: row.version,
-                            required_scope: row.scope,
-                            input_schema: (row.input_schema)(),
-                            output_schema: (row.output_schema)(),
-                        },
-                    )
-                })
-                .collect(),
-            server_instance_id: Some(state.instance.clone()),
-            scopes: caller.scopes().to_vec(),
-        }
+                    row.id.into(),
+                    ActionDescriptor {
+                        version: row.version,
+                        required_scope: row.scope,
+                        input_schema: (row.input_schema)(),
+                        output_schema: (row.output_schema)(),
+                    },
+                )
+            })
+            .collect(),
+        server_instance_id: Some(state.instance.clone()),
+        scopes: caller.scopes().to_vec(),
     }
 }
 
@@ -445,7 +397,7 @@ async fn require_control_token(
             "x-bitrouter-control-read-consistency",
             header::HeaderValue::from_static(if spans_versions {
                 "may_span_versions"
-            } else if state.consistency == crate::reload::ReloadConsistency::Mixed {
+            } else if state.consistency == bitrouter_ai::control::reload::ReloadConsistency::Mixed {
                 "mixed"
             } else {
                 "consistent"
@@ -495,7 +447,7 @@ async fn capabilities(
     State(state): State<ControlState>,
     axum::Extension(caller): axum::Extension<ControlCaller>,
 ) -> Json<CapabilitiesReport> {
-    Json(CapabilitiesReport::current(&state, &caller))
+    Json(current_capabilities(&state, &caller))
 }
 
 fn operation_service(state: &ControlState) -> Result<&Arc<OperationService>, ControlError> {
@@ -875,7 +827,7 @@ impl HttpControlClient {
         self.get("state", None).await
     }
 
-    pub async fn state(&self) -> Result<crate::reload::ReloadState> {
+    pub async fn state(&self) -> Result<bitrouter_ai::control::reload::ReloadState> {
         Ok(self.state_report().await?.reload)
     }
 
@@ -1283,21 +1235,23 @@ providers:
         async fn reload(&self) -> anyhow::Result<()> {
             Ok(())
         }
-        fn reload_state(&self) -> Option<crate::reload::ReloadState> {
+        fn reload_state(&self) -> Option<bitrouter_ai::control::reload::ReloadState> {
             Some(self.0.state())
         }
-        async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+        async fn configuration_state(
+            &self,
+        ) -> Option<bitrouter_ai::control::reload::ConfigurationState> {
             let reload = self.0.state();
-            Some(crate::reload::ConfigurationState {
+            Some(bitrouter_ai::control::reload::ConfigurationState {
                 server_instance_id: Some(reload.server_instance_id),
                 generation: Some(reload.generation),
-                source: crate::reload::ConfigSourceKind::File,
-                saved: crate::reload::SavedConfigState::Available,
-                running: crate::reload::RunningConfigState::InSync,
+                source: bitrouter_ai::control::reload::ConfigSourceKind::File,
+                saved: bitrouter_ai::control::reload::SavedConfigState::Available,
+                running: bitrouter_ai::control::reload::RunningConfigState::InSync,
                 reload_required_fields: Vec::new(),
                 restart_required_fields: Vec::new(),
-                named_policy: crate::reload::AuxiliaryConfigState::NotConfigured,
-                access_policies: crate::reload::AuxiliaryConfigState::NotConfigured,
+                named_policy: bitrouter_ai::control::reload::AuxiliaryConfigState::NotConfigured,
+                access_policies: bitrouter_ai::control::reload::AuxiliaryConfigState::NotConfigured,
                 last_reload: reload.last_outcome,
                 mixed_state_history: reload.mixed_state_history,
             })
@@ -1312,22 +1266,26 @@ providers:
         async fn reload_reserved(
             &self,
             reservation: crate::reload::ReloadReservation,
-        ) -> crate::reload::ReloadReport {
-            let mut report = crate::reload::ReloadReport::succeeded(
+        ) -> bitrouter_ai::control::reload::ReloadReport {
+            let mut report = bitrouter_ai::control::reload::ReloadReport::succeeded(
                 reservation.server_instance_id().into(),
                 reservation.generation(),
             );
             if self.1 {
-                report.outcome = crate::reload::ReloadOutcome::PartiallyApplied;
+                report.outcome = bitrouter_ai::control::reload::ReloadOutcome::PartiallyApplied;
                 for participant in &mut report.participants {
-                    if participant.participant == crate::reload::ReloadParticipant::RoutingTable {
-                        participant.outcome = crate::reload::ReloadParticipantOutcome::Applied;
+                    if participant.participant
+                        == bitrouter_ai::control::reload::ReloadParticipant::RoutingTable
+                    {
+                        participant.outcome =
+                            bitrouter_ai::control::reload::ReloadParticipantOutcome::Applied;
                     }
                     if participant.participant
-                        == crate::reload::ReloadParticipant::NamedPolicyRuntime
+                        == bitrouter_ai::control::reload::ReloadParticipant::NamedPolicyRuntime
                     {
-                        participant.outcome = crate::reload::ReloadParticipantOutcome::Failed;
-                        participant.error = Some(crate::reload::ReloadFailure {
+                        participant.outcome =
+                            bitrouter_ai::control::reload::ReloadParticipantOutcome::Failed;
+                        participant.error = Some(bitrouter_ai::control::reload::ReloadFailure {
                             code: "fixture_policy_failure".into(),
                             message: "injected policy table failure".into(),
                         });
@@ -1815,15 +1773,15 @@ providers:
             .ok_or_else(|| anyhow::anyhow!("remote status omitted server-side saved state"))?;
         assert_eq!(
             config_state.source,
-            crate::reload::ConfigSourceKind::Default
+            bitrouter_ai::control::reload::ConfigSourceKind::Default
         );
         assert_eq!(
             config_state.saved,
-            crate::reload::SavedConfigState::Generated
+            bitrouter_ai::control::reload::SavedConfigState::Generated
         );
         assert_eq!(
             config_state.running,
-            crate::reload::RunningConfigState::Unknown
+            bitrouter_ai::control::reload::RunningConfigState::Unknown
         );
         Ok(())
     }
@@ -1864,14 +1822,17 @@ providers:
         let config_state = report
             .config_state
             .ok_or_else(|| anyhow::anyhow!("remote state omitted daemon evidence"))?;
-        assert_eq!(config_state.source, crate::reload::ConfigSourceKind::File);
+        assert_eq!(
+            config_state.source,
+            bitrouter_ai::control::reload::ConfigSourceKind::File
+        );
         assert_eq!(
             config_state.saved,
-            crate::reload::SavedConfigState::Available
+            bitrouter_ai::control::reload::SavedConfigState::Available
         );
         assert_eq!(
             config_state.running,
-            crate::reload::RunningConfigState::InSync
+            bitrouter_ai::control::reload::RunningConfigState::InSync
         );
         Ok(())
     }
@@ -1902,14 +1863,17 @@ providers:
         let config_state = report
             .config_state
             .ok_or_else(|| anyhow::anyhow!("HTTP status omitted server-side saved state"))?;
-        assert_eq!(config_state.source, crate::reload::ConfigSourceKind::File);
+        assert_eq!(
+            config_state.source,
+            bitrouter_ai::control::reload::ConfigSourceKind::File
+        );
         assert_eq!(
             config_state.saved,
-            crate::reload::SavedConfigState::Available
+            bitrouter_ai::control::reload::SavedConfigState::Available
         );
         assert_eq!(
             config_state.running,
-            crate::reload::RunningConfigState::Unknown
+            bitrouter_ai::control::reload::RunningConfigState::Unknown
         );
         let models = client.models(None).await?;
         assert!(models.models.iter().any(|model| model.id == "test-model"));

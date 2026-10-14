@@ -2733,11 +2733,11 @@ mod tests {
     use crate::gateway::http::{AppState, build_router};
     use crate::gateway::pipeline::builder::PipelineBuilder;
     use crate::gateway::pipeline::context::{PipelineContext, ProviderContinuation, StreamContext};
+    use crate::gateway::pipeline::execution::Pipeline;
     use crate::gateway::pipeline::executor::{
         Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
     };
     use crate::gateway::pipeline::hooks::{ObserveHook, RequestOutcome, RouteHook, StreamHook};
-    use crate::gateway::pipeline::pipeline::Pipeline;
     use crate::gateway::pipeline::routing::StaticRoutingTable;
     use crate::gateway::pipeline::settlement::{
         DeliveryAcknowledgement, RequiredFinalizationContext, RequiredFinalizer, SettlementContext,

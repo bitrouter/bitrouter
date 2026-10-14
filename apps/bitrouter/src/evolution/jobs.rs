@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::gateway::pipeline::pipeline::Pipeline;
+use crate::gateway::pipeline::execution::Pipeline;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseTransaction, TransactionTrait};

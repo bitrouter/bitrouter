@@ -67,6 +67,7 @@
 
 pub mod builder;
 pub mod context;
+pub mod execution;
 pub mod executor;
 pub mod hooks;
 pub mod native;
@@ -82,7 +83,6 @@ mod native_report;
 mod native_stream;
 pub mod native_work;
 pub mod operations;
-pub mod pipeline;
 pub mod request_checks;
 pub mod routing;
 pub mod server_tools;

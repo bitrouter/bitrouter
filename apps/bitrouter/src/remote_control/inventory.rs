@@ -1,6 +1,6 @@
 //! Explicit control exposure, independent of the cloud MCP profile.
 
-use crate::config::ControlScope;
+use bitrouter_ai::control::ControlScope;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -95,8 +95,8 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         dashboard: "reload",
         requires_administration: false,
         requires_reload: true,
-        input_schema: input_schema::<super::operations::ReloadInput>,
-        output_schema: output_schema::<super::operations::OperationReport>,
+        input_schema: input_schema::<bitrouter_ai::control::reload::ReloadInput>,
+        output_schema: output_schema::<bitrouter_ai::control::reload::OperationReport>,
     },
     action!(
         Status,

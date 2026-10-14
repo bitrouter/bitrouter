@@ -11,6 +11,7 @@
 //! on Windows. Both are encapsulated by a private `transport` module so the
 //! rest of this file — and every caller — is platform-agnostic.
 
+use crate::reload::ReloadReportRuntime;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -29,7 +30,8 @@ use crate::actions::administration::{
     Administration, AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
 };
 use crate::metering::{MeteringStore, TimeWindow};
-use crate::reload::{ReloadAdmissionError, ReloadReport, ReloadReservation, ReloadState};
+use crate::reload::{ReloadAdmissionError, ReloadReservation};
+use bitrouter_ai::control::reload::{ReloadReport, ReloadState};
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
@@ -64,7 +66,9 @@ pub trait DaemonReloader: Send + Sync {
     /// Redaction-safe saved/running configuration state. The read is async
     /// because the server must inspect its own source files; callers must not
     /// substitute a client-local config.
-    async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+    async fn configuration_state(
+        &self,
+    ) -> Option<bitrouter_ai::control::reload::ConfigurationState> {
         None
     }
 
@@ -323,7 +327,7 @@ pub enum DaemonResponse {
         router_restart_required: Option<bool>,
         /// Whole saved/running configuration state computed by the daemon.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        config_state: Option<Box<crate::reload::ConfigurationState>>,
+        config_state: Option<Box<bitrouter_ai::control::reload::ConfigurationState>>,
     },
     /// The live routing table's catalog.
     Models {

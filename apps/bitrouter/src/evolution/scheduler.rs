@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use crate::gateway::pipeline::pipeline::Pipeline;
+use crate::gateway::pipeline::execution::Pipeline;
 use crate::harness::acp::capture::{CaptureEvent, CaptureKind};
 use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;

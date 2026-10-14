@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::gateway::pipeline::pipeline::Pipeline;
+use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::server_tools::toolset::ToolContext;
 use crate::gateway::pipeline::types::PipelineRequest;
 use bitrouter_ai::types::{

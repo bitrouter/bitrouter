@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
+use crate::gateway::pipeline::execution::DEFAULT_KEEPALIVE;
+use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::executor::Executor;
 use crate::gateway::pipeline::hooks::ExecutionHook;
 use crate::gateway::pipeline::hooks::ObserveHook;
@@ -16,8 +18,6 @@ use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::hooks::StreamHook;
 use crate::gateway::pipeline::operations::HookRegistration;
 use crate::gateway::pipeline::operations::HookStage;
-use crate::gateway::pipeline::pipeline::DEFAULT_KEEPALIVE;
-use crate::gateway::pipeline::pipeline::Pipeline;
 use crate::gateway::pipeline::request_checks::RequestCheckerRunner;
 use crate::gateway::pipeline::routing::DefaultFallbackPolicy;
 use crate::gateway::pipeline::routing::FallbackPolicy;

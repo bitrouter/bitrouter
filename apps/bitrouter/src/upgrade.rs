@@ -154,7 +154,10 @@ pub async fn ensure_compatible(source: &ConfigSource, socket: &Path, no_start: b
             config_state: Some(state),
             ..
         } if pid == located.pid()
-            && matches!(state.running, crate::reload::RunningConfigState::InSync) =>
+            && matches!(
+                state.running,
+                bitrouter_ai::control::reload::RunningConfigState::InSync
+            ) =>
         {
             (pid, listen)
         }

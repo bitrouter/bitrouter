@@ -26,8 +26,8 @@ use crate::daemon::{
 };
 use crate::output::reports::requests::RequestsReport;
 use crate::paths::ConfigSource;
-use crate::reload::ReloadState;
-use crate::remote_control::operations::{OperationReport, ReloadInput};
+use bitrouter_ai::control::reload::ReloadState;
+use bitrouter_ai::control::reload::{OperationReport, ReloadInput};
 
 /// Result of an explicit reload submitted through a selected target.
 ///

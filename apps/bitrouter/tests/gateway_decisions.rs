@@ -86,7 +86,7 @@ fn builder(targets: Vec<RoutingTarget>) -> TestResult<PipelineBuilder> {
     Ok(builder)
 }
 
-fn router(pipeline: Arc<bitrouter::gateway::pipeline::pipeline::Pipeline>) -> Router {
+fn router(pipeline: Arc<bitrouter::gateway::pipeline::execution::Pipeline>) -> Router {
     build_router(AppState {
         language_model: pipeline,
         mcp: None,

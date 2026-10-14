@@ -36,7 +36,7 @@ fn schema_path(root: &Path) -> PathBuf {
 }
 
 fn render(root: &Path) -> Result<String> {
-    let cargo = std::env::var_os("CARGO").map_or_else(|| "cargo".into(), |path| path);
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = std::process::Command::new(cargo)
         .current_dir(root)
         .args([

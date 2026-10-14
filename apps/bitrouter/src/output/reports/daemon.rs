@@ -190,7 +190,7 @@ impl CliReport for StatusReport {
 }
 
 fn render_configuration_state(report: &StatusReport, h: &mut Human<'_>) -> std::io::Result<()> {
-    use crate::reload::{
+    use bitrouter_ai::control::reload::{
         AuxiliaryConfigState, ConfigSourceKind, RunningConfigState, SavedConfigState,
     };
 
@@ -248,10 +248,10 @@ fn render_configuration_state(report: &StatusReport, h: &mut Human<'_>) -> std::
         && let Some(latest) = state.mixed_state_history.last()
     {
         let outcome = match latest.outcome {
-            crate::reload::ReloadOutcome::Succeeded => "succeeded",
-            crate::reload::ReloadOutcome::Failed => "failed",
-            crate::reload::ReloadOutcome::PartiallyApplied => "partially applied",
-            crate::reload::ReloadOutcome::Unknown => "unknown",
+            bitrouter_ai::control::reload::ReloadOutcome::Succeeded => "succeeded",
+            bitrouter_ai::control::reload::ReloadOutcome::Failed => "failed",
+            bitrouter_ai::control::reload::ReloadOutcome::PartiallyApplied => "partially applied",
+            bitrouter_ai::control::reload::ReloadOutcome::Unknown => "unknown",
         };
         h.field(
             "mixed reload history",
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn status_renders_whole_configuration_state_without_values() -> anyhow::Result<()> {
-        use crate::reload::{
+        use bitrouter_ai::control::reload::{
             AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, RunningConfigState,
             SavedConfigState,
         };
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn mixed_status_points_to_the_retained_participant_cause() -> anyhow::Result<()> {
-        use crate::reload::{
+        use bitrouter_ai::control::reload::{
             AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, ReloadOutcome,
             ReloadReport, RunningConfigState, SavedConfigState,
         };

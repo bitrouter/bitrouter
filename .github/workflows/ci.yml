@@ -415,6 +415,7 @@ jobs:
                 'pub struct bitrouter_ai::protocol::chat_completions::ChatRequest'
                 'pub struct bitrouter_ai::gateway::ModelsResponse'
                 'pub mod bitrouter_ai::extension'
+                'pub struct bitrouter_ai::control::reload::ReloadInput'
               )
               forbidden='bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else

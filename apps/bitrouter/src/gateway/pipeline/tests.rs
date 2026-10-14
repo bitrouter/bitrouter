@@ -32,6 +32,7 @@ use crate::gateway::model::error::ModelError;
 use crate::gateway::model::target::AuthScheme;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
+use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::executor::{
     DispatchExecutor, Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
 };
@@ -39,7 +40,6 @@ use crate::gateway::pipeline::hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
     PreRequestHook, RequestOutcome, RouteHook, StreamHook,
 };
-use crate::gateway::pipeline::pipeline::Pipeline;
 use crate::gateway::pipeline::routing::{
     FallbackPolicy, ModelInfo, ModelResolution, ModelSelector, PromptOverrides,
     RouterRequestIdentity, RoutingPrefs, RoutingTable, StaticRoutingTable,

@@ -503,7 +503,7 @@ fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reload::{
+    use bitrouter_ai::control::reload::{
         AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, RunningConfigState,
         SavedConfigState,
     };

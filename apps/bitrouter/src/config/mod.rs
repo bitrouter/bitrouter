@@ -19,6 +19,7 @@
 //! # let _ = routing; Ok(()) }
 //! ```
 
+use bitrouter_ai::control::ControlScope;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -303,19 +304,6 @@ pub struct ControlConfig {
     pub listen: String,
     /// Explicit operator credentials. Empty keeps the legacy read-only token.
     pub credentials: Vec<ControlCredentialConfig>,
-}
-
-/// Authority granted by a host operator, independently of inference credentials.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
-pub enum ControlScope {
-    /// Host-wide operational inspection, including usage and policy metadata.
-    #[serde(rename = "control:read")]
-    Read,
-    /// Reload server-owned configuration; requires the read grant as well.
-    #[serde(rename = "control:reload")]
-    Reload,
 }
 
 /// A token reference only; configuration never stores the bearer value.

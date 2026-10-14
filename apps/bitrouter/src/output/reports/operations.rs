@@ -2,11 +2,11 @@
 
 use crate::output::CliReport;
 use crate::output::human::{Health, Human, Table};
-use crate::reload::{
+use bitrouter_ai::control::reload::{OperationReport, OperationStatus};
+use bitrouter_ai::control::reload::{
     ReloadConsistency, ReloadOutcome, ReloadParticipant, ReloadParticipantOutcome, ReloadReport,
     ReloadState,
 };
-use crate::remote_control::operations::{OperationReport, OperationStatus};
 
 fn operation_status(status: OperationStatus) -> &'static str {
     match status {

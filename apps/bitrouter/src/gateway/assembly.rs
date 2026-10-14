@@ -1,7 +1,7 @@
 //! [`App`] and [`AppBuilder`] — the top-level entry point.
 //!
 //! An [`App`] holds one pipeline per enabled protocol
-//! ([`crate::gateway::pipeline::pipeline::Pipeline`], [`crate::gateway::mcp::Pipeline`]) plus the
+//! ([`crate::gateway::pipeline::execution::Pipeline`], [`crate::gateway::mcp::Pipeline`]) plus the
 //! injected infrastructure (metrics store, metrics renderer, the aggregated
 //! migration set).
 //!
@@ -123,7 +123,7 @@ pub trait PromptTransform: Send + Sync {
 /// A fully assembled application: one pipeline per enabled protocol, plus the
 /// injected infrastructure and the collected migration set.
 pub struct App {
-    language_model: Option<Arc<language_model::pipeline::Pipeline>>,
+    language_model: Option<Arc<language_model::execution::Pipeline>>,
     decision_model: Option<crate::gateway::model::decision::DecisionRuntime>,
     mcp: Option<Arc<mcp::Pipeline>>,
     /// Optional Prometheus-style metrics renderer; if set, the HTTP server
@@ -329,7 +329,7 @@ impl App {
     }
 
     /// The `language_model` pipeline, if that protocol was configured.
-    pub fn language_model(&self) -> Option<&Arc<language_model::pipeline::Pipeline>> {
+    pub fn language_model(&self) -> Option<&Arc<language_model::execution::Pipeline>> {
         self.language_model.as_ref()
     }
 

@@ -39,6 +39,7 @@ Navigation:
 - [Product and ownership decisions](#product-and-ownership-decisions)
 - [Target package graph](#target-package-graph)
 - [Public contracts and clients](#public-contract-and-client-boundaries)
+- [Consumer migration paths](#consumer-migration-paths)
 - [Existing service surfaces](#existing-service-surfaces-and-feature-ownership)
 - [Complete source migration inventory](#source-migration-inventory)
 - [Feature dependencies and build profiles](#feature-dependency-plan)
@@ -298,6 +299,21 @@ Add an API type only with its actual handler/client or extension consumer. A
 contract review must examine serialization in both needed directions and the
 public dependency surface, not just the absence of runtime calls in a type file.
 
+Use the same fidelity checks for request, response and stream-event contracts:
+
+| Contract concern | Required migration evidence |
+| --- | --- |
+| Field presence | Preserve missing, explicit `null` and empty values wherever the existing protocol distinguishes them; do not synthesize defaults during a wire round trip |
+| Nested extension data | Preserve the existing treatment of unknown fields, opaque reasoning/history and continuation evidence at every relevant nesting level; retain rejection of invalid representations |
+| Response and event shape | Decode fixtures emitted by the actual gateway serializers, including usage details, tool calls, protocol errors and terminal events; canonical internal types alone do not prove wire compatibility |
+| Stream framing | SDK owns bounded HTTP/SSE decoding and explicit incomplete-stream errors; AI owns event data only; gateway owns provider framing and protocol adaptation |
+| Diagnostics and schema | Preserve diagnostic redaction and public schema metadata when adding client-side serialization; generated observation/configuration artifacts remain under their existing compatibility gates |
+
+These checks preserve the existing protocol contract; they do not require
+byte-identical JSON formatting or acceptance of arbitrary unknown input. A
+contract helper may validate a field's grammar or bound, but cannot decide
+whether a principal may use a resource or whether a conversion is admissible.
+
 ### New bitrouter-sdk
 
 The SDK owns explicit endpoint/authentication options, HTTP transport, request
@@ -320,6 +336,30 @@ The base SDK supports gateway and control HTTP calls. Add an optional client
 `core` feature only for the existing core streaming transport when it introduces
 additional dependencies. That feature never enables the application's `core`.
 Do not add client feature names for hypothetical APIs.
+
+Client construction takes endpoint and credential values explicitly; environment
+variables, saved profiles and local credential discovery remain application
+adapters. Preserve HTTP status and relevant response headers when decoding a
+service error, including when its body cannot be decoded. Bound response/event
+buffering, distinguish a protocol terminal event from a disconnected stream,
+and do not treat dropping a client stream as proof of provider cancellation.
+Credential forwarding, redirects and retries must be explicit transport policy;
+none may silently change service authority or replay a dispatched mutation.
+
+### Consumer migration paths
+
+Package retirement changes Rust APIs even when product behavior stays the same.
+Document these replacements with compilable examples in P0; an import rename
+alone cannot convert an embedded service into a remote client.
+
+| Existing consumer | P0 destination | Migration requirement |
+| --- | --- | --- |
+| SDK `AppBuilder`, server/pipeline/configuration and provider execution | Official `bro serve` plus configuration; remote application uses the new HTTP SDK | Start the released gateway as its own process, pass only service endpoint/credential to the client, and keep provider secrets and service storage on the server |
+| AI selected-model client and protocol conversion helpers | Application gateway implementation | Service consumers call the gateway; existing trusted embedded hosts migrate explicitly to application-owned APIs instead of expecting the new AI library to execute inference |
+| SDK observation schema and extension callback types | AI `observe`, `event` and `extension` contracts | Import the actual owning module and preserve schemas and callback behavior; no public forwarding facade |
+| Standalone telemetry exporter imports | Internal application telemetry | Configure the gateway's built-in exporter; an external service owns its own business/ingress instrumentation and does not import the gateway exporter as a new general-purpose SDK |
+| Guardrails `sdk` hooks and plugin adapter | Application `gateway::extensions::guardrails` with the matcher depending on AI | Preserve the trusted custom-host example and opt-in installation; the official microservice integration does not require custom compilation |
+| Orchestrator and TUI implementation imports | Application core/harness/TUI owners | Preserve supported application host entry points where needed; client-visible data moves to AI and existing network calls to SDK, without claiming every local operation is remotely available |
 
 ### Existing service surfaces and feature ownership
 
@@ -476,7 +516,7 @@ crate-root module declarations at the inventory baseline.
 | `native_acp` | `harness::acp::native` local endpoint/stdio bridge; CLI dispatch separated |
 | `native_code` | Split headless/native driver to harness/CLI, drawing/editor loop to TUI, `presentation` data to shared presentation |
 | `onboarding` | `cli::onboarding` noninteractive validation/setup; terminal interaction under TUI |
-| `optimization` | `core::optimization` controller, exploration, cohort and identity |
+| `optimization` | Controller, cohort analysis and learning to `core::optimization`; published exploration policy types, deterministic assignment and certificate identity/digest validation from `exploration/identity` to gateway policy/routing; shared application helpers remain available without core |
 | `orchestrator_api` | `core::api` authenticated handlers, channels and Responses managed opt-in; public messages in AI, remote clients in SDK |
 | `output` | `cli::output` text/JSON formatting and shared reports; no mandatory Ratatui types |
 | `paths` | `config::paths` application-owned path decisions |
@@ -522,6 +562,14 @@ a published policy. Retain these serving-time projections, validators and their
 supporting data under gateway ownership. Core produces learned artifacts; the
 gateway must still validate and apply an existing artifact with core disabled.
 This service logic does not belong in AI merely because both owners use it.
+
+The same split applies to `optimization::exploration` and
+`optimization::identity`: `policy_table_router` uses `RouteExploration::assignment`
+while serving requests, and `policy_lock` checks experiment identities and
+compiler digests when admitting a published artifact. Keep those policy data,
+assignment and verification helpers available to gateway builds. Core owns
+creating, evaluating and promoting experiments; disabling core must neither
+disable an already published experiment nor skip its certificate checks.
 
 ### Current bitrouter-ai
 
@@ -947,7 +995,8 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
 - Move AI codecs, conversion algorithms, upstream execution, auth/provider and
   catalog runtime into the application.
 - Keep serving-time workflow projection and published-policy validation in the
-  gateway; only learning and scheduling depend on core.
+  gateway, including deterministic assignment for published experiments and
+  their identity/certificate checks; only learning and scheduling depend on core.
 - Split DTOs from implementation within mixed files; keep public API errors and
   observation views free of credentials and internal runtime objects.
 - Move runtime tests and fixtures with their implementations. Preserve protocol
@@ -967,6 +1016,10 @@ consumer requires the old SDK server API.
   policy or local discovery in the client. Compare raw and SDK-serialized
   requests at gateway admission, including opaque replay metadata and nested
   extension fields, to prove that serialization preserves their meaning.
+- Verify typed responses and stream events against actual gateway output,
+  including missing/null fields, terminal events and usage details. Exercise
+  malformed, oversized and disconnected responses without losing HTTP error
+  context or causing an unintended second dispatch.
 - Preserve supported gateway/control paths and auth behavior; document exactly
   which core methods are remotely supported. Preserve the existing WebSocket
   boundary where used.
@@ -1038,7 +1091,7 @@ refactor has already been implemented or tested.
 | A04 Gateway artifact | Official gateway profile runs as an independent process using configuration; no consumer-provided AppBuilder, hooks, database handles or source changes |
 | A05 Feature closure | Minimum/core/harness/tui/core+harness/core+tui/optional-gateway/default/all-features builds succeed in isolation; `tui` contains harness/CLI, harness does not implicitly enable core |
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state |
-| A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; typed client serialization preserves admission and replay semantics; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
+| A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; typed client serialization preserves admission and replay semantics, and response/event contracts preserve gateway output including presence/null semantics; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees |
 | A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
@@ -1046,7 +1099,7 @@ refactor has already been implemented or tested.
 | A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
 | A13 Extensions | Matcher needs only contracts; real plugin installation preserves legacy global/output behavior and rule isolation; native checker fail-closed, revision/binding and permit lifetime tests pass; default activation is unchanged |
 | A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct |
-| A15 External migration | Old SDK builder, AI ModelClient, telemetry imports and guardrails SDK adapter each have an explicit migration example; no claim that HTTP transparently replaces arbitrary custom hooks |
+| A15 External migration | Every consumer migration path above has an explicit replacement example or documented local-only boundary; old SDK builder, AI ModelClient, telemetry imports and guardrails SDK adapter are covered; no claim that HTTP transparently replaces arbitrary custom hooks |
 | A16 Performance | Compare size, normal dependency graph, idle memory and bounded throughput/stream behavior against P0 0; explain and resolve regressions outside the agreed budget |
 
 ### Isolated build and behavior matrix
@@ -1076,7 +1129,7 @@ coverage that justifies a profile.
 
 | Profile or boundary | Required behavior evidence |
 | --- | --- |
-| Minimum gateway | Real-process inference/control, configured authentication, published-policy load/validation and equivalent routing, usage finalization and shutdown without agent resources or a terminal |
+| Minimum gateway | Real-process inference/control, configured authentication, published-policy load/validation and equivalent routing including published experiment assignment and certificate rejection, usage finalization and shutdown without agent resources or a terminal |
 | Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness; existing eval HTTP subject/result/snapshot/status behavior and tenant isolation |
 | Harness only | ThreadService ownership/queue/approval/recovery, historical native snapshot decoding and corruption rejection, and supported headless execution tests, without production core or terminal drawing |
 | Core and harness | Existing managed execution, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |

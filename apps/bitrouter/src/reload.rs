@@ -13,6 +13,11 @@
 //! provider with an empty `api_base`, and an `auto_discover` provider
 //! would then silently drop every model.
 
+use bitrouter_ai::control::reload::{
+    AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, ReloadConsistency, ReloadFailure,
+    ReloadOutcome, ReloadParticipant, ReloadParticipantOutcome, ReloadParticipantReport,
+    ReloadReport, ReloadState, RunningConfigState, SavedConfigState,
+};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
@@ -32,173 +37,37 @@ const MAX_MIXED_STATE_HISTORY: usize = 32;
 /// inputs before it changes any live participant.
 pub const PREPARATION_TIMEOUT_SECONDS: u64 = 60;
 
-/// Where the daemon's primary configuration comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigSourceKind {
-    File,
-    Default,
-}
-
-/// Whether the currently saved primary configuration can be inspected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SavedConfigState {
-    Available,
-    Generated,
-    Missing,
-    Invalid,
-    Unavailable,
-}
-
-/// Relationship between inspected configuration inputs and the running daemon.
-/// Startup-owned settings and separate policy sources participate; external
-/// OAuth, registry, and discovery services are not probed by this comparison.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RunningConfigState {
-    InSync,
-    ReloadRequired,
-    RestartRequired,
-    Mixed,
-    Unknown,
-}
-
-/// State of a configuration source loaded separately from `bitrouter.yaml`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AuxiliaryConfigState {
-    InSync,
-    ReloadRequired,
-    NotConfigured,
-    Missing,
-    Invalid,
-    Unavailable,
-    Unknown,
-}
-
-/// Redaction-safe saved/running configuration contract.
-///
-/// Field names are fixed schema categories. Configuration values, source
-/// bytes, credentials, and value-derived hashes never leave the process.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ConfigurationState {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_instance_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generation: Option<u64>,
-    pub source: ConfigSourceKind,
-    pub saved: SavedConfigState,
-    pub running: RunningConfigState,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reload_required_fields: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub restart_required_fields: Vec<String>,
-    pub named_policy: AuxiliaryConfigState,
-    pub access_policies: AuxiliaryConfigState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_reload: Option<ReloadReport>,
-    /// Bounded mixed/unknown outcomes retained for this daemon boot, oldest
-    /// first. A later preparation failure cannot erase the report that made
-    /// the running configuration mixed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_state_history: Vec<ReloadReport>,
-}
-
-/// Consistency of the runtime configuration after the last completed reload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadConsistency {
-    /// Every participant in the last completed reload reached its intended
-    /// state, or a failed candidate made no live change.
-    Consistent,
-    /// A reload may have changed some live participants before it failed or
-    /// was interrupted. Operators must inspect the participant report.
-    Mixed,
-}
-
-/// A terminal reload outcome. `Unknown` is reserved for an interrupted
-/// in-process attempt after mutation began; it is never evidence of failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadOutcome {
-    Succeeded,
-    Failed,
-    PartiallyApplied,
-    Unknown,
-}
-
-/// A live subsystem participating in a daemon reload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadParticipant {
-    RoutingTable,
-    UpstreamTimeoutClients,
-    NamedPolicyRuntime,
-    AccessPolicyStore,
-}
-
-/// What one reload participant actually did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadParticipantOutcome {
-    Applied,
-    Unchanged,
-    Failed,
-    NotAttempted,
-}
-
-/// A safe, structured participant failure. Raw configuration and upstream
-/// errors may carry credentials, so the externally visible message is fixed
-/// and the detailed error remains in process logs only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadFailure {
-    pub code: String,
-    pub message: String,
-}
-
-impl ReloadFailure {
-    fn new(code: &str, message: &str) -> Self {
-        Self {
-            code: code.to_string(),
-            message: message.to_string(),
-        }
+fn reload_failure(code: &str, message: &str) -> ReloadFailure {
+    ReloadFailure {
+        code: code.to_string(),
+        message: message.to_string(),
     }
 }
 
-/// The actual result for one reload participant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadParticipantReport {
-    pub participant: ReloadParticipant,
-    pub outcome: ReloadParticipantOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ReloadFailure>,
+pub(crate) trait ReloadReportRuntime: Sized {
+    fn pending(instance: String, generation: u64) -> Self;
+    #[cfg(test)]
+    fn succeeded(instance: String, generation: u64) -> Self;
+    fn unsupported() -> Self;
+    fn participant_mut(
+        &mut self,
+        participant: ReloadParticipant,
+    ) -> Option<&mut ReloadParticipantReport>;
+    fn participant_applied(&mut self, participant: ReloadParticipant);
+    fn participant_unchanged(&mut self, participant: ReloadParticipant);
+    fn participant_failed(&mut self, participant: ReloadParticipant, error: ReloadFailure);
+    fn finish(&mut self, outcome: ReloadOutcome);
+    fn safe_summary(&self) -> &'static str;
+    fn any_applied(&self) -> bool;
 }
 
-/// A completed reload attempt. The report deliberately does not claim a
-/// cross-subsystem transaction: a partial outcome identifies every participant
-/// that changed before a later failure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadReport {
-    pub server_instance_id: String,
-    pub generation: u64,
-    pub outcome: ReloadOutcome,
-    pub participants: Vec<ReloadParticipantReport>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub restart_required_fields: Vec<String>,
-    /// RFC 3339 UTC timestamp captured when execution started.
-    pub started_at: String,
-    /// RFC 3339 UTC timestamp captured when this terminal report was recorded.
-    pub completed_at: String,
-}
-
-impl ReloadReport {
+impl ReloadReportRuntime for ReloadReport {
     fn pending(instance: String, generation: u64) -> Self {
         Self {
             server_instance_id: instance,
             generation,
             outcome: ReloadOutcome::Failed,
-            participants: ReloadParticipant::all()
+            participants: reload_participants()
                 .into_iter()
                 .map(|participant| ReloadParticipantReport {
                     participant,
@@ -214,7 +83,7 @@ impl ReloadReport {
 
     /// Build a successful report for coordinator-backed fakes in crate tests.
     #[cfg(test)]
-    pub(crate) fn succeeded(instance: String, generation: u64) -> Self {
+    fn succeeded(instance: String, generation: u64) -> Self {
         let mut report = Self::pending(instance, generation);
         for participant in &mut report.participants {
             participant.outcome = ReloadParticipantOutcome::Unchanged;
@@ -224,11 +93,11 @@ impl ReloadReport {
         report
     }
 
-    pub(crate) fn unsupported() -> Self {
+    fn unsupported() -> Self {
         let mut report = Self::pending("unsupported".to_string(), 0);
         report.participant_failed(
             ReloadParticipant::RoutingTable,
-            ReloadFailure::new(
+            reload_failure(
                 "unsupported_reload",
                 "this daemon does not support coordinated reload",
             ),
@@ -293,32 +162,13 @@ impl ReloadReport {
     }
 }
 
-impl ReloadParticipant {
-    fn all() -> [Self; 4] {
-        [
-            Self::RoutingTable,
-            Self::UpstreamTimeoutClients,
-            Self::NamedPolicyRuntime,
-            Self::AccessPolicyStore,
-        ]
-    }
-}
-
-/// State exposed by the coordinator. A generation marks a terminal attempt
-/// boundary; it is not an atomic snapshot of every request path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadState {
-    pub server_instance_id: String,
-    pub generation: u64,
-    pub running: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub running_generation: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_outcome: Option<ReloadReport>,
-    pub consistency: ReloadConsistency,
-    /// Bounded reports for prior mixed/unknown states in this process boot.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_state_history: Vec<ReloadReport>,
+fn reload_participants() -> [ReloadParticipant; 4] {
+    [
+        ReloadParticipant::RoutingTable,
+        ReloadParticipant::UpstreamTimeoutClients,
+        ReloadParticipant::NamedPolicyRuntime,
+        ReloadParticipant::AccessPolicyStore,
+    ]
 }
 
 /// Rejection before a reload operation is admitted. These conditions leave the
@@ -1542,7 +1392,7 @@ impl PreparationError {
     fn failed(participant: ReloadParticipant, code: &str, message: &str) -> Self {
         Self {
             participant,
-            failure: ReloadFailure::new(code, message),
+            failure: reload_failure(code, message),
             restart_required_fields: Vec::new(),
         }
     }
@@ -1550,7 +1400,7 @@ impl PreparationError {
     fn restart_required(fields: Vec<String>) -> Self {
         Self {
             participant: ReloadParticipant::RoutingTable,
-            failure: ReloadFailure::new(
+            failure: reload_failure(
                 "restart_required",
                 "candidate changes a field that is only applied at daemon startup",
             ),
@@ -1789,7 +1639,7 @@ impl AppReloader {
         if !reservation.belongs_to(&self.coordinator) {
             report.participant_failed(
                 ReloadParticipant::RoutingTable,
-                ReloadFailure::new(
+                reload_failure(
                     "invalid_reservation",
                     "reload reservation does not belong to this daemon",
                 ),
@@ -1841,7 +1691,7 @@ impl AppReloader {
             Err(_) => {
                 report.participant_failed(
                     ReloadParticipant::RoutingTable,
-                    ReloadFailure::new(
+                    reload_failure(
                         "preparation_timed_out",
                         "reload preparation exceeded its time limit",
                     ),
@@ -1861,7 +1711,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::RoutingTable) {
             report.participant_failed(
                 ReloadParticipant::RoutingTable,
-                ReloadFailure::new("fault_injected", "routing table update failed"),
+                reload_failure("fault_injected", "routing table update failed"),
             );
         } else {
             match self
@@ -1874,7 +1724,7 @@ impl AppReloader {
                     tracing::warn!(error = %error, "reload routing table swap failed");
                     report.participant_failed(
                         ReloadParticipant::RoutingTable,
-                        ReloadFailure::new("routing_apply_failed", "routing table update failed"),
+                        reload_failure("routing_apply_failed", "routing table update failed"),
                     );
                 }
             }
@@ -1884,7 +1734,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::UpstreamTimeoutClients) {
             report.participant_failed(
                 ReloadParticipant::UpstreamTimeoutClients,
-                ReloadFailure::new("fault_injected", "upstream timeout client update failed"),
+                reload_failure("fault_injected", "upstream timeout client update failed"),
             );
         } else {
             self.upstream_executor
@@ -1896,7 +1746,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::NamedPolicyRuntime) {
             report.participant_failed(
                 ReloadParticipant::NamedPolicyRuntime,
-                ReloadFailure::new("fault_injected", "named policy runtime update failed"),
+                reload_failure("fault_injected", "named policy runtime update failed"),
             );
         } else {
             match (self.policy_runtime.as_ref(), prepared.named_policy_runtime) {
@@ -1912,7 +1762,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::AccessPolicyStore) {
             report.participant_failed(
                 ReloadParticipant::AccessPolicyStore,
-                ReloadFailure::new("fault_injected", "access-policy store update failed"),
+                reload_failure("fault_injected", "access-policy store update failed"),
             );
         } else {
             match prepared.access_policy_store {
@@ -1922,7 +1772,7 @@ impl AppReloader {
                         tracing::warn!(error = %error, "reload access-policy store swap failed");
                         report.participant_failed(
                             ReloadParticipant::AccessPolicyStore,
-                            ReloadFailure::new(
+                            reload_failure(
                                 "access_policy_apply_failed",
                                 "access-policy store update failed",
                             ),
@@ -2617,7 +2467,7 @@ policies:
     #[tokio::test]
     async fn fault_boundaries_report_each_participant_and_preserve_active_policy_truth()
     -> anyhow::Result<()> {
-        for failed_participant in ReloadParticipant::all() {
+        for failed_participant in reload_participants() {
             let fixture = fault_fixture(failed_participant).await?;
             let initial_state = fixture
                 .reloader
@@ -3109,7 +2959,7 @@ presets:
         partial.participant_applied(ReloadParticipant::RoutingTable);
         partial.participant_failed(
             ReloadParticipant::NamedPolicyRuntime,
-            ReloadFailure::new("fault_injected", "policy table update failed"),
+            reload_failure("fault_injected", "policy table update failed"),
         );
         partial.finish(ReloadOutcome::PartiallyApplied);
         coordinator.complete(&partial_reservation, partial);
@@ -3123,7 +2973,7 @@ presets:
         );
         failed.participant_failed(
             ReloadParticipant::RoutingTable,
-            ReloadFailure::new("config_prepare_failed", "reload configuration is invalid"),
+            reload_failure("config_prepare_failed", "reload configuration is invalid"),
         );
         failed.finish(ReloadOutcome::Failed);
         coordinator.complete(&failed_reservation, failed);

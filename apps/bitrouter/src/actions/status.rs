@@ -149,7 +149,7 @@ pub struct StatusReport {
     /// configuration sources. `None` means runtime evidence is unavailable; it
     /// never means the saved and running configurations match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_state: Option<crate::reload::ConfigurationState>,
+    pub config_state: Option<bitrouter_ai::control::reload::ConfigurationState>,
     /// Version of this CLI, only for local status queries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_version: Option<String>,
@@ -273,7 +273,10 @@ impl StatusReport {
         self
     }
 
-    pub fn with_config_state(mut self, state: Option<crate::reload::ConfigurationState>) -> Self {
+    pub fn with_config_state(
+        mut self,
+        state: Option<bitrouter_ai::control::reload::ConfigurationState>,
+    ) -> Self {
         self.config_state = state;
         self
     }

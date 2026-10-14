@@ -38,7 +38,7 @@ struct Fixture {
     canonical: CanonicalStore,
     config: Config,
     source: ConfigSource,
-    pipeline: Arc<crate::gateway::pipeline::pipeline::Pipeline>,
+    pipeline: Arc<crate::gateway::pipeline::execution::Pipeline>,
     ingress: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     upstream: MockServer,
