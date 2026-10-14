@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::harness::acp::native::NativeAcpServer;
+use crate::harness::agent::AgentConfig;
 use anyhow::{Context, Result};
-use bitrouter_orchestrator::acp::native::NativeAcpServer;
-use bitrouter_orchestrator::agent::AgentConfig;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;

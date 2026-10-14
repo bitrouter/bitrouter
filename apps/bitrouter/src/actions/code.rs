@@ -7,8 +7,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::actions::route::RouteInput;
+use crate::commands::chat::PromptCommand;
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_tui::machine::PromptCommand;
 use tokio_util::sync::CancellationToken;
 
 use crate::acp_cli::{SessionSelection, SpawnContext, lifecycle_cancelled};
@@ -64,7 +64,7 @@ pub(crate) struct OpenedSession {
     pub diagnostics: Vec<String>,
     pub prompt_commands: Vec<PromptCommand>,
     pub resumed: bool,
-    pub background_choices: bitrouter_tui::agents::NewAgentRunChoices,
+    pub background_choices: crate::presentation::agents::NewAgentRunChoices,
 }
 
 impl CodeServices {
@@ -98,7 +98,7 @@ impl CodeServices {
     pub fn commands(
         &self,
         capabilities: Option<&crate::acp_cli::CapabilitySnapshot>,
-    ) -> Vec<bitrouter_tui::machine::Command> {
+    ) -> Vec<crate::commands::chat::Command> {
         if let Some(capabilities) = capabilities {
             return super::session::offered_route_commands(
                 capabilities.route_list,
@@ -115,7 +115,7 @@ impl CodeServices {
                 let name = action.tui_command?;
                 let unavailable = (!matches!(action.requires, crate::actions::Requires::Nothing))
                     .then_some("Connect a routable ACP session to use this action");
-                Some(bitrouter_tui::machine::Command {
+                Some(crate::commands::chat::Command {
                     name,
                     action: action.id,
                     summary: super::session::summary_for(action.id),
@@ -388,8 +388,9 @@ pub(crate) async fn background_choices(
     config: &bitrouter_sdk::config::Config,
     current_agent: Option<&str>,
     foreground_claim: bool,
-) -> Result<bitrouter_tui::agents::NewAgentRunChoices> {
-    use bitrouter_tui::agents::{NewAgentDirectoryChoice, NewAgentRunChoices};
+) -> Result<crate::presentation::agents::NewAgentRunChoices> {
+    use crate::presentation::agents::NewAgentDirectoryChoice;
+    use crate::presentation::agents::NewAgentRunChoices;
     let cwd = std::env::current_dir()?;
     let canonical = tokio::fs::canonicalize(&cwd).await?;
     let mut paths = vec![canonical.clone()];
@@ -460,7 +461,8 @@ fn operation_command_supported(action: &str) -> bool {
 /// entries remain selectable only when the catalog actually supplies ACP.
 fn agent_is_selectable(row: &crate::agents::ListRow) -> bool {
     row.configured
-        || crate::harness::by_id(&row.id).is_some_and(|harness| harness.acp_command.is_some())
+        || crate::harness::catalog::by_id(&row.id)
+            .is_some_and(|harness| harness.acp_command.is_some())
 }
 
 #[cfg(test)]

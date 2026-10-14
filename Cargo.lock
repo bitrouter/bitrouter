@@ -662,6 +662,8 @@ name = "bitrouter"
 version = "1.0.0-alpha.33"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-conductor",
+ "agent-client-protocol-schema",
  "anyhow",
  "async-trait",
  "atomicwrites",
@@ -671,26 +673,39 @@ dependencies = [
  "base64 0.22.1",
  "bitrouter-ai",
  "bitrouter-guardrails",
- "bitrouter-orchestrator",
  "bitrouter-sdk",
- "bitrouter-telemetry",
- "bitrouter-tui",
+ "bytes",
  "chrono",
  "clap",
+ "criterion",
  "crossterm",
+ "dashmap",
  "erased-serde",
  "futures",
+ "futures-core",
+ "globset",
  "hex",
  "hmac 0.13.0",
  "http",
  "http-body",
+ "ignore",
  "jsonschema",
  "keyring",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
  "opentelemetry-proto",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "pin-project-lite",
  "portable-pty",
+ "process-wrap",
  "prost",
  "rand 0.10.2",
  "rand_distr",
+ "ratatui",
+ "ratatui-markdown",
+ "regex",
  "reqwest",
  "ring",
  "rmcp",
@@ -703,16 +718,23 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2 0.11.0",
+ "shell-words",
+ "similar",
  "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
  "toml",
+ "tonic",
  "tower",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
  "url",
  "uuid",
  "vt100",
@@ -762,43 +784,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-orchestrator"
-version = "1.0.0-alpha.33"
-dependencies = [
- "agent-client-protocol",
- "agent-client-protocol-conductor",
- "agent-client-protocol-schema",
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "bitrouter-ai",
- "bitrouter-sdk",
- "futures",
- "globset",
- "hex",
- "http",
- "ignore",
- "process-wrap",
- "regex",
- "reqwest",
- "rmcp",
- "rustix 1.1.4",
- "serde",
- "serde-saphyr",
- "serde_json",
- "sha2 0.11.0",
- "similar",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
- "uuid",
- "wiremock",
-]
-
-[[package]]
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.33"
 dependencies = [
@@ -829,53 +814,6 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
-]
-
-[[package]]
-name = "bitrouter-telemetry"
-version = "1.0.0-alpha.33"
-dependencies = [
- "async-trait",
- "axum",
- "bitrouter-ai",
- "bitrouter-sdk",
- "bytes",
- "criterion",
- "dashmap",
- "futures",
- "futures-core",
- "http",
- "http-body",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "pin-project-lite",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tower",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "bitrouter-tui"
-version = "1.0.0-alpha.33"
-dependencies = [
- "agent-client-protocol-schema",
- "crossterm",
- "ratatui",
- "ratatui-markdown",
- "serde_json",
- "shell-words",
- "similar",
- "unicode-segmentation",
- "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -5571,8 +5509,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
 dependencies = [
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "bytes",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -5582,6 +5522,7 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "rustls-native-certs",
+ "socket2",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

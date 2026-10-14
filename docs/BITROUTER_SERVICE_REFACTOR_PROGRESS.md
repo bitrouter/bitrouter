@@ -42,7 +42,9 @@ out. That case passed in the subsequent run. The subsequent run is not a clean
 baseline: three MCP fixture tests invoked Cargo while migration edits were in
 progress, and encountered a temporarily invalid manifest. That run was stopped;
 a fresh, detached source worktree at the baseline commit now runs the complete
-suite independently of implementation edits. Its final outcome is pending.
+suite independently of implementation edits. That frozen run completed:
+**4,473 passed, 22 skipped, 6 slow**, in 784.349 seconds. No test was excluded
+to obtain this result; skips are the baseline configuration's existing skips.
 
 A baseline executable is retained outside the source worktree for later
 process/performance comparisons. The initial build is 322,416,544 bytes with
@@ -56,9 +58,9 @@ the contract move must preserve its bytes.
 
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
-| P0 0 Compatibility baseline | In progress | Inventory and persisted format recorded; test baseline and measurements pending |
+| P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check contracts and operation scopes moved to AI; matcher detached from old SDK; legacy adapters moved to application; Observation/capability slice verified; shared control/core DTO extraction remains before their final service/client split |
-| P0 2 Application consolidation | Pending | Core/harness, TUI and telemetry relocation with preserved behavior |
+| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | Pending | Service runtime relocation, AI dependency isolation and schema bootstrap |
 | P0 4 HTTP SDK | Pending | Typed gateway/control client and independent process consumer |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
@@ -100,8 +102,11 @@ real legacy plugin installation tests; behavioral tests for isolated core/harnes
 profiles; a gRPC-only collector test; and historical payload fixtures distinct
 from version-number acceptance. The two new plugin installation tests passed
 against the original adapter before relocation, proving static input denial,
-stream block/redact, hook order and per-request rule isolation. gRPC and persisted
-payload baseline evidence remain open.
+stream block/redact, hook order and per-request rule isolation. The added
+gRPC-only collector baseline also passed before exporter relocation. It exercises
+the actual exporter constructor, trace/metric delivery, static authentication
+metadata and shutdown flushing in an isolated process. Persisted historical
+payload baseline evidence remains open.
 
 P0 1 independent review found one stale SDK observation rustdoc link in
 `metrics.rs`. It now links to the AI contract and describes host seams accurately.
@@ -123,3 +128,43 @@ Current validation:
 
 AI still contains its original model runtime at this intermediate stage; complete
 lightweight dependency isolation is a P0 3 gate, not a claim of this extraction.
+
+
+P0 2 consolidation is in progress. Orchestrator and telemetry relocations each
+passed workspace all-feature/all-target type checking. The relocated gRPC-only
+collector test passed with HTTP disabled, including child-process trace/metric
+delivery, static metadata and shutdown flushing. Independent static review found
+one release blocker: CI still named retired packages. Those checks now target the
+application and the final P0 dependency matrix; the matrix remains an open gate
+until full feature isolation lands. The review found no other relocation issue.
+TUI consolidation and shared command/permission/presentation extraction passed
+all-feature/all-target checking. The first 1,037-test consolidation run passed
+1,035 cases; two child-process recovery fixtures selected their former module
+names and exited before fault injection. They now derive the test name from
+`module_path!`, and both passed in a subsequent 226-test run together with the
+active TUI/shared presentation tests and new source-boundary guards.
+
+Restricting TUI visibility exposed unused legacy library APIs: the former
+machine/picker/view, footer helpers and frame scheduler had no product callers.
+Their removal retains the canonical Code view and its behavior tests, moves
+resolver tests to shared commands, and replaces the headless permission effect
+interpreter with direct use of the same harness policy/outcome resolution.
+The 264 baseline renderer tests become 220 active renderer/shared tests; 44 tests
+of the retired APIs are removed. Independent comparison against the baseline
+found no removed product caller, consent/lifecycle regression, or unique active
+behavior coverage lost. This is an alpha library API retirement, not a change to
+the product's interaction paths. Session log-tail text now lives in presentation
+without terminal types. Plain transcript Markdown formatting still requires a
+terminal-free split.
+
+The all-feature/all-target workspace check passed without project warnings.
+Strict workspace rustdoc passed after replacing two public links to private TUI
+implementation details. The subsequent real ACP/PTY, native-agent TUI, log-tail
+and source-boundary run passed all 75 selected cases, including headless denial,
+approval policy, streaming text output, cancellation and terminal restoration.
+
+The plan review also identified two feature-isolation prerequisites: gateway
+serving must retain policy-key projection and published-artifact validation; and
+harness-only recovery must retain shared snapshot decoding and immutable-history
+validation. Their ownership and cross-profile acceptance fixtures are now
+explicit in the implementation plan. Both remain implementation work.

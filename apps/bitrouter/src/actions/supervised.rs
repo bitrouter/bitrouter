@@ -10,6 +10,7 @@ use anyhow::{Result, bail, ensure};
 
 use crate::acp_cli::{CapabilitySnapshot, LaunchOptions, RoutingOptions, SessionSelection};
 use crate::daemon::{self, DaemonStartOutcome};
+use crate::harness::acp::client::SessionInitialSettings;
 use crate::paths::ConfigSource;
 use crate::supervisor::{
     ActionAcknowledgement, ActionValue, ControlFence, PermissionPolicy, Presentation, ReplayBatch,
@@ -19,7 +20,6 @@ use crate::supervisor::{
 use agent_client_protocol::schema::v1::{
     ListSessionsResponse, SessionConfigOptionValue, SetSessionConfigOptionResponse,
 };
-use bitrouter_orchestrator::acp::client::SessionInitialSettings;
 use tokio_util::sync::CancellationToken;
 
 /// Resolve the selected configuration's live endpoint, starting its daemon

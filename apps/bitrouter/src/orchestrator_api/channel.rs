@@ -5,18 +5,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::core::checkpoint::{CheckpointAck, CheckpointBatch};
+use crate::core::collaboration::Action;
+use crate::core::protocol::{ArtifactRef, BETA, ClientMessage, Command, ServerMessage, ToolStatus};
+use crate::core::session::HarnessPort;
 use async_trait::async_trait;
 use axum::extract::State;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use bitrouter_orchestrator::core::checkpoint::{CheckpointAck, CheckpointBatch};
-use bitrouter_orchestrator::core::collaboration::Action;
-use bitrouter_orchestrator::core::protocol::{
-    ArtifactRef, BETA, ClientMessage, Command, ServerMessage, ToolStatus,
-};
-use bitrouter_orchestrator::core::session::HarnessPort;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -86,7 +84,7 @@ pub(super) struct RemotePort {
     pub(super) output: Arc<output::Scope>,
     control: Arc<output::Scope>,
     principal: Principal,
-    grant: bitrouter_orchestrator::core::protocol::OwnershipGrant,
+    grant: crate::core::protocol::OwnershipGrant,
     limits: Limits,
     connection: Mutex<Option<Connection>>,
     ack: Mutex<Option<PendingAck>>,
@@ -97,7 +95,7 @@ pub(super) struct RemotePort {
 impl RemotePort {
     pub(super) fn new(
         principal: Principal,
-        grant: bitrouter_orchestrator::core::protocol::OwnershipGrant,
+        grant: crate::core::protocol::OwnershipGrant,
         limits: Limits,
         output: Arc<output::Scope>,
         control: Arc<output::Scope>,

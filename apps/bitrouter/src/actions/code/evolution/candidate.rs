@@ -1,7 +1,7 @@
 //! Explicit candidate draft; persistence and live route validation stay in the service.
 
+use crate::tui::code::{Inspector, Selector, SelectorRow};
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_tui::code::{Inspector, Selector, SelectorRow};
 
 use super::{Panel, SessionRef, mode_name};
 use crate::evolution::control::BlockRule;

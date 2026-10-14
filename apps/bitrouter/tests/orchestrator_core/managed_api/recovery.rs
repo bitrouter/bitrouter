@@ -1,8 +1,8 @@
 //! Remote ownership and ACK-loss checks using independently retained journal bytes.
 
 use super::*;
-use bitrouter_orchestrator::core::protocol::Restore;
-use bitrouter_orchestrator::core::session::SessionSnapshot;
+use bitrouter::core::protocol::Restore;
+use bitrouter::core::session::SessionSnapshot;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;

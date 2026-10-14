@@ -1,9 +1,9 @@
 //! Joint native provider-state and core allocation conformance through real HTTP.
 
 use super::*;
-use bitrouter_orchestrator::core::allocation::ContextKind;
-use bitrouter_orchestrator::core::collaboration::{Action, Work};
-use bitrouter_orchestrator::core::session::SessionSnapshot;
+use bitrouter::core::allocation::ContextKind;
+use bitrouter::core::collaboration::{Action, Work};
+use bitrouter::core::session::SessionSnapshot;
 use bitrouter_sdk::language_model::native_continuation::ContinuationFailure;
 
 #[derive(Clone)]
@@ -143,7 +143,7 @@ fn work(text: &str, fresh: bool) -> Work {
 fn receipt<'a>(
     snapshot: &'a SessionSnapshot,
     agent: &str,
-) -> Result<&'a bitrouter_orchestrator::core::routing::ExecutionReceipt> {
+) -> Result<&'a bitrouter::core::routing::ExecutionReceipt> {
     snapshot
         .agents
         .get(agent)

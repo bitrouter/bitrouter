@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, ensure};
 use bitrouter::agent_local::{Operation, ReplyResult};
-use bitrouter_orchestrator::turn::{TurnStatus, VerificationStatus};
+use bitrouter::harness::turn::{TurnStatus, VerificationStatus};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 use tokio::process::Command;
@@ -560,7 +560,7 @@ async fn submit(
     let (thread, turn) = client
         .create_and_start(
             workspace.into(),
-            bitrouter_orchestrator::agent::AgentConfig::fixed("test-model", None),
+            bitrouter::harness::agent::AgentConfig::fixed("test-model", None),
             check,
             "Change note.txt".into(),
         )
@@ -575,7 +575,7 @@ async fn wait_status(
     socket: &std::path::Path,
     execution: &Execution,
     wanted: TurnStatus,
-) -> Result<bitrouter_orchestrator::turn::TurnSnapshot> {
+) -> Result<bitrouter::harness::turn::TurnSnapshot> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let snapshot = match bitrouter::agent_local::request(

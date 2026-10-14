@@ -10,20 +10,34 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::commands::agents::AgentEffect;
+use crate::commands::agents::AgentLeaseIntent;
+use crate::presentation::agents::AgentAttention;
+use crate::presentation::agents::AgentDeckSnapshot;
+use crate::presentation::agents::AgentHistoryEvent;
+use crate::presentation::agents::AgentHistoryKind;
+use crate::presentation::agents::AgentHistorySnapshot;
+use crate::presentation::agents::AgentLeaseView;
+use crate::presentation::agents::AgentPermissionOption;
+use crate::presentation::agents::AgentPermissionView;
+use crate::presentation::agents::AgentProcessState;
+use crate::presentation::agents::AgentReviewState;
+use crate::presentation::agents::AgentRunView;
+use crate::presentation::agents::AgentTurnState;
+use crate::presentation::agents::NewAgentRunTarget;
+use crate::tui::agents::AgentAction;
+use crate::tui::agents::AgentDeckMode;
+use crate::tui::agents::AgentDeckState;
+use crate::tui::agents::AgentDeckView;
+use crate::tui::code::{CodeEffect, CodeState};
 use anyhow::{Context, Result, bail};
-use bitrouter_tui::agents::{
-    AgentAction, AgentAttention, AgentDeckMode, AgentDeckSnapshot, AgentDeckState, AgentDeckView,
-    AgentEffect, AgentHistoryEvent, AgentHistoryKind, AgentHistorySnapshot, AgentLeaseIntent,
-    AgentLeaseView, AgentPermissionOption, AgentPermissionView, AgentProcessState,
-    AgentReviewState, AgentRunView, AgentTurnState, NewAgentRunTarget,
-};
-use bitrouter_tui::code::{CodeEffect, CodeState};
 use crossterm::event::EventStream;
 use futures::{FutureExt as _, StreamExt as _};
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 
 use crate::acp_cli::{RoutingOptions, SessionSelection};
+use crate::harness::acp::translate::SessionUpdateKind;
 use crate::paths::ConfigSource;
 use crate::supervisor::{
     ActionAcknowledgement, AttentionState, ControlFence, LeaseMode, ProcessState, ReviewState,
@@ -31,7 +45,6 @@ use crate::supervisor::{
     SessionEventKind, SessionGrant, SessionMutation, SessionResponse, SessionScope,
     StartRunRequest, TurnState,
 };
-use bitrouter_orchestrator::acp::translate::SessionUpdateKind;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -1501,7 +1514,7 @@ fn map_update(
         }
         _ => {}
     }
-    match bitrouter_orchestrator::acp::translate::translate(update.clone()) {
+    match crate::harness::acp::translate::translate(update.clone()) {
         Some(SessionUpdateKind::MessageChunk { text, .. }) => (AgentHistoryKind::Assistant, text),
         Some(SessionUpdateKind::ThoughtChunk { text, .. }) => (AgentHistoryKind::Thought, text),
         Some(SessionUpdateKind::ToolCall {
@@ -1615,17 +1628,21 @@ fn unexpected<T>(operation: &str, _: SessionResponse) -> Result<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::commands::agents::AgentEffect;
+    use crate::harness::permission::Prompt;
+    use crate::presentation::agents::AgentDeckSnapshot;
+    use crate::presentation::agents::AgentHistorySnapshot;
+    use crate::presentation::agents::AgentLeaseView;
+    use crate::presentation::agents::AgentRunView;
+    use crate::tui::agents::AgentAction;
+    use crate::tui::agents::AgentDeckMode;
+    use crate::tui::agents::AgentDeckState;
+    use crate::tui::code::{CodeAction, CodeEffect, CodeState};
     use agent_client_protocol::schema::v1::{
         ContentBlock, SessionUpdate, TextContent, ToolCallContent, ToolCallUpdate,
         ToolCallUpdateFields,
     };
     use anyhow::Context as _;
-    use bitrouter_tui::agents::{
-        AgentAction, AgentDeckMode, AgentDeckSnapshot, AgentDeckState, AgentEffect,
-        AgentHistorySnapshot, AgentLeaseView, AgentRunView,
-    };
-    use bitrouter_tui::code::{CodeAction, CodeEffect, CodeState};
-    use bitrouter_tui::permission::Prompt;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
     use crate::supervisor::SessionScope;

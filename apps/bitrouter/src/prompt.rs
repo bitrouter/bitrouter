@@ -2,8 +2,8 @@
 
 use std::io::{self, IsTerminal};
 
+use crate::tui::select::{Action, Item, Select, View};
 use anyhow::{Context, Result};
-use bitrouter_tui::select::{Action, Item, Select, View};
 use futures::StreamExt;
 
 pub(crate) async fn select(

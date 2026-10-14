@@ -15,7 +15,7 @@
 
 use std::time::{Duration, Instant};
 
-use bitrouter_orchestrator::harness::mcp::McpConnections;
+use crate::harness::resources::mcp::McpConnections;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::Config;
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;

@@ -14,8 +14,8 @@ use crate::actions::models::ModelsQuery;
 use crate::actions::route::{RouteInput, RouteQuery};
 use crate::actions::status::StatusQuery;
 use crate::actions::{ACTIONS, Requires};
-use bitrouter_orchestrator::acp::client::{AcpClient, RouteMethod};
-use bitrouter_tui::machine::Command;
+use crate::commands::chat::Command;
+use crate::harness::acp::client::{AcpClient, RouteMethod};
 
 use crate::output::CliReport;
 use crate::paths::ConfigSource;
@@ -100,7 +100,7 @@ pub struct SessionSurface<'a> {
     /// in once its session is open.
     pub commands: Vec<Command>,
     /// The user's prompt-expansion commands, resolved from config at launch.
-    pub prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
+    pub prompt_commands: Vec<crate::commands::chat::PromptCommand>,
     /// The ports a read command is answered through.
     pub ports: &'a SessionPorts,
 }
@@ -198,7 +198,7 @@ impl SessionPorts {
 /// It cannot live in the SDK: the check needs the app-owned `ACTIONS` table.
 pub fn prompt_commands(
     config: &bitrouter_sdk::config::ChatConfig,
-) -> anyhow::Result<Vec<bitrouter_tui::machine::PromptCommand>> {
+) -> anyhow::Result<Vec<crate::commands::chat::PromptCommand>> {
     let mut seen: Vec<&str> = Vec::new();
     let mut commands = Vec::with_capacity(config.commands.len());
     for command in &config.commands {
@@ -227,7 +227,7 @@ pub fn prompt_commands(
                 row.id
             );
         }
-        if let Some((alias, target)) = bitrouter_tui::machine::ALIASES
+        if let Some((alias, target)) = crate::commands::chat::ALIASES
             .iter()
             .find(|(alias, _)| *alias == name)
         {
@@ -241,7 +241,7 @@ pub fn prompt_commands(
             "`chat.commands` defines `/{name}` twice"
         );
         seen.push(name);
-        commands.push(bitrouter_tui::machine::PromptCommand {
+        commands.push(crate::commands::chat::PromptCommand {
             name: name.to_string(),
             description: command.description.clone(),
             template: command.prompt.clone(),

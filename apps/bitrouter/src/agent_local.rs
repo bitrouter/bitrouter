@@ -3,11 +3,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::harness::agent::AgentConfig;
+use crate::harness::service::{ErrorCode, RuntimeCapabilities, ThreadService};
+use crate::harness::turn::TurnSnapshot;
 use anyhow::{Context, Result};
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_orchestrator::agent::AgentConfig;
-use bitrouter_orchestrator::service::{ErrorCode, RuntimeCapabilities, ThreadService};
-use bitrouter_orchestrator::turn::TurnSnapshot;
 use bitrouter_sdk::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -15,11 +15,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::daemon::transport;
 
-use bitrouter_orchestrator::thread::{
+use crate::harness::thread::{
     PermissionProfile, ThreadHistoryPage, ThreadHistoryRequest, ThreadObservation, ThreadRequest,
     ThreadSnapshot, ThreadTarget, ThreadView,
 };
-use bitrouter_orchestrator::turn::{
+use crate::harness::turn::{
     ApprovalAnswer, CancelTurnRequest, SteeringReceipt, SteeringRequest, TurnReceipt, TurnRequest,
 };
 
@@ -90,7 +90,7 @@ pub enum Operation {
         workspace: PathBuf,
         model: String,
         #[serde(default)]
-        model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
+        model_mode: crate::core::protocol::ModelMode,
         effort: Option<ReasoningEffort>,
         #[serde(default)]
         max_output_tokens: Option<u32>,
@@ -170,7 +170,7 @@ pub struct ThreadReply {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplyResult {
     Directory {
-        page: bitrouter_orchestrator::thread::ThreadDirectoryPage,
+        page: crate::harness::thread::ThreadDirectoryPage,
     },
     Capabilities {
         operations: Vec<String>,
@@ -591,7 +591,7 @@ fn target(
     service: &ThreadService,
     command: &ThreadCommand,
     thread_id: &str,
-) -> std::result::Result<ThreadTarget, bitrouter_orchestrator::service::ServiceError> {
+) -> std::result::Result<ThreadTarget, crate::harness::service::ServiceError> {
     service.ensure_instance(command.server_instance_id.as_deref())?;
     Ok(ThreadTarget {
         thread_id: thread_id.into(),
@@ -643,7 +643,7 @@ impl ThreadClient {
             model_mode: config.model_mode,
             effort: config.effort,
             max_output_tokens: config.max_output_tokens,
-            read_only: config.tool_mode() == bitrouter_orchestrator::agent::ToolMode::ReadOnly,
+            read_only: config.tool_mode() == crate::harness::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
         };
@@ -762,7 +762,7 @@ pub async fn request(socket: &Path, operation: Operation) -> Result<ReplyResult>
 
 fn uncertain(error: &anyhow::Error) -> bool {
     error
-        .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
+        .downcast_ref::<crate::harness::service::ServiceError>()
         .is_none_or(|failure| {
             matches!(
                 failure.code,
@@ -839,9 +839,12 @@ fn decode_reply(line: &str, request_id: &str) -> Result<ReplyResult> {
         "task reply request ID mismatch"
     );
     match reply.result {
-        ReplyResult::Error { code, message } => Err(anyhow::Error::new(
-            bitrouter_orchestrator::service::ServiceError { code, message },
-        )),
+        ReplyResult::Error { code, message } => {
+            Err(anyhow::Error::new(crate::harness::service::ServiceError {
+                code,
+                message,
+            }))
+        }
         ReplyResult::UnsupportedVersion { supported } => anyhow::bail!(
             "task server supports contract version {supported}; client requires {CONTRACT_VERSION}"
         ),
@@ -920,7 +923,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing instance error"))?;
         assert!(
             error
-                .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
+                .downcast_ref::<crate::harness::service::ServiceError>()
                 .is_some_and(|error| error.code == ErrorCode::InstanceChanged)
         );
         Ok(())
@@ -957,7 +960,7 @@ mod tests {
                                 snapshot: Box::new(ThreadSnapshot {
                                     server_instance_id: "fixture-epoch".into(),
                                     thread_id: "original-thread".into(),
-                                    status: bitrouter_orchestrator::thread::ThreadStatus::Idle,
+                                    status: crate::harness::thread::ThreadStatus::Idle,
                                     workspace: PathBuf::from("/fixture"),
                                     model: "fixture-model".into(),
                                     permission_profile: PermissionProfile::ReadOnly,
@@ -994,7 +997,7 @@ mod tests {
                                     thread_id,
                                     turn_id: "original-turn".into(),
                                     queue_order: 1,
-                                    status: bitrouter_orchestrator::turn::TurnStatus::Accepted,
+                                    status: crate::harness::turn::TurnStatus::Accepted,
                                 },
                             },
                         )

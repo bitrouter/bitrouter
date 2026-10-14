@@ -8,7 +8,7 @@
 //! - `crate::auth::AuthHook` (binary module: `brvk_` validation)
 //! - `crate::policy::PolicyHook` (binary module: model + tool + spend)
 //! - the named-router compiled request-check runtime (input allow/deny)
-//! - `bitrouter_telemetry::otel::OtelObserveHook` (SDK `otel` feature: per-request
+//! - `bitrouter::telemetry::exporter::OtelObserveHook` (SDK `otel` feature: per-request
 //!   OTLP trace + metric export)
 //! - `crate::metering::MeteringRecorder` (binary module: SettlementRecorder)
 //!

@@ -24,7 +24,7 @@ fn worker(id: &str) -> Option<(&'static str, &'static str, Version)> {
 /// unresponsive local CLIs leave the adapter's bundled worker in control.
 pub(crate) async fn apply(transport: &mut AcpTransport) {
     let AcpTransport::Stdio { command, args, env } = transport;
-    let Some(harness) = crate::harness::match_invocation(command, args) else {
+    let Some(harness) = crate::harness::catalog::match_invocation(command, args) else {
         return;
     };
     if !harness.uses_maintained_adapter(command, args) {

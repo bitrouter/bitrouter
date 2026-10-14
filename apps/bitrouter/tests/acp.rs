@@ -1035,8 +1035,8 @@ async fn headless(
     (tally, String::from_utf8(buf).expect("utf8"))
 }
 
-fn policy(mode: bitrouter_tui::permission::Mode) -> bitrouter_tui::permission::Policy {
-    bitrouter_tui::permission::Policy {
+fn policy(mode: bitrouter::harness::permission::Mode) -> bitrouter::harness::permission::Policy {
+    bitrouter::harness::permission::Policy {
         mode,
         ..Default::default()
     }
@@ -1047,7 +1047,7 @@ fn policy(mode: bitrouter_tui::permission::Mode) -> bitrouter_tui::permission::P
 #[tokio::test]
 async fn prompt_approve_all_selects_the_allow_option() {
     let options = bitrouter::acp_cli::PromptOptions {
-        policy: policy(bitrouter_tui::permission::Mode::ApproveAll),
+        policy: policy(bitrouter::harness::permission::Mode::ApproveAll),
         ..Default::default()
     };
     let (tally, output) = headless(permission_stub("execute"), "run it", options).await;
@@ -1080,7 +1080,7 @@ async fn prompt_approve_all_selects_the_allow_option() {
 #[tokio::test]
 async fn prompt_approve_reads_reads_the_kind() {
     let reads = || bitrouter::acp_cli::PromptOptions {
-        policy: policy(bitrouter_tui::permission::Mode::ApproveReads),
+        policy: policy(bitrouter::harness::permission::Mode::ApproveReads),
         ..Default::default()
     };
     let (tally, output) = headless(permission_stub("read"), "read it", reads()).await;
@@ -1097,8 +1097,8 @@ async fn prompt_approve_reads_reads_the_kind() {
 #[tokio::test]
 async fn prompt_permission_policy_title_head_wins() {
     let options = bitrouter::acp_cli::PromptOptions {
-        policy: bitrouter_tui::permission::Policy {
-            mode: bitrouter_tui::permission::Mode::ApproveAll,
+        policy: bitrouter::harness::permission::Policy {
+            mode: bitrouter::harness::permission::Mode::ApproveAll,
             auto_deny: vec!["write".to_string()],
             ..Default::default()
         },

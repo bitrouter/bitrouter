@@ -457,7 +457,7 @@ async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<
         "Choose an authentication method",
         options
             .iter()
-            .map(|method| bitrouter_tui::select::Item::new(method.label(), ""))
+            .map(|method| crate::tui::select::Item::new(method.label(), ""))
             .collect(),
         0,
     )
@@ -1119,7 +1119,7 @@ mod skills_init_tests {
 
         assert!(output.is_file());
         assert_eq!(report.path, output.display().to_string());
-        let parsed = bitrouter_orchestrator::harness::skills::format::parse_frontmatter(
+        let parsed = crate::harness::resources::skills::format::parse_frontmatter(
             &std::fs::read_to_string(output).expect("read scaffold"),
         )
         .expect("valid frontmatter");
@@ -1527,3 +1527,8 @@ providers:
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }
+
+/// Shared agent action vocabulary.
+pub mod agents;
+/// Shared chat command resolution.
+pub mod chat;

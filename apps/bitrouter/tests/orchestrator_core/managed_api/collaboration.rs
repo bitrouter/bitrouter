@@ -1,9 +1,9 @@
 //! The same scripted collaboration crosses local and authenticated remote ports.
 
 use super::*;
-use bitrouter_orchestrator::core::allocation::ContextKind;
-use bitrouter_orchestrator::core::routing::ApplicationDisposition;
-use bitrouter_orchestrator::core::session::{AgentStatus, SessionSnapshot};
+use bitrouter::core::allocation::ContextKind;
+use bitrouter::core::routing::ApplicationDisposition;
+use bitrouter::core::session::{AgentStatus, SessionSnapshot};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;

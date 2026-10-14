@@ -53,11 +53,13 @@ use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
 use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
+use crate::telemetry::OTEL_ENABLED;
+use crate::telemetry::config::ContentCaptureMode;
+use crate::telemetry::config::MetricsConfig;
+use crate::telemetry::config::OtelConfig;
+use crate::telemetry::exporter::OtelExporter;
+use crate::telemetry::exporter::OtelObserveHook;
 use bitrouter_sdk::MetricsRenderer;
-use bitrouter_telemetry::OTEL_ENABLED;
-use bitrouter_telemetry::otel::{
-    ContentCaptureMode, MetricsConfig, OtelConfig, OtelExporter, OtelObserveHook,
-};
 
 use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
@@ -604,7 +606,7 @@ async fn assemble_app(
                 // exporter path) is `StaticOnly` and never reads the credential
                 // store. Best-effort: a `None` source means the export proceeds
                 // anonymously — for `account` we additionally warn.
-                let bearer: Option<Arc<dyn bitrouter_telemetry::otel::TelemetryBearer>> =
+                let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
                     match plan.bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
                             let source = crate::cloud::cloud_bearer_source(
@@ -1567,7 +1569,7 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
             return None;
         }
     };
-    let bearer: Option<Arc<dyn bitrouter_telemetry::otel::TelemetryBearer>> = match plan.bearer_plan
+    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> = match plan.bearer_plan
     {
         BearerPlan::LiveSource { warn_if_unmet } => {
             let source = cloud_credentials
@@ -1791,7 +1793,7 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 ///
 /// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
 /// The signed-in account bearer is NO LONGER snapshotted into the config — it is
-/// resolved live per export by a [`bitrouter_telemetry::otel::TelemetryBearer`]
+/// resolved live per export by a [`crate::telemetry::bearer::TelemetryBearer`]
 /// source the async call site builds (refresh-aware), so account attribution
 /// survives token expiry without a daemon restart. `attribution: anonymous`
 /// still drops even the explicit token (the opt-out guarantee).

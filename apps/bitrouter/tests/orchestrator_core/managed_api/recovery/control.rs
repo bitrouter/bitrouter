@@ -1,9 +1,9 @@
 //! Independent control clients retain exact journal bytes across socket loss.
 
 use super::*;
-use bitrouter_orchestrator::core::checkpoint::ToolStartFence;
-use bitrouter_orchestrator::core::protocol::OperationReceipt;
-use bitrouter_orchestrator::core::session::steering::SteeringDisposition;
+use bitrouter::core::checkpoint::ToolStartFence;
+use bitrouter::core::protocol::OperationReceipt;
+use bitrouter::core::session::steering::SteeringDisposition;
 use std::collections::BTreeSet;
 
 struct ControlPeer {

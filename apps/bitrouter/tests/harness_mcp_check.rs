@@ -1,6 +1,6 @@
 use bitrouter_sdk::config::{Config, McpUpstreamProtocol};
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/harness_resources/mcp_fixture.rs"]
+#[path = "harness_resources/mcp_fixture.rs"]
 mod mcp_fixture;
 
 #[tokio::test]

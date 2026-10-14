@@ -28,12 +28,12 @@ use std::sync::Arc;
 
 use crate::cloud::account::credentials::default_credentials_path;
 use crate::cloud::account::manager::CredentialManager;
+use crate::telemetry::bearer::TelemetryBearer;
 use anyhow::{Context, Result};
 use bitrouter_ai::auth::AuthAppliers;
 use bitrouter_ai::providers::hosted::PROVIDER_ID;
 use bitrouter_ai::providers::hosted::applier::BitrouterAuthApplier;
 use bitrouter_sdk::config::{Config, ProviderConfig};
-use bitrouter_telemetry::otel::TelemetryBearer;
 
 const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";

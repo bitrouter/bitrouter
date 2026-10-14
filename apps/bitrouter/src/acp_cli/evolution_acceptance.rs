@@ -177,7 +177,7 @@ async fn fixture_with_response(
         .context("adapter package path missing")?
         .join("package.json");
     let package: Value = serde_json::from_slice(&std::fs::read(package_file)?)?;
-    let harness = crate::harness::by_id(agent).context("unknown harness")?;
+    let harness = crate::harness::catalog::by_id(agent).context("unknown harness")?;
     let (name, version) = harness
         .maintained_adapter_identity()
         .context("adapter is not pinned")?;

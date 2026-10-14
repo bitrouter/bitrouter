@@ -2694,7 +2694,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
 async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     use bitrouter::agent_local::{Operation, ReplyResult};
-    use bitrouter_orchestrator::turn::TurnStatus;
+    use bitrouter::harness::turn::TurnStatus;
 
     anyhow::ensure!(
         !remote,
@@ -2714,7 +2714,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
         .or_else(|| bitrouter::policy_lock::native_default_model(&cfg).map(str::to_owned))
         .context("no native model configured; pass --model or enable defaults")?;
     let model_mode = bitrouter::policy_lock::native_model_mode(&cfg, &model)?;
-    let config = bitrouter_orchestrator::agent::AgentConfig::fixed(model, args.effort)
+    let config = bitrouter::harness::agent::AgentConfig::fixed(model, args.effort)
         .with_model_mode(model_mode)
         .with_output_reservation(args.max_output_tokens);
     let config = if args.read_only {
@@ -2753,7 +2753,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             next = stream.next() => next?.ok_or_else(|| anyhow::anyhow!("task observation disconnected; task {} may still be running; no task was resubmitted", accepted.turn_id))?,
         };
         match observation {
-            bitrouter_orchestrator::thread::ThreadObservation::Snapshot {
+            bitrouter::harness::thread::ThreadObservation::Snapshot {
                 view: fresh,
                 resynchronized,
                 catchup,
@@ -2766,11 +2766,11 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                     serde_json::json!({"type":"snapshot", "view":view, "resynchronized":resynchronized}),
                 )?;
             }
-            bitrouter_orchestrator::thread::ThreadObservation::Event { event } => {
+            bitrouter::harness::thread::ThreadObservation::Event { event } => {
                 view.apply(&event);
                 emit_task_event(&event)?;
             }
-            bitrouter_orchestrator::thread::ThreadObservation::Live {
+            bitrouter::harness::thread::ThreadObservation::Live {
                 event,
                 after_cursor,
             } => {
@@ -2819,9 +2819,9 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                 .await;
             if let Err(error) = result
                 && !error
-                    .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
+                    .downcast_ref::<bitrouter::harness::service::ServiceError>()
                     .is_some_and(|error| {
-                        error.code == bitrouter_orchestrator::service::ErrorCode::Conflict
+                        error.code == bitrouter::harness::service::ErrorCode::Conflict
                     })
             {
                 return Err(error);
@@ -2856,7 +2856,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     }
 }
 
-fn emit_task_event(event: &bitrouter_orchestrator::thread::ThreadEvent) -> Result<()> {
+fn emit_task_event(event: &bitrouter::harness::thread::ThreadEvent) -> Result<()> {
     // Private execution fences still advance the durable cursor. The client
     // applies them locally, but NDJSON consumers only need public changes.
     if !event.changes.is_empty() {
@@ -4254,7 +4254,7 @@ async fn administration_observe(
 /// and exporter endpoint fields. The redacted administration report is used
 /// for every remote target and by the dashboard.
 async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
-    use bitrouter_telemetry::OTEL_ENABLED;
+    use bitrouter::telemetry::OTEL_ENABLED;
 
     let (snapshot, daemon_reachable) =
         match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
@@ -5806,7 +5806,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                         id.as_str()
                     }
                 });
-            let harness = bitrouter::harness::by_id(harness_id).ok_or_else(|| {
+            let harness = bitrouter::harness::catalog::by_id(harness_id).ok_or_else(|| {
                 anyhow::anyhow!(
                     "'{id}' is not a catalog agent. Run `{cli} agents list` to see the ids.",
                     cli = bitrouter_sdk::invocation::name()
@@ -7316,13 +7316,14 @@ mod tests {
     /// reachable.
     ///
     /// Lives here rather than beside the table because it is the only place
-    /// that can see `bitrouter_tui::machine` and `bitrouter::actions`
+    /// that can see `bitrouter::tui::machine` and `bitrouter::actions`
     /// together: the TUI crate depends on nothing of BitRouter's, so the two
     /// halves of this agreement meet only in the app that wires them.
     #[test]
     fn every_tui_command_has_an_actions_row() {
         use bitrouter::actions::ACTIONS;
-        use bitrouter_tui::machine::{ALIASES, REDUCER_OWNED};
+        use bitrouter::commands::chat::ALIASES;
+        use bitrouter::commands::chat::REDUCER_OWNED;
 
         let named: Vec<&str> = ACTIONS.iter().filter_map(|row| row.tui_command).collect();
 

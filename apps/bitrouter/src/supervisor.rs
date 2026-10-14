@@ -16,12 +16,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::harness::acp::client::SessionInitialSettings;
 use agent_client_protocol::schema::v1::{
     ListSessionsResponse, PermissionOption, SessionConfigOption, SessionConfigOptionValue,
     SessionUpdate, ToolCallUpdate,
 };
 use anyhow::{Context, Result};
-use bitrouter_orchestrator::acp::client::SessionInitialSettings;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -658,8 +658,7 @@ struct Run {
     startup_finished: Notify,
     handle: Mutex<Option<SessionHandle>>,
     session_commands: Mutex<Option<mpsc::UnboundedSender<SessionActorCommand>>>,
-    pending_permissions:
-        Mutex<HashMap<String, bitrouter_orchestrator::acp::client::PendingPermission>>,
+    pending_permissions: Mutex<HashMap<String, crate::harness::acp::client::PendingPermission>>,
     permission_policy: PermissionPolicy,
     result_schema: Option<serde_json::Value>,
     turn_timeout: Option<Duration>,
@@ -693,10 +692,7 @@ struct ActionRecord {
 }
 
 type UpdateStream = Pin<
-    Box<
-        dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::SequencedSessionUpdate>
-            + Send,
-    >,
+    Box<dyn futures::Stream<Item = crate::harness::acp::client::SequencedSessionUpdate> + Send>,
 >;
 
 enum SessionActorCommand {
@@ -708,7 +704,7 @@ enum SessionActorCommand {
 }
 
 struct PromptActorInput {
-    client: Box<bitrouter_orchestrator::acp::client::AcpClient>,
+    client: Box<crate::harness::acp::client::AcpClient>,
     session_id: String,
     text: String,
     generation: u64,
@@ -2019,7 +2015,7 @@ impl Run {
         }
     }
 
-    async fn client(&self) -> Result<bitrouter_orchestrator::acp::client::AcpClient> {
+    async fn client(&self) -> Result<crate::harness::acp::client::AcpClient> {
         self.handle
             .lock()
             .await
@@ -2028,9 +2024,7 @@ impl Run {
             .context("supervised controller is not live")
     }
 
-    async fn client_and_session(
-        &self,
-    ) -> Result<(bitrouter_orchestrator::acp::client::AcpClient, String)> {
+    async fn client_and_session(&self) -> Result<(crate::harness::acp::client::AcpClient, String)> {
         let handle = self.handle.lock().await;
         let handle = handle
             .as_ref()
@@ -2193,7 +2187,7 @@ impl Run {
                     }
                     deadline.as_mut().reset(
                         tokio::time::Instant::now()
-                            + bitrouter_orchestrator::acp::client::AcpClient::cancellation_grace(),
+                            + crate::harness::acp::client::AcpClient::cancellation_grace(),
                     );
                 }
             }
@@ -2222,7 +2216,7 @@ impl Run {
 
     async fn record_sequenced_update(
         &self,
-        entry: bitrouter_orchestrator::acp::client::SequencedSessionUpdate,
+        entry: crate::harness::acp::client::SequencedSessionUpdate,
         last_update_sequence: &mut u64,
     ) {
         *last_update_sequence = (*last_update_sequence).max(entry.sequence);
@@ -2234,10 +2228,7 @@ impl Run {
     fn spawn_permission_forwarder(
         self: &Arc<Self>,
         mut permissions: std::pin::Pin<
-            Box<
-                dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::PendingPermission>
-                    + Send,
-            >,
+            Box<dyn futures::Stream<Item = crate::harness::acp::client::PendingPermission> + Send>,
         >,
     ) {
         let run = self.clone();
@@ -2269,10 +2260,9 @@ impl Run {
 
     async fn record_update(&self, update: SessionUpdate) {
         let mut state = self.state.lock().await;
-        if let Some(bitrouter_orchestrator::acp::translate::SessionUpdateKind::MessageChunk {
-            text,
-            ..
-        }) = bitrouter_orchestrator::acp::translate::translate(update.clone())
+        if let Some(crate::harness::acp::translate::SessionUpdateKind::MessageChunk {
+            text, ..
+        }) = crate::harness::acp::translate::translate(update.clone())
         {
             state.current_reply.push_str(&text);
         }
@@ -2299,11 +2289,12 @@ impl Run {
             let marker = usage
                 .meta
                 .as_ref()
-                .and_then(|meta| meta.get(bitrouter_tui::cost::COST_PROVENANCE_META_KEY));
+                .and_then(|meta| meta.get(crate::presentation::cost::COST_PROVENANCE_META_KEY));
             let source = match marker {
                 None => Some("harness"),
                 Some(value)
-                    if value.as_str() == Some(bitrouter_tui::cost::COST_PROVENANCE_ROUTER) =>
+                    if value.as_str()
+                        == Some(crate::presentation::cost::COST_PROVENANCE_ROUTER) =>
                 {
                     Some("router")
                 }
@@ -2318,10 +2309,7 @@ impl Run {
         state.append(event, false);
     }
 
-    async fn record_permission(
-        &self,
-        permission: bitrouter_orchestrator::acp::client::PendingPermission,
-    ) {
+    async fn record_permission(&self, permission: crate::harness::acp::client::PendingPermission) {
         let snapshot = PendingPermissionSnapshot {
             permission_id: permission.request_id.clone(),
             tool_call: permission.tool_call.clone(),
@@ -2654,10 +2642,7 @@ impl Run {
         client.cancel(&session_id).await?;
         let run = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(
-                bitrouter_orchestrator::acp::client::AcpClient::cancellation_grace(),
-            )
-            .await;
+            tokio::time::sleep(crate::harness::acp::client::AcpClient::cancellation_grace()).await;
             run.fail_if_current(
                 generation,
                 "cancelled turn did not settle before the controller grace deadline".to_string(),
@@ -3224,7 +3209,7 @@ impl PermissionPolicy {
     fn decide(
         &self,
         permission: &PendingPermissionSnapshot,
-    ) -> Option<bitrouter_tui::permission::Decision> {
+    ) -> Option<crate::harness::permission::Decision> {
         let prompt = permission_prompt(permission);
         let title = prompt.title().trim();
         let head = title.split_whitespace().next().unwrap_or_default();
@@ -3242,28 +3227,28 @@ impl PermissionPolicy {
             })
         };
         if matches(&self.auto_deny) {
-            return Some(bitrouter_tui::permission::Decision::Deny);
+            return Some(crate::harness::permission::Decision::Deny);
         }
         if matches(&self.auto_approve) {
-            return Some(bitrouter_tui::permission::Decision::Approve);
+            return Some(crate::harness::permission::Decision::Approve);
         }
         match self.unmatched {
             PermissionDefault::Ask => None,
-            PermissionDefault::ApproveAll => Some(bitrouter_tui::permission::Decision::Approve),
+            PermissionDefault::ApproveAll => Some(crate::harness::permission::Decision::Approve),
             PermissionDefault::ApproveReads => match prompt.kind() {
                 Some(
                     agent_client_protocol::schema::v1::ToolKind::Read
                     | agent_client_protocol::schema::v1::ToolKind::Search,
-                ) => Some(bitrouter_tui::permission::Decision::Approve),
-                _ => Some(bitrouter_tui::permission::Decision::Deny),
+                ) => Some(crate::harness::permission::Decision::Approve),
+                _ => Some(crate::harness::permission::Decision::Deny),
             },
-            PermissionDefault::DenyAll => Some(bitrouter_tui::permission::Decision::Deny),
+            PermissionDefault::DenyAll => Some(crate::harness::permission::Decision::Deny),
         }
     }
 }
 
-fn permission_prompt(permission: &PendingPermissionSnapshot) -> bitrouter_tui::permission::Prompt {
-    bitrouter_tui::permission::Prompt::new(
+fn permission_prompt(permission: &PendingPermissionSnapshot) -> crate::harness::permission::Prompt {
+    crate::harness::permission::Prompt::new(
         permission.permission_id.clone(),
         permission.tool_call.fields.title.clone(),
         permission.tool_call.tool_call_id.0.to_string(),

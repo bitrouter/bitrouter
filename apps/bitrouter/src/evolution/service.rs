@@ -434,9 +434,9 @@ impl EvolutionService {
             let mut created_in_epoch = false;
             let mut creation_recorded = false;
             for node in captured {
-                let event: bitrouter_orchestrator::acp::capture::CaptureEvent =
+                let event: crate::harness::acp::capture::CaptureEvent =
                     serde_json::from_str(&node.event_json)?;
-                use bitrouter_orchestrator::acp::capture::CaptureKind;
+                use crate::harness::acp::capture::CaptureKind;
                 if matches!(event.method.as_str(), "session/new" | "session/fork")
                     && event.kind == CaptureKind::Response
                 {

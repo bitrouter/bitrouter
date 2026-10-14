@@ -406,7 +406,7 @@ pub enum DaemonResponse {
 }
 
 /// Serializable snapshot of the OTel exporter's state, transported over
-/// the daemon control socket. Fields mirror `bitrouter_telemetry::otel::OtelStatus`
+/// the daemon control socket. Fields mirror `crate::telemetry::exporter::OtelStatus`
 /// — but this module deliberately re-states the wire format rather than
 /// serializing the SDK type directly, so the JSON shape on the control
 /// socket stays stable even if `OtelStatus` gains, drops, or renames a

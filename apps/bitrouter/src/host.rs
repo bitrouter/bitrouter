@@ -95,7 +95,7 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 /// spans into OTel via the supplied exporter's SDK tracer.
 ///
 /// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
-/// so this MUST be called after [`bitrouter_telemetry::otel::OtelExporter::new`]
+/// so this MUST be called after [`crate::telemetry::exporter::OtelExporter::new`]
 /// has built the real exporter; passing `None` (OTel disabled in config)
 /// installs the fmt-only registry.
 ///
@@ -104,7 +104,7 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 /// `bro reload` re-reads the config but cannot re-install the
 /// subscriber, so a changed `log_level` needs a restart.
 fn init_serve_tracing_subscriber(
-    exporter: Option<&bitrouter_telemetry::otel::OtelExporter>,
+    exporter: Option<&crate::telemetry::exporter::OtelExporter>,
     config_log_level: &str,
 ) -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
@@ -115,7 +115,7 @@ fn init_serve_tracing_subscriber(
         .with(tracing_subscriber::fmt::layer());
     match exporter {
         Some(exp) => registry
-            .with(bitrouter_telemetry::otel::subscriber::tracing_subscriber_layer(exp))
+            .with(crate::telemetry::subscriber::tracing_subscriber_layer(exp))
             .try_init(),
         None => registry.try_init(),
     }
@@ -275,7 +275,7 @@ async fn serve_with_options(
         let task_socket = crate::agent_local::socket_path(&socket_path);
         let task_listener = daemon::transport::bind(&task_socket).await?;
         let acp_listener = daemon::transport::bind(&crate::native_acp::socket_path(&socket_path)).await?;
-        let task_service = bitrouter_orchestrator::service::ThreadService::with_store(
+        let task_service = crate::harness::service::ThreadService::with_store(
             app.clone(),
             &cfg.agent_api.workspaces,
             Arc::new(crate::agent_store::DatabaseExecutionStore::new(assembled.db.clone())),
@@ -283,11 +283,11 @@ async fn serve_with_options(
         .map_err(anyhow::Error::msg)?
         .with_resources(native_harness_config(&cfg, home))
         .map_err(anyhow::Error::msg)?;
-        let native_acp = bitrouter_orchestrator::acp::native::NativeAcpServer::new(
+        let native_acp = crate::harness::acp::native::NativeAcpServer::new(
             task_service.clone(), bitrouter_sdk::caller::CallerContext::local(),
-            bitrouter_orchestrator::acp::native::NativeSessionConfig {
-                agent: bitrouter_orchestrator::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
-                permission_profile: bitrouter_orchestrator::thread::PermissionProfile::Ask,
+            crate::harness::acp::native::NativeSessionConfig {
+                agent: crate::harness::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
+                permission_profile: crate::harness::thread::PermissionProfile::Ask,
                 servers: native_harness_config(&cfg, home).servers,
                 register_local_workspaces: true,
             },
@@ -328,7 +328,7 @@ async fn serve_with_options(
         let otel_router_wrapper = assembled
             .otel_exporter
             .as_deref()
-            .map(bitrouter_telemetry::otel::http_layer::router_wrapper);
+            .map(crate::telemetry::http_layer::router_wrapper);
         let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
         let http = async move {
             let managed_shutdown = managed_core.clone();
@@ -912,7 +912,7 @@ fn other_provider_env_var_hints() -> Vec<String> {
 pub(crate) fn native_harness_config(
     cfg: &bitrouter_sdk::config::Config,
     home: &std::path::Path,
-) -> bitrouter_orchestrator::harness::HarnessConfig {
+) -> crate::harness::resources::HarnessConfig {
     let mut servers: Vec<_> = cfg
         .mcp_servers
         .iter()
@@ -935,11 +935,11 @@ pub(crate) fn native_harness_config(
     if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
         skill_roots.push(std::path::PathBuf::from(codex_home).join("skills"));
     }
-    bitrouter_orchestrator::harness::HarnessConfig {
+    crate::harness::resources::HarnessConfig {
         servers,
         protocol: bitrouter_sdk::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
         skill_roots,
-        instructions: bitrouter_orchestrator::harness::instructions::InstructionConfig {
+        instructions: crate::harness::resources::instructions::InstructionConfig {
             global_root: Some(home.to_path_buf()),
             ..Default::default()
         },

@@ -2,17 +2,15 @@ use anyhow::Context;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
+use crate::harness::acp::client::{AcpClient, ClientOptions};
+use crate::harness::acp::controller::{Controller, ControllerConfig, ControllerIdentity};
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, InitializeRequest, InitializeResponse, LoadSessionRequest,
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
     StopReason,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, UntypedMessage};
-use bitrouter_orchestrator::acp::capture::{
-    CaptureDirection, CaptureEvent, CaptureKind, CapturePort,
-};
-use bitrouter_orchestrator::acp::client::{AcpClient, ClientOptions};
-use bitrouter_orchestrator::acp::controller::{Controller, ControllerConfig, ControllerIdentity};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::json;
 

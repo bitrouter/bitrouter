@@ -2,8 +2,8 @@
 
 use super::*;
 use bitrouter::auth::{db, keys};
+use bitrouter::core::protocol::{ToolExecute, ToolOutcome, ToolResult};
 use bitrouter::orchestrator_api::ManagedCoreApi;
-use bitrouter_orchestrator::core::protocol::{ToolExecute, ToolOutcome, ToolResult};
 use bitrouter_sdk::server::{AppState, build_router};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
@@ -232,11 +232,11 @@ async fn harness_with_limits(
 }
 
 fn binding(limits: Limits) -> Result<Bind> {
-    let tools = vec![bitrouter_orchestrator::core::protocol::HarnessTool {
+    let tools = vec![bitrouter::core::protocol::HarnessTool {
         name: "read".into(),
         description: "Read a file".into(),
         parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
-        effect: bitrouter_orchestrator::core::protocol::ToolEffect::Read,
+        effect: bitrouter::core::protocol::ToolEffect::Read,
         approval_required: false,
     }];
     let manifest = HarnessManifest {
@@ -618,7 +618,7 @@ async fn unmanaged_inference_stays_available_and_unknown_extensions_fail_before_
 
 #[tokio::test]
 async fn disconnected_existing_session_restores_unstarted_tools_on_the_same_host() -> Result<()> {
-    use bitrouter_orchestrator::core::protocol::{
+    use bitrouter::core::protocol::{
         Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
     };
     let fixture = fixture().await?;
@@ -633,7 +633,7 @@ async fn disconnected_existing_session_restores_unstarted_tools_on_the_same_host
     tokio::time::timeout(std::time::Duration::from_secs(10), task).await???;
     let records = store.lock().await;
     let checkpoint = records.batches.last().context("checkpoint")?.clone();
-    let state: bitrouter_orchestrator::core::session::SessionSnapshot =
+    let state: bitrouter::core::session::SessionSnapshot =
         serde_json::from_value(checkpoint.decode(&Limits::default())?.checkpoint.state)?;
     let run = state.run.as_ref().context("run")?;
     let grant = OwnershipGrant {
@@ -699,7 +699,7 @@ async fn disconnected_existing_session_restores_unstarted_tools_on_the_same_host
 
 #[tokio::test]
 async fn restore_ack_loss_keeps_the_registered_replacement_and_exact_batch() -> Result<()> {
-    use bitrouter_orchestrator::core::protocol::{
+    use bitrouter::core::protocol::{
         Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
     };
     for committed in [false, true] {
@@ -715,7 +715,7 @@ async fn restore_ack_loss_keeps_the_registered_replacement_and_exact_batch() -> 
         tokio::time::timeout(std::time::Duration::from_secs(10), task).await???;
         let records = store.lock().await;
         let checkpoint = records.batches.last().context("checkpoint")?.clone();
-        let state: bitrouter_orchestrator::core::session::SessionSnapshot =
+        let state: bitrouter::core::session::SessionSnapshot =
             serde_json::from_value(checkpoint.decode(&Limits::default())?.checkpoint.state)?;
         let run = state.run.as_ref().context("run")?;
         let grant = OwnershipGrant {

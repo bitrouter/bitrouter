@@ -4,7 +4,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
-use bitrouter_orchestrator::core::checkpoint::sha256;
+use crate::core::checkpoint::sha256;
 
 const PREFIX: &str = "bro-zstd-v2:";
 pub(super) const LEGACY_PREFIX: &str = "bro-zstd-v1:";

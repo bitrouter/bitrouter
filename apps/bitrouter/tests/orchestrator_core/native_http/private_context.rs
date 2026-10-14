@@ -662,7 +662,7 @@ async fn private_history_redirect_is_not_followed_or_claimed_as_success() -> Res
 
 #[tokio::test]
 async fn private_history_core_changes_model_only_after_authorized_context_rebuild() -> Result<()> {
-    use bitrouter_orchestrator::core::protocol::DiscardableHistory;
+    use bitrouter::core::protocol::DiscardableHistory;
     for protocol in ["messages", "responses"] {
         for (discard, portable) in [(false, false), (true, false), (false, true)] {
             let rebuild = discard || (portable && protocol == "responses");
@@ -699,9 +699,8 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
                 max_artifact_chunk_bytes: 8192,
                 required_features: if portable {
                     vec![
-                        bitrouter_orchestrator::core::context_router::FEATURE.into(),
-                        bitrouter_orchestrator::core::context_router::PORTABLE_RESPONSES_REASONING
-                            .into(),
+                        bitrouter::core::context_router::FEATURE.into(),
+                        bitrouter::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
                     ]
                 } else {
                     Vec::new()
@@ -890,11 +889,10 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
                 session.disconnect().await;
                 let store = harness.store.lock().await;
                 let checkpoint = store.batches.last().context("recovery checkpoint")?.clone();
-                let restored: bitrouter_orchestrator::core::session::SessionSnapshot =
-                    serde_json::from_value(
-                        checkpoint.decode(&Limits::default())?.checkpoint.state,
-                    )?;
-                let request = bitrouter_orchestrator::core::protocol::Restore {
+                let restored: bitrouter::core::session::SessionSnapshot = serde_json::from_value(
+                    checkpoint.decode(&Limits::default())?.checkpoint.state,
+                )?;
+                let request = bitrouter::core::protocol::Restore {
                     binding: Bind {
                         grant: harness.grant.clone(),
                         durable_head: store.head.clone(),

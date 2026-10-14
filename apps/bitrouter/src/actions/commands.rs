@@ -80,8 +80,9 @@ pub struct CommandsReport {
     pub commands: Vec<CommandRow>,
 }
 
+use crate::commands::chat::Command;
+use crate::commands::chat::PromptCommand;
 use agent_client_protocol::schema::v1::{AvailableCommand, AvailableCommandInput};
-use bitrouter_tui::machine::{Command, PromptCommand};
 
 /// Everything this session offers, in precedence order.
 ///

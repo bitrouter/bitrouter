@@ -20,18 +20,68 @@ name = "bro"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["core", "harness", "tui", "otel-http"]
+core = []
+harness = []
+tui = ["harness"]
 guardrails = ["dep:bitrouter-guardrails"]
 
+otel = ["otel-http"]
+otel-http = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:dashmap",
+    "dep:futures-core",
+    "dep:pin-project-lite",
+    "dep:opentelemetry-http",
+    "dep:bytes",
+    "opentelemetry-otlp/http-proto",
+    "opentelemetry-otlp/reqwest-client",
+    "opentelemetry-otlp/reqwest-rustls",
+]
+otel-grpc = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:dashmap",
+    "dep:futures-core",
+    "dep:pin-project-lite",
+    "dep:tonic",
+    "opentelemetry-otlp/grpc-tonic",
+    "opentelemetry-otlp/tls-roots",
+]
+
 [dependencies]
+bytes = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
+futures-core = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-http = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+pin-project-lite = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+# Internal scheduling/harness modules; dependency isolation follows their move.
+process-wrap = { workspace = true, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
+rmcp.workspace = true
+globset.workspace = true
+ignore.workspace = true
+regex.workspace = true
+similar.workspace = true
+agent-client-protocol-schema.workspace = true
+agent-client-protocol-conductor.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
 bitrouter-guardrails = { workspace = true, optional = true }
 bitrouter-ai = { workspace = true, features = ["pkce", "hosted-login", "file-store"] }
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp"] }
-bitrouter-orchestrator = { workspace = true, features = ["acp"] }
-# `server`: the inbound ingress SERVER span, which wraps the SDK router this
-# binary serves. A deployment that builds its own ingress span takes
-# `otel-http` alone.
-bitrouter-telemetry = { workspace = true, features = ["otel-http", "server"] }
 # Product-only OS keyring discovery for explicitly adopted external CLI sessions.
 keyring.workspace = true
 chrono.workspace = true
@@ -72,12 +122,12 @@ agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat", "rt"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
-# Everything drawn by this binary. There is deliberately no `ratatui` here:
-# the app may touch the terminal but may not draw on it, and the absence of the
-# dependency is what makes that a compile error rather than a convention.
-bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.33" }
-# Terminal *I/O*, which is this process's: owning stdin, bracketed paste, and
-# reading key events for `bro chat`. Not drawing — see above.
+# Terminal implementations now live under the application tui module.
+ratatui.workspace = true
+ratatui-markdown.workspace = true
+shell-words.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
 crossterm.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
 schemars.workspace = true
@@ -94,6 +144,10 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+bitrouter-ai = { workspace = true, features = ["testing"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
+tonic = { workspace = true, features = ["server", "router"] }
+tokio-stream = { workspace = true, features = ["net"] }
 tokio-tungstenite = "0.29"
 rmcp.workspace = true
 bitrouter-guardrails = { path = "../../extensions/regex-checker/matcher" }
@@ -110,10 +164,23 @@ serde-saphyr.workspace = true
 # OTLP/HTTP+protobuf decoding for full-stack tests that inspect the trace
 # bodies the observe plugin pushes to the configured collector. Pins live in
 # the root `[workspace.dependencies]` alongside the rest of the 0.32.x stack.
-opentelemetry-proto.workspace = true
+opentelemetry-proto = { workspace = true, features = ["gen-tonic", "metrics"] }
 prost.workspace = true
 # Real-terminal acceptance coverage: the process under test must see a PTY,
 # while the test controls its size, input bytes, output, and child lifetime.
 portable-pty = "0.9"
 # Reconstructs cursor-addressed ratatui frames for semantic PTY assertions.
 vt100 = "0.15"
+
+[[test]]
+name = "telemetry_ingress_log_target"
+required-features = ["otel-http"]
+
+[[test]]
+name = "telemetry_grpc_transport"
+required-features = ["otel-grpc"]
+
+[[bench]]
+name = "observe_overhead"
+harness = false
+required-features = ["otel-http"]

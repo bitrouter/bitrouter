@@ -89,14 +89,11 @@ pub fn native_default_model(config: &Config) -> Option<&str> {
 }
 
 /// Named policy selectors opt into policy routing; physical model pins stay fixed.
-pub fn native_model_mode(
-    config: &Config,
-    model: &str,
-) -> Result<bitrouter_orchestrator::core::protocol::ModelMode> {
+pub fn native_model_mode(config: &Config, model: &str) -> Result<crate::core::protocol::ModelMode> {
     Ok(if config.resolve_router(model)?.policy.is_some() {
-        bitrouter_orchestrator::core::protocol::ModelMode::Policy
+        crate::core::protocol::ModelMode::Policy
     } else {
-        bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+        crate::core::protocol::ModelMode::Fixed
     })
 }
 pub const POLICY_LOCKFILE_VERSION: u32 = 4;
@@ -3510,11 +3507,11 @@ mod tests {
         assert_eq!(native_default_model(&config), Some(DEFAULT_NATIVE_MODEL));
         assert_eq!(
             native_model_mode(&config, DEFAULT_NATIVE_MODEL)?,
-            bitrouter_orchestrator::core::protocol::ModelMode::Policy
+            crate::core::protocol::ModelMode::Policy
         );
         assert_eq!(
             native_model_mode(&config, "provider:model")?,
-            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+            crate::core::protocol::ModelMode::Fixed
         );
         let loaded = load_for_config(&config, None)
             .await?
@@ -3546,7 +3543,7 @@ mod tests {
         assert_eq!(native_default_model(&config), Some("@auto"));
         assert_eq!(
             native_model_mode(&config, "@auto")?,
-            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+            crate::core::protocol::ModelMode::Fixed
         );
         config.chat.model = Some("external-default".into());
         apply_defaults(&mut config, None);

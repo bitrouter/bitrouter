@@ -2,19 +2,19 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitrouter::managed_store::DatabaseNativeStore;
-use bitrouter_ai::types::AuthScheme;
-use bitrouter_ai::types::{ApiProtocol, Content, FinishReason, GenerateResult, Usage};
-use bitrouter_orchestrator::agent::ToolMode;
-use bitrouter_orchestrator::core::protocol::{CoreError, TaskInput, ToolExecute, ToolOutcome};
-use bitrouter_orchestrator::core::session::RunStatus;
-use bitrouter_orchestrator::harness::{
+use bitrouter::core::protocol::{CoreError, TaskInput, ToolExecute, ToolOutcome};
+use bitrouter::core::session::RunStatus;
+use bitrouter::harness::agent::ToolMode;
+use bitrouter::harness::resources::{
     HarnessConfig,
     managed::{
         session::{NativeApproval, NativeSession},
         store::NativeStore,
     },
 };
+use bitrouter::managed_store::DatabaseNativeStore;
+use bitrouter_ai::types::AuthScheme;
+use bitrouter_ai::types::{ApiProtocol, Content, FinishReason, GenerateResult, Usage};
 use bitrouter_sdk::language_model::{
     MockExecutor, MockResponse, RoutingTarget, StaticRoutingTable,
 };
@@ -378,7 +378,7 @@ impl NativeStore for DelayedCommitStore {
         // Pause a direct scheduler commit, while it holds the core commit lock.
         let journal: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| {
             CoreError::rejected(
-                bitrouter_orchestrator::core::protocol::ErrorCode::CheckpointUnavailable,
+                bitrouter::core::protocol::ErrorCode::CheckpointUnavailable,
                 err.to_string(),
             )
         })?;

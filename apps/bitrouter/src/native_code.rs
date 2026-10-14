@@ -2,19 +2,21 @@
 mod presentation;
 
 use crate::agent_local::{self, Operation, ReplyResult, ThreadClient};
-use anyhow::Result;
-use bitrouter_ai::types::Content;
-use bitrouter_orchestrator::service::{ErrorCode, ServiceError};
-use bitrouter_orchestrator::thread::{
+use crate::harness::service::{ErrorCode, ServiceError};
+use crate::harness::thread::{
     ThreadChange, ThreadDirectoryPage, ThreadEvent, ThreadObservation, ThreadStatus, ThreadView,
 };
-use bitrouter_orchestrator::turn::TurnLifecycle;
-use bitrouter_orchestrator::turn::TurnSnapshot;
-use bitrouter_tui::agents_menu::MenuEntry;
-use bitrouter_tui::editor::{Edit, Editor, press};
-use bitrouter_tui::native_agent::{
-    NativeEntryKind, NativeLive, NativeState, NativeView, ToolStatus,
-};
+use crate::harness::turn::TurnLifecycle;
+use crate::harness::turn::TurnSnapshot;
+use crate::presentation::agents::MenuEntry;
+use crate::presentation::native_agent::NativeEntryKind;
+use crate::presentation::native_agent::NativeLive;
+use crate::presentation::native_agent::ToolStatus;
+use crate::tui::editor::{Edit, Editor, press};
+use crate::tui::native_agent::NativeState;
+use crate::tui::native_agent::NativeView;
+use anyhow::Result;
+use bitrouter_ai::types::Content;
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::{FutureExt, StreamExt};
 use presentation::{tool_result, tool_title};
@@ -34,7 +36,7 @@ enum SubmissionMode {
 }
 #[derive(Default)]
 struct Session {
-    model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
+    model_mode: crate::core::protocol::ModelMode,
     max_output_tokens: Option<u32>,
     model_config: Option<bitrouter_sdk::config::Config>,
     thread_id: Option<String>,
@@ -118,10 +120,9 @@ fn show_directory(state: &mut NativeState, directory: &mut Directory, page: Thre
                     format!(
                         "Permissions: {}",
                         match thread.permission_profile {
-                            bitrouter_orchestrator::thread::PermissionProfile::ReadOnly =>
-                                "read only",
-                            bitrouter_orchestrator::thread::PermissionProfile::Ask => "ask",
-                            bitrouter_orchestrator::thread::PermissionProfile::AllowEffects =>
+                            crate::harness::thread::PermissionProfile::ReadOnly => "read only",
+                            crate::harness::thread::PermissionProfile::Ask => "ask",
+                            crate::harness::thread::PermissionProfile::AllowEffects =>
                                 "allow effects",
                         }
                     ),
@@ -190,9 +191,9 @@ pub async fn run(
     let mut session = Session {
         max_output_tokens: options.max_output_tokens,
         model_mode: if options.model_policy {
-            bitrouter_orchestrator::core::protocol::ModelMode::Policy
+            crate::core::protocol::ModelMode::Policy
         } else if state.model.is_empty() || reattach.is_some() {
-            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+            crate::core::protocol::ModelMode::Fixed
         } else {
             crate::policy_lock::native_model_mode(&cfg, &state.model)?
         },
@@ -292,7 +293,7 @@ pub async fn run(
             next = async { match events.as_mut() { Some(events) => events.next().await, None => std::future::pending().await } } => {
                 let Some(next) = next else { break; };
                 let event = next?;
-                if bitrouter_tui::editor::is_redraw(&event) { view.invalidate(); continue; }
+                if crate::tui::editor::is_redraw(&event) { view.invalidate(); continue; }
                 if state.menu.is_open() {
                     if let Some(key) = press(&event) {
                         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -450,11 +451,11 @@ async fn handle_event(
         }
     }
     if let Some(editor) = state.model_editor.as_mut() {
-        if bitrouter_tui::native_agent::edit(editor, event) == Edit::Submitted
+        if crate::tui::native_agent::edit(editor, event) == Edit::Submitted
             && !editor.text().trim().is_empty()
         {
             let model = editor.text().trim().to_owned();
-            if session.model_mode == bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+            if session.model_mode == crate::core::protocol::ModelMode::Fixed
                 && let Some(config) = &session.model_config
             {
                 match crate::policy_lock::native_model_mode(config, &model) {
@@ -670,162 +671,161 @@ fn message_text(message: &bitrouter_ai::types::Message) -> String {
 
 fn show_event(state: &mut NativeState, event: &ThreadEvent) {
     for change in &event.changes {
-        let (id, text, kind) = match change {
-            ThreadChange::ContextRouting {
-                turn_id,
-                inspection,
-            } => (
-                format!("context:{turn_id}"),
-                context_status(inspection),
-                NativeEntryKind::Detail,
-            ),
-            ThreadChange::TurnQueued {
-                user_item_id,
-                prompt,
-                ..
-            } => (user_item_id.clone(), prompt.clone(), NativeEntryKind::User),
-            ThreadChange::AssistantResponse {
-                item_id, message, ..
-            } => (
-                item_id.clone(),
-                message_text(message),
-                NativeEntryKind::Assistant,
-            ),
-            ThreadChange::AssistantInterrupted {
-                item_id,
-                partial,
-                detail,
-                ..
-            } => (
-                item_id.clone(),
-                format!("{}\nAssistant interrupted: {detail}", message_text(partial)),
-                NativeEntryKind::Assistant,
-            ),
-            ThreadChange::ToolIntent { call, .. } => (
-                call.item_id.clone(),
-                tool_title(&call.name, &call.arguments),
-                NativeEntryKind::Tool {
-                    status: ToolStatus::Running,
-                    detail: String::new(),
-                },
-            ),
-            ThreadChange::ToolResult {
-                item_id,
-                message,
-                effect,
-                ..
-            } => {
-                let (text, kind) = tool_result(state, item_id, message, *effect);
-                (item_id.clone(), text, kind)
-            }
-            ThreadChange::VerificationResult {
-                call,
-                evidence,
-                effect,
-                ..
-            } => (
-                call.item_id.clone(),
-                format!("check {}", evidence.command),
-                NativeEntryKind::Tool {
-                    status: if *effect == bitrouter_orchestrator::store::EffectStatus::Unknown {
-                        ToolStatus::Unknown
-                    } else if *effect == bitrouter_orchestrator::store::EffectStatus::NotExecuted {
-                        ToolStatus::Denied
-                    } else if evidence.exit_status == Some(0)
-                        && !evidence.timed_out
-                        && evidence.error.is_none()
-                    {
-                        ToolStatus::Succeeded
-                    } else {
-                        ToolStatus::Failed
+        let (id, text, kind) =
+            match change {
+                ThreadChange::ContextRouting {
+                    turn_id,
+                    inspection,
+                } => (
+                    format!("context:{turn_id}"),
+                    context_status(inspection),
+                    NativeEntryKind::Detail,
+                ),
+                ThreadChange::TurnQueued {
+                    user_item_id,
+                    prompt,
+                    ..
+                } => (user_item_id.clone(), prompt.clone(), NativeEntryKind::User),
+                ThreadChange::AssistantResponse {
+                    item_id, message, ..
+                } => (
+                    item_id.clone(),
+                    message_text(message),
+                    NativeEntryKind::Assistant,
+                ),
+                ThreadChange::AssistantInterrupted {
+                    item_id,
+                    partial,
+                    detail,
+                    ..
+                } => (
+                    item_id.clone(),
+                    format!("{}\nAssistant interrupted: {detail}", message_text(partial)),
+                    NativeEntryKind::Assistant,
+                ),
+                ThreadChange::ToolIntent { call, .. } => (
+                    call.item_id.clone(),
+                    tool_title(&call.name, &call.arguments),
+                    NativeEntryKind::Tool {
+                        status: ToolStatus::Running,
+                        detail: String::new(),
                     },
-                    detail: evidence.error.clone().unwrap_or_else(|| {
-                        if evidence.timed_out {
-                            "Timed out".into()
+                ),
+                ThreadChange::ToolResult {
+                    item_id,
+                    message,
+                    effect,
+                    ..
+                } => {
+                    let (text, kind) = tool_result(state, item_id, message, *effect);
+                    (item_id.clone(), text, kind)
+                }
+                ThreadChange::VerificationResult {
+                    call,
+                    evidence,
+                    effect,
+                    ..
+                } => (
+                    call.item_id.clone(),
+                    format!("check {}", evidence.command),
+                    NativeEntryKind::Tool {
+                        status: if *effect == crate::harness::storage::EffectStatus::Unknown {
+                            ToolStatus::Unknown
+                        } else if *effect == crate::harness::storage::EffectStatus::NotExecuted {
+                            ToolStatus::Denied
+                        } else if evidence.exit_status == Some(0)
+                            && !evidence.timed_out
+                            && evidence.error.is_none()
+                        {
+                            ToolStatus::Succeeded
                         } else {
-                            evidence
-                                .exit_status
-                                .filter(|code| *code != 0)
-                                .map(|code| format!("Exit {code}"))
-                                .unwrap_or_default()
-                        }
-                    }),
-                },
-            ),
-            ThreadChange::TurnLifecycle {
-                turn_id,
-                lifecycle: TurnLifecycle::Finished { status, detail, .. },
-            } if *status == bitrouter_orchestrator::turn::TurnStatus::Failed => (
-                format!("failure:{turn_id}"),
-                format!("Turn failed: {detail}"),
-                NativeEntryKind::Detail,
-            ),
-            ThreadChange::TurnLifecycle {
-                lifecycle:
-                    TurnLifecycle::InputRequested {
-                        request_id,
-                        tool_name,
-                        arguments,
-                        ..
+                            ToolStatus::Failed
+                        },
+                        detail: evidence.error.clone().unwrap_or_else(|| {
+                            if evidence.timed_out {
+                                "Timed out".into()
+                            } else {
+                                evidence
+                                    .exit_status
+                                    .filter(|code| *code != 0)
+                                    .map(|code| format!("Exit {code}"))
+                                    .unwrap_or_default()
+                            }
+                        }),
                     },
-                ..
-            } => (
-                format!("approval:{request_id}"),
-                format!("Approval required: {tool_name}\n{arguments}"),
-                NativeEntryKind::Detail,
-            ),
-            ThreadChange::TurnLifecycle {
-                lifecycle:
-                    TurnLifecycle::InputResolved {
-                        request_id,
-                        approved,
-                    },
-                ..
-            } => (
-                format!("approval:{request_id}"),
-                format!("Approval {}", if *approved { "accepted" } else { "denied" }),
-                NativeEntryKind::Detail,
-            ),
-            ThreadChange::TurnLifecycle {
-                lifecycle: TurnLifecycle::SteeringUpdated { receipt, text },
-                ..
-            } => {
-                let id = format!("steering:{}", receipt.input_id);
-                let prompt = text
-                    .as_deref()
-                    .or_else(|| {
-                        state
-                            .entries
-                            .iter()
-                            .find(|entry| entry.id == id)
-                            .and_then(|entry| {
-                                entry
-                                    .text
-                                    .split_once("\nSteering status:")
-                                    .map(|(prompt, _)| prompt)
+                ),
+                ThreadChange::TurnLifecycle {
+                    turn_id,
+                    lifecycle: TurnLifecycle::Finished { status, detail, .. },
+                } if *status == crate::harness::turn::TurnStatus::Failed => (
+                    format!("failure:{turn_id}"),
+                    format!("Turn failed: {detail}"),
+                    NativeEntryKind::Detail,
+                ),
+                ThreadChange::TurnLifecycle {
+                    lifecycle:
+                        TurnLifecycle::InputRequested {
+                            request_id,
+                            tool_name,
+                            arguments,
+                            ..
+                        },
+                    ..
+                } => (
+                    format!("approval:{request_id}"),
+                    format!("Approval required: {tool_name}\n{arguments}"),
+                    NativeEntryKind::Detail,
+                ),
+                ThreadChange::TurnLifecycle {
+                    lifecycle:
+                        TurnLifecycle::InputResolved {
+                            request_id,
+                            approved,
+                        },
+                    ..
+                } => (
+                    format!("approval:{request_id}"),
+                    format!("Approval {}", if *approved { "accepted" } else { "denied" }),
+                    NativeEntryKind::Detail,
+                ),
+                ThreadChange::TurnLifecycle {
+                    lifecycle: TurnLifecycle::SteeringUpdated { receipt, text },
+                    ..
+                } => {
+                    let id = format!("steering:{}", receipt.input_id);
+                    let prompt =
+                        text.as_deref()
+                            .or_else(|| {
+                                state.entries.iter().find(|entry| entry.id == id).and_then(
+                                    |entry| {
+                                        entry
+                                            .text
+                                            .split_once("\nSteering status:")
+                                            .map(|(prompt, _)| prompt)
+                                    },
+                                )
                             })
-                    })
-                    .unwrap_or("Steering input");
-                let status = match receipt.status {
-                    bitrouter_orchestrator::turn::SteeringStatus::Received => "received",
-                    bitrouter_orchestrator::turn::SteeringStatus::Applied => "applied",
-                    bitrouter_orchestrator::turn::SteeringStatus::NotApplied => "not applied",
-                };
-                (
-                    id,
-                    format!(
-                        "{prompt}\nSteering status: {status}{}",
-                        receipt
-                            .reason
-                            .as_ref()
-                            .map(|reason| format!(" · {reason}"))
-                            .unwrap_or_default()
-                    ),
-                    NativeEntryKind::User,
-                )
-            }
-            _ => continue,
-        };
+                            .unwrap_or("Steering input");
+                    let status = match receipt.status {
+                        crate::harness::turn::SteeringStatus::Received => "received",
+                        crate::harness::turn::SteeringStatus::Applied => "applied",
+                        crate::harness::turn::SteeringStatus::NotApplied => "not applied",
+                    };
+                    (
+                        id,
+                        format!(
+                            "{prompt}\nSteering status: {status}{}",
+                            receipt
+                                .reason
+                                .as_ref()
+                                .map(|reason| format!(" · {reason}"))
+                                .unwrap_or_default()
+                        ),
+                        NativeEntryKind::User,
+                    )
+                }
+                _ => continue,
+            };
         state.upsert(id, text, kind);
     }
 }
@@ -884,9 +884,7 @@ async fn restore_history_at(
     Ok(())
 }
 
-fn context_status(
-    inspection: &bitrouter_orchestrator::core::context_router::inspection::Inspection,
-) -> String {
+fn context_status(inspection: &crate::core::context_router::inspection::Inspection) -> String {
     let decisions = &inspection.decisions;
     format!(
         "Routing · {} tasks · {} decision calls · {} pending · {} failed",
@@ -936,7 +934,7 @@ fn update_snapshot(state: &mut NativeState, snapshot: &TurnSnapshot) {
             )
         });
 
-    if snapshot.status == bitrouter_orchestrator::turn::TurnStatus::Failed
+    if snapshot.status == crate::harness::turn::TurnStatus::Failed
         && let Some(detail) = &snapshot.detail
     {
         state.upsert(
@@ -999,7 +997,7 @@ fn known_rejection(error: &anyhow::Error) -> bool {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use bitrouter_orchestrator::turn::TurnStatus;
+    use crate::harness::turn::TurnStatus;
     use crossterm::event::KeyEvent;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -1018,7 +1016,7 @@ mod tests {
                     status: TurnStatus::Failed,
                     detail: detail.into(),
                     final_answer: None,
-                    verification: bitrouter_orchestrator::turn::VerificationStatus::Unavailable,
+                    verification: crate::harness::turn::VerificationStatus::Unavailable,
                     verification_evidence: None,
                     unknown_effect: false,
                 },
@@ -1040,7 +1038,7 @@ mod tests {
             final_answer: None,
             detail: Some(detail.into()),
             unknown_effect: false,
-            verification: bitrouter_orchestrator::turn::VerificationStatus::Unavailable,
+            verification: crate::harness::turn::VerificationStatus::Unavailable,
             verification_evidence: None,
             pending_input_id: None,
             pending_input: None,
@@ -1069,7 +1067,7 @@ mod tests {
                 let command: agent_local::ThreadCommand = serde_json::from_str(&line)?;
                 let result = match (index, command.operation) {
                     (0, Operation::Capabilities) => ReplyResult::Capabilities {
-                        runtime: Box::new(bitrouter_orchestrator::service::RuntimeCapabilities {
+                        runtime: Box::new(crate::harness::service::RuntimeCapabilities {
                             server_instance_id: "epoch".into(),
                             limits: Default::default(),
                             execution_ownership: None,
@@ -1085,7 +1083,7 @@ mod tests {
                     ) => {
                         anyhow::ensure!(thread_id == "thread" && prompt == "follow up");
                         ReplyResult::Receipt {
-                            receipt: bitrouter_orchestrator::turn::TurnReceipt {
+                            receipt: crate::harness::turn::TurnReceipt {
                                 user_item_id: String::new(),
                                 thread_id,
                                 turn_id: "queued".into(),
@@ -1109,11 +1107,11 @@ mod tests {
                                 && text == "adjust course"
                         );
                         ReplyResult::Steering {
-                            receipt: bitrouter_orchestrator::turn::SteeringReceipt {
+                            receipt: crate::harness::turn::SteeringReceipt {
                                 input_id: "steering".into(),
                                 turn_id: expected_turn_id,
                                 order: 1,
-                                status: bitrouter_orchestrator::turn::SteeringStatus::Received,
+                                status: crate::harness::turn::SteeringStatus::Received,
                                 context_version: None,
                                 next_step_id: None,
                                 reason: None,
@@ -1220,7 +1218,7 @@ mod tests {
                 let command: agent_local::ThreadCommand = serde_json::from_str(&line)?;
                 let result = if index == 0 {
                     ReplyResult::Capabilities {
-                        runtime: Box::new(bitrouter_orchestrator::service::RuntimeCapabilities {
+                        runtime: Box::new(crate::harness::service::RuntimeCapabilities {
                             server_instance_id: "epoch".into(),
                             limits: Default::default(),
                             execution_ownership: None,
@@ -1254,7 +1252,7 @@ mod tests {
                     } else {
                         anyhow::ensure!(original.as_ref() == Some(&idempotency_key));
                         ReplyResult::Receipt {
-                            receipt: bitrouter_orchestrator::turn::TurnReceipt {
+                            receipt: crate::harness::turn::TurnReceipt {
                                 user_item_id: String::new(),
                                 thread_id,
                                 turn_id: "original-turn".into(),

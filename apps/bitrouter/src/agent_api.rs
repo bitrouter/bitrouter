@@ -5,6 +5,12 @@ use std::future::IntoFuture;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
+use crate::harness::agent::AgentConfig;
+use crate::harness::service::{ErrorCode, ServiceError, ThreadService};
+use crate::harness::thread::{
+    PermissionProfile, ThreadHistoryRequest, ThreadRequest, ThreadTarget,
+};
+use crate::harness::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest};
 use anyhow::{Result, ensure};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -13,14 +19,6 @@ use axum::response::{IntoResponse, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_orchestrator::agent::AgentConfig;
-use bitrouter_orchestrator::service::{ErrorCode, ServiceError, ThreadService};
-use bitrouter_orchestrator::thread::{
-    PermissionProfile, ThreadHistoryRequest, ThreadRequest, ThreadTarget,
-};
-use bitrouter_orchestrator::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest,
-};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::AgentApiConfig;
 use serde::{Deserialize, Serialize};
@@ -81,7 +79,7 @@ struct CreateBody {
     workspace: PathBuf,
     model: String,
     #[serde(default)]
-    model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
+    model_mode: crate::core::protocol::ModelMode,
     effort: Option<ReasoningEffort>,
     #[serde(default)]
     max_output_tokens: Option<u32>,

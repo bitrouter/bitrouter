@@ -1,6 +1,6 @@
 //! App-owned transactional storage for the BRO native execution runtime.
 
-use bitrouter_orchestrator::store::{
+use crate::harness::storage::{
     AcceptedKey, ExecutionHead, ExecutionIndexPage, ExecutionOwner, ExecutionPage, ExecutionRecord,
     ExecutionStore, OwnerClaim, RUNTIME_FORMAT_VERSION, StoredExecution, ThreadHistoryChunk,
     owner_time_ms, push_history_event, validate_owner_id, validate_runtime_format,
@@ -827,8 +827,8 @@ mod tests {
     #[tokio::test]
     async fn v1_upgrade_rolls_back_corruption_and_preserves_bytes_after_reopen()
     -> anyhow::Result<()> {
+        use crate::core::checkpoint::sha256;
         use base64::{Engine, engine::general_purpose::STANDARD};
-        use bitrouter_orchestrator::core::checkpoint::sha256;
 
         let directory = tempfile::tempdir()?;
         let url = format!("sqlite://{}/upgrade.db", directory.path().display());
@@ -1284,8 +1284,8 @@ mod tests {
     }
 
     fn history_event(seq: u64, text: &str) -> ExecutionRecord {
-        use bitrouter_orchestrator::thread::{ThreadChange, ThreadEvent};
-        use bitrouter_orchestrator::turn::TurnReceipt;
+        use crate::harness::thread::{ThreadChange, ThreadEvent};
+        use crate::harness::turn::TurnReceipt;
         ExecutionRecord::ThreadEvent {
             event: ThreadEvent {
                 server_instance_id: "first-process".into(),
@@ -1298,7 +1298,7 @@ mod tests {
                         thread_id: "thread".into(),
                         turn_id: format!("turn-{seq}"),
                         queue_order: seq,
-                        status: bitrouter_orchestrator::turn::TurnStatus::Queued,
+                        status: crate::harness::turn::TurnStatus::Queued,
                     },
                     user_item_id: format!("user-{seq}"),
                     prompt: text.into(),

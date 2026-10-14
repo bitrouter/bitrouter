@@ -8,9 +8,7 @@ use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook};
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
 use crate::acp_trajectory::{RecordingScope, SessionIdentity};
-use bitrouter_orchestrator::acp::capture::{
-    CaptureDirection, CaptureEvent, CaptureKind, CapturePort,
-};
+use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
 
 struct JudgeRequestContract;
 

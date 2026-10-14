@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::tui::code::{Inspector, Selector, SelectorRow};
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_tui::code::{Inspector, Selector, SelectorRow};
 
 use crate::acp_trajectory::checkpoint::types::{
     AssessmentRevision, AssessmentSource, CriterionScore, EvidenceCitation,

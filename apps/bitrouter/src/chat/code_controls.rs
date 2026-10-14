@@ -1,10 +1,10 @@
 //! ACP metadata translated into plain, temporary Code pickers.
 
+use crate::tui::code::{Selector, SelectorRow};
 use agent_client_protocol::schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
     SessionConfigSelectOptions, SessionModeState,
 };
-use bitrouter_tui::code::{Selector, SelectorRow};
 
 /// Revalidate a choice against the latest reported setting before mutation.
 pub(crate) fn setting_value(

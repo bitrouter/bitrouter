@@ -1,8 +1,6 @@
 use super::*;
 mod revisions;
-use bitrouter_orchestrator::acp::capture::{
-    CaptureDirection, CaptureEvent, CaptureKind, CapturePort,
-};
+use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
 use serde_json::json;
 
 use crate::acp_trajectory::{CanonicalStore, RecordingScope};

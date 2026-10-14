@@ -166,7 +166,10 @@ jobs:
             targets: >-
               --test agent_trace_generalization --test observe_hierarchy
               --test workflow_state_real_agent_e2e
-              --test workflow_state_replay
+              --test workflow_state_replay --test telemetry_ingress_log_target --test source_boundaries
+          - shard: core-scheduling
+            retries: "0"
+            targets: --test core_contract --test core_execution
           - shard: optimization
             retries: "0"
             targets: >-
@@ -229,207 +232,119 @@ jobs:
           done
 
   feature-isolation:
-    name: feature-isolation
+    name: public-library-boundaries
     runs-on: ubuntu-latest
-    # The SDK's default dependency tree is a shipped promise: a consumer that
-    # wants pure routing must not pay for the axum HTTP server. The whole
-    # OpenTelemetry stack is a stronger promise still — it must not reach
-    # `bitrouter-sdk` under ANY feature combination, because it lives in
-    # `bitrouter-telemetry` and the SDK owns only the contract that crate
-    # renders. Every capability that pulls weight sits behind a default-off
-    # feature, and each feature must build on its own.
-    #
-    # `cargo tree` is the tool here, and it mishandles a bad name in *two*
-    # different ways depending on which flag carries it. Both make a typo (or a
-    # crate rename) pass silently, so both need a guard:
-    #
-    #   1. `-i <pkg>` — exits 101 both when the package is absent from the
-    #      selected tree AND when the name matches no package at all, with a
-    #      byte-identical message. Guard: every negative assertion below is
-    #      preceded by a positive one proving the name resolves somewhere.
-    #
-    #   2. `-p <crate>` — the sharper one. An unknown package spec is silently
-    #      ignored and `cargo tree` falls back to the **whole workspace**
-    #      default tree: `cargo tree -p bitrouter-guardrailz -e normal -i axum`
-    #      exits **0**, prints a full workspace-wide inverted tree, and writes
-    #      nothing to stderr. Because it both succeeds and produces output,
-    #      exit status alone cannot catch it — the `-i` guard above is no help
-    #      here. In the crate loop below, a typo'd or renamed crate therefore
-    #      stops asserting anything about that crate and silently asserts about
-    #      the workspace instead. Today both `axum` and `opentelemetry` are in
-    #      the workspace default tree (apps/bitrouter enables
-    #      `bitrouter-telemetry/otel-http` unconditionally), so the failure is
-    #      a *misleading* one: the job
-    #      blames a crate that does not exist for a dependency it never had.
-    #      Drop either from the workspace default tree and the same typo flips
-    #      to the opposite failure — a negative assertion that passes forever
-    #      without checking anything. Guard: assert workspace membership via
-    #      `cargo metadata` before using a name in `-p`.
-    #
-    # Literal `-p bitrouter-sdk` / `-p bitrouter-telemetry` uses are covered
-    # already: the `cargo check -p` steps above exit 101 on an unknown package
-    # spec (unlike `cargo tree`).
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo check -p bitrouter-ai --no-default-features
-      - run: cargo test -p bitrouter-ai --no-default-features
-      - run: cargo test -p bitrouter-ai --no-default-features --features pkce
-      - run: cargo test -p bitrouter-ai --no-default-features --features hosted-login
-      - run: cargo test -p bitrouter-ai --no-default-features --features file-store
-      - name: model integration stays independent of gateway and agent runtime
+      - name: verify final workspace membership
+        run: |
+          cargo metadata --no-deps --format-version 1 | jq -e '
+            [.packages[].name] | sort ==
+            ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-sdk", "dist-helper"]'
+      - name: contracts and client build independently
+        run: |
+          cargo test -p bitrouter-ai
+          cargo test -p bitrouter-ai --all-features
+          cargo test -p bitrouter-sdk
+          cargo test -p bitrouter-sdk --all-features
+          cargo test -p bitrouter-guardrails --all-features
+      - name: inspect isolated production dependency closures
         shell: bash
         run: |
-          cargo tree --locked -p bitrouter-ai --all-features -e normal,build --prefix none > ai-tree.txt
-          if grep -Eq '^(bitrouter(-sdk|-providers|-core|-orchestrator(-core)?)?|axum|agent-client-protocol(-[^ ]*)?|rmcp) v' ai-tree.txt; then
-            echo '::error::model integration pulls gateway or agent runtime dependencies'; exit 1
+          # Successful checks above prove package membership. Inspect forward
+          # trees: an unknown inverted dependency must not count as evidence.
+          for flags in '' '--all-features'; do
+            cargo tree --locked -p bitrouter-ai $flags -e normal,build --prefix none > ai-tree.txt
+            if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+              echo '::error::AI public contracts pulled runtime dependencies'; exit 1
+            fi
+            cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
+            if grep -Eq '^(bitrouter|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
+              echo '::error::HTTP SDK pulled service, execution or UI dependencies'; exit 1
+            fi
+          done
+          cargo tree --locked -p bitrouter-guardrails --all-features -e normal,build --prefix none > guardrails-tree.txt
+          if grep -Eq '^(bitrouter(-sdk)?|axum|opentelemetry[^ ]*) v' guardrails-tree.txt; then
+            echo '::error::matcher depends on its host implementation'; exit 1
           fi
-      - run: cargo check -p bitrouter-sdk --no-default-features
-      - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
-      - run: cargo check -p bitrouter-guardrails
-      - run: cargo check -p bitrouter --features guardrails
-      - name: guardrails and the default host have separate dependency trees
-        shell: bash
-        run: |
           cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
           if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
-            echo '::error::default bro links the guardrails implementation'; exit 1
+            echo '::error::default bro links the optional matcher'; exit 1
           fi
-      - run: cargo check -p bitrouter-sdk --no-default-features --features server
-      - run: cargo check -p bitrouter-orchestrator --no-default-features
-      - run: cargo check -p bitrouter-orchestrator --no-default-features --features acp
-      - name: the native orchestrator does not load the ACP runtime by default
-        shell: bash
+
+  application-features:
+    name: application-features (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ''
+          - core
+          - harness
+          - tui
+          - core,harness
+          - core,tui
+          - mcp
+          - server-tools
+          - guardrails
+          - otel-http
+          - otel-grpc
+          - otel-http,otel-grpc
+          - harness,otel-http
+          - db-postgres
+          - db-mysql
+          - mcp,server-tools,otel-http,db-postgres,db-mysql
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: build selected profile without workspace feature unification
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
         run: |
-          cargo tree --locked -p bitrouter-orchestrator --no-default-features -e normal,build --prefix none > orchestrator-tree.txt
-          if grep -Eq '^agent-client-protocol[^ ]* v' orchestrator-tree.txt; then
-            echo '::error::ACP runtime dependencies reached the native orchestrator default tree'; exit 1
-          fi
-      - name: the ACP runtime stays outside the SDK
-        shell: bash
-        run: |
-          cargo tree --locked -p bitrouter-sdk --all-features -e normal,build --prefix none > sdk-tree.txt
-          if grep -Eq '^agent-client-protocol[^ ]* v' sdk-tree.txt; then
-            echo '::error::ACP runtime dependencies reached bitrouter-sdk'; exit 1
-          fi
-      - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-http
-      - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-grpc
-      - run: cargo check -p bitrouter-telemetry --no-default-features --features otel,server
-      - name: the OpenTelemetry stack never reaches the SDK
-        # The gate the telemetry crate exists for, and the strongest form of
-        # it: not "off by default" but absent at every feature combination.
-        # `--all-features` is the whole point — a feature that quietly pulled
-        # the stack back into the foundation crate would pass a default-tree
-        # check and fail this one.
-        #
-        # Scope, because the first draft got this wrong and failed on its first
-        # CI run. Only crates that can be in the SDK's tree *solely* because of
-        # the OTLP renderer belong here. `tracing-subscriber`, `tonic` and
-        # `dashmap` were on the list and do not qualify: they are
-        # general-purpose, and something unrelated may legitimately want them.
-        # `tracing-subscriber` promptly proved it — `agent-client-protocol-conductor`
-        # pulls it, so the over-broad list failed on a dependency that has
-        # nothing to do with telemetry.
-        #
-        # The semver argument this job serves was never about tree membership
-        # anyway. It is about *public* dependencies, and
-        # `public-api-deps.txt` below is what guards those. A crate can sit in
-        # the tree transitively forever without costing a semver commitment;
-        # only appearing in a public signature does that. Do not conflate them
-        # again by re-widening this list.
-        #
-        # `tonic` and `dashmap` keep their guard in "telemetry default tree
-        # stays lean" and "transports stay isolated", where the question asked
-        # is one they can actually answer.
-        run: |
-          for pkg in opentelemetry opentelemetry_sdk opentelemetry-otlp \
-                     opentelemetry-semantic-conventions tracing-opentelemetry; do
-            if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg reached bitrouter-sdk — the OTLP renderer belongs in bitrouter-telemetry; see docs/TELEMETRY_CRATE_SPEC.md"; exit 1
-            fi
-          done
-      - name: SDK default tree stays lean
-        # Just `axum` now: the OTel names moved to their own steps above, and
-        # `tower` is not a valid subject here — `reqwest` puts it in the
-        # default tree regardless of the `server` feature.
-        run: |
-          for pkg in axum; do
-            if ! cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-sdk --no-default-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg is in bitrouter-sdk's default tree"; exit 1
-            fi
-          done
-      - name: telemetry default tree stays lean
-        run: |
-          for pkg in opentelemetry opentelemetry_sdk opentelemetry-otlp \
-                     tracing-opentelemetry tracing-subscriber tonic dashmap axum; do
-            if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-telemetry --no-default-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg is in bitrouter-telemetry's default tree"; exit 1
-            fi
-          done
-      - name: transports stay isolated
-        run: |
-          for pkg in tonic axum; do
-            if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-telemetry --no-default-features --features otel-http -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg leaked into the otel-http tree"; exit 1
-            fi
-          done
-      - name: consumers stay lean when consumed on their own
-        # Scope, stated exactly, because the obvious reading of this step is
-        # wrong and the wrong reading is the reassuring one.
-        #
-        # `cargo tree -p <crate>` resolves that crate's features IN ISOLATION —
-        # what a downstream gets from `cargo add bitrouter-guardrails`. That is
-        # a real shipped promise and this step guards it: pull the hook crate
-        # on its own and no axum, no OpenTelemetry.
-        #
-        # It is NOT a claim that the workspace product has no OTel stack:
-        # `apps/bitrouter` enables `bitrouter-telemetry/otel-http` explicitly.
-        # Cargo unifies enabled features of shared dependencies in a workspace
-        # build. These checks describe each listed package resolved alone;
-        # the separate host/service tree checks above guard their actual
-        # product boundary, and cargo-dist builds each application separately.
-        #
-        # `bitrouter-sdk` is in the crate loop now that the OTel stack is not
-        # its to carry: `cargo add bitrouter-sdk` must pull neither.
-        run: |
-          if ! cargo tree -p bitrouter-sdk --all-features -e normal -i axum >/dev/null 2>&1; then
-            echo "::error::axum resolves in no tree at all — misspelled?"; exit 1
-          fi
-          if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i opentelemetry >/dev/null 2>&1; then
-            echo "::error::opentelemetry resolves in no tree at all — misspelled?"; exit 1
-          fi
-          for crate in bitrouter-ai bitrouter-sdk bitrouter-guardrails dist-helper; do
-            # `cargo tree -p` ignores an unknown spec and exits 0 (see the job
-            # comment), so prove membership before trusting anything below.
-            if ! cargo metadata --no-deps --format-version 1 \
-                 | jq -e --arg c "$crate" '.packages[] | select(.name == $c)' >/dev/null; then
-              echo "::error::unknown workspace crate: $crate"; exit 1
-            fi
-            for pkg in axum opentelemetry; do
-              if cargo tree -p "$crate" -e normal -i "$pkg" >/dev/null 2>&1; then
-                echo "::error::$crate must not depend on $pkg when resolved on its own (a workspace build unifies features and legitimately does link it)"; exit 1
-              fi
-            done
-          done
-      - name: "the OTel core without a transport is a compile error"
-        run: |
-          if out=$(cargo check -p bitrouter-telemetry --features __otel-core --message-format=short 2>&1); then
-            echo "::error::expected the transport-less build to fail"; printf '%s\n' "$out"; exit 1
-          fi
-          printf '%s\n' "$out" | grep -qF 'the OpenTelemetry stack needs a transport' || {
-            echo "::error::failed, but not with the transport compile_error"; printf '%s\n' "$out"; exit 1; }
+          cargo check -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
+          cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
+          case ",$PROFILE_FEATURES," in
+            *,tui,*) ;;
+            *) if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
+                 echo '::error::headless profile pulled terminal dependencies'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,harness,*|*,tui,*) ;;
+            *) if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
+                 echo '::error::profile without harness pulled ACP runtime'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,otel-http,*|*,otel-grpc,*) ;;
+            *) if grep -Eq '^(opentelemetry[^ ]*|tracing-opentelemetry) v' profile-tree.txt; then
+                 echo '::error::profile without OTLP pulled exporter dependencies'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,otel-grpc,*) ;;
+            *) if grep -Eq '^tonic v' profile-tree.txt; then
+                 echo '::error::profile without gRPC pulled tonic'; exit 1
+               fi ;;
+          esac
+
+  telemetry-transports:
+    name: telemetry (${{ matrix.transport }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - transport: otel-http
+            targets: --test telemetry_ingress_log_target --test observe_hierarchy --test full_stack
+          - transport: otel-grpc
+            targets: --test telemetry_grpc_transport
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test -p bitrouter --no-default-features --features ${{ matrix.transport }} ${{ matrix.targets }}
 
   sdk-public-api:
     name: sdk-public-api

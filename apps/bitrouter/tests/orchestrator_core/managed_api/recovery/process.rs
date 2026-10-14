@@ -1,8 +1,8 @@
 //! Crash the shipped CLI, retaining only the independent harness's journal.
 
 use super::*;
-use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_orchestrator::core::protocol::{
+use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::core::protocol::{
     RunActivityReconciliation, ToolEffect, ToolObservation, ToolStatus,
 };
 use std::io::Write;

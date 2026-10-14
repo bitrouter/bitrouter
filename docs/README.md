@@ -6,7 +6,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 ## Contents
 
 - [`BITROUTER_SERVICE_REFACTOR_PLAN.md`](BITROUTER_SERVICE_REFACTOR_PLAN.md) —
-  **accepted direction; implementation pending.** Complete package/module
+  **accepted direction; P0 implementation in progress.** Complete package/module
   migration inventory, lightweight AI contracts, HTTP SDK, application-owned
   telemetry, feature dependencies, P0 single-instance delivery and acceptance,
   and the separate P1 gateway multi-instance milestone.

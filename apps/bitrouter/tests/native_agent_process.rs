@@ -565,9 +565,9 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .context("caller ownership should be checked")?;
     ensure!(
         denied
-            .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
+            .downcast_ref::<bitrouter::harness::service::ServiceError>()
             .is_some_and(
-                |error| error.code == bitrouter_orchestrator::service::ErrorCode::Unauthorized
+                |error| error.code == bitrouter::harness::service::ErrorCode::Unauthorized
             )
     );
     loop {
@@ -730,7 +730,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
     let (local_thread, _) = local_client
         .create_and_start(
             unlisted.clone(),
-            bitrouter_orchestrator::agent::AgentConfig::fixed("test-model", None).read_only(),
+            bitrouter::harness::agent::AgentConfig::fixed("test-model", None).read_only(),
             None,
             "Local inspection".into(),
         )

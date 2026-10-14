@@ -131,7 +131,7 @@ async fn setup_with_reply(
             .context("adapter package directory missing")?
             .join("package.json"),
     )?)?;
-    let harness = bitrouter::harness::by_id(agent).context("unknown harness")?;
+    let harness = bitrouter::harness::catalog::by_id(agent).context("unknown harness")?;
     let (name, version) = harness
         .maintained_adapter_identity()
         .context("adapter is not pinned")?;

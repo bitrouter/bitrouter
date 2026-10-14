@@ -780,7 +780,7 @@ async fn interactive_credentials(
     skipped: &mut Vec<String>,
     manager: Arc<CredentialManager>,
 ) -> Result<()> {
-    use bitrouter_tui::select::Item;
+    use crate::tui::select::Item;
 
     let path = config_path(flags.config.as_deref())?;
     let registry = if path.is_file() && !flags.force {
@@ -920,13 +920,13 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
             .map(String::from)
             .collect());
     }
-    let harnesses = crate::harness::CATALOG;
+    let harnesses = crate::harness::catalog::CATALOG;
     let selected = crate::prompt::select(
         "Step 2/3 — Default ACP harness",
         "BitRouter provides the TUI. Choose the agent it runs.",
         harnesses
             .iter()
-            .map(|harness| bitrouter_tui::select::Item::new(harness.id, harness.description))
+            .map(|harness| crate::tui::select::Item::new(harness.id, harness.description))
             .collect(),
         harnesses
             .iter()
@@ -944,7 +944,7 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
 }
 
 async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
-    use bitrouter_tui::select::Item;
+    use crate::tui::select::Item;
     if let Some(after) = flags.after {
         return Ok(after);
     }
@@ -1010,8 +1010,8 @@ async fn finish_serve(
 /// the local `skip_auth` placeholder. The Codex example opens Code.
 fn build_snippet(listen: &str) -> Snippet {
     let base_url = crate::spawn::derive_base_url(listen);
-    let token = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV)
-        .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    let token = crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV)
+        .unwrap_or_else(|| crate::harness::catalog::PLACEHOLDER_API_KEY.to_string());
     let v1 = {
         let trimmed = base_url.trim_end_matches('/');
         if trimmed.ends_with("/v1") {
@@ -1138,8 +1138,8 @@ async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
         prompt,
         "Choose whether to continue",
         vec![
-            bitrouter_tui::select::Item::new("Yes", ""),
-            bitrouter_tui::select::Item::new("No", ""),
+            crate::tui::select::Item::new("Yes", ""),
+            crate::tui::select::Item::new("No", ""),
         ],
         usize::from(!default_yes),
     )
@@ -1364,7 +1364,7 @@ mod tests {
         // With no BITROUTER_API_KEY exported, the local `skip_auth` placeholder
         // is templated into all three shapes.
         // (This test process does not set BITROUTER_API_KEY.)
-        if crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV).is_some() {
+        if crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV).is_some() {
             return; // environment is non-hermetic; skip rather than false-fail
         }
         let snippet = build_snippet("127.0.0.1:4356");
@@ -1376,7 +1376,7 @@ mod tests {
         );
         assert!(snippet.anthropic.contains(&format!(
             "ANTHROPIC_AUTH_TOKEN={}",
-            crate::harness::PLACEHOLDER_API_KEY
+            crate::harness::catalog::PLACEHOLDER_API_KEY
         )));
         // OpenAI shape carries the /v1 suffix.
         assert!(

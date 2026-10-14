@@ -8,13 +8,13 @@ mod responses;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
+use crate::core::protocol::{Capabilities, CoreError, ErrorCode, Limits, VERSION};
+use crate::core::session::CoreSession;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use bitrouter_orchestrator::core::protocol::{Capabilities, CoreError, ErrorCode, Limits, VERSION};
-use bitrouter_orchestrator::core::session::CoreSession;
 use bitrouter_sdk::App;
 use sea_orm::DatabaseConnection;
 use tokio::sync::{Mutex, Semaphore};
@@ -25,12 +25,12 @@ type OutputBudgets = (Weak<output::Budget>, Weak<output::Budget>);
 struct Entry {
     session: Option<CoreSession>,
     port: Arc<channel::RemotePort>,
-    grant: bitrouter_orchestrator::core::protocol::OwnershipGrant,
+    grant: crate::core::protocol::OwnershipGrant,
     limits: Limits,
     connected: bool,
     ready: bool,
     job: Option<responses::Job>,
-    recovery_evidence: Vec<bitrouter_orchestrator::core::protocol::ProviderAttemptEvidence>,
+    recovery_evidence: Vec<crate::core::protocol::ProviderAttemptEvidence>,
 }
 
 struct Shared {
@@ -78,8 +78,8 @@ impl ManagedCoreApi {
                 "checkpoint.ack",
                 "artifact.chunk",
                 "responses.create",
-                bitrouter_orchestrator::core::context_router::FEATURE,
-                bitrouter_orchestrator::core::context_router::PORTABLE_RESPONSES_REASONING,
+                crate::core::context_router::FEATURE,
+                crate::core::context_router::PORTABLE_RESPONSES_REASONING,
             ]
             .into_iter()
             .map(String::from)

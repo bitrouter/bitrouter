@@ -2,8 +2,8 @@
 //! A checkpoint, exact ACK, artifact closure and tool-start tombstones occupy
 //! one versioned row, so no partial combination can become execution authority.
 
-use bitrouter_orchestrator::core::protocol::{CoreError, ErrorCode};
-use bitrouter_orchestrator::harness::managed::store::{MAX_STORE_BYTES, NativeStore};
+use crate::core::protocol::{CoreError, ErrorCode};
+use crate::harness::resources::managed::store::{MAX_STORE_BYTES, NativeStore};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set,
 };

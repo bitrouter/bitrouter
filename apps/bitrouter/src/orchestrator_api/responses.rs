@@ -10,16 +10,16 @@ mod authority_tests;
 
 use std::sync::Arc;
 
+use crate::core::protocol::{
+    ArtifactRef, BETA, CoreError, DiscardableHistory, ErrorCode, Limits, RoutingSettings,
+    TaskInput, ToolOutcome, ToolResult, VERSION, Verification,
+};
+use crate::core::session::CoreSession;
+use crate::core::session::responses::{ResponseExchange, ResponseToolResult};
 use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use bitrouter_orchestrator::core::protocol::{
-    ArtifactRef, BETA, CoreError, DiscardableHistory, ErrorCode, Limits, RoutingSettings,
-    TaskInput, ToolOutcome, ToolResult, VERSION, Verification,
-};
-use bitrouter_orchestrator::core::session::CoreSession;
-use bitrouter_orchestrator::core::session::responses::{ResponseExchange, ResponseToolResult};
 use http::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -271,14 +271,13 @@ async fn start(
     mut create: Create,
 ) -> Result<watch::Receiver<Progress>, ApiError> {
     create.stream = false;
-    let fingerprint = bitrouter_orchestrator::core::checkpoint::sha256(
-        &serde_json::to_vec(&create).map_err(|_| {
+    let fingerprint =
+        crate::core::checkpoint::sha256(&serde_json::to_vec(&create).map_err(|_| {
             ApiError::core(
                 ErrorCode::UnsupportedCapability,
                 "cannot encode managed request",
             )
-        })?,
-    );
+        })?);
     let mut sessions = api.shared.sessions.lock().await;
     let entry = sessions
         .get_mut(&ManagedCoreApi::key(

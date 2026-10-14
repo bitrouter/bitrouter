@@ -50,7 +50,7 @@ mod background;
 /// A deliberately small ACP agent. Its responses are protocol-shaped JSON, not
 /// terminal snapshots, so test failures describe lifecycle behavior instead of
 /// an incidental escape-sequence layout.
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
 /// The mode an isolated mock agent should exercise.

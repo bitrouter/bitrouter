@@ -217,7 +217,7 @@ impl InspectionTarget {
                 Ok(DaemonInspectionReport::Observe(report)) => Ok(report),
                 Ok(other) => unexpected_inspection("observe", other),
                 Err(error) if daemon::is_not_reachable(&error) => Ok(ObserveReport::from_snapshot(
-                    daemon::ObserveStatusPayload::unwired(bitrouter_telemetry::OTEL_ENABLED),
+                    daemon::ObserveStatusPayload::unwired(crate::telemetry::OTEL_ENABLED),
                     false,
                 )),
                 Err(error) => Err(error),

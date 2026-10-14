@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::auth::{db, entities::api_keys, keys};
+use crate::core::protocol::OwnershipGrant;
 use crate::orchestrator_api::{Entry, channel::RemotePort, output};
-use bitrouter_orchestrator::core::protocol::OwnershipGrant;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde_json::json;
 
@@ -79,9 +79,7 @@ async fn fixture() -> Result<(ManagedCoreApi, Principal, Create), Box<dyn std::e
             ready: true,
             job: Some(Job {
                 operation_id: "replay".into(),
-                fingerprint: bitrouter_orchestrator::core::checkpoint::sha256(&serde_json::to_vec(
-                    &create,
-                )?),
+                fingerprint: crate::core::checkpoint::sha256(&serde_json::to_vec(&create)?),
                 progress,
             }),
             recovery_evidence: Vec::new(),

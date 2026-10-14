@@ -3,14 +3,12 @@
 //! The internal `code` module owns the only full-screen interaction loop, including terminal
 //! restoration, prompt lifetime, and permission handling. [`session`] keeps
 //! the plain compatibility renderer and session-log helpers for redirected
-//! legacy invocations. [`effects`] remains the shared ACP wire interpreter for
-//! headless and plain execution.
+//! legacy invocations. Headless permissions use the harness ACP policy adapter.
 
 pub(crate) mod code;
 pub(crate) mod code_controls;
 pub(crate) mod code_wire;
 pub(crate) mod editor;
-pub mod effects;
 pub mod session;
 pub mod signals;
 
@@ -19,9 +17,7 @@ mod tests {
     /// The guard §8 asks for, because what stays here is rendering-adjacent
     /// code sitting where it *could* reach anything.
     ///
-    /// `picker.rs` and the rendering half of `cost.rs` went back to
-    /// `bitrouter-tui`, where the compiler keeps them honest. What is left
-    /// here is the part that genuinely is not ACP — this process's stdin,
+    /// The TUI renderer has its own import boundary. This module owns stdin,
     /// its signals, its session log — and it gets this instead: the chat
     /// module may read the ACP wire and the terminal, and nothing else. No
     /// `Config`, no metering store, no control socket, and none of the
@@ -39,7 +35,6 @@ mod tests {
             ("code_wire.rs", include_str!("code_wire.rs")),
             ("code_controls.rs", include_str!("code_controls.rs")),
             ("editor.rs", include_str!("editor.rs")),
-            ("effects.rs", include_str!("effects.rs")),
             ("session.rs", include_str!("session.rs")),
         ];
         // Spelled as paths and type names, so a mention in prose — "the

@@ -7,7 +7,7 @@ use crate::evolution::{
     scoring,
     service::DecisionContext,
 };
-use bitrouter_orchestrator::acp::capture::{CaptureDirection, CaptureEvent, CapturePort};
+use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CapturePort};
 use std::sync::Arc;
 
 async fn fixture() -> Result<(

@@ -5,15 +5,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bitrouter_ai::types::Role;
-use bitrouter_orchestrator::core::checkpoint::{
-    CheckpointAck, CheckpointBatch, DurableHead, sha256,
-};
-use bitrouter_orchestrator::core::protocol::{
+use bitrouter::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, sha256};
+use bitrouter::core::protocol::{
     Bind, Capabilities, ContextMode, CoreError, DiscardableHistory, ErrorCode, HarnessManifest,
     Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate, TaskInput,
 };
-use bitrouter_orchestrator::core::session::{CoreSession, HarnessPort, RunStatus};
+use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus};
+use bitrouter_ai::types::Role;
 use bitrouter_sdk::caller::CallerContext;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -47,7 +45,7 @@ struct Harness {
 impl HarnessPort for Harness {
     async fn read_artifact(
         &self,
-        _reference: &bitrouter_orchestrator::core::protocol::ArtifactRef,
+        _reference: &bitrouter::core::protocol::ArtifactRef,
         _offset: u64,
         _max_bytes: u64,
     ) -> std::result::Result<Vec<u8>, CoreError> {
@@ -395,10 +393,10 @@ models:
 
 #[tokio::test]
 async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<()> {
+    use bitrouter::core::context_router::FEATURE;
+    use bitrouter::core::protocol::ModelMode;
     use bitrouter::eval::types::EvalScope;
     use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
-    use bitrouter_orchestrator::core::context_router::FEATURE;
-    use bitrouter_orchestrator::core::protocol::ModelMode;
     let home = tempfile::tempdir()?;
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/chat/completions"))

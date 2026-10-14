@@ -1,6 +1,10 @@
 # BitRouter service architecture refactor plan
 
-Status: **accepted architecture direction; implementation pending.**
+Status: **accepted architecture direction; P0 implementation in progress.**
+
+See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for verified
+results and open acceptance gates. The target tables below are not a claim that
+every boundary has already been implemented.
 
 Date: 2026-10-15. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
 on `main`, version `1.0.0-alpha.33`.
@@ -16,6 +20,12 @@ application.
 the official gateway usable as a standalone single-instance microservice.
 P1 adds native gateway multi-instance operation.** Core distribution and a new
 plugin transport are outside both milestones.
+
+The two ownership decisions apply together: AI contains the contracts shared by
+clients and extensions, while the application owns the implementations that act
+on them. This includes protocol conversion and lifecycle execution as well as
+telemetry export. Keeping serde definitions in AI does not require keeping
+provider clients, conversion algorithms or an exporter there.
 
 This plan changes the target ownership in
 [the AI extraction spec](BITROUTER_AI_REFACTOR_SPEC.md) and
@@ -123,7 +133,9 @@ Solid arrows are Rust dependencies. The dotted arrow is a process boundary.
 The `bitrouter -> bitrouter-sdk` dependency supports remote command/client paths;
 gateway execution does not route a local request through its own HTTP listener.
 
-Five workspace packages remain:
+P0 reduces the eight existing workspace packages to five: `bitrouter`,
+`bitrouter-ai`, the repurposed `bitrouter-sdk`, `bitrouter-guardrails` and the
+unpublished `dist-helper`.
 
 | Existing package | Current source | P0 disposition |
 | --- | --- | --- |
@@ -166,7 +178,7 @@ apps/bitrouter/src/
   client/                 local IPC adapters and endpoint/profile selection
   host/                   assembly, daemon lifecycle, shutdown and upgrade
   config/                 application configuration and feature availability checks
-  storage/                connection/bootstrap and unchanged migration ledger
+  storage/                bootstrap, migration ledger and shared checkpoint codecs
   telemetry/              optional OTLP implementation
   integrations/           hosted account/product-management clients
 ```
@@ -224,6 +236,23 @@ Protocol JSON serialization is distinct from semantic conversion. For example,
 `ChatRequest <-> JSON` may be contract code; mapping a Chat request to Messages
 through canonical model content belongs to gateway codecs. The SDK decodes the
 service's declared response/events without embedding provider adaptation logic.
+
+Apply that distinction within mixed modules, rather than moving a directory
+wholesale:
+
+| Concern | Public contract in AI | Implementation owner |
+| --- | --- | --- |
+| Model protocol | Request/response/event structures, field names and serde behavior | Gateway maps protocols, repairs history and executes provider streams; SDK parses service framing |
+| Request lifecycle | IDs, stage/outcome enums and bounded observation/capability views | Gateway owns mutable pipeline context, hooks, dispatch and finalization |
+| Conversion | Public report, reason and location types already exposed to consumers | Gateway decides admissibility and performs the conversion |
+| Agent scheduling | Existing public commands, events and checkpoint references | Core schedules; harness executes and commits its durable session |
+| Observability | Schema, attribute vocabulary and small conformance helpers | Application telemetry samples, batches, authenticates and exports |
+
+For each moved type, check its fields, generic bounds, trait signatures and
+helper methods as well as imports. A contract-shaped struct that exposes a live
+provider client, scheduler handle or storage transaction still violates this
+boundary. Keep intrinsic validation beside the contract; validation requiring
+credentials, policy evaluation or live ownership belongs to the service.
 
 ### New bitrouter-sdk
 
@@ -312,6 +341,12 @@ split is stated explicitly. `lib.rs`, `main.rs`, build scripts, integration test
 and non-source assets have separate entries. New source added during execution
 must be assigned before its migration patch is accepted.
 
+The inventory was checked against all eight package manifests and their source
+entry points: application 72 library-root modules, AI 12, SDK 16, orchestrator
+12, TUI 19, telemetry one `otel` root with 11 child modules, matcher six root
+modules including tests, and helper three binary-root modules. Counts describe
+the source revision above; they are an audit aid, not a new architectural limit.
+
 ### Current bitrouter application
 
 All paths in this table are relative to `apps/bitrouter/src`. There are 72
@@ -390,7 +425,7 @@ crate-root module declarations at the inventory baseline.
 | `update` | `host::update` updater implementation and thin CLI entry |
 | `upgrade` | `host::upgrade` upgrade coordination and thin CLI entry |
 | `upgrade_preflight` | `storage` schema compatibility checks plus host upgrade coordination |
-| `workflow_state` | `core::workflow_state` IR, measurement, decision, classifier, reward, replay and policy analysis; gateway response observer is a narrow optional adapter |
+| `workflow_state` | Serving-time `OnlineWorkflowState` projection, routing-key derivation and published-policy validation support to `gateway::routing`; learning, measurement, classifier training, reward, replay and policy analysis to core; gateway response observer is a narrow optional adapter |
 
 For split observation modules, ordinary gateway completion must not require a
 core worker. Preserve necessary gateway evidence writers and usage finalization;
@@ -402,6 +437,13 @@ In particular, `session_identity` currently imports both `AcpRuntime` and
 `workflow_state` extractors. Move reusable identity extraction below those
 optional consumers; gating the whole observer would lose gateway attribution,
 while retaining those imports would defeat the minimum feature profile.
+
+`policy_table_router` derives lookup keys through `OnlineWorkflowState`, and
+`policy_lock` validates predictive route keys and predictor contracts when loading
+a published policy. Retain these serving-time projections, validators and their
+supporting data under gateway ownership. Core produces learned artifacts; the
+gateway must still validate and apply an existing artifact with core disabled.
+This service logic does not belong in AI merely because both owners use it.
 
 ### Current bitrouter-ai
 
@@ -479,12 +521,25 @@ enabling `core` or workspace shell/file tools in a gateway build.
 | `tools` | `harness::tools` declarations, validation and `read/glob/grep/write/edit/shell` execution |
 | `acp` | `harness::acp` client/controller/child-process stack and `native` server; CLI and TUI remain adapters |
 
-Within `core`, `accounting/activity/allocation/checkpoint/collaboration/
-context_router/reconstruction/routing/session/signals` remain scheduling
+Within `core`, live `accounting/activity/allocation/checkpoint/collaboration/
+context_router/reconstruction/routing/session/signals` behavior remains scheduling
 implementation. Split `protocol` definitions and serializable checkpoint
 envelopes from validation that requires live scheduler authority. Neither
 extracting a checkpoint type nor moving `service` transfers harness commit
 authority to core.
+
+There is also a persisted-data dependency: ThreadService recovery calls native
+replay, which decodes `SessionSnapshot` and validates context-store history.
+Move shared internal snapshot codecs, immutable-history checks and supporting
+types to application `storage::checkpoint`, available with either `core` or
+`harness`. Extract only genuinely public envelopes into AI. Harness journal
+replay/commit stays harness-owned; live scheduler restoration and authorization
+stay core-owned. Both consume the same format checks without making harness
+depend on the scheduler or exposing internal replay machinery through AI.
+A harness-only build must inspect and validate existing native records even
+when it cannot resume their local core execution; unavailable execution must
+produce a capability diagnostic rather than bypassing validation or rewriting
+the records.
 
 Core reconstruction, routing and session pairing currently call the shared
 `context` helpers directly. Move those helpers and their model-history tests
@@ -507,14 +562,14 @@ owned by application telemetry.
 | `cost` | Shared cost/provenance value in presentation; terminal rendering in TUI |
 | `journal` | Conversation presentation model usable by headless output; isolate any terminal-specific cache |
 | `lifecycle` | Terminal enter/restore lifecycle in TUI; process ownership remains host |
-| `log_tail` | TUI view; service/log source supplied through commands/client |
-| `machine` | `Command/PromptCommand/resolve` and shared command semantics to commands; keyboard/focus machine stays TUI |
+| `log_tail` | Terminal-independent failure text in presentation; service/log source supplied through command adapters |
+| `machine` | `Command/PromptCommand/resolve` and their tests to commands; retire the unused legacy reducer after verifying that the active `code` view retains product interactions |
 | `native_agent` | Native presentation types to presentation; view/editor rendering to TUI |
 | `permission` | Approval decision/policy in harness; prompt UI in TUI; retain each existing headless approval policy |
-| `picker`, `select` | TUI interaction; command arguments and noninteractive selection remain CLI |
+| `picker`, `select` | Active selection UI stays TUI; retire the unused legacy picker with its old reducer; command arguments and noninteractive selection remain CLI |
 | `plain` | CLI plain output using terminal-independent presentation; remove Ratatui `Line/Size` requirement |
 | `render` | `tui::render`; extract shared content formatting only where headless output needs it |
-| `view`, `wrap`, `writer` | TUI drawing/layout/cache; terminal-independent transcript data outside renderer |
+| `view`, `wrap`, `writer` | Active TUI layout/writer/cache stay internal; retire the unused legacy View and frame scheduler; retain shared cost tests and terminal-independent transcript data outside the renderer |
 
 The current `plain` path shares Ratatui rendering, and headless paths consume
 types from `machine` and `permission`. A directory move alone does not isolate
@@ -575,6 +630,16 @@ These are target features to implement in P0, not existing manifest behavior.
 There is no optional `gateway` or `cli` feature: gateway and essential command
 parsing/configuration/management are always present.
 
+The public libraries have separate feature namespaces; none selects application
+runtime behavior:
+
+| Package | Public feature policy |
+| --- | --- |
+| `bitrouter-ai` | Empty default; optional `schema` enables only schema derives and optional `testing` exposes existing pure conformance helpers. Every combination stays contract-only. |
+| `bitrouter-sdk` | Gateway/control HTTP client by default; an optional `core` feature is justified only by additional dependencies of supported core transports. It never enables server code. |
+| `bitrouter-guardrails` | Rules and native capability implementation by default; remove the old `sdk` feature once its adapters move into the application. |
+| `dist-helper` | No product capability flags; registry bootstrap stays independent of application compilation. |
+
 | Application feature | Enables | Must not imply |
 | --- | --- | --- |
 | None | Gateway HTTP APIs, model protocols/conversion, provider integration, configured routing/fallback, auth, metering, SQLite persistence, basic logs and CLI/control | Core, harness, terminal UI or OTLP |
@@ -631,6 +696,32 @@ supported standalone/external-agent paths; commands requiring local core report
 that requirement. A TUI build includes every CLI/headless capability supported
 by the same feature set, without fabricating local core availability.
 
+### Existing feature migration
+
+Feature names belong to their package. Removing an old library feature does not
+remove its product behavior; the implementation moves to the application owner
+and is selected there. The new SDK does not retain empty server-feature aliases.
+
+| Existing package feature or dependency | P0 destination |
+| --- | --- |
+| AI `hosted`, `pkce`, `hosted-login`, `file-store` | Gateway provider/authentication implementation; remove these features from AI and preserve the existing product login and credential paths |
+| SDK `server` | Always-available gateway HTTP server in the application; no server code in the new SDK |
+| SDK `config_file` | Always-available application configuration parsing; SDK takes explicit client options |
+| SDK `mcp` | Application `mcp`; harness workspace connections belong to `harness`, which enables `mcp` |
+| SDK `testing` | AI `testing` for pure observation-schema conformance helpers; runtime fixtures stay with their implementation |
+| Orchestrator `acp` | Application `harness`; preserve native and external ACP support without enabling core or TUI |
+| Application's unconditional TUI dependency | Application `tui`; command vocabulary, approval policy and plain output move outside that gate |
+| Telemetry `otel`, `otel-http`, `otel-grpc` | Application features of the same names, with the existing alias and transport precedence |
+| Telemetry `server` | Exporter ingress integration under the selected application OTLP transport; a gateway is always present |
+| Telemetry `__otel-core` | Internal application conditional compilation; no independently selectable transport-less feature |
+| Guardrails `sdk` | Application `guardrails` adapter; remove the matcher's old SDK dependency and feature after moving consumers |
+| Unconditional PostgreSQL/MySQL driver activation | Application `db-postgres` and `db-mysql`; retain both in the full default distribution |
+
+Cargo features select compiled capability, while configuration selects runtime
+activation. Enabling `guardrails` does not register callbacks; enabling an OTLP
+transport does not override endpoint opt-in. The startup checks below enforce
+this distinction for reduced builds.
+
 ### Supported build profiles
 
 | Profile | Feature selection | Purpose |
@@ -676,6 +767,21 @@ their historical tables. Feature changes must not reinterpret schema history.
 Each stage produces a buildable, reviewable change. Temporary implementation
 ownership is allowed while moving consumers, but no permanent forwarding crates,
 duplicate model types or service runtime in the final SDK/AI graph remain.
+
+| Stage | Reviewable result | Principal final acceptance gates |
+| --- | --- | --- |
+| P0 0 | Recorded behavior, serialized-data and performance baselines | Evidence required by A07–A16 |
+| P0 1 | Shared contracts and matcher dependency direction established | A02, A13, A15; A02 completes in P0 3 |
+| P0 2 | Core/harness, TUI and telemetry merged into the application | A01, A10–A13 |
+| P0 3 | Application owns gateway execution; AI is contract-only | A02, A07, A09, A14 |
+| P0 4 | HTTP SDK and independent client/server example | A03, A04, A15 |
+| P0 5 | Feature isolation, startup and persistence transitions | A05, A06, A08–A12 |
+| P0 6 | Complete validation, packaging and migration documentation | A01–A16 together |
+
+These mappings identify review responsibility, not early acceptance: moving
+three packages does not complete P0 while gateway/SDK separation or feature
+isolation is unfinished. Validate the complete candidate against every gate
+after the final ownership and feature graph are in place.
 
 ### P0 0 Record compatibility and delivery baselines
 
@@ -723,6 +829,8 @@ pass. AI becomes fully lightweight after its runtime moves in P0 3.
 
 - Absorb orchestrator into core/harness according to the inventory, preserving
   ThreadService ownership, checkpoint ACKs, workspace cleanup and recovery.
+  Extract shared snapshot decoding and offline history validation before gating
+  the scheduler, so harness recovery remains independently usable.
 - Absorb TUI after extracting command vocabulary, approval policy and presentation
   data. Remove Ratatui types from headless output.
 - Move the telemetry implementation into the application, keeping schema
@@ -744,6 +852,8 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
   MCP, server tools, finalization and host extension machinery into the application.
 - Move AI codecs, conversion algorithms, upstream execution, auth/provider and
   catalog runtime into the application.
+- Keep serving-time workflow projection and published-policy validation in the
+  gateway; only learning and scheduling depend on core.
 - Split DTOs from implementation within mixed files; keep public API errors and
   observation views free of credentials and internal runtime objects.
 - Move runtime tests and fixtures with their implementations. Preserve protocol
@@ -789,6 +899,8 @@ supported remote control without custom server code or access to server files.
 - Execute core-only and harness-only behavioral suites, not just compilation.
   Reopen the baseline data through full-product, minimum and full-product builds
   in sequence; no feature selection may discard another subsystem's records.
+  Also test full-product → harness-only → full-product with native checkpoint
+  records, including malformed snapshots and immutable-history violations.
 
 Exit: all supported isolated feature combinations build, headless output has no
 TUI dependency, and a gateway starts with agent/UI resources unavailable.
@@ -829,7 +941,7 @@ refactor has already been implemented or tested.
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state |
 | A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds |
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees |
-| A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full preserves records and the migration ledger; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
+| A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
 | A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui |
 | A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
@@ -865,16 +977,16 @@ coverage that justifies a profile.
 
 | Profile or boundary | Required behavior evidence |
 | --- | --- |
-| Minimum gateway | Real-process inference/control, configured authentication, usage finalization and shutdown without agent resources or a terminal |
+| Minimum gateway | Real-process inference/control, configured authentication, published-policy load/validation and equivalent routing, usage finalization and shutdown without agent resources or a terminal |
 | Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness |
-| Harness only | ThreadService ownership/queue/approval/recovery and supported headless execution tests, without production core or terminal drawing |
+| Harness only | ThreadService ownership/queue/approval/recovery, historical native snapshot decoding and corruption rejection, and supported headless execution tests, without production core or terminal drawing |
 | Core and harness | Existing managed execution, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
 | TUI | Existing PTY actions and terminal restoration; shared command results agree with the corresponding headless paths |
 | Guardrails | Real `GuardrailsPlugin::install` path plus native checker host tests; denied input makes zero upstream calls, output block/redact works, dynamic rules do not leak between requests |
 | HTTP-only telemetry | Trace/metric delivery to a test collector, configured headers, current bearer-refresh behavior and shutdown flushing |
 | gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |
 | No telemetry | Essential request/usage facts and finalization remain available with no exporter |
-| Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
+| Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full and full → harness-only → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
 
 Historical-format compatibility requires payload fixtures with known provenance,
 not newly written data with a different version field. Reuse existing historical
@@ -992,14 +1104,17 @@ as permanent product requirements:
 - [PR 701](https://github.com/bitrouter/bitrouter/pull/701) folded the old plugin
   directory into shared crates because directory taxonomy obstructed real
   dependencies.
-- [PR 810](https://github.com/bitrouter/bitrouter/pull/810) proposed placing the
-  exporter with the SDK because its spans encode BitRouter semantics.
+- [PR 810](https://github.com/bitrouter/bitrouter/pull/810) moved the
+  exporter into the SDK because its spans encode BitRouter semantics.
   [PR 851](https://github.com/bitrouter/bitrouter/pull/851) separated it again
   after the schema became an independent contract, avoiding OTel-related public
   dependency commitments in the foundation library. That rationale requires
   separating the contract from implementation; it does not require a permanent
   exporter package. This plan keeps the contract in AI and the implementation
-  with the service that emits it.
+  with the service that emits it. PR 851 explicitly rejected dependency-count
+  and build-cache savings as reasons for its split; this consolidation likewise
+  treats footprint improvements as measurements to verify, not benefits implied
+  by a smaller package count.
 - [PR 923](https://github.com/bitrouter/bitrouter/pull/923) established compiled
   capability extensions and shared custom-host startup. The nested extension
   directory groups the regex capability and its matcher package; it does not

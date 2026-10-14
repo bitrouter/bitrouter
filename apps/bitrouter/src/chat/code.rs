@@ -4,14 +4,14 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::tui::code::{
+    CodeAction, CodeEffect, CodeHotkey, CodeState, CodeStatus, CodeView, Command, CommandOwner,
+    CommandTarget, Inspector, Selector, TurnOutcome,
+};
 use agent_client_protocol::schema::v1::{
     ConfigOptionUpdate, CurrentModeUpdate, SessionConfigOption, SessionUpdate, StopReason,
 };
 use anyhow::{Context, Result, ensure};
-use bitrouter_tui::code::{
-    CodeAction, CodeEffect, CodeHotkey, CodeState, CodeStatus, CodeView, Command, CommandOwner,
-    CommandTarget, Inspector, Selector, TurnOutcome,
-};
 use crossterm::event::EventStream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
@@ -23,8 +23,9 @@ use crate::actions::code::evolution::{Panel, SessionRef};
 use crate::actions::code::{CodeServices, OpenedSession};
 use crate::actions::supervised::SupervisedHandle;
 use crate::agent_sessions::{AgentResult, BackgroundClient};
+use crate::commands::agents::AgentEffect;
 use crate::dashboard::SessionRequest;
-use bitrouter_tui::agents::{AgentEffect, NewAgentRunTarget};
+use crate::presentation::agents::NewAgentRunTarget;
 
 use super::code_controls::{picker, row};
 use super::code_wire::{CodeWire, WireEvent};
@@ -58,7 +59,7 @@ struct Runtime {
     session_job_cancel: Option<CancellationToken>,
     job_blocks_prompt: bool,
     effects: VecDeque<CodeEffect>,
-    templates: Vec<bitrouter_tui::machine::PromptCommand>,
+    templates: Vec<crate::commands::chat::PromptCommand>,
     selectors: Vec<Selector>,
     editing: bool,
     exit: bool,
@@ -404,7 +405,7 @@ impl Runtime {
                     let streamed = matches!(&event, WireEvent::Update(_));
                     self.wire_event(event);
                     if streamed {
-                        paint_due.get_or_insert(tokio::time::Instant::now() + bitrouter_tui::writer::Schedule::INTERVAL);
+                        paint_due.get_or_insert(tokio::time::Instant::now() + std::time::Duration::from_millis(30));
                     } else { dirty = true; }
                 }
                 result = next_job(&mut self.job) => {
@@ -1130,7 +1131,7 @@ impl Runtime {
             }
             WireEvent::Permission(permission) => {
                 let context = permission.tool_call;
-                let prompt = bitrouter_tui::permission::Prompt::new(
+                let prompt = crate::harness::permission::Prompt::new(
                     permission.permission_id,
                     context.fields.title.clone(),
                     context.tool_call_id.to_string(),

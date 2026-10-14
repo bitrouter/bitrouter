@@ -7,10 +7,8 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
 
+use crate::harness::acp::client::AcpClient;
 use agent_client_protocol::schema::v1::SessionUpdate;
-use bitrouter_orchestrator::acp::client::AcpClient;
-
-use crate::chat::effects::Wire;
 
 /// This process's session log, once the subscriber has opened one.
 ///
@@ -42,11 +40,12 @@ fn write_session_log_tail(out: &mut impl std::io::Write) -> Result<()> {
         Ok(log) => log,
         Err(e) => format!("(could not read the session log: {e})"),
     };
-    bitrouter_tui::plain::write(
-        out,
-        &bitrouter_tui::log_tail::render(path, &log, bitrouter_tui::log_tail::TAIL_LINES),
-    )
-    .context("writing the session log tail")
+    for line in
+        crate::presentation::log_tail::render(path, &log, crate::presentation::log_tail::TAIL_LINES)
+    {
+        writeln!(out, "{line}").context("writing the session log tail")?;
+    }
+    Ok(())
 }
 
 /// Show the end of the session log on **stderr**, for a failure that happened
@@ -103,7 +102,7 @@ pub(crate) async fn chat_plain(
     client: &AcpClient,
     session_id: &str,
     agent_id: &str,
-    recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    recorder: Option<std::sync::Arc<crate::telemetry::acp::AcpSpanRecorder>>,
     surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     use std::io::Write as _;
@@ -118,9 +117,8 @@ pub(crate) async fn chat_plain(
     } = surface;
 
     let mut out = std::io::stdout();
-    let mut transcript = bitrouter_tui::plain::Transcript::default();
-    let policy = bitrouter_tui::permission::Policy::default();
-    let mut wire = Wire::new(client, session_id);
+    let mut transcript = crate::tui::plain::Transcript::default();
+    let policy = crate::harness::permission::Policy::default();
     let mut prompts = 0_usize;
     let mut updates = client.subscribe_raw_updates();
     let mut permissions = client.subscribe_permissions();
@@ -140,8 +138,8 @@ pub(crate) async fn chat_plain(
         // The same resolver the terminal runs, so a name means one thing on
         // both. What differs is only what can be *done* with the result: the
         // picker and the journal need keys and a screen.
-        let line = match bitrouter_tui::machine::resolve(&commands, &prompt_commands, &line) {
-            bitrouter_tui::machine::Resolution::Owned { action, .. } => {
+        let line = match crate::commands::chat::resolve(&commands, &prompt_commands, &line) {
+            crate::commands::chat::Resolution::Owned { action, .. } => {
                 let name = commands
                     .iter()
                     .find(|command| command.action == action)
@@ -151,7 +149,7 @@ pub(crate) async fn chat_plain(
             }
             // The same ports, rendered the same way; a pipe gets the bytes
             // where a terminal gets a notice.
-            bitrouter_tui::machine::Resolution::Action { action, args } => {
+            crate::commands::chat::Resolution::Action { action, args } => {
                 match ports.run(action, &args).await {
                     Ok(report) => out
                         .write_all(
@@ -163,14 +161,14 @@ pub(crate) async fn chat_plain(
                 }
                 continue;
             }
-            bitrouter_tui::machine::Resolution::Unavailable(reason) => {
+            crate::commands::chat::Resolution::Unavailable(reason) => {
                 writeln!(out, "{reason}").context("writing to stdout")?;
                 continue;
             }
             // Expanded identically here and in the terminal, through the one
             // resolver: a config command means the same thing on both.
-            bitrouter_tui::machine::Resolution::Expand(prompt)
-            | bitrouter_tui::machine::Resolution::Prompt(prompt) => prompt,
+            crate::commands::chat::Resolution::Expand(prompt)
+            | crate::commands::chat::Resolution::Prompt(prompt) => prompt,
         };
         prompts = prompts.saturating_add(1);
         transcript.apply(SessionUpdate::UserMessageChunk(prompt_chunk(
@@ -186,7 +184,7 @@ pub(crate) async fn chat_plain(
                     transcript.apply(update);
                 },
                 request = permissions.next() => if let Some(request) = request {
-                    let (decision, prompt) = wire.answer(request, &policy).await;
+                    let (decision, prompt) = crate::harness::acp::permission::answer(request, &policy);
                     writeln!(out, "  permission {decision}: {}", prompt.title())
                         .context("writing the permission decision")?;
                 },
@@ -199,7 +197,7 @@ pub(crate) async fn chat_plain(
         while let Some(Some(update)) = updates.next().now_or_never() {
             transcript.apply(update);
         }
-        bitrouter_tui::plain::write(&mut out, &transcript.unwritten())
+        crate::tui::plain::write(&mut out, &transcript.unwritten())
             .context("writing the session to stdout")?;
         match outcome {
             Ok(response) => {

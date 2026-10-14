@@ -1,8 +1,8 @@
 //! Local operational ports and presentation data for checkpoint evaluation.
 //! The conversation driver owns draft lifetime; all daemon I/O stays here.
 
+use crate::tui::code::{Inspector, Selector, SelectorRow};
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_tui::code::{Inspector, Selector, SelectorRow};
 
 use crate::daemon::{DaemonCommand, DaemonResponse, send_command};
 use crate::evolution::control::EvolutionMode;

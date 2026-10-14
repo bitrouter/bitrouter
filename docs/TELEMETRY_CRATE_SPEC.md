@@ -6,7 +6,9 @@ replaces the standalone exporter package target with an internal application
 module. Public observation/schema contracts move to AI; optional OTLP rendering
 stays outside that contract library. Frozen wire names and the behavioral
 requirements below remain in force. This document records the existing split;
-the planned consolidation has not yet been implemented.
+the application consolidation is now in progress. Exporter code and its tests
+have moved to `apps/bitrouter/src/telemetry`; complete feature isolation remains
+an open P0 gate. The implementation record below describes the earlier package.
 
 Status: **built.** Reverses `OTEL_SDK_MIGRATION_SPEC.md` D1 — the OTLP renderer
 has left `bitrouter-sdk` for `crates/bitrouter-telemetry`. Landed inside the

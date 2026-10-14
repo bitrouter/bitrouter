@@ -3,7 +3,7 @@
 //! Assembly layer: turns a [`bitrouter_sdk::config::Config`] into a running
 //! [`bitrouter_sdk::App`], and carries the management-command logic.
 //! The external-agent ACP controller, client and process transport live in
-//! `bitrouter_orchestrator::acp`; this app assembles their product adapters.
+//! `crate::harness::acp`; this app assembles their product adapters.
 //!
 //! Foreground custom hosts register typed capabilities through
 //! [`bitrouter_sdk::extension::ExtensionApi`] and [`host::serve_with_extensions`],
@@ -41,6 +41,7 @@ pub mod config_synthesis;
 pub mod conformance;
 pub mod contexts;
 pub mod continuation;
+pub mod core;
 pub mod daemon;
 pub mod daemon_handoff;
 pub mod daemon_locator;
@@ -96,3 +97,11 @@ pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_int
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Build fingerprint of the local handoff and migration contract.
 pub const HANDOFF_BUILD_ID: &str = env!("BITROUTER_HANDOFF_BUILD_ID");
+
+/// Optional application telemetry transports.
+pub mod telemetry;
+
+/// Terminal-independent presentation values.
+pub mod presentation;
+/// Terminal views and interaction reducers.
+pub(crate) mod tui;

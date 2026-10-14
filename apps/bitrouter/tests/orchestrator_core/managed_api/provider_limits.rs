@@ -1,8 +1,8 @@
 //! Provider entity admission happens before complete output enters core state.
 
 use super::*;
-use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_orchestrator::core::session::SessionSnapshot;
+use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::core::session::SessionSnapshot;
 
 #[tokio::test]
 async fn unfinished_chunked_provider_body_is_rejected_without_waiting_for_eof() -> Result<()> {

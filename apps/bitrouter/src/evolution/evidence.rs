@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::harness::acp::capture::{CaptureDirection, CaptureKind};
 use anyhow::{Result, ensure};
-use bitrouter_orchestrator::acp::capture::{CaptureDirection, CaptureKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

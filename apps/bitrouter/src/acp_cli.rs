@@ -45,7 +45,7 @@
 //! Nobody is at a headless terminal to broker a permission, so the caller
 //! states the rule up front: `--deny-all` (the default), `--approve-reads`,
 //! `--approve-all`, and a per-tool `--permission-policy`. The decision is made
-//! by the same [`bitrouter_tui::permission::Policy`] the piped `chat` runs
+//! by the same [`crate::harness::permission::Policy`] the piped `chat` runs
 //! under and reaches the agent through the same wire as a keystroke would. A
 //! run that denied at least one request and approved none exits 5.
 //!
@@ -66,16 +66,15 @@ use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-use agent_client_protocol::schema::v1::{Cost, LlmProtocol, SessionUpdate};
-use bitrouter_orchestrator::acp::client::{AcpClient, ClientOptions, PendingPermission};
-use bitrouter_orchestrator::acp::controller::{
+use crate::harness::acp::client::{AcpClient, ClientOptions, PendingPermission};
+use crate::harness::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
     SessionCost as AcpSessionCost,
 };
-use bitrouter_orchestrator::acp::translate::{SessionUpdateKind, translate};
-use bitrouter_tui::permission::{Decision, Mode, Policy, Prompt as PermissionPrompt};
+use crate::harness::acp::translate::{SessionUpdateKind, translate};
+use crate::harness::permission::{Decision, Mode, Policy, Prompt as PermissionPrompt};
+use agent_client_protocol::schema::v1::{Cost, LlmProtocol, SessionUpdate};
 
-use crate::chat::effects::Wire;
 use crate::paths::ConfigSource;
 
 // ── routing (spawn --via-daemon by default) ─────────────────────────────────────
@@ -115,7 +114,8 @@ pub fn resolve_agent_id(config: &Config, requested: &str) -> Result<String> {
         other => other,
     };
     if config.agents.contains_key(canonical)
-        || crate::harness::by_id(canonical).is_some_and(|harness| harness.acp_command.is_some())
+        || crate::harness::catalog::by_id(canonical)
+            .is_some_and(|harness| harness.acp_command.is_some())
     {
         Ok(canonical.to_string())
     } else {
@@ -814,9 +814,9 @@ impl CapabilitySnapshot {
                 .map(|method| method.id().0.to_string())
                 .collect(),
             terminal_auth,
-            route_list: route.allows(bitrouter_orchestrator::acp::client::RouteMethod::List),
-            route_set: route.allows(bitrouter_orchestrator::acp::client::RouteMethod::Set),
-            route_reset: route.allows(bitrouter_orchestrator::acp::client::RouteMethod::Reset),
+            route_list: route.allows(crate::harness::acp::client::RouteMethod::List),
+            route_set: route.allows(crate::harness::acp::client::RouteMethod::Set),
+            route_reset: route.allows(crate::harness::acp::client::RouteMethod::Reset),
         }
     }
 
@@ -1005,7 +1005,7 @@ pub struct Routed {
     pub api_principal: Option<String>,
     /// The one process-scoped endpoint plan used for both launch fallback and
     /// post-initialize ACP provider configuration.
-    pub endpoint_plan: Option<crate::harness::HarnessEndpointPlan>,
+    pub endpoint_plan: Option<crate::harness::catalog::HarnessEndpointPlan>,
 }
 
 /// Resolve routing and overlay it onto `config`'s entry for `agent_id`,
@@ -1059,7 +1059,7 @@ async fn apply_routing_with_diagnostics(
     config.database.url = crate::db::anchor_url(&config.database.url, source.home());
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
-        && let Some(h) = crate::harness::by_id(agent_id)
+        && let Some(h) = crate::harness::catalog::by_id(agent_id)
         // Interactive-only harnesses (grok, antigravity) have no ACP
         // adapter to synthesize — the id falls through to not-found.
         && let Some(command) = h.acp_command
@@ -1092,7 +1092,7 @@ async fn apply_routing_with_diagnostics(
     let harness = match config.agents.get(agent_id) {
         Some(entry) => {
             let AcpTransport::Stdio { command, args, .. } = &entry.transport;
-            crate::harness::match_invocation(command, args)
+            crate::harness::catalog::match_invocation(command, args)
         }
         // Unknown agent — let the caller's `Session::launch` surface the
         // configured-agents not-found error.
@@ -1169,7 +1169,7 @@ async fn apply_routing_with_diagnostics(
         ));
     }
 
-    let explicit_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV);
+    let explicit_key = crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV);
     let stored_cloud_key = if explicit_key.is_none() && require_key && !target_is_local {
         cloud_credentials.routing_fallback(&base_url).await
     } else {
@@ -1322,7 +1322,7 @@ pub async fn spawn_check(
 
     // 1. The agent resolves — either configured or a bundled-catalog id.
     let configured = config.agents.get(agent_id);
-    let catalog = crate::harness::by_id(agent_id);
+    let catalog = crate::harness::catalog::by_id(agent_id);
     let (command, args) = match (configured, catalog) {
         (Some(entry), _) => {
             let AcpTransport::Stdio { command, args, .. } = &entry.transport;
@@ -1369,8 +1369,8 @@ pub async fn spawn_check(
         .base_url
         .clone()
         .unwrap_or_else(|| crate::spawn::derive_base_url(&config.server.listen));
-    let harness = crate::harness::match_invocation(&command, &args);
-    let mut routable_harness: Option<&'static crate::harness::Harness> = None;
+    let harness = crate::harness::catalog::match_invocation(&command, &args);
+    let mut routable_harness: Option<&'static crate::harness::catalog::Harness> = None;
     if routing.direct {
         checks.push(row(
             "routing",
@@ -1417,7 +1417,8 @@ pub async fn spawn_check(
             .map(|a| crate::spawn::listen_is_local(&a))
             .unwrap_or_else(|| crate::spawn::listen_is_local(&config.server.listen));
         let require_key = !target_is_local || !config.server.skip_auth;
-        let has_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV).is_some();
+        let has_key =
+            crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV).is_some();
         checks.push(if require_key && !has_key {
             row(
                 "auth",
@@ -1485,24 +1486,24 @@ fn controller_identity(
     agent_id: &str,
     command: &str,
     args: &[String],
-    endpoint: Option<&crate::harness::HarnessEndpointPlan>,
-) -> bitrouter_orchestrator::acp::controller::ControllerIdentity {
+    endpoint: Option<&crate::harness::catalog::HarnessEndpointPlan>,
+) -> crate::harness::acp::controller::ControllerIdentity {
     if let Some(endpoint) = endpoint {
-        return bitrouter_orchestrator::acp::controller::ControllerIdentity::new(
+        return crate::harness::acp::controller::ControllerIdentity::new(
             endpoint.harness_id,
             endpoint.adapter_package,
             endpoint.adapter_version,
         );
     }
-    if let Some(harness) = crate::harness::match_invocation(command, args)
+    if let Some(harness) = crate::harness::catalog::match_invocation(command, args)
         && let Some((package, version)) = harness.maintained_adapter_identity()
         && harness.uses_maintained_adapter(command, args)
     {
-        return bitrouter_orchestrator::acp::controller::ControllerIdentity::new(
+        return crate::harness::acp::controller::ControllerIdentity::new(
             harness.id, package, version,
         );
     }
-    bitrouter_orchestrator::acp::controller::ControllerIdentity::new(
+    crate::harness::acp::controller::ControllerIdentity::new(
         agent_id,
         "configured-acp-adapter",
         "configured",
@@ -1510,13 +1511,13 @@ fn controller_identity(
 }
 
 fn controller_endpoint(
-    endpoint: &crate::harness::HarnessEndpointPlan,
-) -> bitrouter_orchestrator::acp::controller::ProviderEndpointPlan {
+    endpoint: &crate::harness::catalog::HarnessEndpointPlan,
+) -> crate::harness::acp::controller::ProviderEndpointPlan {
     let protocol = match endpoint.protocol {
-        crate::harness::HarnessProtocol::Anthropic => LlmProtocol::Anthropic,
-        crate::harness::HarnessProtocol::OpenAi => LlmProtocol::OpenAi,
+        crate::harness::catalog::HarnessProtocol::Anthropic => LlmProtocol::Anthropic,
+        crate::harness::catalog::HarnessProtocol::OpenAi => LlmProtocol::OpenAi,
     };
-    bitrouter_orchestrator::acp::controller::ProviderEndpointPlan {
+    crate::harness::acp::controller::ProviderEndpointPlan {
         provider_id: endpoint.provider_id.to_string(),
         protocol,
         base_url: endpoint.base_url.clone(),
@@ -1865,14 +1866,11 @@ pub(crate) struct SessionHandle {
     pub(crate) via: Option<String>,
     pub(crate) launch_id: Option<String>,
     pub(crate) capabilities: CapabilitySnapshot,
-    pub(crate) initial_settings: bitrouter_orchestrator::acp::client::SessionInitialSettings,
+    pub(crate) initial_settings: crate::harness::acp::client::SessionInitialSettings,
     cwd: PathBuf,
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     pub(crate) updates: std::pin::Pin<
-        Box<
-            dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::SequencedSessionUpdate>
-                + Send,
-        >,
+        Box<dyn futures::Stream<Item = crate::harness::acp::client::SequencedSessionUpdate> + Send>,
     >,
     pub(crate) permissions:
         std::pin::Pin<Box<dyn futures::Stream<Item = PendingPermission> + Send>>,
@@ -1924,10 +1922,7 @@ impl SessionHandle {
     pub(crate) fn take_sequenced_updates(
         &mut self,
     ) -> std::pin::Pin<
-        Box<
-            dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::SequencedSessionUpdate>
-                + Send,
-        >,
+        Box<dyn futures::Stream<Item = crate::harness::acp::client::SequencedSessionUpdate> + Send>,
     > {
         std::mem::replace(&mut self.updates, Box::pin(futures::stream::empty()))
     }
@@ -2249,8 +2244,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
     let identity = controller_identity(agent_id, command, args, host.routed.endpoint_plan.as_ref());
-    let mut controller_config =
-        bitrouter_orchestrator::acp::controller::ControllerConfig::new(identity);
+    let mut controller_config = crate::harness::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = host.routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
@@ -2260,14 +2254,11 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
              the ACP client controls prompt deadlines"
         );
     }
-    let process = bitrouter_orchestrator::acp::up::AgentProcess::new(
-        command.clone(),
-        args.clone(),
-        env.clone(),
-    )
-    .strip_inherited_env(host.options.strip_inherited_env);
+    let process =
+        crate::harness::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
+            .strip_inherited_env(host.options.strip_inherited_env);
     let mut controller =
-        bitrouter_orchestrator::acp::controller::Controller::new(process, controller_config);
+        crate::harness::acp::controller::Controller::new(process, controller_config);
     if let Some(binding) = &host.binding {
         controller = controller
             .route_control(binding.route_control())
@@ -2425,7 +2416,7 @@ async fn chat_piped(
             // A harness that is merely unauthenticated is not a broken one, and
             // relaying its JSON-RPC error would leave the reader to guess which
             // of the two it is. The protocol already said which; say it.
-            let unauthenticated = bitrouter_orchestrator::acp::client::is_auth_required(&error);
+            let unauthenticated = crate::harness::acp::client::is_auth_required(&error);
             let context = if unauthenticated {
                 unauthenticated_message(agent_id, session.client.auth_methods())
             } else {
@@ -2527,12 +2518,12 @@ where
     // the one resolver. The BitRouter half is deliberately empty: `acp prompt
     // "/status"` is not a scheduled surface, so a name this process answers
     // goes to the agent exactly as it does today.
-    let expanded = match bitrouter_tui::machine::resolve(
+    let expanded = match crate::commands::chat::resolve(
         &[],
         &crate::actions::session::prompt_commands(&config.chat)?,
         text,
     ) {
-        bitrouter_tui::machine::Resolution::Expand(prompt) => prompt,
+        crate::commands::chat::Resolution::Expand(prompt) => prompt,
         _ => text.to_string(),
     };
     let text = expanded.as_str();
@@ -2616,7 +2607,6 @@ where
         session_id: &session.session_id,
         agent_id: &agent_id,
         recorder: observability.recorder.clone(),
-        wire: Wire::new(&session.client, &session.session_id),
         permissions,
         policy,
         tally: PermissionTally::default(),
@@ -2644,7 +2634,7 @@ async fn open_session(
     selection: &SessionSelection,
     cwd: PathBuf,
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
-) -> Result<bitrouter_orchestrator::acp::client::SessionIds> {
+) -> Result<crate::harness::acp::client::SessionIds> {
     match selection {
         SessionSelection::New => client.new_session(cwd, mcp_servers).await,
         SessionSelection::Load(session_id) => {
@@ -2765,12 +2755,9 @@ impl ControlledCleanup {
         // The connection is down; the child may not be. `kill_on_drop` reaches
         // the wrapper (`npx`) and not the `node` it spawned, so the group kill
         // has to be confirmed rather than assumed.
-        if tokio::time::timeout(
-            bitrouter_orchestrator::acp::up::REAP_CONFIRM,
-            self.reaped.clone(),
-        )
-        .await
-        .is_err()
+        if tokio::time::timeout(crate::harness::acp::up::REAP_CONFIRM, self.reaped.clone())
+            .await
+            .is_err()
         {
             tracing::warn!("harness child not confirmed reaped; a grandchild may have survived");
             clean = false;
@@ -2805,7 +2792,7 @@ async fn open_capture(
     config: &Config,
     agent_id: &str,
     binding: Option<&LocalControllerBinding>,
-) -> Result<Option<Arc<dyn bitrouter_orchestrator::acp::capture::CapturePort>>> {
+) -> Result<Option<Arc<dyn crate::harness::acp::capture::CapturePort>>> {
     if !config.acp_recording.enabled {
         return Ok(None);
     }
@@ -2893,20 +2880,16 @@ async fn launch_controlled_with_cancel(
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
 
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
-    let mut controller_config =
-        bitrouter_orchestrator::acp::controller::ControllerConfig::new(identity);
+    let mut controller_config = crate::harness::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    let mut process = bitrouter_orchestrator::acp::up::AgentProcess::new(
-        command.clone(),
-        args.clone(),
-        env.clone(),
-    )
-    .strip_inherited_env(options.strip_inherited_env);
+    let mut process =
+        crate::harness::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
+            .strip_inherited_env(options.strip_inherited_env);
     let reaped = process.reaped().shared();
     let mut controller =
-        bitrouter_orchestrator::acp::controller::Controller::new(process, controller_config);
+        crate::harness::acp::controller::Controller::new(process, controller_config);
     if let Some(binding) = &binding {
         controller = controller
             .route_control(binding.route_control())
@@ -2975,10 +2958,9 @@ struct Turn<'a> {
     client: &'a AcpClient,
     session_id: &'a str,
     agent_id: &'a str,
-    recorder: Option<Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    recorder: Option<Arc<crate::telemetry::acp::AcpSpanRecorder>>,
     /// The wire half of the session's effects — the same interpreter `chat`
     /// runs, so an answer here reaches the agent as an answer there does.
-    wire: Wire<'a>,
     /// The harness's permission requests, polled beside the updates.
     permissions: std::pin::Pin<Box<dyn futures::Stream<Item = PendingPermission> + Send>>,
     /// The rule that answers them.
@@ -3098,7 +3080,7 @@ where
                 // must not spin the select.
                 request = turn.permissions.next() => {
                     if let Some(request) = request {
-                        let (decision, prompt) = turn.wire.answer(request, &turn.policy).await;
+                        let (decision, prompt) = crate::harness::acp::permission::answer(request, &turn.policy);
                         turn.tally.record(decision);
                         presenter.permission(&prompt, decision).await?;
                     }
@@ -3131,7 +3113,7 @@ where
 pub(crate) fn report_turn(
     client: &AcpClient,
     agent_id: &str,
-    recorder: Option<&Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    recorder: Option<&Arc<crate::telemetry::acp::AcpSpanRecorder>>,
     response: &agent_client_protocol::schema::v1::PromptResponse,
     latency: Duration,
 ) {
@@ -3142,7 +3124,7 @@ pub(crate) fn report_turn(
         context: client.context_usage().lock().ok().and_then(|slot| *slot),
     };
     if let Some(recorder) = recorder {
-        recorder.turn_completed(&bitrouter_telemetry::otel::acp::TurnRecord {
+        recorder.turn_completed(&crate::telemetry::acp::TurnRecord {
             stop_reason: record.stop_reason.clone(),
             latency,
             context_used: record.context.map(|c| c.used),
@@ -3169,7 +3151,7 @@ enum Presenter<'a, W> {
     /// Boxed: a journal and a render cache are a lot larger than a writer.
     Text {
         out: &'a mut W,
-        transcript: Box<bitrouter_tui::plain::Transcript>,
+        transcript: Box<crate::tui::plain::Transcript>,
     },
 }
 
@@ -3336,7 +3318,7 @@ where
     async fn turn_settled(&mut self) -> Result<()> {
         if let Presenter::Text { out, transcript } = self {
             let mut rendered = Vec::new();
-            bitrouter_tui::plain::write(&mut rendered, &transcript.unwritten())
+            crate::tui::plain::write(&mut rendered, &transcript.unwritten())
                 .context("rendering the transcript")?;
             out.write_all(&rendered)
                 .await
@@ -3492,7 +3474,7 @@ pub async fn commands(
     // commands immediately is not raced.
     let mut updates = session.client.subscribe_raw_updates();
     if let Err(error) = session.client.new_session(cwd, mcp_servers).await {
-        let context = if bitrouter_orchestrator::acp::client::is_auth_required(&error) {
+        let context = if crate::harness::acp::client::is_auth_required(&error) {
             unauthenticated_message(agent_id, session.client.auth_methods())
         } else {
             "opening the harness session".to_string()
@@ -3538,8 +3520,8 @@ pub async fn commands(
 /// The OTel exporter for this process and, when one exists, the span recorder
 /// bound to one session.
 struct Observability {
-    exporter: Option<Arc<bitrouter_telemetry::otel::OtelExporter>>,
-    recorder: Option<Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    exporter: Option<Arc<crate::telemetry::exporter::OtelExporter>>,
+    recorder: Option<Arc<crate::telemetry::acp::AcpSpanRecorder>>,
 }
 
 /// Build the exporter and the session's span recorder. `conversation_id` is
@@ -3566,7 +3548,7 @@ async fn build_observability(
         crate::assemble::build_otel_exporter_standalone_with_credentials(config, cloud_credentials)
             .await;
     let recorder = exporter.as_ref().map(|exporter| {
-        Arc::new(bitrouter_telemetry::otel::acp::AcpSpanRecorder::new(
+        Arc::new(crate::telemetry::acp::AcpSpanRecorder::new(
             exporter,
             agent_id,
             conversation_id,
@@ -3579,11 +3561,11 @@ async fn build_observability(
 /// translated update stream. Exporter-gated by its `recorder` argument:
 /// without one there is nothing to emit to.
 fn spawn_tool_spans(
-    recorder: Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>,
+    recorder: Arc<crate::telemetry::acp::AcpSpanRecorder>,
     mut updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdateKind> + Send>>,
 ) {
     tokio::spawn(async move {
-        use bitrouter_orchestrator::acp::translate::ToolStatus;
+        use crate::harness::acp::translate::ToolStatus;
         while let Some(update) = updates.next().await {
             match update {
                 SessionUpdateKind::ToolCall {
@@ -3765,7 +3747,7 @@ pub struct RequestCompleted {
     pub latency_ms: u64,
     /// Context-window occupancy as of the latest `UsageUpdate`, when the agent
     /// has reported one.
-    pub context: Option<bitrouter_orchestrator::acp::telemetry::ContextUsage>,
+    pub context: Option<crate::harness::acp::telemetry::ContextUsage>,
 }
 
 /// Build [`LaunchOptions`] from the CLI flags shared by `serve` and `prompt`:
@@ -3854,8 +3836,8 @@ mod controller_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use crate::harness::acp::controller::SessionCost;
     use agent_client_protocol::schema::v1::Cost;
-    use bitrouter_orchestrator::acp::controller::SessionCost;
 
     use super::{CachedSessionCost, attributed_cost, controller_identity};
 
@@ -3958,12 +3940,12 @@ mod controller_tests {
     #[test]
     fn the_cost_marker_is_spelled_the_same_on_both_sides() {
         assert_eq!(
-            bitrouter_tui::cost::COST_PROVENANCE_META_KEY,
-            bitrouter_orchestrator::acp::controller::COST_PROVENANCE_META_KEY
+            crate::presentation::cost::COST_PROVENANCE_META_KEY,
+            crate::harness::acp::controller::COST_PROVENANCE_META_KEY
         );
         assert_eq!(
-            bitrouter_tui::cost::COST_PROVENANCE_ROUTER,
-            bitrouter_orchestrator::acp::controller::COST_PROVENANCE_ROUTER
+            crate::presentation::cost::COST_PROVENANCE_ROUTER,
+            crate::harness::acp::controller::COST_PROVENANCE_ROUTER
         );
     }
 

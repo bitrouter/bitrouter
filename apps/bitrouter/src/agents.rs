@@ -22,7 +22,7 @@ use bitrouter_sdk::config::Config;
 use bitrouter_sdk::invocation;
 
 use crate::agent_registry::{InstallSupport, Registry, RegistryAgent};
-use crate::harness::{self, Harness};
+use crate::harness::catalog::{self as harness, Harness};
 
 /// One row in `bro agents list`.
 #[derive(Debug, Clone)]
@@ -110,7 +110,7 @@ pub async fn check(config: &Config) -> Vec<CheckRow> {
     for (id, cfg) in sorted {
         let outcome = match &cfg.transport {
             AcpTransport::Stdio { command, args, env } => {
-                bitrouter_orchestrator::acp::up::health_check(command, args, env).await
+                crate::harness::acp::up::health_check(command, args, env).await
             }
         };
         out.push(CheckRow {

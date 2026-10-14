@@ -17,7 +17,7 @@
 //! hermes, openclaw) are routed by *synthesizing* a throwaway config under the
 //! repo's `.bitrouter/launch/` and pointing the harness at it with an env var
 //! — still never touching the user's own config
-//! ([`crate::harness::Harness::launch_overlay`]).
+//! ([`crate::harness::catalog::Harness::launch_overlay`]).
 //! Own-auth harnesses (`grok`, `agy`) are subscription clients the daemon
 //! borrows as providers, so `launch` does not redirect or meter them.
 //!
@@ -112,9 +112,9 @@ pub struct AgentSpec {
 /// mistake, so the error is a [`BitrouterError::BadRequest`] — the CLI's error
 /// envelope reports it as `kind: "bad_request"`, not `internal` — and lists
 /// what is available.
-pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness> {
-    let known = crate::harness::by_interactive_binary(id)
-        .or_else(|| crate::harness::by_id(id).filter(|h| h.interactive_binary.is_some()));
+pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::catalog::Harness> {
+    let known = crate::harness::catalog::by_interactive_binary(id)
+        .or_else(|| crate::harness::catalog::by_id(id).filter(|h| h.interactive_binary.is_some()));
     known.ok_or_else(|| {
         anyhow::Error::new(BitrouterError::bad_request(format!(
             "'{id}' is not a launchable harness — available: {}",
@@ -125,7 +125,7 @@ pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness
 
 /// The interactive binaries `launch` supports, sorted for a stable message.
 fn launchable() -> Vec<&'static str> {
-    let mut names: Vec<&str> = crate::harness::CATALOG
+    let mut names: Vec<&str> = crate::harness::catalog::CATALOG
         .iter()
         .filter(|h| h.launch_supported())
         .filter_map(|h| h.interactive_binary)
@@ -137,12 +137,12 @@ fn launchable() -> Vec<&'static str> {
 /// The `--agent` value a harness is displayed as: its interactive binary
 /// (falling back to the catalog id, which cannot happen for a resolved
 /// launch target).
-fn harness_id(h: &crate::harness::Harness) -> &'static str {
+fn harness_id(h: &crate::harness::catalog::Harness) -> &'static str {
     h.interactive_binary.unwrap_or(h.id)
 }
 
 /// What `bro launch` injects into the child process. The env/args come
-/// from the shared [`crate::harness`] catalog's [`RoutingOverlay`](crate::harness::RoutingOverlay), so the
+/// from the shared [`crate::harness`] catalog's [`RoutingOverlay`](crate::harness::catalog::RoutingOverlay), so the
 /// interactive and ACP facets of a harness route identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildLaunch {
@@ -198,7 +198,7 @@ pub(crate) fn is_launch_token(token: &str) -> bool {
 pub struct SpawnOptions {
     /// Which harness to launch, already resolved against the shared catalog
     /// (see [`resolve_launch_agent`]).
-    pub agent: &'static crate::harness::Harness,
+    pub agent: &'static crate::harness::catalog::Harness,
     /// Pin the harness's model. Applied through the harness's own mechanism —
     /// a model env var, a `-c model=` override, the synthesized config's
     /// default, or the harness's native flag for own-auth clients.
@@ -308,7 +308,7 @@ pub struct Prepared<'a> {
     /// Args forwarded verbatim, appended after [`ChildLaunch::args_prefix`].
     pub agent_args: Vec<String>,
     /// The catalog harness being launched.
-    pub harness: &'static crate::harness::Harness,
+    pub harness: &'static crate::harness::catalog::Harness,
     /// Config source, for the exit summary's metering read.
     pub source: &'a crate::paths::ConfigSource,
     /// The attribution token this launch minted, when it owns the credential
@@ -350,7 +350,7 @@ pub async fn prepare<'a>(
         None => derive_base_url(&cfg.server.listen),
     };
 
-    if matches!(harness.routing, crate::harness::Routing::CodexArgs) {
+    if matches!(harness.routing, crate::harness::catalog::Routing::CodexArgs) {
         let conflicts = codex_forwarded_config_args(&opts.agent_args);
         if !conflicts.is_empty() {
             anyhow::bail!(
@@ -387,12 +387,12 @@ pub async fn prepare<'a>(
     // for this harness → the BitRouter API key → a local placeholder. Only
     // env-routed harnesses (Claude) have such a var; Codex reads none.
     let parent_auth = match harness.routing {
-        crate::harness::Routing::Env { auth_env, .. } => nonempty_env(auth_env),
+        crate::harness::catalog::Routing::Env { auth_env, .. } => nonempty_env(auth_env),
         _ => None,
     };
     let token = resolve_launch_token(
         parent_auth,
-        nonempty_env(crate::harness::BITROUTER_API_KEY_ENV),
+        nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV),
     );
     // The daemon's advertised model ids fill the synthesized providers' model
     // lists — only the config-synthesis harnesses need them, so nothing else
@@ -449,9 +449,9 @@ pub async fn prepare<'a>(
 /// and a user should learn that here rather than by noticing the tools are
 /// missing later.
 fn startup_line(
-    harness: &crate::harness::Harness,
+    harness: &crate::harness::catalog::Harness,
     base_url: &str,
-    gateways: &[crate::harness::McpServer],
+    gateways: &[crate::harness::catalog::McpServer],
     p: &Palette,
 ) -> String {
     let agent_id = harness_id(harness);
@@ -466,7 +466,7 @@ fn startup_line(
     // itself borrows as providers — routing them through BitRouter would loop
     // back to the same backend on the same credential. Their traffic never
     // reaches the daemon, so there is nothing to meter.
-    if matches!(harness.routing, crate::harness::Routing::OwnAuth) {
+    if matches!(harness.routing, crate::harness::catalog::Routing::OwnAuth) {
         return format!("{head} · own-auth · not routed · not metered");
     }
 
@@ -482,8 +482,8 @@ fn startup_line(
 /// both built from this one function, so the two cannot drift into disagreeing
 /// about what the harness actually got.
 pub(crate) fn capability_summary(
-    harness: &crate::harness::Harness,
-    gateways: &[crate::harness::McpServer],
+    harness: &crate::harness::catalog::Harness,
+    gateways: &[crate::harness::catalog::McpServer],
     p: &Palette,
 ) -> String {
     let named = |name: &str| gateways.iter().any(|s| s.name == name);
@@ -634,12 +634,12 @@ fn launch_gateways(
     cfg: &bitrouter_sdk::config::Config,
     base_url: &str,
     owns_local_daemon: bool,
-) -> Vec<crate::harness::McpServer> {
-    let auth = crate::harness::resolve_gateway_auth(
-        std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
+) -> Vec<crate::harness::catalog::McpServer> {
+    let auth = crate::harness::catalog::resolve_gateway_auth(
+        std::env::var(crate::harness::catalog::BITROUTER_API_KEY_ENV).ok(),
         false,
     )
-    .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    .unwrap_or_else(|| crate::harness::catalog::PLACEHOLDER_API_KEY.to_string());
     // Local assembly mounts MCP only when upstreams are configured. External
     // targets own their upstream inventory; preserve their configured route.
     let aggregate_route = (cfg.mcp.aggregate.enabled
@@ -652,8 +652,8 @@ fn launch_gateways(
 /// true exactly for the config-synthesis harnesses, whose synthesized provider
 /// carries an explicit model list. Env/args and own-auth harnesses ignore it,
 /// so they never pay for the `/v1/models` probe.
-fn needs_model_catalog(h: &crate::harness::Harness) -> bool {
-    matches!(h.routing, crate::harness::Routing::ConfigFile(_))
+fn needs_model_catalog(h: &crate::harness::catalog::Harness) -> bool {
+    matches!(h.routing, crate::harness::catalog::Routing::ConfigFile(_))
 }
 
 /// Where `launch` writes the throwaway configs it synthesizes for the harnesses
@@ -725,7 +725,7 @@ pub async fn check(
     let harness = opts.agent;
     let agent_id = harness_id(harness);
     let binary = harness.interactive_binary.unwrap_or(harness.id);
-    let is_codex = matches!(harness.routing, crate::harness::Routing::CodexArgs);
+    let is_codex = matches!(harness.routing, crate::harness::catalog::Routing::CodexArgs);
     let base_url = opts
         .base_url
         .clone()
@@ -755,13 +755,13 @@ pub async fn check(
     // file, or (own-auth) not at all.
     checks.push(SpawnCheckRow {
         name: "routing".to_string(),
-        status: if matches!(harness.routing, crate::harness::Routing::OwnAuth) {
+        status: if matches!(harness.routing, crate::harness::catalog::Routing::OwnAuth) {
             SpawnCheckStatus::Warn
         } else {
             SpawnCheckStatus::Pass
         },
         message: match harness.routing {
-            crate::harness::Routing::OwnAuth => format!(
+            crate::harness::catalog::Routing::OwnAuth => format!(
                 "'{}' is a subscription client the daemon borrows sessions from — it launches \
                  with its own auth, never routed through BitRouter",
                 harness.id
@@ -1193,7 +1193,7 @@ fn home_dir() -> Option<PathBuf> {
 /// sign the user in) so both go through one detect-and-install path.
 pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
     let spec = agent.spec();
-    let harness = crate::harness::by_interactive_binary(spec.binary).ok_or_else(|| {
+    let harness = crate::harness::catalog::by_interactive_binary(spec.binary).ok_or_else(|| {
         anyhow::anyhow!(
             "no catalog harness for interactive binary '{}'",
             spec.binary
@@ -1207,7 +1207,7 @@ pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) 
 /// permits prompting. Harnesses with no bundled installer get an actionable
 /// error pointing at their upstream project.
 pub(crate) async fn ensure_harness_installed(
-    harness: &'static crate::harness::Harness,
+    harness: &'static crate::harness::catalog::Harness,
     no_install: bool,
 ) -> Result<PathBuf> {
     let binary = harness
@@ -1223,7 +1223,7 @@ pub(crate) async fn ensure_harness_installed(
 /// installer when stdin is interactive and `--no-install` was not set;
 /// otherwise return an actionable error listing the install command.
 async fn ensure_installed(
-    harness: &'static crate::harness::Harness,
+    harness: &'static crate::harness::catalog::Harness,
     binary: &'static str,
     no_install: bool,
 ) -> Result<PathBuf> {
@@ -1516,7 +1516,7 @@ mod tests {
         let gateways = launch_gateways(&cfg, "http://127.0.0.1:4356", true);
         let line = |id: &str| {
             startup_line(
-                crate::harness::by_id(id).expect("catalog"),
+                crate::harness::catalog::by_id(id).expect("catalog"),
                 "http://127.0.0.1:4356",
                 &gateways,
                 &p,
@@ -1545,7 +1545,7 @@ mod tests {
         // line must say so rather than claiming tools the harness never got.
         let p = Palette::none();
         let line = startup_line(
-            crate::harness::by_id("claude-acp").expect("catalog"),
+            crate::harness::catalog::by_id("claude-acp").expect("catalog"),
             "http://127.0.0.1:4356",
             &[],
             &p,
@@ -1578,7 +1578,7 @@ mod tests {
         // openclaw, grok, antigravity) have no mechanism and are excluded by
         // design.
         for id in ["claude-acp", "codex-acp", "opencode", "hermes-acp"] {
-            let h = crate::harness::by_id(id).expect("catalog entry");
+            let h = crate::harness::catalog::by_id(id).expect("catalog entry");
             let dir = tempfile::tempdir().expect("tempdir");
             let overlay = h
                 .launch_overlay(
@@ -1731,7 +1731,9 @@ mod tests {
         // false` and attribute someone else's traffic to this launch.
         assert!(!is_launch_token("user-token"));
         assert!(!is_launch_token("brk_key"));
-        assert!(!is_launch_token(crate::harness::PLACEHOLDER_API_KEY));
+        assert!(!is_launch_token(
+            crate::harness::catalog::PLACEHOLDER_API_KEY
+        ));
         assert!(is_launch_token(&mint_launch_token()));
     }
 
@@ -1748,28 +1750,32 @@ mod tests {
     fn launch_agents_map_to_catalog_harnesses() {
         // The interactive binary is the key into the shared routing catalog;
         // the overlay content itself is covered by `harness` tests.
-        let claude = crate::harness::by_interactive_binary(SpawnAgent::Claude.spec().binary)
-            .expect("claude maps to a catalog harness");
+        let claude =
+            crate::harness::catalog::by_interactive_binary(SpawnAgent::Claude.spec().binary)
+                .expect("claude maps to a catalog harness");
         assert_eq!(claude.id, "claude-acp");
         assert!(matches!(
             claude.routing,
-            crate::harness::Routing::Env {
+            crate::harness::catalog::Routing::Env {
                 base_url_env: "ANTHROPIC_BASE_URL",
                 auth_env: "ANTHROPIC_AUTH_TOKEN",
                 ..
             }
         ));
 
-        let codex = crate::harness::by_interactive_binary(SpawnAgent::Codex.spec().binary)
+        let codex = crate::harness::catalog::by_interactive_binary(SpawnAgent::Codex.spec().binary)
             .expect("codex maps to a catalog harness");
         assert_eq!(codex.id, "codex-acp");
-        assert!(matches!(codex.routing, crate::harness::Routing::CodexArgs));
+        assert!(matches!(
+            codex.routing,
+            crate::harness::catalog::Routing::CodexArgs
+        ));
     }
 
     #[test]
     fn resolve_launch_agent_accepts_every_supported_harness() {
         // `launch --agent` takes every *supported* harness, by binary name…
-        for h in crate::harness::CATALOG
+        for h in crate::harness::catalog::CATALOG
             .iter()
             .filter(|h| h.launch_supported())
         {
@@ -1819,11 +1825,11 @@ mod tests {
     #[test]
     fn needs_model_catalog_only_for_config_synthesis_harnesses() {
         for id in ["opencode", "pi-acp", "hermes-acp", "openclaw"] {
-            let h = crate::harness::by_id(id).expect("catalog harness");
+            let h = crate::harness::catalog::by_id(id).expect("catalog harness");
             assert!(needs_model_catalog(h), "{id} synthesizes a model list");
         }
         for id in ["claude-acp", "codex-acp"] {
-            let h = crate::harness::by_id(id).expect("catalog harness");
+            let h = crate::harness::catalog::by_id(id).expect("catalog harness");
             assert!(!needs_model_catalog(h), "{id} needs no /v1/models probe");
         }
     }
@@ -1917,7 +1923,8 @@ providers:
         let report = check(
             &cfg,
             &SpawnOptions {
-                agent: crate::harness::by_id("codex-acp").context("Codex harness missing")?,
+                agent: crate::harness::catalog::by_id("codex-acp")
+                    .context("Codex harness missing")?,
                 model: Some("gpt-native".into()),
                 agent_args: Vec::new(),
                 base_url: Some("http://127.0.0.1:0".into()),
