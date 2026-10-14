@@ -6,7 +6,7 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 The table below describes the current implementation during P0. Core, harness,
 TUI, telemetry, model/provider runtime and the old SDK server have moved into
-the application. The SDK provides gateway HTTP/SSE and control clients; eval/core
+the application. The SDK provides gateway HTTP/SSE, control and evaluation clients; core
 client extraction and application feature isolation remain in progress. The final
 architecture and migration gates are in the
 [service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
@@ -16,7 +16,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation and catalog contracts; optional schema derives; no service runtime or transport |
-| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE and control service clients using AI wire contracts; eval/core clients remain in migration |
+| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control and evaluation service clients using AI wire contracts; core streaming clients remain in migration |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, terminal UI, optional OTLP and management commands |
 | `helpers/dist-helper` | helper | Unpublished registry/chart tooling; configuration schema delegates to the application-owned generator |
@@ -228,7 +228,7 @@ SDK limitation and live-provider validation scope.
 
 The matcher depends only on AI capability contracts. The repurposed SDK is a
 service-client package and never owns gateway assembly, configuration discovery
-or provider authentication. Its gateway/control methods use explicit endpoints and
+or provider authentication. Its gateway/control/evaluation methods use explicit endpoints and
 credentials, bounded reads and no automatic replay. See the
 [SDK guide](../crates/bitrouter-sdk/README.md) for the available methods and
 [service progress](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for remaining P0 work.
@@ -294,7 +294,7 @@ The old SDK `server`, `config_file` and `mcp` flags are retired. Gateway HTTP
 and configuration parsing always belong to the application; concrete MCP
 transports use application `mcp`. ACP uses application `harness`. Existing
 `agents:` configuration and its schema remain compatible. The SDK currently has
-no server API; its gateway/control methods do not enable service features.
+no server API; its gateway/control/evaluation methods do not enable service features.
 
 AI observation declarations are ungated. Its pure conformance helpers use the
 default-off `testing` feature. The [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
@@ -427,7 +427,7 @@ input/output behavior and requires explicit installation.
 ### Run the official gateway or assemble an advanced host
 
 Ordinary service consumers run `bro serve` with configuration and use its HTTP
-interfaces. The SDK provides typed gateway and control clients. Advanced trusted Rust
+interfaces. The SDK provides typed gateway, control and evaluation clients. Advanced trusted Rust
 hosts can use `gateway::assembly::App` and the shared `host::serve_with_extensions`
 lifecycle; adding compiled extension code requires rebuilding that custom host.
 

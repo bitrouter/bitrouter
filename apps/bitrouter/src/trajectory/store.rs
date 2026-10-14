@@ -19,8 +19,8 @@ use super::types::{
     TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
-use crate::eval::types::{EvalExperimentRef, RouteDecisionMeasurement};
 use crate::workflow_state::ir::RouteProjection;
+use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
 
 mod episode_entity {
     use sea_orm::entity::prelude::*;
@@ -2247,16 +2247,16 @@ fn build_guarded_route_batch(
         categorical.insert(
             "route.experiment_arm".to_owned(),
             match experiment.arm {
-                crate::eval::types::ExperimentArm::Control => "control",
-                crate::eval::types::ExperimentArm::Challenger => "challenger",
+                bitrouter_ai::eval::ExperimentArm::Control => "control",
+                bitrouter_ai::eval::ExperimentArm::Challenger => "challenger",
             }
             .to_owned(),
         );
         categorical.insert(
             "route.experiment_assignment_unit".to_owned(),
             match experiment.assignment_unit {
-                crate::eval::types::ExperimentAssignmentUnit::Task => "task",
-                crate::eval::types::ExperimentAssignmentUnit::Episode => "episode",
+                bitrouter_ai::eval::ExperimentAssignmentUnit::Task => "task",
+                bitrouter_ai::eval::ExperimentAssignmentUnit::Episode => "episode",
             }
             .to_owned(),
         );
@@ -3152,12 +3152,15 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryTrait, RuntimeErr, Statement};
 
     use super::*;
-    use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
     use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
     use crate::workflow_state::ir::RouteProjection;
+    use {
+        bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
+        bitrouter_ai::eval::ExperimentAssignmentUnit,
+    };
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

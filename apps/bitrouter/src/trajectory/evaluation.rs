@@ -3,11 +3,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::eval::types::{
-    DecisionCredit, EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope,
-    EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem,
-    ExperimentArm, ExperimentAssignmentUnit, MetricUnit, MetricValue, canonical_digest,
-    evidence_digest, validate_result_for_subject,
+use {
+    crate::eval::types::canonical_digest, crate::eval::types::evidence_digest,
+    crate::eval::types::validate_result_for_subject, bitrouter_ai::eval::DecisionCredit,
+    bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
+    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+    bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+    bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::EvidenceItem,
+    bitrouter_ai::eval::ExperimentArm, bitrouter_ai::eval::ExperimentAssignmentUnit,
+    bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::MetricValue,
 };
 
 use super::health::reduce;
@@ -559,14 +564,15 @@ mod tests {
     use super::{
         build_operational_evaluation, decision_credit, decode_eval_decision, operational_metrics,
     };
-    use crate::eval::types::{
-        EvalScope, EvalVerdict, ExperimentArm, ExperimentAssignmentUnit, MetricUnit,
-        RouteActionCandidate, RouteDecisionMeasurement,
-    };
     use crate::trajectory::health::reduce;
     use crate::trajectory::types::{
         HistoryCompleteness, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent, TrajectoryEventKind,
         TrajectoryEvidence, TrajectoryHealth,
+    };
+    use {
+        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalVerdict,
+        bitrouter_ai::eval::ExperimentArm, bitrouter_ai::eval::ExperimentAssignmentUnit,
+        bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::RouteActionCandidate,
     };
 
     const POLICY_DIGEST: &str =
@@ -915,7 +921,7 @@ mod tests {
             "planning",
             ("economy", false),
         )?;
-        route.evidence.route_measurement = Some(RouteDecisionMeasurement::new(
+        route.evidence.route_measurement = Some(crate::eval::types::route_decision_measurement(
             "economy",
             "vendor/economy",
             None,

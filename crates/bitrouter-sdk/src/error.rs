@@ -31,12 +31,14 @@ pub enum Error {
     Options(&'static str),
     #[error("invalid request: {0}")]
     Request(&'static str),
-    #[error("gateway transport failed; execution may have started")]
+    #[error("service transport failed; execution may have started")]
     Transport(#[source] reqwest::Error),
     #[error("gateway returned HTTP status {}", .0.status)]
     Service(Box<ServiceFailure>),
     #[error("control service returned HTTP status {}", .0.status)]
     Control(Box<ServiceFailure<bitrouter_ai::control::error::ErrorEnvelope>>),
+    #[error("evaluation service returned HTTP status {}", .0.status)]
+    Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
     #[error(
         "remote control protocol version {server} is incompatible with client version {client}"
     )]
@@ -55,9 +57,9 @@ pub enum Error {
     },
     #[error("gateway reported a stream failure")]
     Stream(Box<ServiceFailure>),
-    #[error("invalid gateway response: {0}")]
+    #[error("invalid service response: {0}")]
     Response(&'static str),
-    #[error("gateway response exceeded the configured byte limit")]
+    #[error("service response exceeded the configured byte limit")]
     Limit,
     #[error("gateway stream ended without its terminal event; execution may still be running")]
     IncompleteStream,

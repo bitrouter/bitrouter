@@ -8,8 +8,9 @@ use std::sync::{
 use crate::config::EvalConfig;
 use anyhow::Result;
 
-use crate::eval::{
-    EvalService, admission::SubmissionPrincipal, store::EvalStore, types::AdmissionStatus,
+use {
+    crate::eval::EvalService, crate::eval::admission::SubmissionPrincipal,
+    crate::eval::store::EvalStore, bitrouter_ai::eval::AdmissionStatus,
 };
 
 use super::{

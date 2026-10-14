@@ -59,10 +59,10 @@ the contract move must preserve its bytes.
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
-| P0 1 Public contracts | In progress | Observation/event/request-check contracts, operation scopes and control lifecycle/inspection contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; eval/core DTO extraction remains before their final service/client split |
+| P0 1 Public contracts | In progress | Observation/event/request-check, control and eval contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; core protocol/checkpoint contracts remain before the final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
-| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE and control clients verified; eval/core client extraction and independent official-service process consumer remain |
+| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control and eval clients verified; core streaming client extraction and independent official-service process consumer remain |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
@@ -466,3 +466,67 @@ service delivery. Eval/core clients, the separate SDK consumer process fixture,
 feature isolation, historical payload/performance evidence, final validation and
 PR remain open. The existing official-executable test does not substitute for
 the planned independently built SDK consumer.
+
+
+### P0 4 Evaluation exchange contracts and typed client
+
+Starting from `e8023ce`, **21 existing evaluation data types** and their schema
+version constants now live in `bitrouter_ai::eval`. Their fields and existing
+serde rules were compared directly with the previous declarations. The subject
+insert receipt, snapshot request, status report and HTTP error body now have
+explicit shared types. The existing `heldout` status-count key remains distinct
+from the `held_out` result-receipt value. The definition-only `EvalSubjectStatus`
+enum had no source or test consumers and was retired instead of being added to
+the public contract package.
+
+Metric range checks are intrinsic contract helpers with typed errors. Evidence
+validation, SHA-256/canonical digest construction, route measurement construction,
+tenant authority, persistence and admission remain application code. Existing
+callers use owning paths and service-side free functions rather than forwarding
+exports or an AI dependency on server algorithms. Existing tests retained their
+assertions and inputs; only owner paths and relocated helper calls changed.
+
+`GatewayClient` now supplies the seven existing eval HTTP operations on the
+inference listener, with no new client feature. The server continues to authorize
+virtual keys and tenant ownership, or its explicitly configured `skip_auth`
+mode. Control credentials do not authorize eval calls. Resource identifiers are
+encoded as path segments, and a missing endpoint remains an HTTP error.
+`Error::Evaluation` retains the distinct string-valued error envelope plus
+status/headers even for unreadable bodies. Gateway and eval reuse bounded
+response handling; redirects and automatic retries remain disabled.
+
+Validation uses the same debug/incremental settings and two-job/thread limits
+recorded above:
+
+- `cargo nextest run -p bitrouter -p bitrouter-ai -p bitrouter-sdk --all-features
+  --build-jobs 2 --test-threads 2 -E 'package(bitrouter-ai) | package(bitrouter-sdk)
+  | test(eval::) | test(policy_lock::) | test(policy_table_router::)
+  | test(workflow_state::) | test(optimization::) | test(trajectory::)
+  | binary(eval_exchange_equivalence) | binary(policy_eval_control_plane)
+  | binary(workflow_state_replay)'`: **688 passed** (619 application, 42 AI,
+  27 SDK); 3,742 outside the selected stage filter.
+- New real-HTTP SDK tests exercise server receipts, duplicate identities,
+  encoded subject IDs, snapshot identity, virtual-key authentication and tenant
+  isolation. Independent SDK HTTP peers cover unavailable/malformed/oversized
+  errors and path-prefix preservation. These complement the existing CLI/REST
+  semantic-equivalence test.
+- Strict Clippy found one unnecessary clone in a new test assertion. After
+  replacing it with a borrowed slice, the final focused run of
+  `binary(eval_exchange_equivalence) | test(remote_control::)` passed **24 tests**;
+  strict workspace/all-feature/all-target Clippy passed on Rust 1.97.0.
+- AI default-feature tests passed **38 cases**; both SDK README examples compile.
+  Strict all-feature workspace Rustdoc passed on Rust 1.97.0.
+- Pinned public API checks passed with new eval contract/client sentinels and
+  unchanged foreign-dependency manifests. No package dependency was added.
+  Formatting and patch whitespace checks passed.
+- `cargo run -p dist-helper -- generate-schema --check` passed. Configuration
+  schema SHA-256 remains
+  `d4aaacc1d5e9b162cd168c08cc4de2b495ba9fbec3b1c582999684b2a1883135`;
+  the observation artifact also retains its baseline bytes.
+
+Independent review found no introduced contract, digest, authority or transport
+issue. These checks complete the eval client extraction, not P0 as a whole.
+Core protocol/checkpoint extraction and streaming clients, the independent
+packaged-service consumer, feature isolation, historical payload/performance
+fixtures, final complete validation and PR remain required. No P1 implementation
+or new evaluation/policy behavior is included in this stage.

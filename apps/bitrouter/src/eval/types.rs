@@ -1,176 +1,57 @@
-//! Versioned wire contracts for generic evaluation subjects and results.
+//! Service-side evaluation validation, evidence construction and semantic digests.
 
-use std::collections::{BTreeMap, BTreeSet};
+use bitrouter_ai::eval::{
+    EVAL_SCHEMA_VERSION, EvalExperimentRef, EvalSubject, EvaluationResult, EvidenceItem,
+    ExperimentArm, ROUTE_MEASUREMENT_SCHEMA_VERSION, RouteActionCandidate,
+    RouteDecisionMeasurement,
+};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use bitrouter_ai::types::ReasoningEffort;
 
-pub const EVAL_SCHEMA_VERSION: u32 = 1;
-pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvalScope {
-    Request,
-    Episode,
-    Task,
+pub(crate) fn route_decision_measurement(
+    logging_action_tier: impl Into<String>,
+    logging_action_model: impl Into<String>,
+    logging_action_effort: Option<ReasoningEffort>,
+    mut candidates: Vec<RouteActionCandidate>,
+) -> Result<RouteDecisionMeasurement> {
+    candidates.sort_by(|left, right| candidate_key(left).cmp(&candidate_key(right)));
+    let logging_action_tier = logging_action_tier.into();
+    let logging_action_model = logging_action_model.into();
+    let logging_action_probability_ppm = candidates
+        .iter()
+        .find(|candidate| {
+            candidate.tier == logging_action_tier
+                && candidate.model == logging_action_model
+                && candidate.effort == logging_action_effort
+        })
+        .map_or(0, |candidate| candidate.logging_probability_ppm);
+    let candidate_set_digest = route_candidate_set_digest(&candidates)?;
+    let measurement = RouteDecisionMeasurement {
+        schema_version: ROUTE_MEASUREMENT_SCHEMA_VERSION,
+        logging_action_tier,
+        logging_action_model,
+        logging_action_effort,
+        logging_action_probability_ppm,
+        candidate_set_digest,
+        candidates,
+    };
+    validate_route_measurement(&measurement)?;
+    Ok(measurement)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvalSubjectStatus {
-    Pending,
-    Evaluated,
+pub(crate) fn subject_digest(value: &EvalSubject) -> Result<String> {
+    validate_subject(value)?;
+    canonical_digest(value)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExperimentArm {
-    Control,
-    Challenger,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExperimentAssignmentUnit {
-    Task,
-    Episode,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvalExperimentRef {
-    pub experiment_id: String,
-    pub arm: ExperimentArm,
-    pub assignment_unit: ExperimentAssignmentUnit,
-    pub assignment_id_digest: String,
-    pub challenger_propensity_ppm: u32,
-}
-
-/// One semantic policy action declared by the immutable routing snapshot.
-///
-/// Probabilities describe the logging policy before deterministic tool,
-/// progress, or continuation guards. The effective action remains
-/// [`EvalDecisionRef::selected_tier`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RouteActionCandidate {
-    pub context: bitrouter_ai::routing::ContextStrategy,
-    pub tier: String,
-    pub model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<ReasoningEffort>,
-    pub logging_probability_ppm: u32,
-}
-
-/// Replayable evidence for the semantic action distribution seen by one
-/// policy decision. This is diagnostic evidence and never controls routing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RouteDecisionMeasurement {
-    pub schema_version: u32,
-    pub logging_action_tier: String,
-    pub logging_action_model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub logging_action_effort: Option<ReasoningEffort>,
-    pub logging_action_probability_ppm: u32,
-    pub candidate_set_digest: String,
-    pub candidates: Vec<RouteActionCandidate>,
-}
-
-impl RouteDecisionMeasurement {
-    pub fn new(
-        logging_action_tier: impl Into<String>,
-        logging_action_model: impl Into<String>,
-        logging_action_effort: Option<ReasoningEffort>,
-        mut candidates: Vec<RouteActionCandidate>,
-    ) -> Result<Self> {
-        candidates.sort_by(|left, right| candidate_key(left).cmp(&candidate_key(right)));
-        let logging_action_tier = logging_action_tier.into();
-        let logging_action_model = logging_action_model.into();
-        let logging_action_probability_ppm = candidates
-            .iter()
-            .find(|candidate| {
-                candidate.tier == logging_action_tier
-                    && candidate.model == logging_action_model
-                    && candidate.effort == logging_action_effort
-            })
-            .map_or(0, |candidate| candidate.logging_probability_ppm);
-        let candidate_set_digest = route_candidate_set_digest(&candidates)?;
-        let measurement = Self {
-            schema_version: ROUTE_MEASUREMENT_SCHEMA_VERSION,
-            logging_action_tier,
-            logging_action_model,
-            logging_action_effort,
-            logging_action_probability_ppm,
-            candidate_set_digest,
-            candidates,
-        };
-        validate_route_measurement(&measurement)?;
-        Ok(measurement)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvalDecisionRef {
-    pub decision_id: String,
-    pub policy: String,
-    pub route_projection: String,
-    pub request_key: String,
-    pub selected_tier: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected_effort: Option<ReasoningEffort>,
-    pub baseline_tier: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub baseline_effort: Option<ReasoningEffort>,
-    pub policy_digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experiment: Option<EvalExperimentRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route_measurement: Option<RouteDecisionMeasurement>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvidenceItem {
-    pub evidence_id: String,
-    pub kind: String,
-    pub digest: String,
-    pub redacted: bool,
-    #[serde(default)]
-    pub attributes: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvalSubject {
-    pub schema_version: u32,
-    pub eval_id: String,
-    pub scope: EvalScope,
-    pub subject_id: String,
-    pub policy_digest: String,
-    pub preset: Option<String>,
-    pub cohort: Option<String>,
-    pub holdout: bool,
-    #[serde(default)]
-    pub decisions: Vec<EvalDecisionRef>,
-    #[serde(default)]
-    pub requested_dimensions: BTreeSet<String>,
-    #[serde(default)]
-    pub evidence: Vec<EvidenceItem>,
-    pub evidence_digest: String,
-    pub observed_at: String,
-}
-
-impl EvalSubject {
-    pub fn semantic_digest(&self) -> Result<String> {
-        validate_subject(self)?;
-        canonical_digest(self)
-    }
+pub(crate) fn result_digest(value: &EvaluationResult) -> Result<String> {
+    validate_result(value)?;
+    canonical_digest(value)
 }
 
 /// Classification cohorts are commitments to backend revision, rubric and
@@ -186,120 +67,6 @@ pub(crate) fn classifier_cohorts(subject: &EvalSubject) -> BTreeSet<String> {
         cohorts.insert("unassessed".into());
     }
     cohorts
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvaluatorKind {
-    TaskNative,
-    Human,
-    Enterprise,
-    Agentic,
-    Generic,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvaluatorIdentity {
-    pub authority_id: String,
-    pub evaluator_id: String,
-    pub kind: EvaluatorKind,
-    pub version: String,
-    pub config_digest: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvalVerdict {
-    Pass,
-    Fail,
-    Inconclusive,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MetricUnit {
-    Boolean,
-    Ppm,
-    MicroUsd,
-    Milliseconds,
-    Count,
-    ScalarMicros,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MetricValue {
-    pub value: i64,
-    pub unit: MetricUnit,
-}
-
-impl MetricValue {
-    pub fn new(value: i64, unit: MetricUnit) -> Self {
-        Self { value, unit }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        match self.unit {
-            MetricUnit::Boolean if !matches!(self.value, 0 | 1) => {
-                anyhow::bail!("boolean metric must be 0 or 1")
-            }
-            MetricUnit::Ppm if !(0..=1_000_000).contains(&self.value) => {
-                anyhow::bail!("ppm metric must be between 0 and 1000000")
-            }
-            MetricUnit::MicroUsd | MetricUnit::Milliseconds | MetricUnit::Count
-                if self.value < 0 =>
-            {
-                anyhow::bail!("unsigned metric unit cannot be negative")
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DecisionCredit {
-    pub weight_ppm: i64,
-    #[serde(default)]
-    pub metric_ids: BTreeSet<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvaluationResult {
-    pub schema_version: u32,
-    pub eval_id: String,
-    pub evidence_digest: String,
-    pub evaluator: EvaluatorIdentity,
-    pub verdict: EvalVerdict,
-    #[serde(default)]
-    pub metrics: BTreeMap<String, MetricValue>,
-    #[serde(default)]
-    pub hard_violations: Vec<String>,
-    pub confidence_ppm: Option<i64>,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-    #[serde(default)]
-    pub decision_credit: BTreeMap<String, DecisionCredit>,
-    pub idempotency_key: String,
-    pub submitted_at: String,
-}
-
-impl EvaluationResult {
-    pub fn semantic_digest(&self) -> Result<String> {
-        validate_result(self)?;
-        canonical_digest(self)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AdmissionStatus {
-    Admitted,
-    Rejected,
-    HeldOut,
-    Disputed,
 }
 
 pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
@@ -666,6 +433,11 @@ fn attribute_looks_sensitive(key: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_ai::eval::{
+        EvalDecisionRef, EvalScope, EvalVerdict, EvaluatorIdentity, EvaluatorKind,
+        ExperimentAssignmentUnit, MetricUnit, MetricValue,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn metric_units_enforce_integer_domains() {
@@ -745,7 +517,10 @@ mod tests {
             .into_iter()
             .map(ToString::to_string)
             .collect();
-        assert_eq!(left.semantic_digest()?, right.semantic_digest()?);
+        assert_eq!(
+            crate::eval::types::subject_digest(&left)?,
+            crate::eval::types::subject_digest(&right)?
+        );
         Ok(())
     }
 
@@ -896,7 +671,7 @@ mod tests {
                 logging_probability_ppm: 100_000,
             },
         ];
-        let measurement = RouteDecisionMeasurement::new(
+        let measurement = crate::eval::types::route_decision_measurement(
             "economy",
             "bitrouter:economy",
             Some(ReasoningEffort::Low),
@@ -950,7 +725,7 @@ mod tests {
                 assignment_id_digest: subject.policy_digest.clone(),
                 challenger_propensity_ppm: 100_000,
             }),
-            route_measurement: Some(RouteDecisionMeasurement::new(
+            route_measurement: Some(crate::eval::types::route_decision_measurement(
                 "economy",
                 "bitrouter:economy",
                 None,
@@ -977,7 +752,7 @@ mod tests {
 
         let mut split = base;
         split.experiment.as_mut().unwrap().arm = ExperimentArm::Challenger;
-        split.route_measurement = Some(RouteDecisionMeasurement::new(
+        split.route_measurement = Some(crate::eval::types::route_decision_measurement(
             "economy",
             "bitrouter:economy",
             None,
@@ -1012,7 +787,7 @@ mod tests {
 
     #[test]
     fn route_measurement_validation_rejects_forged_probability_evidence() -> anyhow::Result<()> {
-        let valid = RouteDecisionMeasurement::new(
+        let valid = crate::eval::types::route_decision_measurement(
             "balanced",
             "bitrouter:balanced",
             None,

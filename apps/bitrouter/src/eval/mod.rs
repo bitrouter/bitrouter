@@ -9,9 +9,9 @@ pub mod types;
 
 use crate::config::EvalConfig;
 
-use self::admission::{AdmissionOutcome, SubmissionPrincipal};
 use self::store::EvalStore;
-use self::types::EvaluationResult;
+use bitrouter_ai::eval::EvaluationResult;
+use {self::admission::SubmissionPrincipal, bitrouter_ai::eval::AdmissionOutcome};
 
 #[derive(Clone)]
 pub struct EvalService {

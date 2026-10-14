@@ -1,5 +1,7 @@
 //! Explicit HTTP access to an independently running gateway.
 
+mod eval;
+
 use std::time::Duration;
 
 use bitrouter_ai::{

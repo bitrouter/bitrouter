@@ -17,9 +17,6 @@ use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
-use crate::eval::types::{
-    EvalExperimentRef, ExperimentArm, RouteActionCandidate, RouteDecisionMeasurement,
-};
 use crate::gateway::routing::signals::NextStepRole;
 use crate::optimization::exploration::RouteExploration;
 use crate::trajectory::guard::ProgressGuardPolicy;
@@ -29,6 +26,10 @@ use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
 use crate::workflow_state::predictive::{
     NextActionClass, PredictiveEvidence, is_predictive_reason_code, is_task_family_reason_code,
+};
+use {
+    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
+    bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,7 +338,7 @@ impl PolicyTable {
         let target = self.target_of_tier(logging_action_tier).ok_or_else(|| {
             anyhow::anyhow!("logging action tier is absent from the policy snapshot")
         })?;
-        RouteDecisionMeasurement::new(
+        crate::eval::types::route_decision_measurement(
             logging_action_tier,
             target.model(),
             target.effort().or(input_effort),
@@ -1215,10 +1216,6 @@ mod tests {
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::settlement::EvalSettlementRecorder;
     use crate::eval::store::EvalStore;
-    use crate::eval::types::{
-        EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
-        ExperimentAssignmentUnit,
-    };
     use crate::gateway::caller::CallerContext;
     use crate::gateway::observability::event::EventBus;
     use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
@@ -1236,6 +1233,11 @@ mod tests {
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
+    use {
+        bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalVerdict,
+        bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+        bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::ExperimentAssignmentUnit,
+    };
 
     use crate::gateway::routing::assessment::{Assessment, Judgment};
     use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
@@ -3057,11 +3059,11 @@ mod tests {
             None
         );
 
-        assert_eq!(subject.scope, crate::eval::types::EvalScope::Request);
+        assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
         // A task evaluator explicitly attributes its task result to this
         // decision. Request completion alone cannot provide this quality.
         let mut subject = subject;
-        subject.scope = crate::eval::types::EvalScope::Task;
+        subject.scope = bitrouter_ai::eval::EvalScope::Task;
         subject.subject_id = "independently-evaluated-task".into();
         subject.eval_id = "task:independently-evaluated-task".into();
         let result = EvaluationResult {

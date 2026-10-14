@@ -114,7 +114,7 @@ fn build_settlement(
     sequence: u64,
     metering: &MeteringSettlementEvent,
     prediction: Option<&PredictionObservationSnapshot>,
-    routing: &[crate::eval::types::EvidenceItem],
+    routing: &[bitrouter_ai::eval::EvidenceItem],
 ) -> Result<Settlement> {
     let captured_at = settlement_timestamp(request, events, metering.duration_ms)?;
     let mut structural =
@@ -454,7 +454,7 @@ mod tests {
         assert!(pending.peek(&invocation, "owner-a").is_none());
         let subjects = eval_store.list_subjects_for_owner("owner-a").await?;
         assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].scope, crate::eval::types::EvalScope::Episode);
+        assert_eq!(subjects[0].scope, bitrouter_ai::eval::EvalScope::Episode);
         assert!(
             eval_store
                 .subject("request:external-request")

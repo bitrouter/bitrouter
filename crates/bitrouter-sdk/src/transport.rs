@@ -23,6 +23,14 @@ pub(crate) async fn body(response: Response, limit: usize) -> Result<Vec<u8>> {
 }
 
 pub(crate) async fn successful(response: Response, limit: usize) -> Result<Response> {
+    successful_as(response, limit, Error::Service).await
+}
+
+pub(crate) async fn successful_as<Body: serde::de::DeserializeOwned>(
+    response: Response,
+    limit: usize,
+    failure: fn(Box<ServiceFailure<Body>>) -> Error,
+) -> Result<Response> {
     if response.status().is_success() {
         return Ok(response);
     }
@@ -38,7 +46,7 @@ pub(crate) async fn successful(response: Response, limit: usize) -> Result<Respo
         },
         Err(error) => (None, Some(error)),
     };
-    Err(Error::Service(Box::new(ServiceFailure {
+    Err(failure(Box::new(ServiceFailure {
         status,
         headers,
         body,

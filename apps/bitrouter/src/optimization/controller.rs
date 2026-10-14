@@ -5,8 +5,6 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::eval::compiler::EvalEvidenceSnapshot;
-use crate::eval::store::EvalSnapshot;
-use crate::eval::types::{EvalScope, EvalSubject};
 use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
 use crate::optimization::exploration::{
     OptimizationGate, OptimizationObjective, PolicyOptimizationState, RouteExploration,
@@ -21,6 +19,8 @@ use crate::policy_lock::{
     PolicyCertificate, PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, validate_document,
 };
 use crate::workflow_state::predictive::compiled_predictor_contract;
+use bitrouter_ai::eval::EvalSnapshot;
+use {bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OptimizationOptions {
@@ -1090,11 +1090,6 @@ mod tests {
     use bitrouter_ai::routing::PolicyModelTarget;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
-    use crate::eval::types::{
-        EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject,
-        EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem,
-        ExperimentArm, ExperimentAssignmentUnit, MetricUnit, MetricValue,
-    };
     use crate::optimization::exploration::{
         OptimizationGate, PolicyOptimizationState, RouteRejection,
     };
@@ -1103,6 +1098,15 @@ mod tests {
         RouteOwner, semantic_digest,
     };
     use crate::workflow_state::predictive::compiled_predictor_contract;
+    use {
+        bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
+        bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
+        bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+        bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+        bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::EvidenceItem,
+        bitrouter_ai::eval::ExperimentArm, bitrouter_ai::eval::ExperimentAssignmentUnit,
+        bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::MetricValue,
+    };
 
     use super::{
         ControllerAction, HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, OptimizationOptions,
@@ -2406,11 +2410,6 @@ mod file_tests {
     use crate::eval::EvalService;
     use crate::eval::admission::SubmissionPrincipal;
     use crate::eval::store::EvalStore;
-    use crate::eval::types::{
-        EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject,
-        EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem,
-        ExperimentArm, ExperimentAssignmentUnit, MetricUnit, MetricValue, evidence_digest,
-    };
     use crate::optimization::controller::{
         ControllerAction, OptimizationOptions, prepare_files, publish_prepared,
         publish_prepared_with_config_writer, read_status,
@@ -2422,6 +2421,16 @@ mod file_tests {
         validate_document,
     };
     use crate::workflow_state::predictive::compiled_predictor_contract;
+    use {
+        crate::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+        bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalExperimentRef,
+        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
+        bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
+        bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
+        bitrouter_ai::eval::EvidenceItem, bitrouter_ai::eval::ExperimentArm,
+        bitrouter_ai::eval::ExperimentAssignmentUnit, bitrouter_ai::eval::MetricUnit,
+        bitrouter_ai::eval::MetricValue,
+    };
 
     const REQUEST_KEY: &str = "semantic_route/v1|unknown|implement|normal";
     const SECOND_REQUEST_KEY: &str = "semantic_route/v1|code:generation|verify|normal";

@@ -5,9 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use super::store::{EvalSnapshot, EvalStore};
-use super::types::{
-    DecisionCredit, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorKind, MetricUnit,
+use {super::store::EvalStore, bitrouter_ai::eval::EvalSnapshot};
+use {
+    bitrouter_ai::eval::DecisionCredit, bitrouter_ai::eval::EvalSubject,
+    bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
+    bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::MetricUnit,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -47,7 +49,7 @@ impl EvalEvidenceSnapshot {
             let subject = store.subject(&entry.eval_id).await?.ok_or_else(|| {
                 anyhow::anyhow!("snapshot subject '{}' is missing", entry.eval_id)
             })?;
-            let subject_digest = subject.semantic_digest()?;
+            let subject_digest = crate::eval::types::subject_digest(&subject)?;
             if subject_digest != entry.subject_content_digest {
                 anyhow::bail!("snapshot subject '{}' changed content", entry.eval_id);
             }
@@ -75,7 +77,7 @@ impl EvalEvidenceSnapshot {
         let mut records = self
             .records
             .iter()
-            .filter(|record| record.subject.scope != super::types::EvalScope::Request)
+            .filter(|record| record.subject.scope != bitrouter_ai::eval::EvalScope::Request)
             .map(|record| {
                 Ok((
                     record,
@@ -302,7 +304,7 @@ fn credit_for_decision<'a>(
 
 fn add_metric(
     aggregate: &mut MetricAggregate,
-    metric: Option<&super::types::MetricValue>,
+    metric: Option<&bitrouter_ai::eval::MetricValue>,
     expected_unit: MetricUnit,
     weight_ppm: i64,
 ) -> Result<()> {
@@ -334,6 +336,7 @@ mod tests {
     use crate::eval::admission::SubmissionPrincipal;
     use crate::eval::store::EvalStore;
     use crate::eval::types::*;
+    use bitrouter_ai::eval::{EvalDecisionRef, EvalScope, EvaluatorIdentity, MetricValue};
 
     #[tokio::test]
     async fn single_decision_result_gets_implicit_full_credit() -> anyhow::Result<()> {
@@ -365,9 +368,9 @@ mod tests {
         let subject = subject()?;
         let result = result(&subject);
         let records = [
-            super::super::types::EvalScope::Request,
-            super::super::types::EvalScope::Episode,
-            super::super::types::EvalScope::Task,
+            bitrouter_ai::eval::EvalScope::Request,
+            bitrouter_ai::eval::EvalScope::Episode,
+            bitrouter_ai::eval::EvalScope::Task,
         ]
         .into_iter()
         .enumerate()

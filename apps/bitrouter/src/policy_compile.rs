@@ -7,7 +7,6 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::eval::compiler::{EvalEvidenceSnapshot, RouteEvalEvidence, TierEvalEvidence};
-use crate::eval::types::EvaluatorKind;
 use crate::gateway::routing::signals::NextStepRole;
 use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, POLICY_COMPILER_ID,
@@ -17,6 +16,7 @@ use crate::policy_lock::{
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::workflow_state::predictive::PredictiveRouteProjection;
+use bitrouter_ai::eval::EvaluatorKind;
 
 const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
 
@@ -574,12 +574,15 @@ mod tests {
     use bitrouter_ai::types::ReasoningEffort;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
-    use crate::eval::types::{
-        EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity,
-        EvaluatorKind, MetricUnit, MetricValue, evidence_digest,
-    };
     use crate::policy_lock::{
         CertificateSource, PolicyDefinition, PolicyLock, PromotionVerdict, RouteOwner,
+    };
+    use {
+        crate::eval::types::evidence_digest, bitrouter_ai::eval::EvalDecisionRef,
+        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
+        bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
+        bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
+        bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::MetricValue,
     };
 
     const EDIT_KEY: &str = "semantic_route/v1|unknown|implement|normal";
@@ -792,7 +795,7 @@ mod tests {
         let candidates = policy
             .tiers
             .iter()
-            .map(|(tier, target)| crate::eval::types::RouteActionCandidate {
+            .map(|(tier, target)| bitrouter_ai::eval::RouteActionCandidate {
                 tier: tier.clone(),
                 model: target.model.clone(),
                 effort: target.effort,
@@ -801,7 +804,7 @@ mod tests {
             })
             .collect();
         eval.records[0].subject.decisions[0].route_measurement =
-            Some(crate::eval::types::RouteDecisionMeasurement::new(
+            Some(crate::eval::types::route_decision_measurement(
                 "economy",
                 "openai:gpt-5.6",
                 Some(ReasoningEffort::Low),

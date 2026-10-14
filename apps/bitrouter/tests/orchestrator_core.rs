@@ -395,8 +395,8 @@ models:
 async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<()> {
     use bitrouter::core::context_router::FEATURE;
     use bitrouter::core::protocol::ModelMode;
-    use bitrouter::eval::types::EvalScope;
     use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
+    use bitrouter_ai::eval::EvalScope;
     let home = tempfile::tempdir()?;
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/chat/completions"))

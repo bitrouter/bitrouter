@@ -4787,7 +4787,7 @@ fn controller_action_name(
 
 async fn eval(action: EvalAction, output: &Output) -> Result<()> {
     use bitrouter::eval::admission::SubmissionPrincipal;
-    use bitrouter::eval::types::{EvalSubject, EvaluationResult};
+    use {bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvaluationResult};
 
     let (action_name, data) = match action {
         EvalAction::Subject { action } => match action {
@@ -7826,7 +7826,7 @@ mod tests {
         eval(action, &Output::new(bitrouter::output::Format::Json)).await?;
 
         let sealed_text = std::fs::read_to_string(&sealed)?;
-        let subject: bitrouter::eval::types::EvalSubject = serde_json::from_str(&sealed_text)?;
+        let subject: bitrouter_ai::eval::EvalSubject = serde_json::from_str(&sealed_text)?;
         bitrouter::eval::types::validate_subject(&subject)?;
 
         let repeat = Cli::try_parse_from([
@@ -7847,7 +7847,7 @@ mod tests {
         };
         eval(action, &Output::new(bitrouter::output::Format::Json)).await?;
         let repeated_text = std::fs::read_to_string(&sealed_again)?;
-        let repeated: bitrouter::eval::types::EvalSubject = serde_json::from_str(&repeated_text)?;
+        let repeated: bitrouter_ai::eval::EvalSubject = serde_json::from_str(&repeated_text)?;
         bitrouter::eval::types::validate_subject(&repeated)?;
         assert_eq!(subject.evidence_digest, repeated.evidence_digest);
         assert_eq!(
@@ -8436,9 +8436,12 @@ mod tests {
         use bitrouter::eval::EvalService;
         use bitrouter::eval::admission::SubmissionPrincipal;
         use bitrouter::eval::store::EvalStore;
-        use bitrouter::eval::types::{
-            EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict,
-            EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, evidence_digest,
+        use {
+            bitrouter::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+            bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
+            bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+            bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+            bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::EvidenceItem,
         };
 
         const PIN: &str = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
@@ -8632,9 +8635,12 @@ mod tests {
         use bitrouter::eval::EvalService;
         use bitrouter::eval::admission::SubmissionPrincipal;
         use bitrouter::eval::store::EvalStore;
-        use bitrouter::eval::types::{
-            EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict,
-            EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, evidence_digest,
+        use {
+            bitrouter::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+            bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
+            bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+            bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+            bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::EvidenceItem,
         };
 
         const EVIDENCE_DIGEST: &str =

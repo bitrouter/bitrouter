@@ -1,5 +1,6 @@
 //! Append-only persistence for generic evaluation exchange records.
 
+use bitrouter_ai::eval::{EvalSnapshot, EvalSnapshotEntry, SubjectInsertOutcome};
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
@@ -9,9 +10,10 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::types::{
-    AdmissionStatus, EvalScope, EvalSubject, EvaluationResult, canonical_digest, validate_result,
-    validate_subject,
+use {
+    super::types::canonical_digest, super::types::validate_result, super::types::validate_subject,
+    bitrouter_ai::eval::AdmissionStatus, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvaluationResult,
 };
 
 mod subject_entity {
@@ -100,12 +102,6 @@ mod snapshot_entity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SubjectInsertOutcome {
-    Inserted,
-    Duplicate,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResultInsertOutcome {
     Inserted { result_id: String },
     Duplicate { result_id: String },
@@ -136,21 +132,6 @@ pub struct StoredEvaluationResult {
     pub result: EvaluationResult,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EvalSnapshotEntry {
-    pub result_id: String,
-    pub content_digest: String,
-    pub subject_content_digest: String,
-    pub eval_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EvalSnapshot {
-    pub evidence_root: String,
-    pub frozen_at: String,
-    pub entries: Vec<EvalSnapshotEntry>,
-}
-
 #[derive(Clone)]
 pub struct EvalStore {
     db: DatabaseConnection,
@@ -172,7 +153,7 @@ impl EvalStore {
     ) -> Result<SubjectInsertOutcome> {
         validate_owner(owner_user_id)?;
         validate_subject(subject)?;
-        let content_digest = subject.semantic_digest()?;
+        let content_digest = crate::eval::types::subject_digest(subject)?;
         if let Some(existing) = subject_entity::Entity::find_by_id(&subject.eval_id)
             .one(&self.db)
             .await?
@@ -262,7 +243,7 @@ impl EvalStore {
         {
             anyhow::bail!("unknown eval subject '{}'", result.eval_id);
         }
-        let content_digest = result.semantic_digest()?;
+        let content_digest = crate::eval::types::result_digest(result)?;
         if let Some(existing) = result_entity::Entity::find()
             .filter(result_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(result_entity::Column::IdempotencyKey.eq(&result.idempotency_key))
@@ -582,7 +563,9 @@ fn validate_owner(owner_user_id: &str) -> Result<()> {
 fn stored_subject(row: subject_entity::Model) -> Result<EvalSubject> {
     let subject: EvalSubject =
         serde_json::from_str(&row.subject_json).context("parsing stored eval subject")?;
-    if subject.eval_id != row.eval_id || subject.semantic_digest()? != row.content_digest {
+    if subject.eval_id != row.eval_id
+        || crate::eval::types::subject_digest(&subject)? != row.content_digest
+    {
         anyhow::bail!("stored eval subject does not match its content address");
     }
     Ok(subject)
@@ -591,7 +574,7 @@ fn stored_subject(row: subject_entity::Model) -> Result<EvalSubject> {
 fn stored_result(row: result_entity::Model) -> Result<StoredEvaluationResult> {
     let result: EvaluationResult =
         serde_json::from_str(&row.result_json).context("parsing stored evaluation result")?;
-    let semantic_digest = result.semantic_digest()?;
+    let semantic_digest = crate::eval::types::result_digest(&result)?;
     if result.eval_id != row.eval_id
         || semantic_digest != row.content_digest
         || semantic_digest != row.result_id
@@ -671,6 +654,7 @@ mod tests {
 
     use super::*;
     use crate::eval::types::*;
+    use bitrouter_ai::eval::{EvalDecisionRef, EvalVerdict, EvaluatorIdentity, EvaluatorKind};
 
     async fn store() -> anyhow::Result<EvalStore> {
         let db = crate::db::connect("sqlite::memory:").await?;

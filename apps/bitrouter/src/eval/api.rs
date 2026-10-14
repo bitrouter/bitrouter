@@ -7,13 +7,14 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
-use serde::Deserialize;
 
 use super::EvalService;
 use super::admission::SubmissionPrincipal;
-use super::types::{EvalSubject, EvaluationResult};
 use crate::auth::hook::credential_from_headers;
 use crate::auth::{db as auth_db, keys};
+use bitrouter_ai::eval::{
+    ErrorEnvelope, EvalSubject, EvaluationResult, FreezeRequest, PutSubjectReport, StatusReport,
+};
 
 #[derive(Clone)]
 struct ApiState {
@@ -44,7 +45,7 @@ async fn put_subject(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Json(subject): Json<EvalSubject>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<PutSubjectReport>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
     let outcome = state
         .service
@@ -52,10 +53,10 @@ async fn put_subject(
         .insert_subject_owned(&subject, principal.owner_user_id())
         .await
         .map_err(ApiError::bad_request)?;
-    Ok(Json(serde_json::json!({
-        "eval_id": subject.eval_id,
-        "outcome": format!("{outcome:?}").to_ascii_lowercase(),
-    })))
+    Ok(Json(PutSubjectReport {
+        eval_id: subject.eval_id,
+        outcome,
+    }))
 }
 
 async fn list_subjects(
@@ -93,7 +94,7 @@ async fn submit_result(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Json(result): Json<EvaluationResult>,
-) -> Result<Json<super::admission::AdmissionOutcome>, ApiError> {
+) -> Result<Json<bitrouter_ai::eval::AdmissionOutcome>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
     let outcome = state
         .service
@@ -103,16 +104,11 @@ async fn submit_result(
     Ok(Json(outcome))
 }
 
-#[derive(Debug, Deserialize)]
-struct FreezeRequest {
-    frozen_at: Option<String>,
-}
-
 async fn freeze_snapshot(
     State(state): State<ApiState>,
     headers: HeaderMap,
     payload: Option<Json<FreezeRequest>>,
-) -> Result<Json<super::store::EvalSnapshot>, ApiError> {
+) -> Result<Json<bitrouter_ai::eval::EvalSnapshot>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
     let frozen_at = payload
         .and_then(|Json(request)| request.frozen_at)
@@ -131,7 +127,7 @@ async fn get_snapshot(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(evidence_root): Path<String>,
-) -> Result<Json<super::store::EvalSnapshot>, ApiError> {
+) -> Result<Json<bitrouter_ai::eval::EvalSnapshot>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
     let snapshot = state
         .service
@@ -146,7 +142,7 @@ async fn get_snapshot(
 async fn status(
     State(state): State<ApiState>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<StatusReport>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
     let subjects = state
         .service
@@ -160,17 +156,19 @@ async fn status(
         .latest_admissions_for_owner(principal.owner_user_id())
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(serde_json::json!({
-        "subjects": subjects.len(),
-        "results": admissions.len(),
-        "admission": admissions.values().fold(
+    Ok(Json(StatusReport {
+        subjects: subjects.len(),
+        results: admissions.len(),
+        admission: admissions.values().fold(
             std::collections::BTreeMap::<String, usize>::new(),
             |mut counts, event| {
-                *counts.entry(format!("{:?}", event.status).to_ascii_lowercase()).or_default() += 1;
+                *counts
+                    .entry(format!("{:?}", event.status).to_ascii_lowercase())
+                    .or_default() += 1;
                 counts
-            }
+            },
         ),
-    })))
+    }))
 }
 
 async fn authenticate(
@@ -239,7 +237,9 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
-            Json(serde_json::json!({ "error": self.message })),
+            Json(ErrorEnvelope {
+                error: self.message,
+            }),
         )
             .into_response()
     }
@@ -257,9 +257,11 @@ mod tests {
     use crate::auth::{db as auth_db, keys};
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
-    use crate::eval::types::{
-        EVAL_SCHEMA_VERSION, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
-        EvaluatorIdentity, EvaluatorKind, evidence_digest,
+    use {
+        crate::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
+        bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
+        bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
     };
 
     #[tokio::test]
@@ -353,13 +355,13 @@ mod tests {
             .authorization_bearer(&user_a_key)
             .json(&serde_json::json!({ "frozen_at": "2026-07-30T00:02:00Z" }))
             .await
-            .json::<crate::eval::store::EvalSnapshot>();
+            .json::<bitrouter_ai::eval::EvalSnapshot>();
         let snapshot_b = server
             .post("/v1/evals/snapshots")
             .authorization_bearer(&user_b_key)
             .json(&serde_json::json!({ "frozen_at": "2026-07-30T00:02:00Z" }))
             .await
-            .json::<crate::eval::store::EvalSnapshot>();
+            .json::<bitrouter_ai::eval::EvalSnapshot>();
         assert_ne!(snapshot_a.evidence_root, snapshot_b.evidence_root);
         server
             .get(&format!("/v1/evals/snapshots/{}", snapshot_a.evidence_root))

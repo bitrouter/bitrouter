@@ -4,8 +4,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
 use crate::workflow_state::ir::WorkflowIdentity;
+use {
+    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
+    bitrouter_ai::eval::ExperimentAssignmentUnit,
+};
 
 const ASSIGNMENT_DOMAIN: &str = "bitrouter.route-exploration.assignment.v1";
 

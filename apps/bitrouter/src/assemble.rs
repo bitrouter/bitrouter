@@ -2492,13 +2492,13 @@ mod trajectory_assembly_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{Config, build_app_with_path};
-    use crate::eval::types::EvalScope;
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, deterministic_yaml, semantic_digest,
     };
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::workflow_state::predictive::compiled_predictor_contract;
+    use bitrouter_ai::eval::EvalScope;
 
     async fn assemble_named_policy(
         trajectory_enabled: bool,

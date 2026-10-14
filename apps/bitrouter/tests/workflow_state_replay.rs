@@ -10,7 +10,6 @@ use bitrouter::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, Reliabi
 use bitrouter::adequacy::store::AdequacyStore;
 use bitrouter::config;
 use bitrouter::eval::store::EvalStore;
-use bitrouter::eval::types::AdmissionStatus;
 use bitrouter::gateway::model::protocol::inbound_adapter_for;
 use bitrouter::gateway::routing::signals::NextStepRole;
 use bitrouter::metering::{
@@ -36,6 +35,7 @@ use bitrouter::workflow_state::real_trace::{
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter_ai::eval::AdmissionStatus;
 use bitrouter_ai::types::{ApiProtocol, NormalizedUsage, ReasoningEffort, UsageOrigin};
 use http::HeaderMap;
 use http::HeaderValue;

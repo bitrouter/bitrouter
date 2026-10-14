@@ -4,11 +4,13 @@ use crate::config::EvalAuthorityConfig;
 use crate::config::EvalAuthorityKind;
 use crate::config::EvalConfig;
 use anyhow::Result;
-use serde::Serialize;
+use bitrouter_ai::eval::AdmissionOutcome;
 
 use super::store::{EvalStore, ResultInsertOutcome};
-use super::types::{
-    AdmissionStatus, EvalVerdict, EvaluationResult, EvaluatorKind, validate_result_for_subject,
+use {
+    super::types::validate_result_for_subject, bitrouter_ai::eval::AdmissionStatus,
+    bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
+    bitrouter_ai::eval::EvaluatorKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,14 +28,6 @@ impl SubmissionPrincipal {
             Self::ApiKey { user_id, .. } => user_id,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AdmissionOutcome {
-    pub result_id: String,
-    pub status: AdmissionStatus,
-    pub reason: String,
-    pub duplicate: bool,
 }
 
 pub async fn submit(
@@ -329,8 +323,10 @@ mod tests {
     use crate::config::EvalAuthorityKind;
 
     use super::*;
-    use crate::eval::types::{
-        EVAL_SCHEMA_VERSION, EvalScope, EvalSubject, EvaluatorIdentity, evidence_digest,
+    use {
+        crate::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
+        bitrouter_ai::eval::EvaluatorIdentity,
     };
 
     async fn service() -> anyhow::Result<crate::eval::EvalService> {
@@ -473,13 +469,13 @@ mod tests {
         operational.metrics = BTreeMap::from([
             (
                 "trajectory.request_count".into(),
-                crate::eval::types::MetricValue::new(1, crate::eval::types::MetricUnit::Count),
+                bitrouter_ai::eval::MetricValue::new(1, bitrouter_ai::eval::MetricUnit::Count),
             ),
             (
                 "latency.ms".into(),
-                crate::eval::types::MetricValue::new(
+                bitrouter_ai::eval::MetricValue::new(
                     100,
-                    crate::eval::types::MetricUnit::Milliseconds,
+                    bitrouter_ai::eval::MetricUnit::Milliseconds,
                 ),
             ),
         ]);
@@ -518,7 +514,7 @@ mod tests {
         );
         untrusted.metrics.insert(
             "quality.pass".into(),
-            crate::eval::types::MetricValue::new(1, crate::eval::types::MetricUnit::Boolean),
+            bitrouter_ai::eval::MetricValue::new(1, bitrouter_ai::eval::MetricUnit::Boolean),
         );
         assert!(super::validate_builtin_trajectory_result(&untrusted).is_err());
         untrusted.metrics.clear();

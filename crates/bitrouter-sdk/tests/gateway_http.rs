@@ -525,6 +525,78 @@ async fn a_truncated_error_body_preserves_the_known_http_failure() -> TestResult
 }
 
 #[tokio::test]
+async fn evaluation_errors_keep_http_metadata_instead_of_an_empty_ledger() -> TestResult {
+    for case in 0..3 {
+        let payload = match case {
+            0 => json!({"error":"private evaluation detail"}).to_string(),
+            1 => "malformed private response".into(),
+            _ => "x".repeat(2048),
+        };
+        let server = serve(vec![Reply {
+            status: 404,
+            headers: vec![
+                ("www-authenticate", "Bearer".into()),
+                ("retry-after", "3".into()),
+            ],
+            chunks: vec![payload.into_bytes()],
+        }])
+        .await?;
+        let client = GatewayClient::with_options(
+            &server.url,
+            Some("service-key"),
+            TransportOptions {
+                max_response_bytes: 1024,
+                ..Default::default()
+            },
+        )?;
+        let error = client
+            .eval_status()
+            .await
+            .err()
+            .ok_or("missing evaluation HTTP error")?;
+        assert!(!format!("{error:?}").contains("private"));
+        let Error::Evaluation(failure) = error else {
+            return Err("evaluation failure lost its HTTP envelope".into());
+        };
+        assert_eq!(failure.status, 404);
+        assert_eq!(failure.headers["www-authenticate"], "Bearer");
+        assert_eq!(failure.headers["retry-after"], "3");
+        assert_eq!(failure.body.is_some(), case == 0);
+        assert_eq!(matches!(failure.body_error, Some(Error::Limit)), case == 2);
+        assert_eq!(server.records.lock().await.len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn evaluation_resource_ids_cannot_change_the_service_path_or_prefix() -> TestResult {
+    let server = serve(vec![Reply {
+        status: 404,
+        headers: vec![],
+        chunks: vec![br#"{"error":"not found"}"#.to_vec()],
+    }])
+    .await?;
+    let client = GatewayClient::new(&format!("{}/proxy/v1", server.url), Some("service-key"))?;
+    for id in ["", ".", ".."] {
+        assert!(matches!(
+            client.eval_subject(id).await,
+            Err(Error::Request(_))
+        ));
+    }
+    assert!(server.records.lock().await.is_empty());
+    let result = client.eval_subject("eval/with ?#%").await;
+    assert!(matches!(result, Err(Error::Evaluation(failure)) if failure.status == 404));
+    let records = server.records.lock().await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].path,
+        "/proxy/v1/evals/subjects/eval%2Fwith%20%3F%23%25"
+    );
+    assert_eq!(records[0].credential.as_deref(), Some("Bearer service-key"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_terminal_response_event_requires_its_response_status() -> TestResult {
     let server = serve(vec![Reply::sse(
         "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",

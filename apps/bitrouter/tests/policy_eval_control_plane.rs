@@ -7,10 +7,6 @@ use bitrouter::eval::settlement::{
     EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
 };
 use bitrouter::eval::store::EvalStore;
-use bitrouter::eval::types::{
-    EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
-    EvaluatorIdentity, EvaluatorKind, evidence_digest,
-};
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::model::target::AuthScheme;
 use bitrouter::gateway::observability::event::EventBus;
@@ -23,6 +19,13 @@ use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, s
 use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
+};
+use {
+    bitrouter::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+    bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+    bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+    bitrouter_ai::eval::EvaluatorKind,
 };
 
 fn base_lock() -> PolicyLock {

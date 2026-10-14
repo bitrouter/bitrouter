@@ -23,6 +23,7 @@ pub mod control;
 pub mod conversion;
 pub mod decisions;
 pub mod error;
+pub mod eval;
 pub mod event;
 pub mod extension;
 pub mod gateway;

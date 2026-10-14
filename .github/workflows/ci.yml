@@ -420,6 +420,8 @@ jobs:
                 'pub struct bitrouter_ai::control::status::StatusReport'
                 'pub enum bitrouter_ai::control::action::Action'
                 'pub struct bitrouter_ai::control::error::ErrorEnvelope'
+                'pub struct bitrouter_ai::eval::EvalSubject'
+                'pub struct bitrouter_ai::eval::AdmissionOutcome'
               )
               forbidden='bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else
@@ -430,6 +432,8 @@ jobs:
                 'pub struct bitrouter_sdk::control::ControlClient'
                 'bitrouter_sdk::control::ControlClient::reload'
                 'bitrouter_sdk::control::ControlClient::operation'
+                'bitrouter_sdk::gateway::GatewayClient::submit_eval_result'
+                'bitrouter_sdk::gateway::GatewayClient::eval_snapshot'
               )
               forbidden='bitrouter::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             fi

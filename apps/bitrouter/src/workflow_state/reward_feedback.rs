@@ -6,15 +6,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::eval::EvalService;
 use crate::eval::admission::SubmissionPrincipal;
-use crate::eval::types::{
-    EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
-    EvaluatorIdentity, EvaluatorKind, EvidenceItem, MetricUnit, MetricValue, canonical_digest,
-    evidence_digest,
-};
 use crate::workflow_state::archive::{
     RequestTransportOutcome, SemanticPolicyTransitionCandidate, SemanticSettlementOutcome,
 };
 use crate::workflow_state::predictive::PredictiveRouteProjection;
+use {
+    crate::eval::types::canonical_digest, crate::eval::types::evidence_digest,
+    bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
+    bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
+    bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
+    bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
+    bitrouter_ai::eval::EvidenceItem, bitrouter_ai::eval::MetricUnit,
+    bitrouter_ai::eval::MetricValue,
+};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RewardEvalImportSummary {
@@ -151,7 +155,7 @@ pub async fn import_semantic_reward_feedback(
         let outcome = service
             .submit(result, SubmissionPrincipal::LocalOperator)
             .await?;
-        if outcome.status == crate::eval::types::AdmissionStatus::Admitted {
+        if outcome.status == bitrouter_ai::eval::AdmissionStatus::Admitted {
             summary.admitted_count += 1;
             summary.eval_ids.push(eval_id);
         } else {

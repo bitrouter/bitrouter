@@ -92,8 +92,26 @@ report is not a completed reload. If submission or polling fails,
 starting another reload with a new identity. Callers that persist their own
 request identity can use `submit_reload` and `operation` directly.
 
+The existing evaluation exchange uses `GatewayClient` on the inference listener:
+`put_eval_subject`, `eval_subjects`, `eval_subject`, `submit_eval_result`,
+`freeze_eval_snapshot`, `eval_snapshot` and `eval_status`. Inputs and receipts
+live in `bitrouter_ai::eval`. Supply a virtual service API key; a control bearer
+does not authorize these endpoints. Omit credentials only for a service
+explicitly configured with `skip_auth`. The service owns tenant isolation,
+evidence validation, evaluator admission and snapshot identity; receiving a
+result receipt does not mean that the result was admitted. Inspect its status.
+The SDK does not calculate policy/evidence digests or publish policy artifacts.
+
+Evaluation uses the same bounded HTTP transport and explicit proxy/retry policy
+as generation; it requires no extra client feature. `Error::Evaluation` preserves
+its distinct `{ "error": "message" }` envelope with HTTP status and headers.
+A server without core returns an unavailable endpoint, not an empty ledger.
+An interrupted mutation remains uncertain; the SDK never repeats it implicitly.
+Existing subject/result identities and the server's idempotency rules determine
+whether an explicit later submission is a duplicate.
+
 This package replaces the former server-framework SDK in an alpha breaking
 migration. Server assembly and advanced trusted host adapters have moved to the
-`bitrouter` application. Evaluation and existing core transport clients remain
-pending migration in P0; gateway/control clients do not establish complete core
-HTTP coverage.
+`bitrouter` application. Existing core streaming clients remain pending migration
+in P0; the gateway/control/evaluation methods do not establish complete core HTTP
+coverage.

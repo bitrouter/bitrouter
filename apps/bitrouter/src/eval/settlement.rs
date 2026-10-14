@@ -13,13 +13,16 @@ use serde::{Serialize, Serializer};
 use uuid::Uuid;
 
 use super::store::EvalStore;
-use super::types::{
-    EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject, EvidenceItem,
-    RouteDecisionMeasurement, canonical_digest, evidence_digest,
-};
 use crate::gateway::routing::signals::TaskFamily;
 use crate::workflow_state::predictive::is_task_family_reason_code;
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
+use {
+    super::types::canonical_digest, super::types::evidence_digest,
+    bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
+    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvidenceItem,
+    bitrouter_ai::eval::RouteDecisionMeasurement,
+};
 
 /// Opaque, process-local identity for one pipeline invocation that produced an
 /// evaluable policy decision. Its token and owner never enter serialized event
@@ -764,7 +767,10 @@ mod tests {
         normalized_task_family_reason_codes,
     };
     use crate::eval::store::EvalStore;
-    use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
+    use {
+        bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
+        bitrouter_ai::eval::ExperimentAssignmentUnit,
+    };
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -1050,7 +1056,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         let second = recorder.subject(&decision, &settlement_context())?;
 
-        assert_eq!(first.semantic_digest()?, second.semantic_digest()?);
+        assert_eq!(
+            crate::eval::types::subject_digest(&first)?,
+            crate::eval::types::subject_digest(&second)?
+        );
         Ok(())
     }
 
