@@ -1,0 +1,48 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+error[E0609]: no field `id` on type `&PendingPermissionSnapshot`
+   --> apps/bitrouter/src/goal_runtime/recovery.rs:160:57
+    |
+160 |                     permission_ids.contains(&permission.id),
+    |                                                         ^^ unknown field
+    |
+    = note: available fields are: `permission_id`, `tool_call`, `options`
+
+error[E0609]: no field `id` on type `&supervisor::PendingPermissionSnapshot`
+   --> apps/bitrouter/src/goal_runtime/recovery.rs:160:57
+    |
+160 |                     permission_ids.contains(&permission.id),
+    |                                                         ^^ unknown field
+    |
+    = note: available fields are: `permission_id`, `tool_call`, `options`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `bitrouter` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `bitrouter` (lib test) due to 1 previous error
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter --lib --bin bro --test goals --all-features` exited with code 101

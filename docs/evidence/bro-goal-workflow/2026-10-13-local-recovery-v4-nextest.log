@@ -1,0 +1,24 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20

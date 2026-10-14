@@ -1,0 +1,76 @@
+   Compiling serde_core v1.0.228
+   Compiling smallvec v1.15.2
+   Compiling hashbrown v0.17.1
+   Compiling log v0.4.33
+   Compiling serde_json v1.0.150
+   Compiling either v1.16.0
+   Compiling memchr v2.8.3
+   Compiling bitflags v2.13.0
+   Compiling ref-cast v1.0.25
+   Compiling futures-core v0.3.32
+   Compiling mio v1.2.1
+   Compiling derive_more-impl v2.1.1
+   Compiling strum v0.26.3
+   Compiling parking_lot_core v0.9.12
+   Compiling itertools v0.13.0
+   Compiling rustix v0.38.44
+   Compiling strum v0.28.0
+   Compiling parking_lot v0.12.5
+   Compiling indexmap v2.14.0
+   Compiling signal-hook-mio v0.2.5
+   Compiling crossterm v0.28.1
+   Compiling derive_more v2.1.1
+   Compiling unicode-truncate v1.1.0
+   Compiling ratatui v0.29.0
+   Compiling serde v1.0.228
+   Compiling schemars v1.2.1
+   Compiling ratatui-markdown v0.3.6
+   Compiling serde_with v3.21.0
+   Compiling agent-client-protocol-schema v1.7.0
+   Compiling bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.59s
+────────────
+ Nextest run ID 87d7db53-7676-4fe3-9ed7-806ca2c9030b with nextest profile: default
+    Starting 20 tests across 1 binary (264 tests skipped)
+        PASS [   0.012s] ( 1/20) bitrouter-tui goals::budget::tests::amounts_are_exact_and_ambiguous_or_overflowing_numbers_are_rejected
+        PASS [   0.012s] ( 2/20) bitrouter-tui goals::tests::busy_enter_targets_the_current_goal_and_preserves_the_draft_until_acceptance
+        PASS [   0.012s] ( 3/20) bitrouter-tui goals::tests::allow_requires_loaded_request_and_explicit_deny_remains_available
+        PASS [   0.012s] ( 4/20) bitrouter-tui goals::tests::budget_form_pins_goal_and_limits_without_editing_the_goal_draft
+        PASS [   0.012s] ( 5/20) bitrouter-tui goals::tests::drafts_pending_scope_and_read_positions_are_independent_per_goal
+        PASS [   0.012s] ( 6/20) bitrouter-tui goals::tests::empty_arrows_navigate_but_nonempty_arrows_edit
+        PASS [   0.012s] ( 7/20) bitrouter-tui goals::tests::decision_has_no_default_consent_and_preserves_the_offered_version
+        PASS [   0.012s] ( 8/20) bitrouter-tui goals::tests::decision_browsing_uses_pinned_identities_and_ignores_late_foreign_evidence
+        PASS [   0.012s] ( 9/20) bitrouter-tui goals::tests::acceptance_requires_explicit_confirmation_of_the_pinned_artifact
+        PASS [   0.012s] (10/20) bitrouter-tui goals::tests::directory_filters_use_facts_and_never_start_or_retarget_work
+        FAIL [   0.008s] (11/20) bitrouter-tui goals::tests::external_editor_targets_only_the_visible_goal_composer
+  stdout ───
+
+    running 1 test
+    test goals::tests::external_editor_targets_only_the_visible_goal_composer ... FAILED
+
+    failures:
+
+    failures:
+        goals::tests::external_editor_targets_only_the_visible_goal_composer
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 283 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'goals::tests::external_editor_targets_only_the_visible_goal_composer' (763391) panicked at crates/bitrouter-tui/src/goals/tests.rs:59:5:
+    assertion failed: state.notebooks.get("second").is_none()
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.013s] (12/20) bitrouter-tui goals::tests::right_view_keys_and_paste_cannot_mutate_or_retarget_the_middle
+        PASS [   0.013s] (13/20) bitrouter-tui goals::tests::multiline_paste_shift_enter_and_key_release_do_not_submit
+        PASS [   0.013s] (14/20) bitrouter-tui goals::tests::fullscreen_browsing_preserves_the_pinned_version_read_position_and_draft
+        PASS [   0.013s] (15/20) bitrouter-tui goals::tests::permission_options_stay_visible_when_requests_and_choices_are_long
+        PASS [   0.013s] (16/20) bitrouter-tui goals::tests::snapshots_preserve_selection_and_pin_opened_evidence
+        PASS [   0.013s] (17/20) bitrouter-tui goals::tests::initial_budget_is_part_of_create_and_invalid_forms_cannot_submit
+        PASS [   0.014s] (18/20) bitrouter-tui goals::tests::expanded_readonly_nodes_preserve_status_scope_draft_and_per_goal_state
+        PASS [   0.013s] (19/20) bitrouter-tui goals::tests::rendering_names_readonly_scope_and_neutralizes_terminal_control_data
+        PASS [   0.013s] (20/20) bitrouter-tui goals::tests::selected_directory_and_workflow_rows_remain_visible_in_short_viewports
+────────────
+     Summary [   0.032s] 20 tests run: 19 passed, 1 failed, 264 skipped
+        FAIL [   0.008s] (11/20) bitrouter-tui goals::tests::external_editor_targets_only_the_visible_goal_composer
+error: test run failed

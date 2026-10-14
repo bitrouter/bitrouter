@@ -1,0 +1,59 @@
+   Compiling rustls v0.23.41
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling axoupdater v0.10.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 59.50s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID ec7eb477-e76f-4c2a-9e93-77dd94eef3a5 with nextest profile: default
+    Starting 1 test across 1 binary (3 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty goal_directory_resize_defers_backlog_and_isolates_native_inspection
+        FAIL [  82.252s] (1/1) bitrouter::goal_tui_pty goal_directory_resize_defers_backlog_and_isolates_native_inspection
+  stdout ───
+
+    running 1 test
+    test goal_directory_resize_defers_backlog_and_isolates_native_inspection has been running for over 60 seconds
+    test goal_directory_resize_defers_backlog_and_isolates_native_inspection ... FAILED
+
+    failures:
+
+    failures:
+        goal_directory_resize_defers_backlog_and_isolates_native_inspection
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 82.24s
+
+  stderr ───
+    Error: supervised session request failed: session authorization does not grant the required command scope
+
+  Cancelling due to test failure:
+────────────
+     Summary [  82.264s] 1 test run: 0 passed, 1 failed, 3 skipped
+        FAIL [  82.252s] (1/1) bitrouter::goal_tui_pty goal_directory_resize_defers_backlog_and_isolates_native_inspection
+error: test run failed

@@ -622,7 +622,7 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         .build()?;
     let service = runtime.block_on(setup(&mock, agent, adapter, worker))?;
     let child_pid_path = mock._directory.path().join("code-child.pid");
-    let mut command = shell_command(&mock, None)?;
+    let mut command = shell_command(&mock)?;
     command.args([
         "code",
         agent,

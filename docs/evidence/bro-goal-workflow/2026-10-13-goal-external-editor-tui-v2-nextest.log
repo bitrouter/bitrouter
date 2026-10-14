@@ -1,0 +1,27 @@
+   Compiling bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+────────────
+ Nextest run ID b487c60f-bed8-453d-95e0-6a5c6eb5c511 with nextest profile: default
+    Starting 20 tests across 1 binary (264 tests skipped)
+        PASS [   0.012s] ( 1/20) bitrouter-tui goals::tests::decision_browsing_uses_pinned_identities_and_ignores_late_foreign_evidence
+        PASS [   0.013s] ( 2/20) bitrouter-tui goals::tests::drafts_pending_scope_and_read_positions_are_independent_per_goal
+        PASS [   0.012s] ( 3/20) bitrouter-tui goals::tests::allow_requires_loaded_request_and_explicit_deny_remains_available
+        PASS [   0.012s] ( 4/20) bitrouter-tui goals::tests::decision_has_no_default_consent_and_preserves_the_offered_version
+        PASS [   0.013s] ( 5/20) bitrouter-tui goals::tests::budget_form_pins_goal_and_limits_without_editing_the_goal_draft
+        PASS [   0.013s] ( 6/20) bitrouter-tui goals::tests::busy_enter_targets_the_current_goal_and_preserves_the_draft_until_acceptance
+        PASS [   0.013s] ( 7/20) bitrouter-tui goals::tests::empty_arrows_navigate_but_nonempty_arrows_edit
+        PASS [   0.014s] ( 8/20) bitrouter-tui goals::tests::directory_filters_use_facts_and_never_start_or_retarget_work
+        PASS [   0.014s] ( 9/20) bitrouter-tui goals::tests::acceptance_requires_explicit_confirmation_of_the_pinned_artifact
+        PASS [   0.015s] (10/20) bitrouter-tui goals::budget::tests::amounts_are_exact_and_ambiguous_or_overflowing_numbers_are_rejected
+        PASS [   0.008s] (11/20) bitrouter-tui goals::tests::fullscreen_browsing_preserves_the_pinned_version_read_position_and_draft
+        PASS [   0.009s] (12/20) bitrouter-tui goals::tests::initial_budget_is_part_of_create_and_invalid_forms_cannot_submit
+        PASS [   0.010s] (13/20) bitrouter-tui goals::tests::external_editor_targets_only_the_visible_goal_composer
+        PASS [   0.010s] (14/20) bitrouter-tui goals::tests::expanded_readonly_nodes_preserve_status_scope_draft_and_per_goal_state
+        PASS [   0.009s] (15/20) bitrouter-tui goals::tests::right_view_keys_and_paste_cannot_mutate_or_retarget_the_middle
+        PASS [   0.010s] (16/20) bitrouter-tui goals::tests::multiline_paste_shift_enter_and_key_release_do_not_submit
+        PASS [   0.010s] (17/20) bitrouter-tui goals::tests::rendering_names_readonly_scope_and_neutralizes_terminal_control_data
+        PASS [   0.010s] (18/20) bitrouter-tui goals::tests::permission_options_stay_visible_when_requests_and_choices_are_long
+        PASS [   0.010s] (19/20) bitrouter-tui goals::tests::snapshots_preserve_selection_and_pin_opened_evidence
+        PASS [   0.013s] (20/20) bitrouter-tui goals::tests::selected_directory_and_workflow_rows_remain_visible_in_short_viewports
+────────────
+     Summary [   0.029s] 20 tests run: 20 passed, 264 skipped

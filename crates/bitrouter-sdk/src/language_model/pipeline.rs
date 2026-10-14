@@ -958,7 +958,19 @@ impl Pipeline {
                 routes[index].input_count = Some(outcome);
             }
             plan.routes = routes.to_vec();
-            let admission = match control.plan(plan.clone()).await {
+            let reservations = routes
+                .iter()
+                .zip(chain)
+                .map(|(route, target)| {
+                    self.native_cost_estimator.as_ref().and_then(|estimator| {
+                        estimator.reservation_for_attempt(route, &plan.prompt, ctx, target)
+                    })
+                })
+                .collect();
+            let admission = match control
+                .plan_with_token_reservations(plan.clone(), reservations)
+                .await
+            {
                 Ok(admission) => admission,
                 Err(error) => {
                     if rebuild_round == 0
@@ -2359,8 +2371,19 @@ impl Pipeline {
             self.wait_before_fallback(dispatched).await;
             dispatched += 1;
             self.observe_hop_start(ctx, target).await;
-            if let Some((control, _)) = attempt_control
-                && let Err(error) = control.before_attempt(ctx.request_id(), index).await
+            if let Some((control, route)) = attempt_control
+                && let Err(error) = control
+                    .before_attempt_with_token_reservation(
+                        ctx.request_id(),
+                        index,
+                        self.native_cost_estimator
+                            .as_ref()
+                            .and_then(|estimator| {
+                                estimator.reservation_for_attempt(route, prompt, ctx, target)
+                            })
+                            .as_ref(),
+                    )
+                    .await
             {
                 self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
                     .await;

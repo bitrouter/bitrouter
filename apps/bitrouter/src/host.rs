@@ -494,6 +494,9 @@ async fn serve_with_options(
             },
             daemon::LocalControlOptions {
                 administration: Some(administration),
+                goals: Some(Arc::new(bitrouter_orchestrator::goal::GoalService::new(
+                    Arc::new(crate::goal_store::DatabaseGoalStore::new(assembled.db.clone())),
+                ))),
                 gate: handoff_gate.clone(),
                 cli_owned,
             },

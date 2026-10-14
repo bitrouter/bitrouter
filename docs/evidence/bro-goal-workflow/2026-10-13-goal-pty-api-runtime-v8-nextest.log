@@ -1,0 +1,475 @@
+   Compiling cfg-if v1.0.4
+   Compiling pin-project-lite v0.2.17
+   Compiling memchr v2.8.3
+   Compiling futures-core v0.3.32
+   Compiling libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling log v0.4.33
+   Compiling scopeguard v1.2.0
+   Compiling itoa v1.0.18
+   Compiling once_cell v1.21.4
+   Compiling lock_api v0.4.14
+   Compiling parking_lot_core v0.9.12
+   Compiling futures-io v0.3.32
+   Compiling allocator-api2 v0.2.21
+   Compiling equivalent v1.0.2
+   Compiling bytes v1.12.1
+   Compiling futures-sink v0.3.32
+   Compiling slab v0.4.12
+   Compiling tracing-core v0.1.36
+   Compiling foldhash v0.2.0
+   Compiling futures-channel v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling zmij v1.0.21
+   Compiling hashbrown v0.17.1
+   Compiling typenum v1.20.1
+   Compiling libm v0.2.16
+   Compiling futures-util v0.3.32
+   Compiling tracing v0.1.44
+   Compiling num-traits v0.2.19
+   Compiling subtle v2.6.1
+   Compiling serde_json v1.0.150
+   Compiling errno v0.3.14
+   Compiling mio v1.2.1
+   Compiling socket2 v0.6.4
+   Compiling signal-hook-registry v1.4.8
+   Compiling zerofrom v0.1.8
+   Compiling stable_deref_trait v1.2.1
+   Compiling thiserror v2.0.18
+   Compiling yoke v0.8.3
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling zerocopy v0.8.54
+   Compiling zerovec v0.11.6
+   Compiling getrandom v0.2.17
+   Compiling writeable v0.6.3
+   Compiling const-oid v0.9.6
+   Compiling litemap v0.8.2
+   Compiling crossbeam-utils v0.8.22
+   Compiling generic-array v0.14.9
+   Compiling zerotrie v0.2.4
+   Compiling utf8_iter v1.0.4
+   Compiling icu_normalizer_data v2.2.0
+   Compiling icu_properties_data v2.2.0
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling icu_locale_core v2.2.0
+   Compiling icu_collections v2.2.0
+   Compiling aws-lc-sys v0.42.0
+   Compiling fnv v1.0.7
+   Compiling ring v0.17.14
+   Compiling indexmap v2.14.0
+   Compiling bitflags v2.13.0
+   Compiling form_urlencoded v1.2.2
+   Compiling http v1.4.2
+   Compiling base64 v0.22.1
+   Compiling smallvec v1.15.2
+   Compiling icu_provider v2.2.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.6
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling rustls-pki-types v1.15.0
+   Compiling digest v0.10.7
+   Compiling parking_lot v0.12.5
+   Compiling ryu v1.0.23
+   Compiling untrusted v0.9.0
+   Compiling tokio v1.52.3
+   Compiling spin v0.9.8
+   Compiling parking v2.2.1
+   Compiling http-body v1.0.1
+   Compiling concurrent-queue v2.5.0
+   Compiling atomic-waker v1.1.2
+   Compiling httparse v1.10.1
+   Compiling lazy_static v1.5.0
+   Compiling strsim v0.11.1
+   Compiling getrandom v0.3.4
+   Compiling serde_urlencoded v0.7.1
+   Compiling idna_adapter v1.2.2
+   Compiling cpufeatures v0.2.17
+   Compiling idna v1.1.0
+   Compiling tower-service v0.3.3
+   Compiling core-foundation-sys v0.8.7
+   Compiling event-listener v5.4.1
+   Compiling futures-executor v0.3.32
+   Compiling try-lock v0.2.5
+   Compiling regex-syntax v0.8.11
+   Compiling ppv-lite86 v0.2.21
+   Compiling url v2.5.8
+   Compiling want v0.3.1
+   Compiling httpdate v1.0.3
+   Compiling http-body-util v0.1.3
+   Compiling aho-corasick v1.1.4
+   Compiling sync_wrapper v1.0.2
+   Compiling ipnet v2.12.0
+   Compiling tower-layer v0.3.3
+   Compiling rand_core v0.10.1
+   Compiling getrandom v0.4.3
+   Compiling anyhow v1.0.103
+   Compiling sha1 v0.10.7
+   Compiling num-integer v0.1.46
+   Compiling unicode-segmentation v1.13.3
+   Compiling ref-cast v1.0.25
+   Compiling rand_core v0.9.5
+   Compiling fastrand v2.4.1
+   Compiling foldhash v0.1.5
+   Compiling hashbrown v0.15.5
+   Compiling rand_chacha v0.9.0
+   Compiling core-foundation v0.10.1
+   Compiling security-framework-sys v2.17.0
+   Compiling either v1.16.0
+   Compiling hybrid-array v0.4.13
+   Compiling regex-automata v0.4.15
+   Compiling rustix v1.1.4
+   Compiling security-framework v3.7.0
+   Compiling rand v0.9.5
+   Compiling num-iter v0.1.46
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling convert_case v0.10.0
+   Compiling futures v0.3.32
+   Compiling darling_core v0.23.0
+   Compiling rand_core v0.6.4
+   Compiling mime v0.3.17
+   Compiling const-oid v0.10.2
+   Compiling base64ct v1.8.3
+   Compiling utf8parse v0.2.2
+   Compiling derive_more-impl v2.1.1
+   Compiling pem-rfc7468 v0.7.0
+   Compiling futures-lite v2.6.1
+   Compiling tokio-util v0.7.18
+   Compiling tower v0.5.3
+   Compiling tower-http v0.6.11
+   Compiling hex v0.4.3
+   Compiling h2 v0.4.15
+   Compiling tokio-stream v0.1.18
+   Compiling data-encoding v2.11.0
+   Compiling dyn-clone v1.0.20
+   Compiling anstyle v1.0.14
+   Compiling schemars v1.2.1
+   Compiling der v0.7.10
+   Compiling rand_chacha v0.3.1
+   Compiling derive_more v2.1.1
+   Compiling darling_macro v0.23.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling iana-time-zone v0.1.65
+   Compiling webpki-roots v1.0.8
+   Compiling darling v0.23.0
+   Compiling crc-catalog v2.5.0
+   Compiling tinyvec_macros v0.1.1
+   Compiling unicode-width v0.1.14
+   Compiling crc v3.4.0
+   Compiling tinyvec v1.12.0
+   Compiling webpki-roots v0.26.11
+   Compiling spki v0.7.3
+   Compiling async-io v2.6.0
+   Compiling chrono v0.4.45
+   Compiling rand v0.8.7
+   Compiling serde_with_macros v3.21.0
+   Compiling tungstenite v0.29.0
+   Compiling polling v3.11.0
+   Compiling anstyle-parse v1.0.0
+   Compiling hashlink v0.10.0
+   Compiling uuid v1.23.4
+   Compiling chacha20 v0.10.1
+   Compiling sha2 v0.10.9
+   Compiling futures-intrusive v0.5.0
+   Compiling crossbeam-queue v0.3.13
+   Compiling cmov v0.5.4
+   Compiling unicode-width v0.2.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling num-bigint-dig v0.8.6
+   Compiling serde_with v3.21.0
+   Compiling anstream v1.0.0
+   Compiling ctutils v0.4.2
+   Compiling ahash v0.8.12
+   Compiling strum v0.28.0
+   Compiling rand v0.10.2
+   Compiling tokio-tungstenite v0.29.0
+   Compiling unicode-normalization v0.1.25
+   Compiling pkcs8 v0.10.2
+   Compiling matchers v0.2.0
+   Compiling axum-core v0.5.6
+   Compiling sharded-slab v0.1.7
+   Compiling hmac v0.12.1
+   Compiling darling_core v0.20.11
+   Compiling tracing-serde v0.2.0
+   Compiling hyper v1.10.1
+   Compiling atoi v2.0.0
+   Compiling serde_path_to_error v0.1.20
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.10
+   Compiling unicode-properties v0.1.4
+   Compiling matchit v0.8.4
+   Compiling nu-ansi-term v0.50.3
+   Compiling clap_lex v1.1.0
+   Compiling shell-words v1.1.1
+   Compiling unicode-bidi v0.3.18
+   Compiling tracing-subscriber v0.3.23
+   Compiling clap_builder v4.6.0
+   Compiling pin-project v1.1.13
+   Compiling async-stream v0.3.6
+   Compiling hkdf v0.12.4
+   Compiling stringprep v0.1.5
+   Compiling hyper-util v0.1.20
+   Compiling async-signal v0.2.14
+   Compiling pkcs1 v0.7.5
+   Compiling nix v0.31.3
+   Compiling digest v0.11.3
+   Compiling agent-client-protocol-schema v1.7.0
+   Compiling libsqlite3-sys v0.30.1
+   Compiling async-lock v3.4.2
+   Compiling async-channel v2.5.0
+   Compiling signature v2.2.0
+   Compiling piper v0.2.5
+   Compiling darling_macro v0.20.11
+   Compiling md-5 v0.10.6
+   Compiling dotenvy v0.15.7
+   Compiling async-task v4.7.1
+   Compiling minimal-lexical v0.2.1
+   Compiling axum v0.8.9
+   Compiling whoami v1.6.1
+   Compiling fixedbitset v0.5.7
+   Compiling yansi v1.0.1
+   Compiling byteorder v1.5.0
+   Compiling static_assertions v1.1.0
+   Compiling signal-hook v0.3.18
+   Compiling futures-concurrency v7.7.1
+   Compiling nom v7.1.3
+   Compiling blocking v1.6.2
+   Compiling rsa v0.9.10
+   Compiling darling v0.20.11
+   Compiling clap v4.6.1
+   Compiling async-process v2.5.0
+   Compiling regex v1.13.0
+   Compiling num-bigint v0.4.8
+   Compiling darling_core v0.24.0
+   Compiling flume v0.11.1
+   Compiling opentelemetry v0.32.0
+   Compiling open v5.4.2
+   Compiling cpufeatures v0.3.0
+   Compiling vte v0.14.1
+   Compiling encoding_rs v0.8.35
+   Compiling home v0.5.12
+   Compiling arraydeque v0.5.1
+   Compiling rustc-hash v2.1.3
+   Compiling typeid v1.0.3
+   Compiling rustix v0.38.44
+   Compiling granit-parser v0.0.7
+   Compiling num-rational v0.4.2
+   Compiling rmcp v3.3.0
+   Compiling strip-ansi-escapes v0.2.1
+   Compiling encoding_rs_io v0.1.7
+   Compiling sha2 v0.11.0
+   Compiling process-wrap v10.0.0
+   Compiling eventsource-stream v0.2.3
+   Compiling agent-client-protocol-trace-viewer v2.0.0 (https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc)
+   Compiling strum v0.26.3
+   Compiling sea-query-derive v0.4.3
+   Compiling annotate-snippets v0.12.5
+   Compiling sse-stream v0.2.4
+   Compiling ordered-float v4.6.0
+   Compiling num-complex v0.4.6
+   Compiling same-file v1.0.6
+   Compiling darling_macro v0.24.0
+   Compiling nohash-hasher v0.2.0
+   Compiling base64 v0.23.0
+   Compiling sea-query v0.32.7
+   Compiling erased-serde v0.4.10
+   Compiling num v0.4.3
+   Compiling darling v0.24.0
+   Compiling serde-saphyr v0.0.29
+   Compiling crossbeam-epoch v0.9.20
+   Compiling walkdir v2.5.0
+   Compiling miette v7.6.0
+   Compiling zstd-sys v2.1.1+zstd.1.5.7
+   Compiling signal-hook-mio v0.2.5
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling prost-derive v0.14.4
+   Compiling castaway v0.2.4
+   Compiling itertools v0.13.0
+   Compiling pxfm v0.1.30
+   Compiling instability v0.3.13
+   Compiling crossterm v0.28.1
+   Compiling camino v1.2.4
+   Compiling prost v0.14.4
+   Compiling crossbeam-deque v0.8.7
+   Compiling compact_str v0.8.2
+   Compiling unicode-truncate v1.1.0
+   Compiling nix v0.30.1
+   Compiling ouroboros_macro v0.18.5
+   Compiling opentelemetry_sdk v0.32.1
+   Compiling moxcms v0.8.1
+   Compiling lru v0.12.5
+   Compiling email_address v0.2.9
+   Compiling bstr v1.13.1
+   Compiling agent-client-protocol v2.0.0 (https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc)
+   Compiling byteorder-lite v0.1.0
+   Compiling bit-vec v0.8.0
+   Compiling aliasable v0.1.3
+   Compiling borrow-or-share v0.2.4
+   Compiling cassowary v0.3.0
+   Compiling bytemuck v1.25.1
+   Compiling fluent-uri v0.4.1
+   Compiling bit-set v0.8.0
+   Compiling ratatui v0.29.0
+   Compiling ouroboros v0.18.5
+   Compiling unicode-general-category v1.1.0
+   Compiling globset v0.4.19
+   Compiling opentelemetry-proto v0.32.0
+   Compiling tempfile v3.27.0
+   Compiling image v0.25.10
+   Compiling semver v1.0.28
+   Compiling winnow v1.0.3
+   Compiling vsimd v0.8.0
+   Compiling similar v3.1.2
+   Compiling num-conv v0.2.2
+   Compiling micromap v0.3.0
+   Compiling hashbrown v0.14.5
+   Compiling agent-client-protocol-conductor v2.0.0 (https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc)
+   Compiling time-core v0.1.9
+   Compiling outref v0.5.2
+   Compiling uuid-simd v0.8.0
+   Compiling time-macros v0.2.31
+   Compiling dashmap v6.2.1
+   Compiling referencing v0.47.0
+   Compiling thiserror v1.0.69
+   Compiling typetag v0.2.22
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling axotag v0.3.0
+   Compiling ratatui-markdown v0.3.6
+   Compiling homedir v0.3.6
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling ignore v0.4.32
+   Compiling fancy-regex v0.18.0
+   Compiling axoprocess v0.2.1
+   Compiling fraction v0.15.4
+   Compiling tracing-opentelemetry v0.33.0
+   Compiling jsonschema-regex v0.47.0
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_writer v1.1.1+spec-1.1.0
+   Compiling bytecount v0.6.9
+   Compiling powerfmt v0.2.0
+   Compiling opentelemetry-semantic-conventions v0.32.1
+   Compiling num-cmp v0.1.0
+   Compiling inventory v0.3.24
+   Compiling deranged v0.5.8
+   Compiling toml v1.1.2+spec-1.1.0
+   Compiling cookie v0.18.1
+   Compiling jsonschema v0.47.0
+   Compiling bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+   Compiling nix v0.28.0
+   Compiling hmac v0.13.0
+   Compiling rand_distr v0.6.0
+   Compiling keyring v3.6.3
+   Compiling num_cpus v1.17.0
+   Compiling arrayvec v0.7.8
+   Compiling diff v0.1.13
+   Compiling deadpool-runtime v0.1.4
+   Compiling vte v0.11.1
+   Compiling deadpool v0.12.3
+   Compiling pretty_assertions v1.4.1
+   Compiling time v0.3.53
+   Compiling expect-json v1.11.0
+   Compiling filedescriptor v0.8.3
+   Compiling zstd-safe v7.3.0
+   Compiling rust-multipart-rfc7578_2 v0.9.0
+   Compiling assert-json-diff v2.0.2
+   Compiling reserve-port v2.5.0
+   Compiling serial2 v0.2.38
+   Compiling zstd v0.13.3
+   Compiling downcast-rs v1.2.1
+   Compiling bytesize v2.4.2
+   Compiling wiremock v0.6.5
+   Compiling vt100 v0.15.2
+   Compiling portable-pty v0.9.0
+   Compiling axum-test v21.0.0
+   Compiling aws-lc-rs v1.17.1
+   Compiling rustls v0.23.41
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 11s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 8bdbaed8-5ff1-4cab-9ad5-ba9f4e3159e2 with nextest profile: default
+    Starting 36 tests across 4 binaries (1755 tests skipped)
+        PASS [   0.024s] ( 1/36) bitrouter goal_code::tests::old_receipt_with_identical_text_cannot_clear_a_different_pending_draft
+        PASS [   0.025s] ( 2/36) bitrouter goal_code::tests::receipt_recovery_rotates_lanes_without_replaying_or_replacing_identity
+        PASS [   0.026s] ( 3/36) bitrouter goal_code::tests::unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop
+        PASS [   0.052s] ( 4/36) bitrouter goal_code::tests::outbox_retains_exact_identity_scope_and_text_without_replaying
+        PASS [   0.053s] ( 5/36) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.054s] ( 6/36) bitrouter goal_code::tests::changed_protocol_outbox_is_preserved_without_reinterpreting_or_replaying
+        PASS [   0.081s] ( 7/36) bitrouter goal_code::tests::actual_database_receipt_must_match_the_original_client_payload
+        PASS [   0.083s] ( 8/36) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        PASS [   0.085s] ( 9/36) bitrouter goal_code::tests::real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        PASS [  94.903s] (10/36) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        PASS [  94.942s] (11/36) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        PASS [  94.972s] (12/36) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        PASS [   0.079s] (13/36) bitrouter::code_tui_pty background::remote_context_rejects_background_and_session_mutations_before_local_start
+        PASS [  95.126s] (14/36) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        PASS [  95.538s] (15/36) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        PASS [  95.857s] (16/36) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        PASS [  96.392s] (17/36) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [   1.367s] (18/36) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        PASS [   1.591s] (19/36) bitrouter::code_tui_pty background_cli_returns_before_settlement_and_run_survives_client_exit
+        PASS [   1.715s] (20/36) bitrouter::code_tui_pty background::schema_failure_never_becomes_ready_for_review
+        PASS [   0.022s] (21/36) bitrouter::code_tui_pty pty_runner_reads_writes_and_resizes_without_a_sleep
+        PASS [   1.283s] (22/36) bitrouter::code_tui_pty evolution::session_api_failed_settings_retain_the_last_confirmed_value
+        PASS [   1.939s] (23/36) bitrouter::code_tui_pty evolution::evolution_api_checkpoint_history_keeps_current_reward_and_original_revisions
+        PASS [   1.159s] (24/36) bitrouter::code_tui_pty evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+        PASS [   1.066s] (25/36) bitrouter::code_tui_pty mock_acp_minimal_lifecycle_logs_exact_multiline_prompt_text
+        PASS [   1.009s] (26/36) bitrouter::code_tui_pty mock_acp_models_delayed_cancellation_and_overlapping_permissions
+        PASS [   2.439s] (27/36) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        PASS [   1.772s] (28/36) bitrouter::code_tui_pty standalone_agents_and_attach_restore_terminal_without_stopping_runs
+        PASS [  98.714s] (29/36) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [   5.972s] (30/36) bitrouter::native_agent_tui native_api_reports_classifier_generation_and_final_routing_facts
+        PASS [   6.667s] (31/36) bitrouter::native_agent_tui native_api_cold_directory_history_and_open_preserve_context_without_execution
+        PASS [ 104.535s] (32/36) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [ 105.079s] (33/36) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [  10.453s] (34/36) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+        PASS [  10.045s] (35/36) bitrouter::native_agent_tui native_api_approvals_disconnect_queue_context_and_cancel_remain_durable
+        PASS [  14.427s] (36/36) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+────────────
+     Summary [ 111.311s] 36 tests run: 36 passed (10 slow), 1755 skipped
