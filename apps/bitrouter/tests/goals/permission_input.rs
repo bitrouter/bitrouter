@@ -57,6 +57,8 @@ fn proposal(decision_id: &str, option_id: &str) -> Interpretation {
             decision_id: decision_id.into(),
             option_id: option_id.into(),
         }),
+        clarification_kind: None,
+        resolutions: Vec::new(),
         clarification: None,
     }
 }

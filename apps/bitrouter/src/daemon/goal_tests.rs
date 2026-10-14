@@ -52,7 +52,7 @@ async fn goals_local_ipc_retries_original_operation_and_rejects_wrong_protocol()
     let wrong = send_command(
         &socket,
         &DaemonCommand::Goals {
-            protocol: 1,
+            protocol: PROTOCOL_VERSION - 1,
             command: request.clone(),
         },
     )

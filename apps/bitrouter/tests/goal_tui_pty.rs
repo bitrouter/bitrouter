@@ -381,7 +381,7 @@ async fn request(socket: &Path, command: GoalCommand) -> Result<GoalReply> {
     let reply = send_command(
         socket,
         &DaemonCommand::Goals {
-            protocol: 2,
+            protocol: bitrouter_orchestrator::goal::PROTOCOL_VERSION,
             command,
         },
     )
@@ -624,6 +624,26 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
             OperationKind::Input { text,task_reference:None } if text == query)).count() == 2,
             "history did not submit the same original bytes exactly twice");
         ensure!(running(&replayed) == 2 && replayed.requirements_revision == 1 && replayed.run_intent == RunIntent::Run);
+        let ambiguous = "/task left FIXTURE_NEW_LEFT_RULE: BAD_RESOURCE_CHANGE_FIXTURE select an unavailable server";
+        terminal.send(format!("\x1b[200~{ambiguous}\x1b[201~").as_bytes())?;
+        terminal.send(b"\r")?;
+        let questioned = wait_goal(&socket,&id,|goal|goal.inputs.latest.as_ref().is_some_and(|result|result.clarification.is_some())).await?;
+        let question_id = questioned.inputs.latest.as_ref().ok_or_else(||anyhow::anyhow!("missing actual question"))?.input_id.clone();
+        ensure!(questioned.inputs.completion_waits_for_input());
+        terminal.wait("Resource changes were not accepted")?;
+        let withdrawal = format!("/input {question_id} /withdraw");
+        terminal.send(format!("\x1b[200~{withdrawal}\x1b[201~").as_bytes())?;
+        terminal.send(b"\r")?;
+        let withdrawn = wait_goal(&socket,&id,|goal|goal.inputs.unresolved_inputs().is_empty()
+            && goal.inputs.latest.as_ref().is_some_and(|result|result.resolutions.iter().any(|resolution|resolution.input_id == question_id))).await?;
+        ensure!(withdrawn.requirements_revision == questioned.requirements_revision && withdrawn.run_intent == RunIntent::Run && running(&withdrawn) == 2);
+        ensure!(withdrawn.control_source_revision == questioned.control_source_revision && withdrawn.budget.limits == questioned.budget.limits);
+        let withdrawal_history = history(&socket,&id,withdrawn.revision).await?;
+        ensure!(withdrawal_history.iter().any(|operation|matches!(&operation.kind,OperationKind::InputWithdrawn {input_id,..} if input_id == &question_id)));
+        ensure!(!withdrawal_history.iter().any(|operation|matches!(&operation.kind,OperationKind::Input {text,..} if text == &withdrawal)));
+        let captured = backend.received_requests().await.ok_or_else(||anyhow::anyhow!("missing backend capture"))?;
+        ensure!(!captured.iter().any(|request|String::from_utf8_lossy(&request.body).contains(&withdrawal)), "explicit withdrawal was forwarded to a model");
+        terminal.wait("disposition saved: Withdrawn")?;
         terminal.send(b"UNSENT_ACTIVE_DRAFT")?;
         terminal.wait("UNSENT_ACTIVE_DRAFT")?;
         ensure!(!terminal.raw.windows(8).any(|bytes| bytes == b"\x1b[?1049h"), "middle entered alternate screen");
@@ -1059,7 +1079,7 @@ async fn goal_directory_resize_defers_backlog_and_isolates_native_inspection() -
                 let response = send_command(
                     &socket,
                     &DaemonCommand::Goals {
-                        protocol: 2,
+                        protocol: bitrouter_orchestrator::goal::PROTOCOL_VERSION,
                         command: GoalCommand::SetBudget {
                             operation_id: marker.clone(),
                             goal_id: id.clone(),
