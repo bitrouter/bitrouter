@@ -10,7 +10,7 @@ use bitrouter_ai::conversion::ConversionReport;
 use bitrouter_ai::extension::request_check::{Decision, Input};
 ```
 
-The crate contains model content and decision semantics, public wire requests,
+The crate contains model content and decision semantics, public wire requests, responses and stream events, gateway discovery/errors,
 conversion reports, lifecycle events, capability contracts, observation schema
 and published catalog artifact definitions. Serde representation and intrinsic
 field validation stay beside these types. Provider metadata and native payloads

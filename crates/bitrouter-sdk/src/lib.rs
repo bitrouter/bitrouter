@@ -1,6 +1,8 @@
-//! HTTP clients for the BitRouter service.
-//!
-//! Server assembly and inference execution belong to the application. Client
-//! methods are introduced separately after that service ownership migration.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
+
+pub mod error;
+pub mod gateway;
+pub mod stream;
+
+mod transport;

@@ -6,12 +6,25 @@
 
 #![forbid(unsafe_code)]
 
+// Wire payloads may contain opaque replay proofs or provider diagnostics. Keep
+// their default diagnostics as bounded as the existing model content types.
+macro_rules! redacted_contract_debug {
+    ($($name:ty),+ $(,)?) => {$(
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.debug_struct(stringify!($name)).finish_non_exhaustive()
+            }
+        }
+    )+};
+}
+
 pub mod catalog;
 pub mod conversion;
 pub mod decisions;
 pub mod error;
 pub mod event;
 pub mod extension;
+pub mod gateway;
 pub mod observe;
 pub mod protocol;
 pub mod types;

@@ -320,3 +320,124 @@ fn conversion_errors_keep_reports_and_project_request_vs_output_status()
     }
     Ok(())
 }
+
+/// Response DTOs are checked against service codecs, rather than only synthetic
+/// SDK fixtures. No codec or canonical accounting implementation lives in AI.
+#[test]
+fn public_response_contracts_decode_gateway_rendering() -> anyhow::Result<()> {
+    use bitrouter::gateway::model::protocol::OutboundDispatch;
+    use bitrouter_ai::protocol::{
+        chat_completions::ChatResponse, messages::MessagesResponse, responses::ResponsesResponse,
+    };
+    use serde_json::json;
+    let cases = [
+        (
+            ApiProtocol::ChatCompletions,
+            json!({"model":"route","messages":[{"role":"user","content":"hello"}]}),
+            json!({"id":"upstream","model":"native","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11,"prompt_tokens_details":{"cached_tokens":3}}}),
+        ),
+        (
+            ApiProtocol::Messages,
+            json!({"model":"route","messages":[{"role":"user","content":"hello"}]}),
+            json!({"id":"upstream","type":"message","role":"assistant","model":"native","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":6,"output_tokens":2,"cache_read_input_tokens":3}}),
+        ),
+        (
+            ApiProtocol::Responses,
+            json!({"model":"route","input":"hello"}),
+            json!({"id":"upstream","object":"response","model":"native","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[]}]}],"usage":{"input_tokens":9,"output_tokens":2,"total_tokens":11,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":0}}}),
+        ),
+    ];
+    for (protocol, request, response) in cases {
+        let inbound = inbound_adapter_for(&protocol)
+            .ok_or_else(|| anyhow::anyhow!("missing inbound codec"))?;
+        let dispatch = OutboundDispatch::builtin();
+        let (outbound, _) = dispatch
+            .lookup(&protocol)
+            .ok_or_else(|| anyhow::anyhow!("missing outbound codec"))?;
+        let prompt = inbound.parse_request(request)?;
+        let result = outbound.parse_response(response)?;
+        let wire = inbound.render_response(&result, &prompt, "request")?;
+        let round_trip = match protocol {
+            ApiProtocol::ChatCompletions => {
+                serde_json::to_value(serde_json::from_value::<ChatResponse>(wire.clone())?)?
+            }
+            ApiProtocol::Messages => {
+                serde_json::to_value(serde_json::from_value::<MessagesResponse>(wire.clone())?)?
+            }
+            ApiProtocol::Responses => {
+                serde_json::to_value(serde_json::from_value::<ResponsesResponse>(wire.clone())?)?
+            }
+            _ => return Err(anyhow::anyhow!("unexpected protocol")),
+        };
+        assert_eq!(round_trip, wire, "{protocol:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn public_event_contracts_decode_gateway_lifecycle_and_failure_frames() -> anyhow::Result<()> {
+    use bitrouter_ai::{
+        gateway::GatewayErrorEnvelope,
+        protocol::{
+            chat_completions::ChatChunk, messages::MessagesEvent, responses::ResponsesEvent,
+        },
+        types::{FinishReason, StreamPart, Usage},
+    };
+    for protocol in all_protocols() {
+        let adapter =
+            inbound_adapter_for(&protocol).ok_or_else(|| anyhow::anyhow!("missing codec"))?;
+        let mut encoder = adapter.stream_encoder("request", "route");
+        let mut frames = Vec::new();
+        for part in [
+            StreamPart::TextDelta {
+                text: "hello".into(),
+            },
+            StreamPart::Usage {
+                usage: Usage {
+                    prompt_tokens: 9,
+                    completion_tokens: 2,
+                    cache_read_tokens: 3,
+                    ..Default::default()
+                },
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ] {
+            frames.extend(encoder.encode(&part)?);
+        }
+        frames.extend(encoder.finish()?);
+        frames.extend(
+            adapter
+                .stream_encoder("request", "route")
+                .encode_stream_error(&BitrouterError::UpstreamUnavailable.stream_error()),
+        );
+        for frame in frames {
+            let SseFrame::Event { data, .. } = frame else {
+                continue;
+            };
+            if data == "[DONE]" {
+                continue;
+            }
+            let wire: serde_json::Value = serde_json::from_str(&data)?;
+            if wire.get("error").is_some() {
+                let _: GatewayErrorEnvelope = serde_json::from_value(wire)?;
+                continue;
+            }
+            let round_trip = match protocol {
+                ApiProtocol::ChatCompletions => {
+                    serde_json::to_value(serde_json::from_value::<ChatChunk>(wire.clone())?)?
+                }
+                ApiProtocol::Messages => {
+                    serde_json::to_value(serde_json::from_value::<MessagesEvent>(wire.clone())?)?
+                }
+                ApiProtocol::Responses => {
+                    serde_json::to_value(serde_json::from_value::<ResponsesEvent>(wire.clone())?)?
+                }
+                _ => return Err(anyhow::anyhow!("unexpected protocol")),
+            };
+            assert_eq!(round_trip, wire, "{protocol:?}");
+        }
+    }
+    Ok(())
+}

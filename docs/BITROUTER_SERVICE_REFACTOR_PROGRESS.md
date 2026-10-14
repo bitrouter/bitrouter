@@ -62,7 +62,7 @@ the contract move must preserve its bytes.
 | P0 1 Public contracts | In progress | Observation/event/request-check contracts and operation scopes moved to AI; matcher detached from old SDK; legacy adapters moved to application; Observation/capability slice verified; shared control/core DTO extraction remains before their final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation verified; serving-time workflow/policy separation and final public API guards remain |
-| P0 4 HTTP SDK | Pending | Typed gateway/control client and independent process consumer |
+| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE client and public wire response contracts verified; control/eval/core client extraction and independent official-service process consumer remain |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
@@ -249,3 +249,56 @@ existing protocol sketch ignored**). The application-owned configuration schema
 generator passed its unchanged-artifact check. Full P0 feature isolation,
 independent service-client integration, packaging and final validation remain
 open; this stage does not claim live-provider or cross-platform verification.
+
+
+P0 4 now provides the gateway HTTP client, with explicit endpoint/credential
+options, bounded JSON and SSE reads, separate protocol wire responses/events,
+and native Decisions usage. Discovery, health and metrics are included. The
+client disables redirects and retries; environment/system proxies require an
+explicit option so an ambient proxy does not become an implicit service hop.
+It preserves HTTP status/headers even when an error body cannot be consumed.
+Responses failure lifecycle events remain typed terminal responses; top-level
+stream errors and premature EOF are distinct client failures.
+
+Isolated SDK verification passed **16 real HTTP tests** and the README's compiled
+example. These tests use Rust HTTP/TCP fixtures without importing the application.
+They cover stream/nonstream calls, nested metadata, usage, BOM and UTF-8 framing,
+response/event limits, redirects, errors, truncation and a disconnected POST
+that is sent only once. An initial disconnect check passed through an ambient
+system proxy and observed its 502; explicit direct transport made this fixture
+hermetic. This is client transport evidence, not the final independent-process
+acceptance test against the released gateway artifact.
+
+The gateway protocol and boundary run passed **285 tests**, including new
+response/SSE-to-contract round trips and the existing native reasoning fixture
+with explicit nulls. AI's isolated all-feature suite passed **36 tests**.
+AI/SDK strict all-target Clippy and strict workspace Rustdoc passed. The isolated
+normal/build trees retain AI's contract-only dependencies and exclude application,
+server, ORM, ACP, terminal and OTel dependencies from SDK production code.
+
+Independent review identified parser behavior on BOM/invalid UTF-8, native null
+preservation and loss of HTTP metadata after error-body failures. The SDK now uses a private bounded SSE framer with one shared line/event
+byte budget, validates UTF-8, removes only one initial BOM, and retains native
+nullable fields and body-read failures alongside HTTP metadata. New wire DTO
+diagnostics redact opaque payloads. Regression tests exercise each correction.
+
+The existing `sdk-public-api` CI check now renders both AI and SDK with the
+shared pinned nightly/tool. Positive sentinels verify the real contract/client
+surface before runtime-signature and public-reexport checks. The exact CI script
+passed locally against the generated dependency manifests: AI exposes schemars,
+serde_core and serde_json; SDK exposes bitrouter_ai, futures_core, http and
+reqwest. SDK no longer declares server/ORM/ACP/OTel public dependencies. Further
+control/eval/core DTO extraction must preserve these boundaries or deliberately
+review an updated manifest. Full P0 acceptance and the final PR remain open.
+
+
+Focused independent re-review found no remaining actionable issue in the final
+SSE framing, presence-aware DTOs, diagnostic redaction or public API guards.
+The final SDK/AI run passed **16 HTTP tests, 36 contract tests and one SDK
+doctest**; the separate application run again passed **285 tests**. Final
+AI/SDK all-target strict Clippy and strict Rustdoc passed. The final full-workspace all-feature/all-target check also passed. The SDK
+package alone again passed all 16 HTTP tests and its doctest without relying on
+workspace-wide AI schema activation. macOS development linking emitted an
+oversized unwind-table warning for the existing full application, separate from
+source lints and the passing test results. Release performance and final P0
+validation remain open.

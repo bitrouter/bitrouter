@@ -771,7 +771,17 @@ dependencies = [
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.33"
 dependencies = [
+ "async-stream",
+ "axum",
  "bitrouter-ai",
+ "futures-core",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
 ]
 
 [[package]]

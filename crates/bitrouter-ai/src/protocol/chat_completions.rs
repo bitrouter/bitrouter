@@ -270,3 +270,248 @@ impl std::fmt::Debug for ChatMessage {
             .finish()
     }
 }
+
+// Service response shapes follow the Chat Completions wire contract.
+// https://platform.openai.com/docs/api-reference/chat/object
+
+/// A complete gateway Chat Completions response.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatResponse {
+    pub id: String,
+    pub object: String,
+    pub model: String,
+    pub choices: Vec<ChatChoice>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub usage: Option<Option<ChatUsage>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// One complete choice, retaining raw finish reasons.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatChoice {
+    pub index: u64,
+    pub message: ChatOutputMessage,
+    pub finish_reason: Option<String>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Assistant output; media parts and extension data retain their wire shape.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatOutputMessage {
+    pub role: String,
+    pub content: serde_json::Value,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub tool_calls: Option<Option<Vec<ChatToolCall>>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub reasoning_content: Option<Option<String>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Chat token counts; no canonical accounting conversion is performed.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub prompt_tokens_details: Option<Option<ChatPromptTokenDetails>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub completion_tokens_details: Option<Option<ChatCompletionTokenDetails>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Optional detailed prompt token counts.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatPromptTokenDetails {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub cached_tokens: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub cache_write_tokens: Option<Option<u64>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Optional detailed completion token counts.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatCompletionTokenDetails {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub reasoning_tokens: Option<Option<u64>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// One gateway Chat Completions SSE data object, including usage-only chunks.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatChunk {
+    pub id: String,
+    pub object: String,
+    pub model: String,
+    pub choices: Vec<ChatChunkChoice>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub usage: Option<Option<ChatUsage>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// One choice delta; a finish reason does not replace the terminal SSE sentinel.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatChunkChoice {
+    pub index: u64,
+    pub delta: ChatDelta,
+    pub finish_reason: Option<String>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// A partial assistant message; fields retain their original wire meaning.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatDelta {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub role: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub content: Option<Option<serde_json::Value>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub reasoning_content: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub tool_calls: Option<Option<Vec<ChatToolCallDelta>>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// An indexed tool-call delta, without client-side argument assembly.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatToolCallDelta {
+    pub index: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub id: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    #[serde(rename = "type")]
+    pub kind: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub function: Option<Option<ChatFunctionDelta>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Partial function name or JSON arguments.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChatFunctionDelta {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub name: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub arguments: Option<Option<String>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+redacted_contract_debug!(
+    ChatResponse,
+    ChatChoice,
+    ChatOutputMessage,
+    ChatUsage,
+    ChatPromptTokenDetails,
+    ChatCompletionTokenDetails,
+    ChatChunk,
+    ChatChunkChoice,
+    ChatDelta,
+    ChatToolCallDelta,
+    ChatFunctionDelta
+);

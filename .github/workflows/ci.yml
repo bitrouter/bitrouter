@@ -375,52 +375,15 @@ jobs:
   sdk-public-api:
     name: sdk-public-api
     runs-on: ubuntu-latest
-    # The SDK owns the observability contract without owning any renderer of
-    # it, and that only means something while the hard constraint holds:
-    #
-    #   No `opentelemetry*` or `tracing_opentelemetry` type may appear in any
-    #   public `bitrouter-sdk` signature.
-    #
-    # `feature-isolation` now proves the stronger version — the stack is not in
-    # the SDK's tree at any feature combination — so this job's `opentelemetry`
-    # grep is the *forward* guard, not the live one: it is what catches the
-    # next change that pulls a renderer back in. Keep it.
-    #
-    # "Signature" is broader than function returns — public struct fields, enum
-    # variant payloads, trait method signatures, generic bounds, associated
-    # types, type aliases, and re-exports all count. `cargo public-api` prints
-    # one fully-qualified line per public item with rustdoc's own resolution
-    # already applied, so all of those collapse into the same grep.
-    #
-    # `--simplified` omits blanket impls. That is load-bearing, not cosmetic:
-    # `opentelemetry` has `impl<T> FutureExt for T`, which rustdoc attaches to
-    # every documented type in the crate. Without the flag the listing carries
-    # hundreds of `impl<T> opentelemetry::context::future_ext::FutureExt for
-    # <every SDK type>` lines that this crate never authored, and the gate
-    # below would be permanently red. The flag drops them structurally — no
-    # allow-list, so a real `opentelemetry` leak still cannot hide behind one.
-    #
-    # The same listing feeds a committed manifest of the foreign crates the
-    # public API reaches. A guard that only greps cannot see *unintended*
-    # public API growth, which is how a public foreign type gets added in the
-    # first place; the manifest makes that specific change show up in review
-    # as a one-line diff.
-    #
-    # Linux-only on purpose: the SDK has `#[cfg(unix)]` items, so a Windows
-    # runner would produce a different (correct, but non-matching) listing.
-    # This is not folded into `feature-isolation` — that job is stable-only,
-    # and rustdoc JSON needs nightly.
+    # Keep the check identity while covering both sides of the new client boundary.
+    # Dependency trees are checked separately; these listings also inspect public
+    # fields, bounds, associated types and signatures rather than only imports.
     steps:
       - uses: actions/checkout@v6
       - name: read the pins
         id: pin
         shell: bash
         run: |
-          # Single source of truth: the pins live beside the baseline they
-          # describe, so a human regenerating locally uses the same versions
-          # this job runs on. Both are load-bearing — rustdoc's JSON format and
-          # `cargo public-api`'s rendering each change across releases, and
-          # either would rewrite the whole baseline.
           pins=crates/bitrouter-sdk/public-api.pins
           for key in toolchain tool; do
             value="$(sed -n "s/^$key=//p" "$pins" | tr -d '[:space:]')"
@@ -432,99 +395,62 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          # This step exists only to build the helper binary below; the nightly
-          # step is the one whose cache is worth keeping.
           cache: false
-      # Built on stable. It shells out to `cargo rustdoc` itself and picks the
-      # toolchain up from the `+<pin>` on the invocation further down.
       - name: install the pinned cargo-public-api
         run: cargo install --locked "${{ steps.pin.outputs.tool }}"
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ steps.pin.outputs.toolchain }}
-      - name: render the SDK's public API
+      - name: verify public contract and client surfaces
         shell: bash
         run: |
-          cargo "+${{ steps.pin.outputs.toolchain }}" public-api \
-            -p bitrouter-sdk --all-features --simplified > "$RUNNER_TEMP/public-api.txt"
-      - name: the listing is real
-        shell: bash
-        run: |
-          # The gates below are negative assertions over this one file, and an
-          # empty or otel-less listing would satisfy every one of them
-          # vacuously — exactly the silent pass this job exists to prevent.
-          # Prove the surface under test is in the listing before trusting
-          # anything the listing does not say.
-          #
-          # Verify ungated host API declarations before using negative checks.
-          # Contract declarations now belong to bitrouter-ai.
-          for sentinel in \
-            'pub mod bitrouter_sdk::extension' \
-            'pub fn bitrouter_sdk::extension::ExtensionApi::request_check'; do
-            if ! grep -qF "$sentinel" "$RUNNER_TEMP/public-api.txt"; then
-              echo "::error::'$sentinel' is missing — the listing is not real; do not trust the negative gates below"
+          for package in bitrouter-ai bitrouter-sdk; do
+            listing="$RUNNER_TEMP/$package-public-api.txt"
+            cargo "+${{ steps.pin.outputs.toolchain }}" public-api \
+              -p "$package" --all-features --simplified > "$listing"
+            # --simplified excludes foreign blanket impls rustdoc attaches to
+            # every type. Real authored fields and bounds remain in the listing.
+            if [[ "$package" == bitrouter-ai ]]; then
+              sentinels=(
+                'pub struct bitrouter_ai::protocol::chat_completions::ChatRequest'
+                'pub struct bitrouter_ai::gateway::ModelsResponse'
+                'pub mod bitrouter_ai::extension'
+              )
+              forbidden='bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+            else
+              sentinels=(
+                'pub struct bitrouter_sdk::gateway::GatewayClient'
+                'bitrouter_sdk::gateway::GatewayClient::chat_completions'
+                'bitrouter_sdk::gateway::GatewayClient::stream_responses'
+              )
+              forbidden='bitrouter::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+            fi
+            for sentinel in "${sentinels[@]}"; do
+              if ! grep -qF "$sentinel" "$listing"; then
+                echo "::error::$package public API listing is missing '$sentinel'"
+                exit 1
+              fi
+            done
+            if hits="$(grep -niE "$forbidden" "$listing")"; then
+              echo "::error::runtime ownership leaked into $package's public API"
+              printf '%s\n' "$hits"
               exit 1
             fi
+            # A public re-export can hide its foreign origin in the listing.
+            # Consumers import each contract from its owning public module.
+            if hits="$(grep -rnE '^[[:space:]]*pub use[[:space:]]' "crates/$package/src/")"; then
+              echo "::error::$package contains a public forwarding export"
+              printf '%s\n' "$hits"
+              exit 1
+            fi
+            crate_name="${package//-/_}"
+            grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' "$listing" \
+              | cut -d: -f1 | sort -u \
+              | grep -vxE "$crate_name|core|std|alloc" > "$RUNNER_TEMP/$package-public-api-deps.txt"
+            diff -u \
+              <(grep -v '^#' "crates/$package/public-api-deps.txt") \
+              "$RUNNER_TEMP/$package-public-api-deps.txt"
           done
-      - name: no opentelemetry type in the SDK's public API
-        shell: bash
-        run: |
-          # Case-insensitive so it catches both the module paths
-          # (`opentelemetry_sdk::…`, `tracing_opentelemetry::…`) and the type
-          # names (`OpenTelemetryLayer`). `tracing_opentelemetry` contains
-          # `opentelemetry`, so one pattern covers both crates.
-          if hits="$(grep -niE 'opentelemetry' "$RUNNER_TEMP/public-api.txt")"; then
-            echo "::error::opentelemetry types leaked into bitrouter-sdk's public API — see docs/TELEMETRY_CRATE_SPEC.md"
-            printf '%s\n' "$hits"
-            exit 1
-          fi
-      - name: no re-export of an OTel type out of the SDK
-        shell: bash
-        run: |
-          # The one thing the listing grep above cannot see. `cargo public-api`
-          # renders a bare re-export under its *local* path — re-exporting
-          # `opentelemetry_sdk::trace::SdkTracer` from a module named `otel`
-          # prints `pub use bitrouter_sdk::observe::SdkTracer`, with the origin crate
-          # nowhere in the line. Types whose *name* carries "OpenTelemetry"
-          # (e.g. `OpenTelemetrySpanExt`) do trip the grep; neutrally-named
-          # ones do not. The baseline gate still catches the added line, but it
-          # would not say why the line matters — so pin it at the source.
-          #
-          # Verbatim `pub use` only: `pub(crate) use` is not public API, and a
-          # re-export laundered through a local alias is out of reach of any
-          # lexical check. That residual is the baseline gate's job.
-          if hits="$(grep -rnE '^[[:space:]]*pub use[[:space:]]+(::)?(opentelemetry|tracing_opentelemetry)' crates/bitrouter-sdk/src/)"; then
-            echo "::error::bitrouter-sdk re-exports an OpenTelemetry type — see docs/TELEMETRY_CRATE_SPEC.md"
-            printf '%s\n' "$hits"
-            exit 1
-          fi
-      # Gates 1-3 above answer "is an OTel type public?". This one answers the
-      # broader question a grep structurally cannot: "did the SDK gain a public
-      # dependency nobody noticed?" That is not hypothetical — `tracing_core`
-      # became public surface here via a generic bound, and no `opentelemetry`
-      # grep would ever have seen it.
-      #
-      # We track the foreign-crate *set*, not the full item listing. The full
-      # listing is ~8.5k lines of which ~22% is auto-derived marker impls
-      # (`Sync`/`Unpin`/`RefUnwindSafe`/…), so adding one public struct writes
-      # six lines of noise into review and the real signal drowns. The set
-      # changes on exactly the semver-relevant event and is silent otherwise.
-      - name: the SDK's public dependency surface is unchanged
-        shell: bash
-        run: |
-          # Path roots only: the regex is greedy from the word boundary, so
-          # `bitrouter_sdk::observe::SpanAttributes` yields `bitrouter_sdk`, not
-          # `observe`. Generic params (`S`, `T`) start uppercase and never match.
-          grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' "$RUNNER_TEMP/public-api.txt" \
-            | cut -d: -f1 | sort -u \
-            | grep -vxE 'bitrouter_sdk|core|std|alloc' > "$RUNNER_TEMP/public-api-deps.txt"
-          if ! diff -u \
-            <(grep -v '^#' crates/bitrouter-sdk/public-api-deps.txt) \
-            "$RUNNER_TEMP/public-api-deps.txt"
-          then
-            echo "::error::bitrouter-sdk's public dependency surface changed. A '+' line means an upstream breaking release in that crate now becomes a BitRouter breaking release — confirm that is intended, then update crates/bitrouter-sdk/public-api-deps.txt (regeneration command in crates/bitrouter-sdk/public-api.pins)."
-            exit 1
-          fi
 
   dist:
     name: dist

@@ -3,7 +3,8 @@ use crate::gateway::model::conversion::ReportAdmission;
 use serde_json::{Value, json};
 
 #[test]
-fn responses_reasoning_replay_preserves_empty_encrypted_and_stored_items_in_order() -> Result<()> {
+fn responses_reasoning_replay_preserves_empty_encrypted_and_stored_items_in_order()
+-> anyhow::Result<()> {
     let adapter = ResponsesAdapter;
     let output = json!([
         {"type":"reasoning", "id":"rs_a", "summary":[
@@ -39,6 +40,9 @@ fn responses_reasoning_replay_preserves_empty_encrypted_and_stored_items_in_orde
     );
     let rendered = adapter.render_response(&result, &prompt, "request")?;
     assert_eq!(rendered["output"], output);
+    let public: bitrouter_ai::protocol::responses::ResponsesResponse =
+        serde_json::from_value(rendered)?;
+    assert_eq!(serde_json::to_value(public)?["output"], output);
     let inbound = adapter.parse_request(json!({"model":"served", "input":output}))?;
     adapter
         .validate_managed_prompt(&inbound)

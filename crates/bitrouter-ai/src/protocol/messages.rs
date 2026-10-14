@@ -151,3 +151,228 @@ pub struct MessagesTool {
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub extra: HashMap<String, serde_json::Value>,
 }
+
+// https://platform.claude.com/docs/en/api/messages
+// https://platform.claude.com/docs/en/api/messages-streaming
+
+/// A complete message or the initial message carried by a stream.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MessagesResponse {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub role: String,
+    pub model: String,
+    pub content: Vec<MessagesContentBlock>,
+    pub stop_reason: Option<String>,
+    pub usage: MessagesUsage,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// A Messages content block with opaque provider extensions retained.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MessagesContentBlock {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub text: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub id: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub name: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub input: Option<Option<serde_json::Value>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub thinking: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub signature: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub data: Option<Option<String>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Messages token counts; input_tokens excludes separately reported cache buckets.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MessagesUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub cache_read_input_tokens: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub cache_creation_input_tokens: Option<Option<u64>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// A Messages SSE data object. Unknown event kinds and fields remain available.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MessagesEvent {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub index: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub message: Option<Option<MessagesResponse>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub content_block: Option<Option<MessagesContentBlock>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub delta: Option<Option<MessagesDelta>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub usage: Option<Option<MessagesUsageDelta>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Partial block content or a message stop reason.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MessagesDelta {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    #[serde(rename = "type")]
+    pub kind: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub text: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub thinking: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub signature: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub partial_json: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub stop_reason: Option<Option<String>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Partial stream usage; absent counts are not fabricated as zero.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MessagesUsageDelta {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub input_tokens: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub output_tokens: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub cache_read_input_tokens: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::present_nullable"
+    )]
+    pub cache_creation_input_tokens: Option<Option<u64>>,
+    /// Additional wire fields, retained without provider interpretation.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+redacted_contract_debug!(
+    MessagesResponse,
+    MessagesContentBlock,
+    MessagesUsage,
+    MessagesEvent,
+    MessagesDelta,
+    MessagesUsageDelta
+);

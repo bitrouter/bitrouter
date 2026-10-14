@@ -6,7 +6,8 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 The table below describes the current implementation during P0. Core, harness,
 TUI, telemetry, model/provider runtime and the old SDK server have moved into
-the application. The new HTTP client and feature isolation remain in progress. The accepted final
+the application. The SDK provides gateway HTTP/SSE clients; control/eval/core
+client extraction and application feature isolation remain in progress. The final
 architecture and migration gates are in the
 [service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 
@@ -15,7 +16,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation and catalog contracts; optional schema derives; no service runtime or transport |
-| `crates/bitrouter-sdk` | crate | Reserved service-client package after server removal; HTTP methods are the next migration stage |
+| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE service client using AI wire contracts; control/eval/core clients remain in migration |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, terminal UI, optional OTLP and management commands |
 | `helpers/dist-helper` | helper | Unpublished registry/chart tooling; configuration schema delegates to the application-owned generator |
@@ -227,8 +228,10 @@ SDK limitation and live-provider validation scope.
 
 The matcher depends only on AI capability contracts. The repurposed SDK is a
 service-client package and never owns gateway assembly, configuration discovery
-or provider authentication. Its typed HTTP implementation remains a later P0
-stage; see [service progress](BITROUTER_SERVICE_REFACTOR_PROGRESS.md).
+or provider authentication. Its gateway methods use explicit endpoints and
+credentials, bounded reads and no automatic replay. See the
+[SDK guide](../crates/bitrouter-sdk/README.md) for the available methods and
+[service progress](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for remaining P0 work.
 
 The span names, attribute vocabulary and lifecycle invariants belong to the AI
 observation contract. The committed schema and conformance tests preserve those
@@ -291,7 +294,7 @@ The old SDK `server`, `config_file` and `mcp` flags are retired. Gateway HTTP
 and configuration parsing always belong to the application; concrete MCP
 transports use application `mcp`. ACP uses application `harness`. Existing
 `agents:` configuration and its schema remain compatible. The SDK currently has
-no server API; its HTTP client is implemented in the next migration stage.
+no server API; its gateway HTTP/SSE methods do not enable service features.
 
 AI observation declarations are ungated. Its pure conformance helpers use the
 default-off `testing` feature. The [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
@@ -421,7 +424,7 @@ input/output behavior and requires explicit installation.
 ### Run the official gateway or assemble an advanced host
 
 Ordinary service consumers run `bro serve` with configuration and use its HTTP
-interfaces. The new HTTP SDK will provide typed clients. Advanced trusted Rust
+interfaces. The SDK provides typed gateway clients. Advanced trusted Rust
 hosts can use `gateway::assembly::App` and the shared `host::serve_with_extensions`
 lifecycle; adding compiled extension code requires rebuilding that custom host.
 
@@ -442,8 +445,11 @@ CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-is
 Public API guards must track both AI contracts and the new SDK client surface.
 AI must not expose service handles, credentials, database or OTel types, including
 through trait bounds. The SDK must not expose the retired server framework.
-The existing pinned SDK listing is being replaced with the client implementation;
-it is not a passing final acceptance gate during this intermediate migration.
+The `sdk-public-api` job renders each package independently using the shared
+renderer pins and compares its committed public-dependency manifest. Positive
+contract/client sentinels precede checks for forbidden runtime types and public
+forwarding exports. Normal/build dependency closures are checked separately.
+Additional service DTO extraction must keep both checks passing.
 Do not regenerate an API baseline merely to conceal an unwanted dependency.
 
 ### Named-router request checks

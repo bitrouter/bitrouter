@@ -1,0 +1,6 @@
+# Foreign crates in the all-feature public API, generated with the shared
+# renderer pins in crates/bitrouter-sdk/public-api.pins. Review intentional
+# changes to this surface; runtime ownership is independently guarded in CI.
+schemars
+serde_core
+serde_json

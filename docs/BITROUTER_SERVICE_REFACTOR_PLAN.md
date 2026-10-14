@@ -251,6 +251,13 @@ that direction. Some current request structs are primarily ingress decoders;
 moving their definitions alone is not a complete client API. Keep existing field
 spellings, optional-field behavior and wire fixtures.
 
+A typed request round trip must preserve extension data that affects gateway
+admission, history replay or provider semantics, including nested fields. Do not
+silently erase evidence that made the original request invalid. Unsupported
+representations must fail explicitly; diagnostic formatting must still redact
+opaque or sensitive data. Test the serialized client request at the gateway
+boundary, not only as an isolated serde round trip.
+
 Protocol JSON serialization is distinct from semantic conversion. For example,
 `ChatRequest <-> JSON` may be contract code; mapping a Chat request to Messages
 through canonical model content belongs to gateway codecs. The SDK decodes the
@@ -957,7 +964,9 @@ consumer requires the old SDK server API.
 - Replace SDK contents with explicit service clients, extracting the existing
   remote-control client and adding typed gateway invocation/streaming.
 - Reuse AI wire types and stable service error payloads. Do not encode provider
-  policy or local discovery in the client.
+  policy or local discovery in the client. Compare raw and SDK-serialized
+  requests at gateway admission, including opaque replay metadata and nested
+  extension fields, to prove that serialization preserves their meaning.
 - Preserve supported gateway/control paths and auth behavior; document exactly
   which core methods are remotely supported. Preserve the existing WebSocket
   boundary where used.
@@ -1029,7 +1038,7 @@ refactor has already been implemented or tested.
 | A04 Gateway artifact | Official gateway profile runs as an independent process using configuration; no consumer-provided AppBuilder, hooks, database handles or source changes |
 | A05 Feature closure | Minimum/core/harness/tui/core+harness/core+tui/optional-gateway/default/all-features builds succeed in isolation; `tui` contains harness/CLI, harness does not implicitly enable core |
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state |
-| A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
+| A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; typed client serialization preserves admission and replay semantics; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees |
 | A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
