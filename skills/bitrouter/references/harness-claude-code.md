@@ -2,8 +2,8 @@
 
 Claude has two deliberate BitRouter facets:
 
-- `bro code claude` drives the built-in `claude-acp` adapter inside
-  BitRouter's full-screen ACP lifecycle UI.
+- BRO Goals (`bro` / `bro code`) can orchestrate the `claude-acp` adapter.
+  `bro acp serve claude` exposes it transparently to another ACP client.
 - `bro claude` launches Claude Code's own native interface with
   reversible per-process routing overrides.
 
@@ -18,7 +18,7 @@ bro init --yes --harness claude --after exit
 ## ACP session
 
 ```bash
-bro code claude
+bro code
 bro run claude "summarize this repo"
 bro acp serve claude
 ```
@@ -30,7 +30,7 @@ can select a worker explicitly; it does not bypass ACP. `--direct` keeps the
 adapter's own provider authentication; ordinary sessions route through
 BitRouter and can auto-start the local daemon.
 
-`init --model ID` saves the default model. `code claude --model ID` overrides
+`init --model ID` saves the default model. `run claude --model ID` overrides
 it for one session. No vendor CLI config file is rewritten.
 
 ## Native interface

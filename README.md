@@ -61,7 +61,7 @@ you admit and proposes a new policy you can review, publish, or revert.
 Keep the clients and workflows you already use:
 
 - **Model APIs** — OpenAI Chat Completions and Responses, and Anthropic Messages, with cross-protocol routing. Metered Gemini uses Google’s OpenAI-compatible Chat endpoint.
-- **Coding agents** — built-in Codex and Claude support through `bro code`, native launchers, and ACP adapters.
+- **Coding agents** — Goal orchestration over ACP, native Codex/Claude launchers, and transparent ACP adapters.
 - **Tools & skills** — aggregate configured MCP servers behind one endpoint, with tools and [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) skills available through the same gateway.
 
 ## Benchmarks
@@ -103,39 +103,29 @@ cargo install bitrouter
 
 ## Quick start
 
-`bro code` is BitRouter's CLI workspace for coding-agent conversations. On the
-first run, `bro` guides you through setup and opens the default agent. The
-current source opens a BRO conversation with bare `bro code` and can reopen a
-durable Thread; `bro code <agent>` connects an explicit ACP harness. In the
-published alpha.33 release, bare `bro code` opens an agent picker instead.
+BRO (BitRouter Orchestrator) delegates long-running, parallel workflows to
+built-in workers and ACP-compatible harnesses. In the current source,
+`bro` and `bro code` open Goals, with current-Goal
+input and a read-only Workflow. Reading a directory or branch does not start work.
+BRO persists accepted changes and reports actual execution and verification.
+
+The published alpha.33 release still opens an agent picker with bare `bro code`;
+the Goal workflow described here requires building the current source.
 
 ```bash
-bro                                  # first-run setup, then the default agent
-bro code                             # conversation (source: ← browses durable Threads)
-bro code codex                       # start an interactive Codex ACP session
-bro code claude                      # start an interactive Claude ACP session
-bro run claude "summarize this repo" # run one headless agent turn
+bro                                # Goal directory
+bro code --workspace /path/to/repo  # workspace for newly created Goals
+bro init                           # explicit setup wizard
+bro codex                          # Codex's own interface through BitRouter
+bro claude                         # Claude's own interface through BitRouter
+bro run claude "summarize this repo" # headless ACP turn
+bro acp serve codex                 # ACP stdio endpoint for another client
 ```
 
-BitRouter discovers a compatible local coding-agent CLI automatically. Its
-built-in Codex and Claude adapters require Node.js 22+ and `npx`; when the local
-CLI is unavailable, the adapter uses its bundled worker.
-
-Use the surrounding `bro` commands to inspect and control the router while you
-work:
-
-```bash
-bro requests                      # settled requests and spend
-bro route <model>                 # explain how a model name resolves
-bro start                         # start the local router
-bro stop                          # stop the local router
-bro restart                       # restart the local router
-bro init                          # scaffold advanced routing configuration
-```
-
-`bro claude` and `bro codex` launch each harness's native interface with
-per-process BitRouter overrides. `bro code <agent>` keeps the conversation
-inside BitRouter's interface; `bro run <agent>` is the headless equivalent.
+Input remains available while workers run. Default completion means a verified,
+reviewable delivery; explicit human acceptance, budgets and unknown effects are
+separate. `code <agent>` and `chat/tui` aliases are removed. Native launchers,
+native task APIs and external ACP interfaces remain available.
 
 See [`docs/CLI.md`](docs/CLI.md) for the complete command reference, session
 controls, flags, and config resolution.

@@ -1,0 +1,60 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 02s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 111fc986-de02-46da-8b32-1ec9504ee2e2 with nextest profile: default
+    Starting 1 test across 1 binary (2 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        FAIL [  97.128s] (1/1) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+  stdout ───
+
+    running 1 test
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution has been running for over 60 seconds
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution ... FAILED
+
+    failures:
+
+    failures:
+        active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 97.12s
+
+  stderr ───
+    Error: missing "Allow this fixture write"; screen: "wire transmission and tool effects      \nremain unconfirmed\" } }                 \nGoal 306910f7 · PTY active parallel Goa…\nMutation rejected; draft retained: Goal…\nPTY active parallel Goal · scope: this  \nGoal · revision 148                     \nSatisfaction: incomplete · execution:   \nresume · Ctrl-B budget · Ctrl-A         \ndecisions/accept · Ctrl-I evidence      \nEnter submits · Ctrl-J newline · Ctrl-G \nexternal editor · Ctrl-←/→ navigate     \n› UNSENT_ACTIVE_DRAFT                   "; output: "low fact: Decision {     \u{1b}[4;1Hevent: Result { decision_id:            \u{1b}[5;1H\"22d8ea36761a87bf8418c485b400b8382b663e8\u{1b}[6;1Hea7fad4d918f2df5d11ded678\",             \u{1b}[7;1Hoperation_id:                           \u{1b}[8;1H\"ec8b3b10-c0a5-4945-8d61-c6726f66f51a\", \u{1b}[9;1Hsubmitted: true, detail: \"Controller    \u{1b}[10;1Hconfirms permission option selection;   \u{1b}[11;1Hwire transmission and tool effects      \u{1b}[12;1Hremain unconfirmed\" } }                 \u{1b}[m\u{1b}[m\u{1b}[m\u{1b}[0m\u{1b}[12;1H\n\n\n\n\n\n\n\n\n\n\u{1b}[3;1H\u{1b}[;mGoal 306910f7 · PTY active parallel Goa…\u{1b}[4;1H\u{1b}[;mMutation rejected; draft retained: Goal…\u{1b}[5;1HPTY active parallel Goal · scope: this  \u{1b}[6;1HGoal · revision 148                     \u{1b}[7;1HSatisfaction: incomplete · execution:   \u{1b}[8;1Hresume · Ctrl-B budget · Ctrl-A         \u{1b}[9;1Hdecisions/accept · Ctrl-I evidence      \u{1b}[10;1HEnter submits · Ctrl-J newline · Ctrl-G \u{1b}[11;1Hexternal editor · Ctrl-←/→ navigate     \u{1b}[12;1H› UNSENT_ACTIVE_DRAFT                   \u{1b}[m\u{1b}[m\u{1b}[m\u{1b}[0m\u{1b}[?2026l\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h\u{1b}[12;22H\u{1b}[?25h"
+
+────────────
+     Summary [  97.129s] 1 test run: 0 passed, 1 failed, 2 skipped
+        FAIL [  97.128s] (1/1) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+error: test run failed

@@ -1,0 +1,90 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 51s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 089dac5e-fa97-43a6-b7fb-e702193f9468 with nextest profile: default
+    Starting 11 tests across 1 binary (42 tests skipped)
+        PASS [   5.976s] ( 1/11) bitrouter::code_tui_pty background::remote_context_rejects_background_and_session_mutations_before_local_start
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::schema_failure_never_becomes_ready_for_review
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty evolution::evolution_api_checkpoint_history_keeps_current_reward_and_original_revisions
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty evolution::evolution_api_checkpoint_history_keeps_current_reward_and_original_revisions
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty background::schema_failure_never_becomes_ready_for_review
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        SLOW [>120.000s] (─────) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        PASS [ 166.291s] ( 2/11) bitrouter::code_tui_pty background::schema_failure_never_becomes_ready_for_review
+        PASS [ 166.383s] ( 3/11) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        PASS [ 166.545s] ( 4/11) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        PASS [ 167.156s] ( 5/11) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        PASS [ 167.490s] ( 6/11) bitrouter::code_tui_pty evolution::evolution_api_checkpoint_history_keeps_current_reward_and_original_revisions
+        PASS [ 167.522s] ( 7/11) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        PASS [ 167.781s] ( 8/11) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        PASS [ 167.866s] ( 9/11) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        PASS [ 168.026s] (10/11) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        SLOW [>180.000s] (─────) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        FAIL [ 183.729s] (11/11) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+  stdout ───
+
+    running 1 test
+    test evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout has been running for over 60 seconds
+    test evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout ... FAILED
+
+    failures:
+
+    failures:
+        evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 52 filtered out; finished in 183.67s
+
+  stderr ───
+    Error: session API did not settle: RunSnapshot { run_id: "22bec9e9-2e80-477f-9491-d6a7aedec97a", label: "explicit session API fixture", agent_id: "stub", native_session_id: Some("pty-fresh-7209"), agent_session_id: None, via: None, cwd: "/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpGA06nk", claim_key: "/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpGA06nk", parent_run_id: None, presentation: Foreground, capabilities: Some(CapabilitySnapshot { load: false, resume: false, list: false, close: false, delete: false, fork: false, mcp_stdio: true, mcp_http: false, mcp_sse: false, authentication_methods: [], terminal_auth: false, route_list: false, route_set: false, route_reset: false }), initial_settings: Some(SessionInitialSettings { modes: None, config_options: None }), process: Running, turn: Idle, attention: None, attachment: Controlled { client_id: "session-api-migration" }, review: Reviewed, activity: "Ready for review", confirmed_route: None, attributed_cost: None, pending_permissions: [], failure: None, lease: Some(ControlLease { owner_client_id: "session-api-migration", generation: 1, mode: Attached, expires_at: 2026-10-13T21:07:07.886189Z }), last_seq: 11, started_at: 2026-10-13T21:06:37.740761Z, updated_at: 2026-10-13T21:06:37.902164Z }
+
+────────────
+     Summary [ 189.734s] 11 tests run: 10 passed (9 slow), 1 failed, 42 skipped
+        FAIL [ 183.729s] (11/11) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+error: test run failed

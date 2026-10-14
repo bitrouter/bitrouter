@@ -61,7 +61,7 @@ top of the controller is client-side: `--turn-timeout` (cooperative
 `session/cancel` plus a three-second grace), headless permission denial, OTel
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
-`bro run --background` and target-state `bro code <agent>` instead ask the
+`bro run --background` and BRO Goal executions instead ask the
 resident local daemon supervisor to own the controller from creation. The
 client receives a BitRouter **agent run ID** only after the controller and a
 harness-native session exist. The run ID identifies that controller lifetime;
@@ -225,7 +225,7 @@ Foreground `run` emits a first
 **harness-native** `session_id` (plus `agent_session_id` when the harness
 exposes one), `agent`, `via`, and `launch_id`. `launch_id` is the one that
 joins to spend: the daemon attributes ACP traffic by an authenticated
-controller namespace, which only `acp serve` and `code <agent>` declare, so a
+controller namespace declared by `acp serve` and daemon-owned supervised runs, so a
 prompt session's rows carry no controller instance to key on.
 It no longer carries `record_id`; that alias is off the wire. Then come
 `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, and `usage`

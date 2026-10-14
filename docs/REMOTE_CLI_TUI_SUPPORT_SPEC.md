@@ -1,5 +1,13 @@
 # RFD: remote ACP sessions for CLI and TUI clients (Phase 2)
 
+Current-entry status: the Goal implementation replaces this document's bare
+`bro`/`bro code`, `code <agent>` and hidden `chat/tui` product entry contracts.
+See [the Goal PRD](BRO_GOAL_ORIENTED_PRD.md) and
+[the implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) for current
+behavior and verification limits. This document retains historical design and
+evidence; native task and ACP protocol contracts remain separately supported.
+
+
 Status: **deferred; no implementation in the HTTP-only remote-control MVP.**
 Baseline: `main` at `61dd77333a91f7aab01647b0ae7d8625d3039ffe`.
 Verified: 2026-09-07.

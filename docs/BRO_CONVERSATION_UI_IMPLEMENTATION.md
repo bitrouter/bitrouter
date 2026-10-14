@@ -1,5 +1,13 @@
 # BRO Conversation UI integration evidence
 
+Current-entry status: the Goal implementation replaces this document's bare
+`bro`/`bro code`, `code <agent>` and hidden `chat/tui` product entry contracts.
+See [the Goal PRD](BRO_GOAL_ORIENTED_PRD.md) and
+[the implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) for current
+behavior and verification limits. This document retains historical design and
+evidence; native task and ACP protocol contracts remain separately supported.
+
+
 Date: 2026-10-04. Contract: [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md).
 Validated source: `485728f9` on macOS with Rust 1.97.0. This ledger is a
 documentation-only follow-up to that source. Builds used incremental=0 and

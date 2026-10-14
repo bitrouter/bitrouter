@@ -1,0 +1,63 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 38s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID b97e8531-9d98-41bf-83a9-9034906bb897 with nextest profile: default
+    Starting 1 test across 3 binaries (1857 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [>120.000s] (───) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        FAIL [ 140.821s] (1/1) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission has been running for over 60 seconds
+    test goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1731 filtered out; finished in 140.80s
+
+  stderr ───
+    Error: fixture Goal did not reach expected state: Workflow { completion: Progress { specification: Some(Specification { conditions: [Condition { id: "delivery", description: "Both independent files and the actual dependency join are delivered" }], checks: [CheckSpec { id: "has-left", description: "Actual left.txt contents", recipe: FileContains { path: "left.txt", text: "LEFT\n" }, timeout_seconds: 10 }, CheckSpec { id: "has-right", description: "Actual right.txt contents", recipe: FileContains { path: "right.txt", text: "RIGHT\n" }, timeout_seconds: 10 }, CheckSpec { id: "has-joined", description: "Actual joined.txt contents", recipe: FileContains { path: "joined.txt", text: "LEFT\nRIGHT\n" }, timeout_seconds: 10 }], human_acceptance_required: false }), attempt: None, last_completed: None }, coordinator: Some(CoordinatorLease { id: "036b16d6-395b-4ead-8994-ce10f8936e9c", expires_at_ms: 1791922675347 }), planning: Planned { attempt_id: "997eb040-ff57-41e9-bfb2-4a606ccfb9b9" }, planning_requirements_revision: 1, tasks: [Task { spec: TaskSpec { id: "left", title: "Fixture left", instruction: "Write and verify left.txt as LEFT newline. FIXTURE_NEW_LEFT_RULE: this exact version must be used by the replacement execution.", harness: "goal-peer", dependencies: [], checks: [CheckSpec { id: "left-written", description: "Actual left.txt contents", recipe: FileContains { path: "left.txt", text: "LEFT\n" }, timeout_seconds: 10 }] }, requirements_revision: 2, executions: [Execution { id: "066d9596-92bc-4668-a236-d248c1778ae6", workspace: "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpiYjOC3/goal-workspaces/41123af7-39e3-47fc-84dc-c8798e99a383/066d9596-92bc-4668-a236-d248c1778ae6", observation: Running { run_id: "a1c4edcb-b9b9-4993-ba74-b60a8511acd1", native_session_id: Some("goal-fixture-80412") }, requirements_revision: 1, task_revision: 1, dispatch_requested: true, checks: [], stop: Some(Confirmed { operation_id: "d97e9bb6-0484-40ad-9b67-984bb7fcc60e", detail: "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled" }), base_commit: Some("b07ab422cdcb0241b909cb35d8ca4cb302a50fb2"), handoff: None, review: None, reconciliation: Some(Blocked { task_revision: 2, control_source_revision: 1, reason: "No automatic replacement: tool history contains an unrecorded permission request. Reconcile the missing tool/workspace/external-effect evidence before retrying." }) }], run_intent: Run, control_source_revision: 0 }, Task { spec: TaskSpec { id: "right", title: "Fixture right", instruction: "Write and verify right.txt", harness: "goal-peer", dependencies: [], checks: [CheckSpec { id: "right-written", description: "Actual right.txt contents", recipe: FileContains { path: "right.txt", text: "RIGHT\n" }, timeout_seconds: 10 }] }, requirements_revision: 1, executions: [Execution { id: "39fea24d-9348-4be0-b9e4-bfba80c5bc47", workspace: "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpiYjOC3/goal-workspaces/41123af7-39e3-47fc-84dc-c8798e99a383/39fea24d-9348-4be0-b9e4-bfba80c5bc47", observation: Failed { run_id: Some("308c200b-ac09-48d6-8317-e84e0e6a11fb"), reason: "ACP adapter exited unexpectedly" }, requirements_revision: 1, task_revision: 1, dispatch_requested: true, checks: [], stop: None, base_commit: Some("b07ab422cdcb0241b909cb35d8ca4cb302a50fb2"), handoff: None, review: None, reconciliation: None }], run_intent: Run, control_source_revision: 0 }, Task { spec: TaskSpec { id: "join", title: "Fixture join", instruction: "Write and verify joined.txt", harness: "goal-peer", dependencies: ["left", "right"], checks: [CheckSpec { id: "join-written", description: "Actual joined.txt contents", recipe: FileContains { path: "joined.txt", text: "LEFT\nRIGHT\n" }, timeout_seconds: 10 }] }, requirements_revision: 2, executions: [], run_intent: Run, control_source_revision: 0 }], decisions: [PermissionDecision { id: "045ec018c29104fe60b1121c6866b63a69346092c94d16fe624f85e6b9e42b46", execution_id: "39fea24d-9348-4be0-b9e4-bfba80c5bc47", run_id: "308c200b-ac09-48d6-8317-e84e0e6a11fb", permission_id: "e3cc47a0-bbfd-4630-a1f0-a3575176fcd7", requirements_revision: 1, task_revision: 1, request: ArtifactRef { path: "/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpiYjOC3/goal-workspaces/41123af7-39e3-47fc-84dc-c8798e99a383/artifacts/f1a99f8b8a959b2172901138b3cfcb91c733b35fbfb477420218ff15db248dcf.blob", sha256: "f1a99f8b8a959b2172901138b3cfcb91c733b35fbfb477420218ff15db248dcf", bytes: 536 }, options: [PermissionOption { id: "allow-once", label: "Allow this fixture write", allows: true, persistent: false }, PermissionOption { id: "deny-once", label: "Deny this fixture write", allows: false, persistent: false }], state: Obsolete { reason: "Permission belongs to superseded requirements or execution" } }, PermissionDecision { id: "a92f5649d21c3e03f8a9beeb7378525b3703e3ea16667cd6c94238cebe927e2f", execution_id: "39fea24d-9348-4be0-b9e4-bfba80c5bc47", run_id: "308c200b-ac09-48d6-8317-e84e0e6a11fb", permission_id: "e3cc47a0-bbfd-4630-a1f0-a3575176fcd7", requirements_revision: 2, task_revision: 1, request: ArtifactRef { path: "/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpiYjOC3/goal-workspaces/41123af7-39e3-47fc-84dc-c8798e99a383/artifacts/f1a99f8b8a959b2172901138b3cfcb91c733b35fbfb477420218ff15db248dcf.blob", sha256: "f1a99f8b8a959b2172901138b3cfcb91c733b35fbfb477420218ff15db248dcf", bytes: 536 }, options: [PermissionOption { id: "allow-once", label: "Allow this fixture write", allows: true, persistent: false }, PermissionOption { id: "deny-once", label: "Deny this fixture write", allows: false, persistent: false }], state: Submitted { operation_id: "current-right-response", option_id: "allow-once" } }] }
+
+  Cancelling due to test failure:
+────────────
+     Summary [ 140.833s] 1 test run: 0 passed, 1 failed, 1857 skipped
+        FAIL [ 140.821s] (1/1) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+error: test run failed

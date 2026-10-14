@@ -1,5 +1,13 @@
 # BRO Conversation and durable Threads navigation
 
+Current-entry status: the Goal implementation replaces this document's bare
+`bro`/`bro code`, `code <agent>` and hidden `chat/tui` product entry contracts.
+See [the Goal PRD](BRO_GOAL_ORIENTED_PRD.md) and
+[the implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) for current
+behavior and verification limits. This document retains historical design and
+evidence; native task and ACP protocol contracts remain separately supported.
+
+
 Updated: 2026-10-04. This is the native presentation and navigation contract for
 PR #945. Runtime identity, admission, context, ownership and recovery are defined
 once in [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md). Explicit
