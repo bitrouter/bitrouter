@@ -934,12 +934,6 @@ impl PtyRunner {
         self.writer.flush().context("flushing PTY input")
     }
 
-    fn paste(&mut self, text: &str) -> Result<()> {
-        self.send(b"\x1b[200~")?;
-        self.send(text.as_bytes())?;
-        self.send(b"\x1b[201~")
-    }
-
     fn checkpoint(&self) -> PtyCheckpoint {
         PtyCheckpoint {
             output_len: self.output.len(),
@@ -1122,22 +1116,6 @@ struct CodeFixture {
 }
 
 impl CodeFixture {
-    fn close_to_composer(&mut self) -> Result<()> {
-        let checkpoint = self.pty.checkpoint();
-        self.pty.send(b"\x1b")?;
-        let after = self.pty.wait_for_screen_inner(
-            Some(&checkpoint),
-            "composer or command launcher",
-            |screen| screen.contains("┃ Message") || screen.contains("Commands ─"),
-        )?;
-        if !after.contains("┃ Message") {
-            let launcher = self.pty.checkpoint();
-            self.pty.send(b"\x1b")?;
-            let _ = self.pty.wait_for_text_since(&launcher, "┃ Message")?;
-        }
-        Ok(())
-    }
-
     fn signal_child(&self, signal: &str) -> Result<()> {
         ensure!(
             matches!(signal, "INT" | "TERM" | "TSTP" | "CONT"),

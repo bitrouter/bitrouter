@@ -1,5 +1,5 @@
-//! A full terminal campaign; policy and scoring mutations occur through the
-//! production terminal or scheduler, never through planted learner/store rows.
+//! A full maintained-session campaign; policy mutations use the operator CLI
+//! and scheduler, never planted learner/store rows.
 
 use super::*;
 use bitrouter::evolution::bandit::Arm;
@@ -26,57 +26,20 @@ fn trial_values(report: &LearningReport) -> Result<Value> {
 }
 
 fn fresh_session(
-    code: &mut CodeFixture,
+    code: &NativeFixture,
     runtime: &tokio::runtime::Runtime,
-    service: &NativeService,
     agent: &str,
 ) -> Result<SessionIdentity> {
-    let known = runtime
-        .block_on(service.canonical.list("local", agent))?
-        .into_iter()
-        .map(|session| session.native_session_id)
-        .collect::<BTreeSet<_>>();
-    code.pty.send(b"/")?;
-    code.pty.wait_for_text("Commands")?;
-    let before = code.pty.checkpoint();
-    code.pty.paste("new")?;
-    code.pty.send(b"\r")?;
-    code.pty
-        .wait_for_screen_inner(Some(&before), "fresh coding session", |screen| {
-            screen.contains("activity: ready")
-                && !screen.contains("NATIVE_CODE_DONE")
-                && !screen.contains("Commands")
-        })?;
-    runtime.block_on(async {
-        tokio::time::timeout(PTY_TIMEOUT, async {
-            loop {
-                for session in service.canonical.list("local", agent).await? {
-                    if !known.contains(&session.native_session_id) {
-                        return Ok::<_, anyhow::Error>(SessionIdentity {
-                            owner: "local".into(),
-                            source: agent.into(),
-                            native_session_id: session.native_session_id,
-                        });
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .context("fresh coding session was not captured")?
-    })
+    runtime.block_on(code.fresh(agent))
 }
 
-fn send(code: &mut CodeFixture, failed: bool) -> Result<()> {
-    let before = code.pty.checkpoint();
+fn send(code: &NativeFixture, runtime: &tokio::runtime::Runtime, failed: bool) -> Result<()> {
     let prompt = if failed {
         format!("{PROMPT} Controlled fixture marker: NATIVE_FAILING_IMPLEMENTATION.")
     } else {
         PROMPT.into()
     };
-    code.pty.paste(&prompt)?;
-    code.pty.send(b"\r")?;
-    finish_coding_turn(code, &before)
+    runtime.block_on(code.prompt(&prompt, "NATIVE_CODE_DONE", true))
 }
 
 async fn processed(service: &NativeService, identity: &SessionIdentity) -> Result<LearningReport> {
@@ -84,7 +47,12 @@ async fn processed(service: &NativeService, identity: &SessionIdentity) -> Resul
         loop {
             let learning = service.evolution.service("local")?;
             let report = match learning.learning_status(BLOCK).await {
-                Err(error) if error.to_string().contains("changed") => {
+                Err(error)
+                    if error.to_string().contains("changed")
+                        || error
+                            .to_string()
+                            .contains("resource observations use different gateway revisions") =>
+                {
                     tokio::time::sleep(Duration::from_millis(25)).await;
                     continue;
                 }
@@ -208,22 +176,13 @@ async fn verify_checkpoint(
     Ok(executions.len())
 }
 
-fn inspect(code: &mut CodeFixture, state: &str) -> Result<()> {
-    open_evolution(code)?;
-    choose(code, "Policy block evidence", "Policy blocks")?;
-    choose(code, BLOCK, "Original trial recommendation")?;
-    code.pty
-        .wait_for_text(&format!("Current block state: {state}"))?;
-    code.close_to_composer()
-}
-
 fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     let started = Instant::now();
-    let (runtime, service, mut code) = launch(agent, adapter, worker)?;
-    send(&mut code, false)?;
+    let (runtime, service, code) = launch(agent, adapter, worker)?;
+    send(&code, &runtime, false)?;
     let initial = runtime.block_on(evaluated(&service, agent))?;
     let mut requests = runtime.block_on(verify_checkpoint(&service, &initial, false, "strong"))?;
-    create_candidate(&mut code, agent)?;
+    create_candidate(&code, &runtime, agent)?;
     let state = runtime.block_on(service.evolution.service("local")?.state())?;
     let block = state
         .blocks
@@ -243,8 +202,8 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
             started.elapsed() < Duration::from_secs(2400),
             "coding campaign exceeded its bounded deadline at trial {arrival}; baseline {baseline}; candidate {candidate}"
         );
-        let identity = fresh_session(&mut code, &runtime, &service, agent)?;
-        send(&mut code, false)?;
+        let identity = fresh_session(&code, &runtime, agent)?;
+        send(&code, &runtime, false)?;
         let enrollment = runtime
             .block_on(service.evolution.service("local")?.enrollment(&identity))?
             .context("coding enrollment missing")?;
@@ -290,13 +249,13 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         baseline >= 20 && candidate >= 20,
         "coding adoption bypassed evidence minimum"
     );
-    inspect(&mut code, "Adopted")?;
+    inspect(&code, &runtime, "adopted")?;
     let trials = trial_values(&adopted)?;
     let mut withdrawn = None;
     for monitor in 1..=12 {
         let failed = monitor > 1;
-        let identity = fresh_session(&mut code, &runtime, &service, agent)?;
-        send(&mut code, failed)?;
+        let identity = fresh_session(&code, &runtime, agent)?;
+        send(&code, &runtime, failed)?;
         let enrollment = runtime
             .block_on(service.evolution.service("local")?.enrollment(&identity))?
             .context("coding monitoring membership missing")?;
@@ -331,7 +290,7 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     }
     let (identity, monitor_sessions, report) =
         withdrawn.context("recorded failing coding tests did not trigger rollback")?;
-    inspect(&mut code, "RolledBack")?;
+    inspect(&code, &runtime, "rolled_back")?;
     ensure!(
         report.publications.iter().any(|p| p.action == "promote")
             && report
@@ -347,30 +306,26 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
             .all(|p| p.action != "operator_restore"),
         "coding campaign used operator withdrawal"
     );
-    assert_restored_dispatch(&mut code, &runtime, &service, &identity)?;
-    open_evolution(&mut code)?;
-    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
-    choose(&mut code, "Off", "Checkpoint evaluation and evolution")?;
+    assert_restored_dispatch(&code, &runtime, &service, &identity)?;
+    mode(&code, &runtime, "off")?;
     ensure!(
         runtime
             .block_on(service.evolution.service("local")?.state())?
             .mode
             == EvolutionMode::Off,
-        "terminal did not disable evolution"
+        "operator CLI did not disable evolution"
     );
-    code.close_to_composer()?;
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()?;
+    runtime.block_on(code.stop())?;
     println!(
         "{}",
-        json!({"agent":agent,"trial_sessions":baseline+candidate,"baseline_trials":baseline,"candidate_trials":candidate,"monitor_sessions":monitor_sessions,"recorded_trial_and_monitor_requests_with_initial":requests,"real_code_and_tests":true,"automatic_adoption":true,"automatic_quality_rollback":true,"baseline_restored_while_automatic":true,"terminal_restored":true,"default_exploration_parameters":true,"scope":"actual native tool execution and terminal serving acceptance; controlled model replies, prices, latency and rubric labels, not historical calibration or live routing benefit"})
+        json!({"agent":agent,"trial_sessions":baseline+candidate,"baseline_trials":baseline,"candidate_trials":candidate,"monitor_sessions":monitor_sessions,"recorded_trial_and_monitor_requests_with_initial":requests,"real_code_and_tests":true,"automatic_adoption":true,"automatic_quality_rollback":true,"baseline_restored_while_automatic":true,"process_stopped":true,"default_exploration_parameters":true,"scope":"actual native tool execution and session/operator serving acceptance; controlled model replies, prices, latency and rubric labels, not historical calibration or live routing benefit"})
     );
     Ok(())
 }
 
 #[test]
 #[ignore = "requires maintained Codex ACP and a bounded multi-session coding campaign"]
-fn maintained_codex_tui_coding_publication_and_rollback() -> Result<()> {
+fn maintained_codex_session_coding_publication_and_rollback() -> Result<()> {
     run(
         "codex-acp",
         "BITROUTER_TEST_CODEX_ADAPTER",
@@ -380,7 +335,7 @@ fn maintained_codex_tui_coding_publication_and_rollback() -> Result<()> {
 
 #[test]
 #[ignore = "requires maintained Claude ACP and a bounded multi-session coding campaign"]
-fn maintained_claude_tui_coding_publication_and_rollback() -> Result<()> {
+fn maintained_claude_session_coding_publication_and_rollback() -> Result<()> {
     run(
         "claude-acp",
         "BITROUTER_TEST_CLAUDE_ADAPTER",
