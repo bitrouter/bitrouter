@@ -78,7 +78,25 @@ pub fn model(request: &Request) -> ResponseTemplate {
         .as_str()
         .is_some_and(|input| input.contains("FIXTURE_NEW_LEFT_RULE"))
     {
-        json!({"answer":null,"objective":null,"task_updates":[{"task_id":"left","instruction":"Write and verify left.txt as LEFT newline. FIXTURE_NEW_LEFT_RULE: this exact version must be used by the replacement execution."}],"control":null,"permission_response":null,"clarification":null})
+        let mut result = json!({"answer":null,"objective":null,"task_updates":[{"task_id":"left","instruction":"Write and verify left.txt as LEFT newline. FIXTURE_NEW_LEFT_RULE: this exact version must be used by the replacement execution."}],"control":null,"permission_response":null,"clarification":null});
+        let input = state["trusted_state"]["input"].as_str().unwrap_or_default();
+        if input.contains("BAD_RESOURCE_CHANGE_FIXTURE") {
+            result["task_updates"][0]["resources"] = json!({"mcp_servers":["unavailable-server"]});
+        } else if input.contains("RESOURCE_CHANGE_FIXTURE") {
+            let Some(skill) = state["trusted_state"]["available_resources"]["skills"]
+                .as_array()
+                .and_then(|skills| {
+                    skills
+                        .iter()
+                        .find(|skill| skill["name"] == "goal-resource-fixture")
+                })
+            else {
+                return ResponseTemplate::new(400);
+            };
+            result["task_updates"][0]["resources"] = json!({"model_route":"goal-model", "mcp_servers":["selected-resource-server"],
+                "skills":[{"material_id":skill["material"]["material_id"],"sha256":skill["material"]["sha256"]}],"context_files":["seed.txt"]});
+        }
+        result
     } else if state.get("trusted_state").is_some() {
         json!({"answer":"Fixture explanation: the two actual branches are still active",
             "objective":null,"task_updates":[],"control":null,"permission_response":null,"clarification":null})
