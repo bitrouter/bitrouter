@@ -1,0 +1,67 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.72s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 1dd66a47-fb26-46fc-a8a6-c14f85850d3a with nextest profile: default
+    Starting 3 tests across 1 binary (71 tests skipped)
+        FAIL [   0.052s] (1/3) bitrouter::goals archive_tests::archived_history_crosses_snapshot_bound_without_resetting_versions_or_budget
+  stdout ───
+
+    running 1 test
+    test archive_tests::archived_history_crosses_snapshot_bound_without_resetting_versions_or_budget ... FAILED
+
+    failures:
+
+    failures:
+        archive_tests::archived_history_crosses_snapshot_bound_without_resetting_versions_or_budget
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.04s
+
+  stderr ───
+    Error: invalid Goal request: semantic effects require a recorded reasoning request
+
+  Cancelling due to test failure: 2 tests still running
+        FAIL [   0.052s] (2/3) bitrouter::goals archive_tests::archive_receipt_failure_rolls_back_head_and_can_retry_original_identity
+  stdout ───
+
+    running 1 test
+    test archive_tests::archive_receipt_failure_rolls_back_head_and_can_retry_original_identity ... FAILED
+
+    failures:
+
+    failures:
+        archive_tests::archive_receipt_failure_rolls_back_head_and_can_retry_original_identity
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.04s
+
+  stderr ───
+    Error: invalid Goal request: semantic effects require a recorded reasoning request
+
+        FAIL [   0.065s] (3/3) bitrouter::goals archive_tests::execution_archive_is_atomic_idempotent_cold_and_owner_scoped
+  stdout ───
+
+    running 1 test
+    test archive_tests::execution_archive_is_atomic_idempotent_cold_and_owner_scoped ... FAILED
+
+    failures:
+
+    failures:
+        archive_tests::execution_archive_is_atomic_idempotent_cold_and_owner_scoped
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.06s
+
+  stderr ───
+    Error: invalid Goal request: semantic effects require a recorded reasoning request
+
+────────────
+     Summary [   0.066s] 3 tests run: 0 passed, 3 failed, 71 skipped
+        FAIL [   0.052s] (1/3) bitrouter::goals archive_tests::archived_history_crosses_snapshot_bound_without_resetting_versions_or_budget
+        FAIL [   0.052s] (2/3) bitrouter::goals archive_tests::archive_receipt_failure_rolls_back_head_and_can_retry_original_identity
+        FAIL [   0.065s] (3/3) bitrouter::goals archive_tests::execution_archive_is_atomic_idempotent_cold_and_owner_scoped
+error: test run failed

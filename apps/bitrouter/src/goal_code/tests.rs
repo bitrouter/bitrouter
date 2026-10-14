@@ -192,15 +192,20 @@ async fn changed_protocol_outbox_is_preserved_without_reinterpreting_or_replayin
         .path()
         .join("outbox")
         .join(format!("{}.json", original.id()?));
-    let mut old: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
-    old["protocol"] = serde_json::json!(1);
-    if let Some(command) = old["pending"]["command"].as_object_mut() {
-        command.remove("budget_limits");
+    let current: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
+    for version in [1, 3] {
+        let mut old = current.clone();
+        old["protocol"] = serde_json::json!(version);
+        if version == 1
+            && let Some(command) = old["pending"]["command"].as_object_mut()
+        {
+            command.remove("budget_limits");
+        }
+        let bytes = serde_json::to_vec(&old)?;
+        tokio::fs::write(&path, &bytes).await?;
+        assert!(outbox.recover().await.is_err());
+        assert_eq!(tokio::fs::read(&path).await?, bytes);
     }
-    let bytes = serde_json::to_vec(&old)?;
-    tokio::fs::write(&path, &bytes).await?;
-    assert!(outbox.recover().await.is_err());
-    assert_eq!(tokio::fs::read(path).await?, bytes);
     Ok(())
 }
 
