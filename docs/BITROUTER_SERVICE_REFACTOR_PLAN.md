@@ -39,6 +39,7 @@ Navigation:
 - [Product and ownership decisions](#product-and-ownership-decisions)
 - [Target package graph](#target-package-graph)
 - [Public contracts and clients](#public-contract-and-client-boundaries)
+- [Existing service surfaces](#existing-service-surfaces-and-feature-ownership)
 - [Complete source migration inventory](#source-migration-inventory)
 - [Feature dependencies and build profiles](#feature-dependency-plan)
 - [P0 implementation sequence](#p0-implementation-sequence)
@@ -276,6 +277,40 @@ The base SDK supports gateway and control HTTP calls. Add an optional client
 `core` feature only for the existing core streaming transport when it introduces
 additional dependencies. That feature never enables the application's `core`.
 Do not add client feature names for hypothetical APIs.
+
+### Existing service surfaces and feature ownership
+
+Preserve these transport boundaries while relocating their handlers. Extracting
+a DTO into AI or adding an SDK method does not change where an endpoint listens
+or which credential authorizes it.
+
+| Existing surface | P0 implementation owner and feature | Client and compatibility requirement |
+| --- | --- | --- |
+| `POST /v1/chat/completions`, `/v1/messages`, ordinary `/v1/responses`, `/v1/decisions`; `GET /v1/models` | Gateway, always compiled | SDK gateway methods; preserve each protocol's request, response, error and supported streaming semantics |
+| `GET /health`, `/metrics` | Gateway, always compiled | Preserve ordinary health and metrics behavior; metrics do not require an OTLP exporter |
+| `POST /mcp/{server}` and the configured aggregate route | Gateway behind `mcp` | Preserve MCP transport and configuration semantics; no agent execution requirement |
+| `/control/v1/*` inspection, capability/state reports, reload and operation lookup | Gateway control and host lifecycle, always compiled; optional action providers follow their owner | SDK control methods; retain the dedicated loopback listener, explicit enablement and scoped control credentials; remote exposure remains an operator's tunnel/proxy concern |
+| `GET /v1/orchestrator/capabilities`, `/v1/orchestrator/channel` | Core behind `core` | Preserve the authenticated capability endpoint and WebSocket channel; do not describe the channel as a newly implemented plain HTTP API |
+| Managed opt-in at `POST /v1/responses` | Core behind `core`; ordinary Responses stays in gateway | Preserve the beta opt-in and managed authority checks; with core disabled, reject an explicit managed request instead of treating it as ordinary inference |
+| `/v1/evals/subjects`, `/results`, `/snapshots`, `/status` and subject/snapshot reads | Core evaluation service behind `core`, on the inference listener | SDK provides typed methods for the existing HTTP exchange; preserve virtual-key authentication, tenant ownership and configured `skip_auth` behavior; routes are not mounted without core |
+| `/agent/v2/*` ThreadService API | Harness behind `harness` | Preserve the loopback-only listener, separate credential and server-owned workspace limits; this is execution/session access, not the core scheduler API |
+| Local daemon IPC and ACP stdio/process transport | Host and harness respectively | Keep local discovery and process ownership in the application; do not expose local IPC over the gateway as part of this refactor |
+
+The baseline route inventories are
+[`server.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/crates/bitrouter-sdk/src/server.rs),
+[`remote_control/inventory.rs`](../apps/bitrouter/src/remote_control/inventory.rs),
+[`orchestrator_api/mod.rs`](../apps/bitrouter/src/orchestrator_api/mod.rs),
+[`eval/api.rs`](../apps/bitrouter/src/eval/api.rs) and
+[`agent_api.rs`](../apps/bitrouter/src/agent_api.rs). Move the corresponding
+route and authorization tests with their owners. Control capability reports
+must describe the selected build, configured services and caller's scope;
+for example, a gateway-only build must not advertise a local harness action.
+Preserve its useful gateway policy inspection and exporter-disabled status.
+The evaluation methods use the SDK's ordinary HTTP transport; they do not
+require a separate feature merely because the server gates evaluation on core.
+Preserve the distinction between an unavailable endpoint and an empty evidence
+ledger. Full/core builds retain evidence admission and snapshot behavior;
+gateway-only builds retain their own request facts and metering independently.
 
 ### Telemetry ownership
 
@@ -562,7 +597,7 @@ owned by application telemetry.
 | `cost` | Shared cost/provenance value in presentation; terminal rendering in TUI |
 | `journal` | Conversation presentation model usable by headless output; isolate any terminal-specific cache |
 | `lifecycle` | Terminal enter/restore lifecycle in TUI; process ownership remains host |
-| `log_tail` | Terminal-independent failure text in presentation; service/log source supplied through command adapters |
+| `log_tail` | Terminal-independent failure text, truncation count and file path in presentation; optional styling in TUI; service/log source supplied through commands/client |
 | `machine` | `Command/PromptCommand/resolve` and their tests to commands; retire the unused legacy reducer after verifying that the active `code` view retains product interactions |
 | `native_agent` | Native presentation types to presentation; view/editor rendering to TUI |
 | `permission` | Approval decision/policy in harness; prompt UI in TUI; retain each existing headless approval policy |
@@ -577,6 +612,13 @@ headless builds. Preserve rendered content, ordering, cost provenance and output
 schemas while separating terminal layout. Do not silently replace existing
 noninteractive denial policies with a blanket approval, or change an explicitly
 configured headless policy.
+
+Before replacing the current plain renderer, capture transcript fixtures for
+Markdown/code blocks, tool results and diffs, reasoning, cost attribution and
+failure log tails. Retain once-per-settled-turn output and closed-pipe behavior.
+Moving Ratatui-backed `Line`, `Size` or a renderer cache into a module named
+`presentation` does not satisfy headless isolation; shared formatting must have
+terminal-independent data and dependencies.
 
 ### Current telemetry, matcher and helper modules
 
@@ -603,7 +645,7 @@ configured headless policy.
 | Package `lib.rs` files | Update module declarations/docs and intentional visibility; delete removed package roots; no public forwarding facades |
 | Application `main.rs` | Keep `bro`; thin feature-aware command dispatch; TUI and CLI share commands |
 | Application `build.rs` | Gate agent/runtime catalog generation by harness; preserve handoff/migration fingerprint inputs needed by gateway |
-| `apps/bitrouter/tests` | Keep real-process/HTTP/PTY integration role; gate suites by the features they exercise, not wholesale |
+| `apps/bitrouter/tests` | Keep real-process/HTTP/PTY integration role; gate suites by the features they exercise, not wholesale; update explicit CI test shards when a suite changes packages so its supported platform coverage is retained |
 | AI and old SDK `tests` | Move provider/auth/codec/runtime suites to application; keep independent contract/serde tests with AI and client tests with SDK |
 | Orchestrator tests/examples | Move scheduling tests to core, runtime/tools/store tests to harness, public contract tests to AI or application integration as appropriate |
 | Telemetry tests/benchmarks | Move ingress, hierarchy, schema conformance and overhead coverage with exporter; do not change frozen wire names |
@@ -735,6 +777,14 @@ this distinction for reduced builds.
 | TUI without local core | `--no-default-features --features tui` | TUI plus supported harness/CLI paths |
 | Full local scheduling and TUI | `--no-default-features --features core,tui` | Local core/harness/TUI with only explicitly selected integrations |
 
+Every optional dependency must follow the same ownership as its code. The
+application declares terminal drawing/input dependencies under `tui`, ACP
+process/controller dependencies under `harness`, MCP transports under `mcp`,
+OTLP dependencies under the selected transport and non-SQLite database drivers
+under their backend feature. Shared workspace declarations must not enable
+those optional features unconditionally. Headless startup must also avoid
+terminal initialization through an indirect onboarding, prompt or log helper.
+
 Ship and document gateway-only artifacts so service operators do not need to
 recompile merely to obtain the supported gateway profile. Optional trusted custom
 extensions still require their own build. Default installations keep the full
@@ -832,7 +882,8 @@ pass. AI becomes fully lightweight after its runtime moves in P0 3.
   Extract shared snapshot decoding and offline history validation before gating
   the scheduler, so harness recovery remains independently usable.
 - Absorb TUI after extracting command vocabulary, approval policy and presentation
-  data. Remove Ratatui types from headless output.
+  data. Remove Ratatui types from headless output and compare the retained
+  transcript/failure-output fixtures before removing the old renderer path.
 - Move the telemetry implementation into the application, keeping schema
   conformance tests, independent HTTP/gRPC transport tests and frozen names
   intact.
@@ -874,6 +925,9 @@ consumer requires the old SDK server API.
 - Preserve supported gateway/control paths and auth behavior; document exactly
   which core methods are remotely supported. Preserve the existing WebSocket
   boundary where used.
+- Carry the service-surface table into endpoint/capability tests. Preserve
+  separate inference, control and execution credentials and listener exposure;
+  never route an unsupported managed request into ordinary inference.
 - Provide a standalone example consumer with only SDK/contract dependencies,
   service endpoint and credential. Use the official gateway executable plus
   ordinary configuration as its server.
@@ -939,7 +993,7 @@ refactor has already been implemented or tested.
 | A04 Gateway artifact | Official gateway profile runs as an independent process using configuration; no consumer-provided AppBuilder, hooks, database handles or source changes |
 | A05 Feature closure | Minimum/core/harness/tui/core+harness/core+tui/optional-gateway/default/all-features builds succeed in isolation; `tui` contains harness/CLI, harness does not implicitly enable core |
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state |
-| A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds |
+| A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees |
 | A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
@@ -978,7 +1032,7 @@ coverage that justifies a profile.
 | Profile or boundary | Required behavior evidence |
 | --- | --- |
 | Minimum gateway | Real-process inference/control, configured authentication, published-policy load/validation and equivalent routing, usage finalization and shutdown without agent resources or a terminal |
-| Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness |
+| Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness; existing eval HTTP subject/result/snapshot/status behavior and tenant isolation |
 | Harness only | ThreadService ownership/queue/approval/recovery, historical native snapshot decoding and corruption rejection, and supported headless execution tests, without production core or terminal drawing |
 | Core and harness | Existing managed execution, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
 | TUI | Existing PTY actions and terminal restoration; shared command results agree with the corresponding headless paths |

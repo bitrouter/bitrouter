@@ -1,9 +1,10 @@
 //! Prepared prompt bytes must be admitted before counting or model execution.
 
 use super::*;
+use bitrouter::gateway::pipeline::native::InputTokenCounting;
+use bitrouter::gateway::pipeline::native::NativeInputCount;
+use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind;
 use bitrouter_ai::types::{Message, Role};
-use bitrouter_sdk::language_model::native::{InputTokenCounting, NativeInputCount};
-use bitrouter_sdk::language_model::native_preparation::NativePreparationWorkKind;
 
 const EXPANSION_BYTES: usize = 512 * 1024;
 
@@ -13,7 +14,7 @@ struct ExpandPrompt {
     calls: AtomicUsize,
 }
 
-impl bitrouter_sdk::app::PromptTransform for ExpandPrompt {
+impl bitrouter::gateway::assembly::PromptTransform for ExpandPrompt {
     fn apply(&self, prompt: &mut Prompt) {
         if self.enabled.load(Ordering::SeqCst) {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -36,10 +37,11 @@ impl Executor for CountedExecutor {
         _: &RoutingTarget,
         prompt: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<NativeInputCount> {
+    ) -> bitrouter::gateway::error::Result<NativeInputCount> {
         self.counts.fetch_add(1, Ordering::SeqCst);
-        let bytes = serde_json::to_vec(prompt)
-            .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?;
+        let bytes = serde_json::to_vec(prompt).map_err(|error| {
+            bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+        })?;
         Ok(NativeInputCount::Counted {
             input_tokens: 100,
             request_sha256: sha256(&bytes),
@@ -52,7 +54,7 @@ impl Executor for CountedExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         self.inner.execute(target, prompt, ctx).await
     }
 
@@ -61,7 +63,7 @@ impl Executor for CountedExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
         self.inner.execute_stream(target, prompt, ctx).await
     }
 }

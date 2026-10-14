@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::gateway::caller::CallerContext;
 use bitrouter_ai::types::{Content, Prompt, Role, ToolResultOutput};
-use bitrouter_sdk::caller::CallerContext;
 use serde_json::json;
 use tempfile::TempDir;
 

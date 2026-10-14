@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::Router;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::RouterOptions;
+use bitrouter::gateway::http::build_router_with_options;
 use bitrouter::workflow_state::archive::TraceArchive;
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{HarnessId, SessionConfidence, WorkflowStateKind};
@@ -15,7 +18,6 @@ use bitrouter::workflow_state::real_trace::{
     RealTraceCapture, TraceCaptureOptions, TraceSanitizer,
 };
 use bitrouter::workflow_state::replay::ReplayEvaluator;
-use bitrouter_sdk::server::{AppState, RouterOptions, build_router_with_options};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -672,7 +674,7 @@ fn assert_agent_output_success(agent: &str, output: std::process::Output) {
 }
 
 async fn serve_real_agent_router(
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &bitrouter::config::Config,
     harness: HarnessId,
 ) -> RealAgentServer {
     let assembled = bitrouter::build_app(cfg).await.expect("app assembles");
@@ -1400,7 +1402,7 @@ toolsets:
     path
 }
 
-fn config_for_real_agent(upstream: &str) -> bitrouter_sdk::config::Config {
+fn config_for_real_agent(upstream: &str) -> bitrouter::config::Config {
     let yaml = format!(
         r#"
 server:
@@ -1457,7 +1459,7 @@ models:
         service_id: test-messages
 "#
     );
-    bitrouter_sdk::config::parse_with(&yaml, |_| None).expect("config parses")
+    bitrouter::config::parse_with(&yaml, |_| None).expect("config parses")
 }
 
 async fn serve_router(router: Router) -> (String, tokio::task::JoinHandle<()>) {

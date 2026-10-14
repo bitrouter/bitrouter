@@ -493,8 +493,8 @@ async fn wait(mut progress: watch::Receiver<Progress>) -> Result<Arc<ResponseExc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::assembly::App;
     use axum::{Router, routing::post};
-    use bitrouter_sdk::App;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tower::ServiceExt;
 

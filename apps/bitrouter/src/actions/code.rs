@@ -37,7 +37,7 @@ struct InitialLaunch {
     agent_id: String,
     selection: SessionSelection,
     routing: crate::acp_cli::RoutingOptions,
-    config: bitrouter_sdk::config::Config,
+    config: crate::config::Config,
     options: crate::acp_cli::LaunchOptions,
 }
 
@@ -385,7 +385,7 @@ impl CodeServices {
 }
 
 pub(crate) async fn background_choices(
-    config: &bitrouter_sdk::config::Config,
+    config: &crate::config::Config,
     current_agent: Option<&str>,
     foreground_claim: bool,
 ) -> Result<crate::presentation::agents::NewAgentRunChoices> {
@@ -446,7 +446,7 @@ fn conversation_label(workspace: &Path) -> String {
         .file_name()
         .unwrap_or(workspace.as_os_str())
         .to_string_lossy();
-    format!("{} code · {short}", bitrouter_sdk::invocation::name())
+    format!("{} code · {short}", crate::commands::invocation::name())
 }
 
 /// A socket or named remote target exposes only daemon reports. The typed
@@ -497,7 +497,7 @@ mod tests {
         let source = ConfigSource::Default { home: directory };
         let (services, initial_request) = CodeServices::from_spawn_context(SpawnContext {
             source: &source,
-            config: bitrouter_sdk::config::Config::default(),
+            config: crate::config::Config::default(),
             agent_id: "initial",
             options: LaunchOptions {
                 strip_inherited_env: vec!["UNRELATED_AGENT_TOKEN".to_string()],

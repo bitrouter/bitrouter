@@ -28,12 +28,13 @@ use std::sync::Arc;
 
 use crate::cloud::account::credentials::default_credentials_path;
 use crate::cloud::account::manager::CredentialManager;
+use crate::config::Config;
+use crate::config::ProviderConfig;
 use crate::telemetry::bearer::TelemetryBearer;
 use anyhow::{Context, Result};
 use bitrouter_ai::auth::AuthAppliers;
 use bitrouter_ai::providers::hosted::PROVIDER_ID;
 use bitrouter_ai::providers::hosted::applier::BitrouterAuthApplier;
-use bitrouter_sdk::config::{Config, ProviderConfig};
 
 const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
@@ -249,7 +250,7 @@ pub async fn cloud_api_key_for_base_url(target_base_url: &str) -> Option<String>
 fn onboarding_hint() -> String {
     format!(
         "no BitRouter Cloud credential — run `{} cloud login` or set BITROUTER_API_KEY=brk_…",
-        bitrouter_sdk::invocation::name()
+        crate::commands::invocation::name()
     )
 }
 
@@ -257,10 +258,10 @@ fn onboarding_hint() -> String {
 mod tests {
     use super::*;
     use crate::cloud::account::manager::CredentialManager;
+    use crate::gateway::pipeline::types::RoutingTarget;
     use bitrouter_ai::auth::AuthApplier;
     use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
     use bitrouter_ai::types::ApiProtocol;
-    use bitrouter_sdk::language_model::types::RoutingTarget;
     use chrono::{Duration, Utc};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path as wm_path};

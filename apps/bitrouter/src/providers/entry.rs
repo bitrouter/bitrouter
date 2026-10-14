@@ -19,8 +19,8 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use crate::config::ProviderClass;
 use bitrouter_ai::types::{ApiProtocol, ProtocolList};
-use bitrouter_sdk::config::ProviderClass;
 
 /// One built-in provider entry.
 #[derive(Debug, Clone, Deserialize)]
@@ -49,7 +49,7 @@ pub struct ProviderEntry {
     /// readers (and reviewers of this file) can verify the auth + URL shape.
     pub doc_url: String,
     /// Routing-preference class for this built-in. Applied to a configured
-    /// provider's [`class`](bitrouter_sdk::config::ProviderConfig::class) when
+    /// provider's [`class`](crate::config::ProviderConfig::class) when
     /// it is unset, so gateways and the hosted cloud land in the right priority
     /// tier even though they are not registry providers. Optional — a built-in
     /// without a class stays unranked (sorts last in the auto-cascade).
@@ -105,7 +105,7 @@ impl ProtocolMapping {
 
 /// Trailing-`*` glob match. Anything else is an exact match. (The wildcard
 /// form is the only one we need for opencode-zen-shape providers; deeper
-/// glob support is in [`bitrouter_sdk::config::Pattern`] for user-written
+/// glob support is in [`crate::config::pattern::Pattern`] for user-written
 /// patterns and we don't want to depend on it here.)
 fn pattern_matches(pat: &str, model_id: &str) -> bool {
     if let Some(prefix) = pat.strip_suffix('*') {

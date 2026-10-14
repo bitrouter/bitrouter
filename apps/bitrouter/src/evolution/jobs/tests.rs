@@ -1,10 +1,13 @@
 use super::*;
+use crate::config::Config;
+use crate::config::ProviderConfig;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::assembly::App;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::executor::MockExecutor;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
 use bitrouter_ai::types::ToolChoice;
-use bitrouter_sdk::app::App;
-use bitrouter_sdk::config::{Config, ConfigRoutingTable, ProviderConfig};
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::executor::MockExecutor;
-use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook};
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
 use crate::acp_trajectory::{RecordingScope, SessionIdentity};
@@ -14,7 +17,10 @@ struct JudgeRequestContract;
 
 #[async_trait::async_trait]
 impl PreRequestHook for JudgeRequestContract {
-    async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
         assert!(ctx.require_generation_prompt()?.tools.is_empty());
         assert_eq!(
             ctx.require_generation_prompt()?.tool_choice,
@@ -38,11 +44,14 @@ struct SwitchEvolutionOff(crate::evolution::service::EvolutionService);
 
 #[async_trait::async_trait]
 impl PreRequestHook for SwitchEvolutionOff {
-    async fn check(&self, _ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        _ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
         self.0
             .set_mode(crate::evolution::control::EvolutionMode::Off, None)
             .await
-            .map_err(|error| bitrouter_sdk::error::BitrouterError::internal(error.to_string()))?;
+            .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?;
         Ok(HookDecision::Allow)
     }
 }

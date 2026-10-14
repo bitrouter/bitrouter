@@ -1,6 +1,6 @@
 use super::*;
-use bitrouter_sdk::language_model::executor::HttpExecutor;
-use bitrouter_sdk::language_model::native::NativeInputCount;
+use bitrouter::gateway::pipeline::executor::HttpExecutor;
+use bitrouter::gateway::pipeline::native::NativeInputCount;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -153,7 +153,7 @@ async fn session_for(
         "providers":{"counter":{"api_base":counter.base,"api_key":"count-fixture-key","models":declared}},
         "models":{"fixture-model":{"endpoints":endpoints}},
     }))?;
-    let table = bitrouter_sdk::config::ConfigRoutingTable::from_config(config);
+    let table = bitrouter::config::routing_table::ConfigRoutingTable::from_config(config);
     let executor = Arc::new(HttpExecutor::with_defaults()?);
     let app = App::builder()
         .language_model(|builder| {
@@ -481,7 +481,7 @@ async fn counting_consumes_active_time_without_consuming_generation_attempts() -
 struct ManagedProtocolInput {
     automatic_truncation: bool,
 }
-impl bitrouter_sdk::app::PromptTransform for ManagedProtocolInput {
+impl bitrouter::gateway::assembly::PromptTransform for ManagedProtocolInput {
     fn apply(&self, prompt: &mut Prompt) {
         prompt.params.store = Some(true);
         if self.automatic_truncation {
@@ -504,12 +504,12 @@ async fn managed_protocol_filters_lossy_candidate_before_count_or_attempt() -> T
         first.api_base = counter.base.clone();
         first.api_key = "count-fixture-key".into();
         first.model_constraints.input_token_counting =
-            Some(bitrouter_sdk::language_model::native::InputTokenCounting::Responses);
+            Some(bitrouter::gateway::pipeline::native::InputTokenCounting::Responses);
         let mut second = first.clone();
         second.provider_name = "b-compatible-responses".into();
         second.api_protocol = ApiProtocol::Responses;
         second.model_constraints.input_token_counting = if count_good {
-            Some(bitrouter_sdk::language_model::native::InputTokenCounting::Responses)
+            Some(bitrouter::gateway::pipeline::native::InputTokenCounting::Responses)
         } else {
             None
         };

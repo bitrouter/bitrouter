@@ -2,9 +2,10 @@ use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::core::context_router::FEATURE;
 use bitrouter::core::protocol::ContextMode;
-use bitrouter_sdk::decision_model::DecisionRuntime;
-use bitrouter_sdk::decision_model::policy::{DecisionPolicy, DecisionPricing};
-use bitrouter_sdk::decision_model::typesafe::TypeSafeExecutor;
+use bitrouter::gateway::model::decision::DecisionRuntime;
+use bitrouter::gateway::model::decision::policy::DecisionPolicy;
+use bitrouter::gateway::model::decision::policy::DecisionPricing;
+use bitrouter::gateway::model::decision::typesafe::TypeSafeExecutor;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -683,7 +684,9 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
 #[tokio::test]
 async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -> TestResult {
     use bitrouter::core::context_router::inspection::{Inspection, RoutingPhase};
-    use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+    use bitrouter::gateway::routing::signals::NextStepRole;
+    use bitrouter::gateway::routing::signals::ProgressState;
+    use bitrouter::gateway::routing::signals::TaskFamily;
     let server = MockServer::start().await;
     Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &Request| {
         let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else { return ResponseTemplate::new(400) };

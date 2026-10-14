@@ -1,9 +1,9 @@
 //! Auxiliary callback admission before the model plan is frozen.
 
 use super::*;
-use bitrouter_sdk::language_model::native_preparation::{
-    NativePreparationWork, NativePreparationWorkKind, NativePreparationWorkReport,
-};
+use crate::gateway::pipeline::native_preparation::NativePreparationWork;
+use crate::gateway::pipeline::native_preparation::NativePreparationWorkKind;
+use crate::gateway::pipeline::native_preparation::NativePreparationWorkReport;
 
 pub(super) fn validate_preparation(step: &ModelStep, request_id: &str) -> Result<(), CoreError> {
     if step.preparation_work.iter().any(|record| {
@@ -25,7 +25,7 @@ impl StepControl {
     pub(super) async fn admit_preparation_work(
         &self,
         work: &NativePreparationWork,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let step_id = self.step_id.lock().await.clone();
         self.session
             .transition_for(
@@ -104,7 +104,7 @@ impl StepControl {
     pub(super) async fn record_preparation_work(
         &self,
         report: NativePreparationWorkReport,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let step_id = self.step_id.lock().await.clone();
         let active_ms = self
             .session

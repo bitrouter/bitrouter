@@ -5,12 +5,14 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::auth::entities::api_keys;
 
+use crate::gateway::caller::CallerContext;
+use crate::gateway::mcp::McpContext;
+use crate::gateway::mcp::McpRequest;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::types::PipelineRequest;
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
-};
-use bitrouter_sdk::mcp::{McpContext, McpRequest};
 
 use crate::auth::db::{self, NewApiKey};
 use crate::auth::events::{ApiPrincipalEstablished, Authenticated};
@@ -113,7 +115,7 @@ async fn valid_key_authenticates_mcp_and_emits_identity_events() {
     let hook = AuthHook::new(pool);
     let mut ctx = mcp_ctx_with(CallerContext::anonymous(), Some(&secret));
 
-    let decision = bitrouter_sdk::mcp::PreRequestHook::check(&hook, &mut ctx)
+    let decision = crate::gateway::mcp::PreRequestHook::check(&hook, &mut ctx)
         .await
         .unwrap();
     assert!(matches!(decision, HookDecision::Allow));
@@ -128,13 +130,13 @@ async fn anonymous_mcp_request_is_denied_when_auth_is_enabled() {
     let hook = AuthHook::new(pool().await);
     let mut ctx = mcp_ctx_with(CallerContext::anonymous(), None);
 
-    let decision = bitrouter_sdk::mcp::PreRequestHook::check(&hook, &mut ctx)
+    let decision = crate::gateway::mcp::PreRequestHook::check(&hook, &mut ctx)
         .await
         .unwrap();
     let HookDecision::Deny(reason) = decision else {
         panic!("anonymous MCP request must be denied");
     };
-    let error: bitrouter_sdk::BitrouterError = reason.into();
+    let error: crate::gateway::error::BitrouterError = reason.into();
     assert_eq!(error.status(), 401);
 }
 
@@ -213,7 +215,7 @@ async fn unknown_key_is_denied_401() {
     let mut ctx = ctx_with(CallerContext::anonymous(), Some(&fresh.secret));
     match hook.check(&mut ctx).await.unwrap() {
         HookDecision::Deny(reason) => {
-            let err: bitrouter_sdk::BitrouterError = reason.into();
+            let err: crate::gateway::error::BitrouterError = reason.into();
             assert_eq!(err.status(), 401);
         }
         HookDecision::Allow => panic!("unknown key must be denied"),

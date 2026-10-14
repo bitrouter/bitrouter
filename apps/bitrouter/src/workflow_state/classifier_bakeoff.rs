@@ -18,7 +18,7 @@ use super::shadow_classifier::{
     ShadowConfidenceKind, ShadowPredictorKind, ShadowPredictorProvenance,
 };
 use crate::eval::types::canonical_digest;
-use bitrouter_sdk::routing::signals::TaskFamily;
+use crate::gateway::routing::signals::TaskFamily;
 
 pub const CLASSIFIER_BAKEOFF_SCHEMA_VERSION: u32 = 2;
 const CLASSIFICATION_WEIGHT_TASK: u32 = 4;

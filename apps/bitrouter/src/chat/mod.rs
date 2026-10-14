@@ -45,7 +45,7 @@ mod tests {
             "crate::metering",
             "crate::policy",
             "MeteringStore",
-            "bitrouter_sdk::config",
+            "crate::config",
             "control_socket",
             "DaemonRouteControl",
             "DaemonSessionCost",

@@ -1,10 +1,10 @@
 //! Deterministic semantic provider fixtures. Labels are test inputs, never a
 //! classifier quality claim or an alternative production routing algorithm.
+use bitrouter::config::Config;
+use bitrouter::config::decision::DecisionModelConfig;
 use bitrouter::policy_lock::{
     CertificateSource, PolicyCertificate, PolicyLock, PromotionVerdict, RouteOwner,
 };
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::config::decision::DecisionModelConfig;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};

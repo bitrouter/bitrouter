@@ -474,7 +474,7 @@ mod tests {
     use bitrouter_ai::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, Tool, ToolResultOutput,
     };
-    use bitrouter_sdk::HeaderMap;
+    use http::HeaderMap;
 
     use crate::workflow_state::ir::{
         ContextSizeBucket, ProtocolKind, RecoverySignal, RequirementLevel, ToolDensity,

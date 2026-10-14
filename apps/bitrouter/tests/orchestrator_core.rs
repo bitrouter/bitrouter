@@ -11,8 +11,8 @@ use bitrouter::core::protocol::{
     Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate, TaskInput,
 };
 use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus};
+use bitrouter::gateway::caller::CallerContext;
 use bitrouter_ai::types::Role;
-use bitrouter_sdk::caller::CallerContext;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
@@ -137,7 +137,7 @@ async fn assembled_app_revalidates_rebuilt_context_before_fresh_count_and_execut
                     "output_tokens_details":{"reasoning_tokens":2}}
             }))
         }).mount(&upstream).await;
-    let config = bitrouter_sdk::config::parse_with(
+    let config = bitrouter::config::parse_with(
         &format!(
             r#"
 inherit_defaults: false
@@ -372,7 +372,7 @@ models:
             "SELECT estimated_charge_micro_usd, charge_status, charge_evidence_json FROM requests",
         ))
         .await?;
-    let bitrouter_sdk::language_model::native_accounting::NativeTokenCost::ConfiguredEstimate {
+    let bitrouter::gateway::pipeline::native_accounting::NativeTokenCost::ConfiguredEstimate {
         pricing_version,
         normalized_usage,
         ..
@@ -419,7 +419,7 @@ async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<
         home.path().join("policy-lock.yaml"),
         bitrouter::policy_lock::deterministic_yaml(&lock)?,
     )?;
-    let mut config = bitrouter_sdk::config::parse_with(
+    let mut config = bitrouter::config::parse_with(
         &format!(
             r#"
 inherit_defaults: false

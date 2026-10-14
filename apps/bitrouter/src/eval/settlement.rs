@@ -3,11 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::gateway::error::Result as BitrouterResult;
+use crate::gateway::pipeline::settlement::SettlementContext;
+use crate::gateway::pipeline::settlement::SettlementRecorder;
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_sdk::Result as BitrouterResult;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use uuid::Uuid;
@@ -17,9 +18,9 @@ use super::types::{
     EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject, EvidenceItem,
     RouteDecisionMeasurement, canonical_digest, evidence_digest,
 };
+use crate::gateway::routing::signals::TaskFamily;
 use crate::workflow_state::predictive::is_task_family_reason_code;
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
-use bitrouter_sdk::routing::signals::TaskFamily;
 
 /// Opaque, process-local identity for one pipeline invocation that produced an
 /// evaluable policy decision. Its token and owner never enter serialized event
@@ -635,7 +636,7 @@ impl EvalSettlementRecorder {
 /// evaluation. Stable receipt IDs deduplicate acknowledged decision reuse.
 pub(crate) fn routing_evidence(context: &SettlementContext) -> anyhow::Result<Vec<EvidenceItem>> {
     let mut evidence = Vec::new();
-    if let Some(receipt) = context.get_event::<bitrouter_sdk::routing::preparation::Receipt>() {
+    if let Some(receipt) = context.get_event::<crate::gateway::routing::preparation::Receipt>() {
         let mut attributes = BTreeMap::from([("decision_receipt_id".into(), receipt.id.clone())]);
         if let Some(assessment) = &receipt.assessment {
             attributes.insert("input_digest".into(), assessment.input_digest.clone());
@@ -668,7 +669,7 @@ pub(crate) fn routing_evidence(context: &SettlementContext) -> anyhow::Result<Ve
             attributes,
         });
     }
-    if let Some(selection) = context.get_event::<bitrouter_sdk::routing::plan::Selection>() {
+    if let Some(selection) = context.get_event::<crate::gateway::routing::plan::Selection>() {
         evidence.push(EvidenceItem {
             evidence_id: format!("route-plan:{}", canonical_digest(&context.request_id)?),
             kind: "routing.plan".into(),
@@ -707,7 +708,7 @@ impl SettlementRecorder for EvalSettlementRecorder {
                 .record_if_tracked(context, snapshot.as_ref())
                 .await
                 .map_err(|error| {
-                    bitrouter_sdk::BitrouterError::internal(format!(
+                    crate::gateway::error::BitrouterError::internal(format!(
                         "persisting trajectory settlement: {error}"
                     ))
                 })?;
@@ -730,7 +731,7 @@ impl SettlementRecorder for EvalSettlementRecorder {
             return Ok(());
         };
         let subject = self.subject(&decision, context).map_err(|error| {
-            bitrouter_sdk::BitrouterError::internal(format!(
+            crate::gateway::error::BitrouterError::internal(format!(
                 "building request eval subject: {error}"
             ))
         })?;
@@ -738,7 +739,7 @@ impl SettlementRecorder for EvalSettlementRecorder {
             .insert_subject_owned(&subject, context.caller.user_id())
             .await
             .map_err(|error| {
-                bitrouter_sdk::BitrouterError::internal(format!(
+                crate::gateway::error::BitrouterError::internal(format!(
                     "persisting request eval subject: {error}"
                 ))
             })?;
@@ -753,11 +754,12 @@ impl SettlementRecorder for EvalSettlementRecorder {
 mod tests {
     use std::collections::BTreeSet;
 
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::observability::event::EventBus;
+    use crate::gateway::pipeline::settlement::SettlementContext;
+    use crate::gateway::pipeline::settlement::SettlementRecorder;
     use bitrouter_ai::types::ReasoningEffort;
     use bitrouter_ai::types::UsageOrigin;
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{
@@ -1151,9 +1153,9 @@ mod tests {
 
     #[tokio::test]
     async fn native_subject_uses_the_same_admitted_tariff_as_metering() -> anyhow::Result<()> {
+        use crate::gateway::pipeline::types::RoutingTarget;
         use crate::metering::pricing::{ModelPricing, PricingTable};
         use bitrouter_ai::types::{ApiProtocol, ModelOperation};
-        use bitrouter_sdk::language_model::types::RoutingTarget;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let recorder =

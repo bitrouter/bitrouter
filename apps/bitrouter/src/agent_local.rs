@@ -3,12 +3,12 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::gateway::caller::CallerContext;
 use crate::harness::agent::AgentConfig;
 use crate::harness::service::{ErrorCode, RuntimeCapabilities, ThreadService};
 use crate::harness::turn::TurnSnapshot;
 use anyhow::{Context, Result};
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_sdk::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;

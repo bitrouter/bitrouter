@@ -1,8 +1,10 @@
 use super::*;
-use bitrouter_sdk::language_model::hooks::{DenyReason, HookDecision, PreRequestHook};
-use bitrouter_sdk::language_model::native::{
-    InputTokenCounting, NativeEvidenceCommitment, NativeInputCount,
-};
+use bitrouter::gateway::pipeline::hooks::DenyReason;
+use bitrouter::gateway::pipeline::hooks::HookDecision;
+use bitrouter::gateway::pipeline::hooks::PreRequestHook;
+use bitrouter::gateway::pipeline::native::InputTokenCounting;
+use bitrouter::gateway::pipeline::native::NativeEvidenceCommitment;
+use bitrouter::gateway::pipeline::native::NativeInputCount;
 
 struct FailedPreparation {
     calls: AtomicUsize,
@@ -21,7 +23,10 @@ struct DenyOnce {
 
 #[async_trait]
 impl PreRequestHook for DenyOnce {
-    async fn check(&self, _: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        _: &mut PipelineContext,
+    ) -> bitrouter::gateway::error::Result<HookDecision> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.fault.set_enabled(true);
             Ok(HookDecision::Deny(DenyReason::Forbidden(
@@ -123,7 +128,10 @@ async fn denied_preparation_survives_outcome_ack_loss_without_rechecking() -> Te
 
 #[async_trait]
 impl PreRequestHook for PreparationHook {
-    async fn check(&self, _: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        _: &mut PipelineContext,
+    ) -> bitrouter::gateway::error::Result<HookDecision> {
         self.0.calls.fetch_add(1, Ordering::SeqCst);
         self.0.entered.add_permits(1);
         if self.0.hold {
@@ -131,13 +139,15 @@ impl PreRequestHook for PreparationHook {
                 .resume
                 .acquire()
                 .await
-                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .map_err(|error| {
+                    bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                })?
                 .forget();
         }
         if let Some(fault) = &self.0.fault {
             fault.set_enabled(true);
         }
-        Err(bitrouter_sdk::BitrouterError::internal(
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "preparation\0\"".repeat(100_000),
         ))
     }
@@ -155,7 +165,7 @@ impl Executor for LargeCount {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<NativeInputCount> {
+    ) -> bitrouter::gateway::error::Result<NativeInputCount> {
         self.counts.fetch_add(1, Ordering::SeqCst);
         Ok(NativeInputCount::Counted {
             input_tokens: 0,
@@ -168,9 +178,9 @@ impl Executor for LargeCount {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         self.generations.fetch_add(1, Ordering::SeqCst);
-        Err(bitrouter_sdk::BitrouterError::internal(
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "generation must not run",
         ))
     }
@@ -179,8 +189,10 @@ impl Executor for LargeCount {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 
@@ -271,9 +283,10 @@ async fn oversized_auxiliary_failures_survive_ack_loss_without_reexecution() -> 
                         .failure_diagnostic
                         .as_ref()
                         .ok_or("failure commitment")?;
-                    let error =
-                        bitrouter_sdk::BitrouterError::internal("preparation\0\"".repeat(100_000))
-                            .to_string();
+                    let error = bitrouter::gateway::error::BitrouterError::internal(
+                        "preparation\0\"".repeat(100_000),
+                    )
+                    .to_string();
                     assert_eq!(*diagnostic, NativeEvidenceCommitment::capture(&error)?);
                     assert!(
                         state

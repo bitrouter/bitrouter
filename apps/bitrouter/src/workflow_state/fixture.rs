@@ -3,18 +3,22 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use bitrouter_ai::protocol::InboundAdapter;
 use bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter;
 use bitrouter_ai::protocol::messages::MessagesAdapter;
 use bitrouter_ai::protocol::responses::ResponsesAdapter;
 use bitrouter_ai::types::Prompt;
-use bitrouter_sdk::{BitrouterError, HeaderMap, Result};
+use http::HeaderMap;
 use http::{HeaderName, HeaderValue};
 
+use crate::gateway::routing::signals::NextStepRole;
+use crate::gateway::routing::signals::ProgressState;
+use crate::gateway::routing::signals::TaskFamily;
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind};
 use crate::workflow_state::predictive::NextActionClass;
-use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 
 #[derive(Debug, Clone)]
 pub struct WorkflowTraceFixture {

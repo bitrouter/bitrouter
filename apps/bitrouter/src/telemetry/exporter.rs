@@ -56,12 +56,18 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::context::StreamContext;
+use crate::gateway::pipeline::hooks::HopOutcome;
+use crate::gateway::pipeline::hooks::ObserveHook;
+use crate::gateway::pipeline::hooks::Phase;
+use crate::gateway::pipeline::hooks::RequestOutcome;
+use crate::gateway::pipeline::hooks::StreamHopOutcome;
+use crate::gateway::pipeline::stream::StreamInterest;
+use crate::gateway::pipeline::types::ExecutionResult;
+use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
 use bitrouter_ai::types::{ApiProtocol, Content, Prompt, StreamPart};
-use bitrouter_sdk::language_model::{
-    ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome,
-    RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest,
-};
 
 use crate::telemetry::cardinality::CardinalityLimiter;
 use crate::telemetry::config::{ContentCaptureMode, OtelConfig, SamplerKind};
@@ -1333,7 +1339,7 @@ fn finish_reason_to_str(reason: &bitrouter_ai::types::FinishReason) -> String {
     }
 }
 
-fn error_type(err: &bitrouter_sdk::error::BitrouterError) -> String {
+fn error_type(err: &crate::gateway::error::BitrouterError) -> String {
     // BitrouterError variants are unit-ish; the Debug name is the class.
     // We strip the payload so the attribute stays low-cardinality.
     let dbg = format!("{err:?}");
@@ -1399,17 +1405,23 @@ mod hop_tests {
     use opentelemetry_sdk::error::OTelSdkResult;
     use opentelemetry_sdk::trace::{Span as SdkSpan, SpanData, SpanProcessor};
 
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::error::BitrouterError;
+    use crate::gateway::pipeline::builder::PipelineBuilder;
+    use crate::gateway::pipeline::executor::MockExecutor;
+    use crate::gateway::pipeline::executor::MockResponse;
+    use crate::gateway::pipeline::hooks::DenyReason;
+    use crate::gateway::pipeline::hooks::HookDecision;
+    use crate::gateway::pipeline::hooks::PreRequestHook;
+    use crate::gateway::pipeline::routing::StaticRoutingTable;
+    use crate::gateway::pipeline::settlement::SettlementContext;
+    use crate::gateway::pipeline::settlement::SettlementRecorder;
+    use crate::gateway::pipeline::types::PipelineRequest;
     use bitrouter_ai::protocol::responses::ResponsesAdapter;
     use bitrouter_ai::protocol::{OutboundAdapter, SseEvent};
     use bitrouter_ai::types::{
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
         Role, Usage,
-    };
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::error::BitrouterError;
-    use bitrouter_sdk::language_model::{
-        DenyReason, HookDecision, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
-        PreRequestHook, SettlementContext, SettlementRecorder, StaticRoutingTable,
     };
 
     struct RejectingPreRequestHook;
@@ -1419,7 +1431,7 @@ mod hop_tests {
         async fn check(
             &self,
             _ctx: &mut PipelineContext,
-        ) -> bitrouter_sdk::error::Result<HookDecision> {
+        ) -> crate::gateway::error::Result<HookDecision> {
             Ok(HookDecision::Deny(DenyReason::Unauthorized(
                 "rejected".into(),
             )))
@@ -1433,7 +1445,7 @@ mod hop_tests {
 
     #[async_trait]
     impl SettlementRecorder for BlockingSettlementRecorder {
-        async fn record(&self, _ctx: &mut SettlementContext) -> bitrouter_sdk::error::Result<()> {
+        async fn record(&self, _ctx: &mut SettlementContext) -> crate::gateway::error::Result<()> {
             self.entered.notify_one();
             self.release.notified().await;
             Ok(())
@@ -1797,7 +1809,7 @@ mod hop_tests {
         exporter.after_phase(Phase::PreRequest, &ctx).await;
         exporter.on_hop_start(&ctx, &target).await;
         let mut result = fresh_result(&target);
-        if let bitrouter_sdk::language_model::types::PipelineOutput::Generation(generation) =
+        if let crate::gateway::pipeline::types::PipelineOutput::Generation(generation) =
             &mut result.result
         {
             generation.response_id = Some("native-nonstream-sentinel".into());
@@ -1854,7 +1866,7 @@ mod hop_tests {
             })
             .err()
             .ok_or_else(|| std::io::Error::other("mismatched terminal id must fail"))?;
-        let error = bitrouter_sdk::BitrouterError::from(error);
+        let error = crate::gateway::error::BitrouterError::from(error);
 
         let (exporter, captured) = make_test_exporter();
         let ctx = PipelineContext::new(fresh_request());
@@ -2618,7 +2630,7 @@ mod hop_tests {
             .input
             .generation_prompt_mut()
             .ok_or_else(|| {
-                bitrouter_sdk::error::BitrouterError::internal("expected generation fixture")
+                crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .stream = true;
         let stream = pipeline
@@ -2777,7 +2789,7 @@ mod hop_tests {
             .input
             .generation_prompt_mut()
             .ok_or_else(|| {
-                bitrouter_sdk::error::BitrouterError::internal("expected generation fixture")
+                crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .stream = true;
         let stream = pipeline
@@ -3372,7 +3384,7 @@ mod hop_tests {
             .input
             .generation_prompt_mut()
             .ok_or_else(|| {
-                bitrouter_sdk::error::BitrouterError::internal("expected generation fixture")
+                crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .stream = true;
         let stream = pipeline
@@ -3469,7 +3481,7 @@ mod hop_tests {
             });
         let mut ctx = PipelineContext::new(request);
         let mut result = fresh_result(&fresh_target("google"));
-        if let bitrouter_sdk::language_model::types::PipelineOutput::Generation(generation) =
+        if let crate::gateway::pipeline::types::PipelineOutput::Generation(generation) =
             &mut result.result
         {
             generation.content.push(signed.clone());

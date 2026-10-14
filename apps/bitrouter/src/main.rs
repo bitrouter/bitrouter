@@ -29,6 +29,7 @@ use bitrouter::actions::requests::RequestFilters;
 use bitrouter::actions::route::RouteInput;
 use bitrouter::administration_target::{InspectionTarget, ReloadSubmission};
 use bitrouter::commands;
+use bitrouter::config;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, process_is_alive};
 use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
@@ -60,12 +61,11 @@ use bitrouter::output::reports::trajectory::{
 };
 use bitrouter::output::{CliReport, Output};
 use bitrouter::remote_control::operations::{OperationReport, OperationStatus};
-use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
 #[derive(Parser)]
 #[command(
-    name = bitrouter_sdk::invocation::DEFAULT,
+    name = bitrouter::commands::invocation::DEFAULT,
     version,
     about,
     after_help = "Global compatibility options (place before COMMAND): --json, --human, --context <NAME>"
@@ -1820,7 +1820,7 @@ fn warn_deprecated_invocation() {
         cyan = palette.cyan,
         reset = palette.reset,
         old = DEPRECATED_INVOCATION,
-        new = bitrouter_sdk::invocation::DEFAULT,
+        new = bitrouter::commands::invocation::DEFAULT,
     );
 }
 
@@ -1852,7 +1852,7 @@ async fn async_main() {
     // single `Output` driver. Diagnostics during execution go to stderr; the
     // result (this match) goes to stdout in the selected format, so
     // `bro <cmd> 2>/dev/null | jq` always sees one clean JSON value.
-    let invoked = bitrouter_sdk::invocation::record_argv0();
+    let invoked = bitrouter::commands::invocation::record_argv0();
     if invoked == DEPRECATED_INVOCATION {
         warn_deprecated_invocation();
     }
@@ -1979,7 +1979,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
     let Some(command) = cli.command else {
         if cli.context.as_deref().is_some_and(|name| name != "local") {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                 "a remote context requires an explicit administration action",
             )
             .into());
@@ -1991,11 +1991,13 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
     let remote_context = if matches!(&command, Command::Context { .. }) {
         if cli.context.as_deref().is_some_and(|name| name != "local") {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(format!(
-                "`{} context` manages targets and does not run against a remote context",
-                bitrouter_sdk::invocation::name()
-            ))
-            .into());
+            return Err(
+                bitrouter::gateway::error::BitrouterError::bad_request(format!(
+                    "`{} context` manages targets and does not run against a remote context",
+                    bitrouter::commands::invocation::name()
+                ))
+                .into(),
+            );
         }
         None
     } else {
@@ -2079,7 +2081,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         }
         Command::Operations { action } => {
             let remote = remote_context.as_ref().ok_or_else(|| {
-                bitrouter_sdk::BitrouterError::bad_request(
+                bitrouter::gateway::error::BitrouterError::bad_request(
                     "`operations show` requires a named remote context",
                 )
             })?;
@@ -2104,7 +2106,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 eprintln!(
                     "note: `{cli} status --requests` is a compatibility form; use \
                      `{cli} requests`.",
-                    cli = bitrouter_sdk::invocation::name()
+                    cli = bitrouter::commands::invocation::name()
                 );
             }
             let target = inspection_target(
@@ -2278,13 +2280,13 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 eprintln!(
                     "note: `{cli} launch --agent <agent>` is a compatibility form; use \
                      `{cli} launch <agent>`.",
-                    cli = bitrouter_sdk::invocation::name()
+                    cli = bitrouter::commands::invocation::name()
                 );
             }
             let agent = agent.or(agent_compat).ok_or_else(|| {
-                bitrouter_sdk::BitrouterError::bad_request(format!(
+                bitrouter::gateway::error::BitrouterError::bad_request(format!(
                     "launch requires an agent, for example `{} launch claude`",
-                    bitrouter_sdk::invocation::name()
+                    bitrouter::commands::invocation::name()
                 ))
             })?;
             run_native_launch(&agent, options, output).await
@@ -2324,7 +2326,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 (None, Some(id)) => bitrouter::acp_cli::SessionSelection::Resume(id),
                 (None, None) => bitrouter::acp_cli::SessionSelection::New,
                 (Some(_), Some(_)) => {
-                    return Err(bitrouter_sdk::BitrouterError::bad_request(
+                    return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                         "--load and --resume cannot be combined",
                     )
                     .into());
@@ -2332,7 +2334,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             };
             if background {
                 if headless.format != bitrouter::acp_cli::PromptFormat::Ndjson {
-                    return Err(bitrouter_sdk::BitrouterError::bad_request(
+                    return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                         "`--format text|quiet` is unavailable with `--background`; the command returns a structured run report",
                     )
                     .into());
@@ -2428,14 +2430,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                          `{cli} launch {}` for the TUI, or drop `--agent` to spawn \
                          an ACP sub-agent.",
                         legacy.spec().id,
-                        cli = bitrouter_sdk::invocation::name()
+                        cli = bitrouter::commands::invocation::name()
                     );
                 }
                 eprintln!(
                     "note: `{cli} spawn --agent` is deprecated — use \
                      `{cli} launch {}` (this alias will be removed).",
                     legacy.spec().id,
-                    cli = bitrouter_sdk::invocation::name()
+                    cli = bitrouter::commands::invocation::name()
                 );
                 let opts = bitrouter::spawn::SpawnOptions {
                     agent: bitrouter::spawn::resolve_launch_agent(legacy.spec().id)?,
@@ -2453,7 +2455,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     "spawn: provide an agent id and a mode, e.g. \
                      `{cli} spawn claude-acp -p \"summarize README\"`, \
                      `{cli} spawn codex-acp --serve`, or `--check`.",
-                    cli = bitrouter_sdk::invocation::name()
+                    cli = bitrouter::commands::invocation::name()
                 );
             };
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -2480,7 +2482,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 eprintln!(
                     "note: `{cli} spawn <agent> --check` is a compatibility form; use \
                      `{cli} agents check <agent>`.",
-                    cli = bitrouter_sdk::invocation::name()
+                    cli = bitrouter::commands::invocation::name()
                 );
                 let report = bitrouter::acp_cli::spawn_check(cfg, &agent, &routing).await?;
                 output.emit(&report)?;
@@ -2503,7 +2505,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 eprintln!(
                     "note: `{cli} spawn <agent> -p` is a compatibility form; use \
                      `{cli} run <agent> <prompt>`.",
-                    cli = bitrouter_sdk::invocation::name()
+                    cli = bitrouter::commands::invocation::name()
                 );
                 run_agent_prompt(
                     &source,
@@ -2539,7 +2541,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Tui { options } => {
             eprintln!(
                 "note: `{cli} tui` is a compatibility alias; use `{cli} code`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             run_code(options, remote_context, cli.context.as_deref()).await
         }
@@ -2553,7 +2555,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
             eprintln!(
                 "note: `{cli} chat` is a compatibility alias; use `{cli} code {agent}`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             // Keep the retired alias safe for existing scripts: the canonical
             // `code <agent>` owns an interactive terminal, while a redirected
@@ -3063,7 +3065,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             use bitrouter::adequacy::report::ReliabilityReport;
             use bitrouter::adequacy::store::AdequacyStore;
 
-            let config_document = bitrouter_sdk::config::load(&config)
+            let config_document = bitrouter::config::load(&config)
                 .await
                 .with_context(|| format!("load reliability config {}", config.display()))?;
             let db = bitrouter::db::connect(&database_url)
@@ -3362,7 +3364,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             let config = bitrouter::paths::load_config(&source).await?;
             let servers = bitrouter::tools::check(&config, server.as_deref())
                 .await
-                .map_err(bitrouter_sdk::BitrouterError::bad_request)?
+                .map_err(bitrouter::gateway::error::BitrouterError::bad_request)?
                 .into_iter()
                 .map(|row| match row.outcome {
                     Ok(tools) => McpCheckRow {
@@ -3393,7 +3395,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
         McpAction::Search { query, limit } => {
             eprintln!(
                 "note: `{cli} mcp search` is deprecated and hidden from help.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let outcome = bitrouter::mcp_registry::RegistryClient::new()?
                 .servers(Some(&query), limit)
@@ -3404,7 +3406,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
         McpAction::List { limit } => {
             eprintln!(
                 "note: `{cli} mcp list` is deprecated and hidden from help.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let outcome = bitrouter::mcp_registry::RegistryClient::new()?
                 .servers(None, limit)
@@ -3415,7 +3417,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
         McpAction::Add { name } => {
             eprintln!(
                 "note: `{cli} mcp add` is deprecated and hidden from help.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let outcome = bitrouter::mcp_registry::RegistryClient::new()?
                 .latest(&name)
@@ -3670,7 +3672,7 @@ fn emit_operation_result(output: &Output, report: &OperationReport) -> Result<()
         "reload {status}; inspect `{cli} --context <name> operations show {} --instance {}` before retrying",
         report.request_id,
         report.server_instance_id,
-        cli = bitrouter_sdk::invocation::name()
+        cli = bitrouter::commands::invocation::name()
     )
 }
 
@@ -3688,7 +3690,7 @@ fn validate_remote_invocation(command: &Command, remote: bool) -> Result<()> {
                 Some(AgentsAction::List {
                     remote: true, ..
                 }),
-        } => Err(bitrouter_sdk::BitrouterError::bad_request(
+        } => Err(bitrouter::gateway::error::BitrouterError::bad_request(
             "`agents list --remote` fetches the external ACP registry and cannot run against a remote BitRouter context",
         )
         .into()),
@@ -3702,7 +3704,7 @@ fn validate_remote_invocation(command: &Command, remote: bool) -> Result<()> {
         } => reject_remote_local_target_flags(config.as_deref(), socket.as_deref()),
         Command::Agents {
             action: Some(AgentsAction::Check { .. }),
-        } => Err(bitrouter_sdk::BitrouterError::bad_request(
+        } => Err(bitrouter::gateway::error::BitrouterError::bad_request(
             "`agents check` launches an agent and is unavailable for a remote context",
         )
         .into()),
@@ -3728,7 +3730,7 @@ fn validate_remote_invocation(command: &Command, remote: bool) -> Result<()> {
                     })?;
                 return Ok(());
             }
-            Err(bitrouter_sdk::BitrouterError::bad_request(
+            Err(bitrouter::gateway::error::BitrouterError::bad_request(
                 "this command is local-only for a remote context",
             )
             .into())
@@ -4174,7 +4176,7 @@ async fn administration_policy(
         }
         action => {
             if remote_context.is_some() {
-                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "this policy action is local-only for a remote context",
                 )
                 .into());
@@ -4215,7 +4217,7 @@ async fn administration_providers(
         }
         action => {
             if remote_context.is_some() {
-                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "provider credential administration is local-only for a remote context",
                 )
                 .into());
@@ -4283,7 +4285,7 @@ async fn administration_agents(
     match action {
         None => {
             if remote_context.is_some() {
-                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "the standalone agent manager is local-only for a remote context",
                 )
                 .into());
@@ -4307,7 +4309,7 @@ async fn administration_agents(
         }
         Some(action) => {
             if remote_context.is_some() {
-                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "agent launch and external-registry actions are local-only for a remote context",
                 )
                 .into());
@@ -4340,7 +4342,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
             let source_raw = tokio::fs::read_to_string(config_path).await?;
-            let source_config = bitrouter_sdk::config::parse(&source_raw)?;
+            let source_config = bitrouter::config::parse(&source_raw)?;
             if let Some(strong_model) = strong.as_deref() {
                 bitrouter::policy_lock::validate_routable_model(&source_config, strong_model)
                     .await?;
@@ -4924,7 +4926,7 @@ async fn trajectory(
 async fn local_trajectory_store(
     source: &bitrouter::paths::ConfigSource,
 ) -> Result<(
-    bitrouter_sdk::config::Config,
+    bitrouter::config::Config,
     bitrouter::trajectory::store::TrajectoryStore,
 )> {
     let config = bitrouter::paths::load_config(source).await?;
@@ -5386,7 +5388,7 @@ fn require_policy_config_path(source: &bitrouter::paths::ConfigSource) -> Result
         bitrouter::paths::ConfigSource::File(path) => Ok(path),
         bitrouter::paths::ConfigSource::Default { .. } => anyhow::bail!(
             "routing policies require a file-backed bitrouter.yaml; run `{} init` first",
-            bitrouter_sdk::invocation::name()
+            bitrouter::commands::invocation::name()
         ),
     }
 }
@@ -5487,7 +5489,7 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                     anyhow::bail!(
                         "`{cli} providers login bitrouter` uses BitRouter Cloud OAuth; \
                          --import-existing/--no-browser apply to upstream provider logins",
-                        cli = bitrouter_sdk::invocation::name()
+                        cli = bitrouter::commands::invocation::name()
                     );
                 }
                 // A supplied key seeds the cloud credential the same way
@@ -5567,7 +5569,7 @@ async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
         ToolsAction::List { config } => {
             eprintln!(
                 "note: `{cli} tools list` is a compatibility form; use `{cli} mcp check`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
@@ -5601,7 +5603,7 @@ async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
         ToolsAction::Status { config } => {
             eprintln!(
                 "note: `{cli} tools status` is a compatibility form; use `{cli} mcp check`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
@@ -5628,7 +5630,7 @@ async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
         ToolsAction::Discover { server, config } => {
             eprintln!(
                 "note: `{cli} tools discover` is deprecated; use `{cli} mcp check <server>`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
@@ -5770,7 +5772,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                 return exit_with(code);
             }
             if routing != bitrouter::acp_cli::RoutingOptions::default() {
-                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "routing flags on `agents check` require a specific agent",
                 )
                 .into());
@@ -5809,7 +5811,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
             let harness = bitrouter::harness::catalog::by_id(harness_id).ok_or_else(|| {
                 anyhow::anyhow!(
                     "'{id}' is not a catalog agent. Run `{cli} agents list` to see the ids.",
-                    cli = bitrouter_sdk::invocation::name()
+                    cli = bitrouter::commands::invocation::name()
                 )
             })?;
             // Synthesized configs land in a scratch directory that goes away
@@ -5873,7 +5875,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
             eprintln!(
                 "note: `{cli} agents install` is a compatibility form; use \
                  `{cli} agents scaffold`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             scaffold_agent(&id, output).await
         }
@@ -6034,13 +6036,13 @@ async fn run_code(
     );
     let initial_session = if let Some(agent) = agent {
         if remote_context.is_some() {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                 "remote ACP conversations are not available; use bare `code` for operations",
             )
             .into());
         }
         if socket.is_some() {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                 "`code <agent>` does not accept --socket",
             )
             .into());
@@ -6050,7 +6052,7 @@ async fn run_code(
             (None, Some(session_id)) => bitrouter::acp_cli::SessionSelection::Resume(session_id),
             (None, None) => bitrouter::acp_cli::SessionSelection::New,
             (Some(_), Some(_)) => {
-                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "--load and --resume are mutually exclusive",
                 )
                 .into());
@@ -6064,7 +6066,7 @@ async fn run_code(
         })
     } else {
         if turn_timeout.is_some() || routing != bitrouter::acp_cli::RoutingOptions::default() {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                 "--turn-timeout, --direct, --base-url, --model, and --no-start apply to \
                  `code <agent>`, not the agent-selection screen",
             )
@@ -6101,7 +6103,7 @@ async fn resolve_prompt_input(
         Some(prompt) if prompt == "-" => {}
         Some(prompt) => return Ok(prompt),
         None if std::io::stdin().is_terminal() => {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                 "run requires a prompt, `--prompt-file <path>`, or piped stdin",
             )
             .into());
@@ -6366,7 +6368,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             eprintln!(
                 "note: `{cli} acp prompt` is a compatibility form; use \
                  `{cli} run <agent> <prompt>`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
@@ -6398,7 +6400,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             eprintln!(
                 "note: `{cli} acp commands` is a compatibility form; use \
                  `{cli} agents inspect <agent>`.",
-                cli = bitrouter_sdk::invocation::name()
+                cli = bitrouter::commands::invocation::name()
             );
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
@@ -6434,7 +6436,7 @@ struct AgentPromptRequest<'a> {
 
 async fn run_agent_prompt(
     source: &bitrouter::paths::ConfigSource,
-    config: bitrouter_sdk::config::Config,
+    config: bitrouter::config::Config,
     agent: &str,
     request: AgentPromptRequest<'_>,
 ) -> Result<()> {
@@ -8376,7 +8378,7 @@ mod tests {
         let report = optimization_status_report(
             bitrouter::optimization::controller::OptimizationStatus {
                 policy: "auto".into(),
-                policy_mode: bitrouter_sdk::config::PolicyRuntimeMode::Adaptive,
+                policy_mode: bitrouter::config::PolicyRuntimeMode::Adaptive,
                 active_policy_digest:
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 parent_policy_digest: None,
@@ -8395,7 +8397,7 @@ mod tests {
         let report = optimization_status_report(
             bitrouter::optimization::controller::OptimizationStatus {
                 policy: "auto".into(),
-                policy_mode: bitrouter_sdk::config::PolicyRuntimeMode::Adaptive,
+                policy_mode: bitrouter::config::PolicyRuntimeMode::Adaptive,
                 active_policy_digest:
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 parent_policy_digest: None,
@@ -8455,7 +8457,7 @@ mod tests {
         )
         .await?;
         let store = EvalStore::new(bitrouter::db::connect(&database_url).await?);
-        let service = EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+        let service = EvalService::new(store.clone(), bitrouter::config::EvalConfig::default());
         for (scope, subject_id, cost) in [
             (EvalScope::Request, "request-report-pin", Some("900")),
             (EvalScope::Task, "task-report-pin", None),
@@ -8658,7 +8660,7 @@ mod tests {
         )?;
         std::fs::write(&config_path, &adaptive_config)?;
         let store = EvalStore::new(bitrouter::db::connect(&database_url).await?);
-        let service = EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+        let service = EvalService::new(store.clone(), bitrouter::config::EvalConfig::default());
         for (scope, subject_id, cost) in [
             (EvalScope::Request, "request-adaptive-recovery", Some("900")),
             (EvalScope::Task, "task-adaptive-recovery", None),
@@ -8766,7 +8768,7 @@ mod tests {
                         anyhow::bail!("injected adaptive daemon rejection of child policy")
                     }
                     let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
                     let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
                     *live
                         .lock()
@@ -8789,7 +8791,7 @@ mod tests {
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(std::fs::read_to_string(&config_path)?, adaptive_config);
         assert_eq!(
-            bitrouter_sdk::config::parse(&std::fs::read_to_string(&config_path)?)?
+            bitrouter::config::parse(&std::fs::read_to_string(&config_path)?)?
                 .policy
                 .mode,
             config::PolicyRuntimeMode::Adaptive
@@ -8831,7 +8833,7 @@ mod tests {
                         anyhow::bail!("injected daemon rejection of child policy")
                     }
                     let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
                     let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
                     *live
                         .lock()
@@ -8903,7 +8905,7 @@ mod tests {
                         anyhow::bail!("injected daemon rejection of child policy")
                     }
                     let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
                     let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
                     events
                         .lock()
@@ -9012,7 +9014,7 @@ mod tests {
                         anyhow::bail!("injected daemon rejection of child policy")
                     }
                     let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
                     let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
                     events
                         .lock()

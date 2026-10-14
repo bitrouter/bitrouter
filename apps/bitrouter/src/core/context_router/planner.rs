@@ -2,9 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::gateway::model::decision::policy::DecisionPolicy;
+use crate::gateway::model::decision::types::Answer;
+use crate::gateway::model::decision::types::DecisionRequest;
+use crate::gateway::model::decision::types::DecisionResponse;
+use crate::gateway::model::decision::types::Question;
 use bitrouter_ai::types::{Message, Prompt, Role};
-use bitrouter_sdk::decision_model::policy::DecisionPolicy;
-use bitrouter_sdk::decision_model::types::{Answer, DecisionRequest, DecisionResponse, Question};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -175,14 +178,14 @@ impl CandidateSet {
         store: &ContextStore,
         model: &str,
         policy: &DecisionPolicy,
-        input: &bitrouter_sdk::routing::input::Input,
+        input: &crate::gateway::routing::input::Input,
     ) -> Result<Option<DecisionRequest>, CoreError> {
         let work = store
             .work
             .get(&self.task_id)
             .ok_or_else(|| invalid("decision task is absent"))?;
         loop {
-            let mut questions = bitrouter_sdk::routing::assessment::questions();
+            let mut questions = crate::gateway::routing::assessment::questions();
             let mut blocks = BTreeMap::new();
             for (question_id, candidate) in &self.candidates {
                 let mut criteria = BTreeMap::from([

@@ -10,10 +10,10 @@ use std::sync::Arc;
 
 use crate::cloud::account::credentials::default_credentials_path;
 use crate::cloud::account::manager::CredentialManager;
+use crate::commands::invocation;
 use anyhow::{Context, Result};
 use bitrouter_ai::auth::file::snapshot::CredentialStore;
 use bitrouter_ai::providers::hosted::PROVIDER_ID;
-use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -378,7 +378,7 @@ fn config_path(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
 
 async fn start_default_chat(
     source: &crate::paths::ConfigSource,
-    config: bitrouter_sdk::config::Config,
+    config: crate::config::Config,
 ) -> Result<()> {
     let agent =
         config.chat.agent.clone().with_context(|| {
@@ -464,7 +464,7 @@ fn save_config(
     }
     let serialized = serde_saphyr::to_string(&value)?;
     // Reject invalid edits before replacing a working configuration.
-    let _: bitrouter_sdk::config::Config = serde_saphyr::from_str(&serialized)?;
+    let _: crate::config::Config = serde_saphyr::from_str(&serialized)?;
     let parent = path.parent().context("configuration path has no parent")?;
     if !parent.exists() {
         crate::paths::ensure_home_directory(parent)?;
@@ -539,7 +539,7 @@ async fn run_headless(
     // Catalog ACP adapters are built in. No native CLI installation is required.
     let path = config_path(flags.config.as_deref())?;
     let existing_agent = if path.is_file() && !flags.force {
-        let config: bitrouter_sdk::config::Config =
+        let config: crate::config::Config =
             serde_saphyr::from_str(&std::fs::read_to_string(&path)?)?;
         config.chat.agent
     } else {
@@ -784,10 +784,9 @@ async fn interactive_credentials(
 
     let path = config_path(flags.config.as_deref())?;
     let registry = if path.is_file() && !flags.force {
-        serde_saphyr::from_str::<bitrouter_sdk::config::Config>(&std::fs::read_to_string(path)?)?
-            .registry
+        serde_saphyr::from_str::<crate::config::Config>(&std::fs::read_to_string(path)?)?.registry
     } else {
-        bitrouter_sdk::config::RegistryConfig::default()
+        crate::config::RegistryConfig::default()
     };
     note("loading providers from the registry…");
     let data = crate::bundled_registry::load(&registry).await;

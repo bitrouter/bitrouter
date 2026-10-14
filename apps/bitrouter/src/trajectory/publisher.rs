@@ -5,8 +5,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use crate::config::EvalConfig;
 use anyhow::Result;
-use bitrouter_sdk::config::EvalConfig;
 
 use crate::eval::{
     EvalService, admission::SubmissionPrincipal, store::EvalStore, types::AdmissionStatus,

@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
-use bitrouter_sdk::Result;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+use crate::gateway::caller::CallerContext;
+use crate::gateway::error::Result;
+use crate::gateway::pipeline::settlement::SettlementContext;
+use crate::gateway::pipeline::settlement::SettlementRecorder;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -34,7 +35,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: format!("r-{api_key}-{prompt}-{completion}"),
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
-        target: Some(bitrouter_sdk::language_model::types::RoutingTarget {
+        target: Some(crate::gateway::pipeline::types::RoutingTarget {
             model_constraints: Default::default(),
             provider_name: "openai".into(),
             service_id: "gpt-5".into(),
@@ -75,7 +76,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         first_token_kind: None,
         finish_reason: None,
         error: None,
-        events: bitrouter_sdk::event::EventBus::new(),
+        events: crate::gateway::observability::event::EventBus::new(),
     };
     freeze_tariff(&mut context, &pricing());
     context
@@ -244,13 +245,11 @@ async fn recorder_persists_router_identity_and_leaves_direct_requests_unknown() 
     let recorder = MeteringRecorder::new(store, pricing());
     let mut routed = ctx("router", 3, 2);
     routed.request_id = "routed-request".to_string();
-    routed.emit(
-        bitrouter_sdk::language_model::routing::RouterRequestIdentity {
-            router_id: "coding".to_string(),
-            original_selector: "bitrouter/coding".to_string(),
-            binding_digest: "router-v1:sha256:abc".to_string(),
-        },
-    );
+    routed.emit(crate::gateway::pipeline::routing::RouterRequestIdentity {
+        router_id: "coding".to_string(),
+        original_selector: "bitrouter/coding".to_string(),
+        binding_digest: "router-v1:sha256:abc".to_string(),
+    });
     recorder.record(&mut routed).await?;
 
     let mut direct = ctx("direct", 3, 2);
@@ -324,7 +323,7 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
     settlement.provider_id.clear();
     settlement.model_id.clear();
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
-    settlement.error = Some(bitrouter_sdk::BitrouterError::NotFound(
+    settlement.error = Some(crate::gateway::error::BitrouterError::NotFound(
         "no active provider declares the selected model".into(),
     ));
 
@@ -568,7 +567,7 @@ async fn product_reconciliation_accepts_authenticated_final_charge_without_price
     let status = store.apply_authoritative_receipt_charge(&receipt).await?;
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
     let Some(evidence) = records[0].charge_evidence.as_ref() else {
-        return Err(bitrouter_sdk::BitrouterError::internal(
+        return Err(crate::gateway::error::BitrouterError::internal(
             "missing authoritative charge evidence",
         ));
     };
@@ -1034,9 +1033,11 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
     let mut settlement = ctx("policy", 0, 0);
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.raw_usage = None;
-    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation {
-        message: "provider detail must not persist".to_string(),
-    });
+    settlement.error = Some(
+        crate::gateway::error::BitrouterError::UpstreamPolicyViolation {
+            message: "provider detail must not persist".to_string(),
+        },
+    );
 
     recorder.record(&mut settlement).await?;
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
@@ -1079,7 +1080,7 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
     let mut settlement = ctx("rate-limited", 0, 0);
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.raw_usage = None;
-    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited {
+    settlement.error = Some(crate::gateway::error::BitrouterError::UpstreamRateLimited {
         retry_after: None,
         detail: None,
     });
@@ -1087,7 +1088,7 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
     recorder.record(&mut settlement).await?;
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
     let Some(record) = records.first() else {
-        return Err(bitrouter_sdk::BitrouterError::internal(
+        return Err(crate::gateway::error::BitrouterError::internal(
             "missing rate-limit usage record",
         ));
     };
@@ -1116,7 +1117,7 @@ async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("legacy-rate-limit", 0, 0);
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
-    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited {
+    settlement.error = Some(crate::gateway::error::BitrouterError::UpstreamRateLimited {
         retry_after: None,
         detail: None,
     });
@@ -1130,14 +1131,16 @@ async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<
     ))
     .await
     .map_err(|error| {
-        bitrouter_sdk::BitrouterError::internal(format!("rewrite legacy rate-limit usage: {error}"))
+        crate::gateway::error::BitrouterError::internal(format!(
+            "rewrite legacy rate-limit usage: {error}"
+        ))
     })?;
 
     let mut records = store.export_usage(TimeWindow::ThisMonth).await?;
     let price = super::UsagePriceOverride::parse("openai:gpt-5=2,10")?;
     super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
     let Some(record) = records.first() else {
-        return Err(bitrouter_sdk::BitrouterError::internal(
+        return Err(crate::gateway::error::BitrouterError::internal(
             "missing legacy rate-limit usage record",
         ));
     };
@@ -1159,9 +1162,11 @@ async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> R
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("legacy-policy", 0, 0);
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
-    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation {
-        message: "legacy provider detail".to_string(),
-    });
+    settlement.error = Some(
+        crate::gateway::error::BitrouterError::UpstreamPolicyViolation {
+            message: "legacy provider detail".to_string(),
+        },
+    );
     recorder.record(&mut settlement).await?;
     pool.execute(Statement::from_string(
         DatabaseBackend::Sqlite,
@@ -1291,7 +1296,7 @@ async fn failed_request_still_records_with_error() -> Result<()> {
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut c = ctx("k1", 5, 0);
-    c.error = Some(bitrouter_sdk::BitrouterError::internal("boom"));
+    c.error = Some(crate::gateway::error::BitrouterError::internal("boom"));
     recorder.record(&mut c).await?;
     let count = store.get_request_count("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(count, 1, "failed requests still get a metering row");
@@ -1307,7 +1312,9 @@ async fn usage_export_records_are_cloud_usage_compatible() -> Result<()> {
     recorder.record(&mut ctx("k1", 10, 5)).await?;
     let mut failed = ctx("k1", 20, 1);
     failed.request_id = "r-k1-failed".to_string();
-    failed.error = Some(bitrouter_sdk::BitrouterError::internal("upstream timeout"));
+    failed.error = Some(crate::gateway::error::BitrouterError::internal(
+        "upstream timeout",
+    ));
     recorder.record(&mut failed).await?;
 
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
@@ -1597,10 +1604,14 @@ async fn filtered_request_page_and_summary_apply_the_same_bounds_before_limit() 
 
     let start = chrono::DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
         .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
-        .map_err(|_| bitrouter_sdk::BitrouterError::internal("invalid test start timestamp"))?;
+        .map_err(|_| {
+            crate::gateway::error::BitrouterError::internal("invalid test start timestamp")
+        })?;
     let end = chrono::DateTime::parse_from_rfc3339("2026-09-02T00:00:00Z")
         .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
-        .map_err(|_| bitrouter_sdk::BitrouterError::internal("invalid test end timestamp"))?;
+        .map_err(|_| {
+            crate::gateway::error::BitrouterError::internal("invalid test end timestamp")
+        })?;
     let window = TimeWindow::Custom { start, end };
     let page = store
         .recent_requests_filtered(window, Some("gpt-5"), Some("openai"), 1)

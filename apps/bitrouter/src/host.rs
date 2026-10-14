@@ -134,7 +134,7 @@ fn init_serve_tracing_subscriber(
 /// the same path as `bro serve`. Detached launch/restart is the caller's job.
 pub async fn serve_with_extensions(
     source: &crate::paths::ConfigSource,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
     serve_with_options(source, false, register).await
 }
@@ -148,7 +148,7 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
 async fn serve_with_options(
     source: &crate::paths::ConfigSource,
     cli_owned: bool,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
         anyhow::bail!(
@@ -284,7 +284,7 @@ async fn serve_with_options(
         .with_resources(native_harness_config(&cfg, home))
         .map_err(anyhow::Error::msg)?;
         let native_acp = crate::harness::acp::native::NativeAcpServer::new(
-            task_service.clone(), bitrouter_sdk::caller::CallerContext::local(),
+            task_service.clone(), crate::gateway::caller::CallerContext::local(),
             crate::harness::acp::native::NativeSessionConfig {
                 agent: crate::harness::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
                 permission_profile: crate::harness::thread::PermissionProfile::Ask,
@@ -797,7 +797,7 @@ impl Drop for PidFile {
     }
 }
 
-fn announce_zero_config(source: &crate::paths::ConfigSource, cfg: &bitrouter_sdk::config::Config) {
+fn announce_zero_config(source: &crate::paths::ConfigSource, cfg: &crate::config::Config) {
     if !source.is_default() {
         return;
     }
@@ -862,7 +862,7 @@ fn maybe_announce_telemetry(home: &std::path::Path) {
 
 fn print_onboarding_hint() {
     let p = crate::style::Palette::for_stderr();
-    let cli = bitrouter_sdk::invocation::name();
+    let cli = crate::commands::invocation::name();
     eprintln!(
         "{cyan}{bold}info:{reset} no providers are configured yet. Choose one:",
         cyan = p.cyan,
@@ -910,7 +910,7 @@ fn other_provider_env_var_hints() -> Vec<String> {
 
 /// Static daemon-owned resources; opening or browsing a Thread never connects.
 pub(crate) fn native_harness_config(
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     home: &std::path::Path,
 ) -> crate::harness::resources::HarnessConfig {
     let mut servers: Vec<_> = cfg
@@ -937,7 +937,7 @@ pub(crate) fn native_harness_config(
     }
     crate::harness::resources::HarnessConfig {
         servers,
-        protocol: bitrouter_sdk::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
+        protocol: crate::gateway::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
         skill_roots,
         instructions: crate::harness::resources::instructions::InstructionConfig {
             global_root: Some(home.to_path_buf()),

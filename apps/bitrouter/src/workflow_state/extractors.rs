@@ -1,5 +1,5 @@
 use bitrouter_ai::types::Prompt;
-use bitrouter_sdk::HeaderMap;
+use http::HeaderMap;
 
 use crate::workflow_state::ir::{
     Evidence, EvidenceLevel, HarnessId, ProtocolKind, WorkflowStateIR,
@@ -288,7 +288,7 @@ pub(crate) fn adapter_session_hints(input: &ExtractorInput<'_>) -> AdapterSessio
 #[cfg(test)]
 mod tests {
     use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
-    use bitrouter_sdk::HeaderMap;
+    use http::HeaderMap;
     use http::HeaderValue;
 
     use super::{ExtractorInput, detect_trace_adapter};

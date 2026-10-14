@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::gateway::mcp::transport::McpServerConfig;
 use bitrouter_ai::types::{Tool, ToolResultOutput};
-use bitrouter_sdk::mcp::transport::McpServerConfig;
 use rmcp::model::ProtocolVersion;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

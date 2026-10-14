@@ -1,4 +1,11 @@
 //! Production SQLite persistence with real MCP HTTP, using scripted model output.
+use bitrouter::gateway::assembly::App;
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::mcp::transport::{McpServerConfig, McpTransport};
+use bitrouter::gateway::pipeline::executor::MockExecutor;
+use bitrouter::gateway::pipeline::executor::MockResponse;
+use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
+use bitrouter::gateway::pipeline::types::RoutingTarget;
 use bitrouter::harness::agent::AgentConfig;
 use bitrouter::harness::resources::HarnessConfig;
 use bitrouter::harness::service::ThreadService;
@@ -7,10 +14,6 @@ use bitrouter::harness::thread::{PermissionProfile, ThreadRequest, ThreadTarget}
 use bitrouter::harness::turn::{ApprovalAnswer, TurnRequest, TurnSnapshot, TurnStatus};
 use bitrouter_ai::types::AuthScheme;
 use bitrouter_ai::types::{ApiProtocol, FinishReason, StreamPart, Usage};
-use bitrouter_sdk::language_model::{
-    MockExecutor, MockResponse, RoutingTarget, StaticRoutingTable,
-};
-use bitrouter_sdk::{App, caller::CallerContext};
 use rmcp::model::ProtocolVersion;
 use sea_orm::{ConnectionTrait, Statement};
 use std::sync::Arc;

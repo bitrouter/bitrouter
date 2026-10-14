@@ -2,14 +2,16 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::executor::MockExecutor;
+use crate::gateway::pipeline::executor::MockResponse;
+use crate::gateway::pipeline::routing::StaticRoutingTable;
+use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, Message, StreamPart, ToolResultOutput, Usage,
 };
 use bitrouter_ai::types::{AuthScheme, GenerateResult};
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::types::RoutingTarget;
-use bitrouter_sdk::language_model::{MockExecutor, MockResponse, StaticRoutingTable};
 use tempfile::TempDir;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;

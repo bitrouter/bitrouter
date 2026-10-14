@@ -4,8 +4,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
 use async_trait::async_trait;
-use bitrouter_sdk::{App, caller::CallerContext};
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 

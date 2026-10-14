@@ -3,18 +3,24 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::error::BitrouterError;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::context::StreamContext;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::HopOutcome;
+use crate::gateway::pipeline::hooks::ObserveHook;
+use crate::gateway::pipeline::hooks::Phase;
+use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::hooks::RequestOutcome;
+use crate::gateway::pipeline::hooks::RouteHook;
+use crate::gateway::pipeline::settlement::SettlementContext;
+use crate::gateway::pipeline::settlement::SettlementRecorder;
+use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::StreamPart;
-use bitrouter_sdk::BitrouterError;
-use bitrouter_sdk::config::ConfigRoutingTable;
-use bitrouter_sdk::language_model::StreamContext;
-use bitrouter_sdk::language_model::hooks::{HopOutcome, ObserveHook, Phase, RequestOutcome};
-use bitrouter_sdk::language_model::{
-    HookDecision, PipelineContext, PreRequestHook, RouteHook, RoutingTarget, SettlementContext,
-    SettlementRecorder,
-};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 
@@ -540,20 +546,26 @@ impl PreRequestHook for EvolutionRuntime {
     async fn revalidate_context(
         &self,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<HookDecision> {
+    ) -> crate::gateway::error::Result<HookDecision> {
         // Reuse the original admission fence; never register or select again.
         self.revalidate_admission(ctx).await?;
         Ok(HookDecision::Allow)
     }
 
-    async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
         self.admit(ctx).await.map_err(internal)?;
         Ok(HookDecision::Allow)
     }
 }
 
 impl EvolutionRuntime {
-    async fn revalidate_admission(&self, ctx: &PipelineContext) -> bitrouter_sdk::Result<()> {
+    async fn revalidate_admission(
+        &self,
+        ctx: &PipelineContext,
+    ) -> crate::gateway::error::Result<()> {
         let Some(fence) = ctx.extension::<AdmissionFence>() else {
             return Ok(());
         };
@@ -591,7 +603,7 @@ impl RouteHook for EvolutionRuntime {
         &self,
         _chain: &mut Vec<RoutingTarget>,
         ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         self.revalidate_admission(ctx).await
     }
 
@@ -599,7 +611,7 @@ impl RouteHook for EvolutionRuntime {
         &self,
         _chain: &[RoutingTarget],
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         self.revalidate_admission(ctx).await
     }
 }
@@ -666,7 +678,7 @@ impl ObserveHook for EvolutionRuntime {
 
 #[async_trait]
 impl SettlementRecorder for EvolutionRuntime {
-    async fn record(&self, ctx: &mut SettlementContext) -> bitrouter_sdk::Result<()> {
+    async fn record(&self, ctx: &mut SettlementContext) -> crate::gateway::error::Result<()> {
         let Some(bound) = ctx.get_event::<GatewayRequestObserved>() else {
             return Ok(());
         };

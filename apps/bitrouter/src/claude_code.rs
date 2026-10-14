@@ -17,13 +17,14 @@
 //! headers), which only exists above the SDK ingress seam, and because the
 //! enable step mutates the assembled [`Config`].
 
+use crate::config::Config;
+use crate::config::ProviderConfig;
+use crate::gateway::assembly::PromptTransform;
 use bitrouter_ai::auth::credentials::Credential;
 use bitrouter_ai::auth::file::snapshot::CredentialStore;
 use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
 use bitrouter_ai::types::Prompt;
-use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::PromptTransform;
-use bitrouter_sdk::config::{Config, ProviderConfig};
+use http::HeaderMap;
 
 /// Provider id of the Claude Pro/Max subscription provider. Must match the id
 /// the [`bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier`] is registered
@@ -58,7 +59,7 @@ impl PromptTransform for ClaudeCodeRouter {
         &self,
         _original: &Prompt,
         _rebuilt: &Prompt,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         // Only model qualification changes here; managed reconstruction freezes it.
         Ok(())
     }

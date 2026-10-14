@@ -19,14 +19,19 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
+use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::context::StreamContext;
+use crate::gateway::pipeline::hooks::DenyReason;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::hooks::StreamHook;
+use crate::gateway::pipeline::stream::StreamAction;
+use crate::gateway::pipeline::stream::StreamInterest;
+use crate::gateway::pipeline::stream::StreamOutcome;
 use bitrouter_ai::types::{Content, StreamPart};
-use bitrouter_sdk::PluginId;
-use bitrouter_sdk::Result;
-use bitrouter_sdk::error::BitrouterError;
-use bitrouter_sdk::language_model::{
-    DenyReason, HookDecision, PipelineContext, PreRequestHook, StreamAction, StreamContext,
-    StreamHook, StreamInterest, StreamOutcome,
-};
 
 use bitrouter_guardrails::rules::{RuleSet, SlidingWindowMatcher, WindowResult};
 

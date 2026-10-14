@@ -146,7 +146,7 @@ impl CloudApiClient {
             .with_context(|| {
                 format!(
                     "no stored credentials — run `{} cloud login` first",
-                    bitrouter_sdk::invocation::name()
+                    crate::commands::invocation::name()
                 )
             })?;
         let base_url = Url::parse(credential.base_url()).with_context(|| {

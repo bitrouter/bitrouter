@@ -13,8 +13,8 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+use crate::config::ProviderClass;
 use bitrouter_ai::types::{ApiProtocol, ProtocolList};
-use bitrouter_sdk::config::ProviderClass;
 
 use super::entry::{AuthScheme, ProtocolMapping, ProviderEntry};
 use bitrouter_ai::catalog::types::{

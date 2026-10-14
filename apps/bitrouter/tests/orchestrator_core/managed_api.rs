@@ -3,8 +3,9 @@
 use super::*;
 use bitrouter::auth::{db, keys};
 use bitrouter::core::protocol::{ToolExecute, ToolOutcome, ToolResult};
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use bitrouter::orchestrator_api::ManagedCoreApi;
-use bitrouter_sdk::server::{AppState, build_router};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
@@ -28,7 +29,7 @@ type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct Fixture {
-    app: Arc<bitrouter_sdk::App>,
+    app: Arc<bitrouter::gateway::assembly::App>,
     router: axum::Router,
     base: String,
     key: String,
@@ -97,7 +98,7 @@ async fn configured_fixture_with_provider(
     if let Some(policy) = policy {
         tokio::fs::write(policy_dir.join("managed-policy.yaml"), policy).await?;
     }
-    let config = bitrouter_sdk::config::parse_with(
+    let config = bitrouter::config::parse_with(
         &format!(
             r#"
 inherit_defaults: false

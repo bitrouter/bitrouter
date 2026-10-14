@@ -161,6 +161,12 @@ jobs:
               --test acp --test acp_checkpoints --test native_acp --test cloud_api --test daemon --test e2e
               --test full_stack --test configuration_state --test extension_host --test subscription
               --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
+          - shard: gateway
+            retries: "0"
+            targets: >-
+              --test gateway_anthropic_authority --test gateway_decision_model
+              --test gateway_decisions --test gateway_model_boundary
+              --test gateway_routing_assessment --test gateway_routing_plan
           - shard: observability
             retries: "0"
             targets: >-

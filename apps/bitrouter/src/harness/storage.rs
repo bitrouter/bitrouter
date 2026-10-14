@@ -101,7 +101,7 @@ pub enum ExecutionRecord {
         event: ThreadEvent,
     },
     ThreadCreated {
-        caller: bitrouter_sdk::caller::CallerContext,
+        caller: crate::gateway::caller::CallerContext,
         snapshot: ThreadSnapshot,
         config: Box<AgentConfig>,
         verification_command: Option<String>,
@@ -132,7 +132,7 @@ pub enum ExecutionRecord {
     },
     /// Host-authorized private bindings, never projected into public history.
     ThreadResources {
-        servers: Vec<bitrouter_sdk::mcp::transport::McpServerConfig>,
+        servers: Vec<crate::gateway::mcp::transport::McpServerConfig>,
     },
     ThreadRecovered {
         source_server_instance_id: String,

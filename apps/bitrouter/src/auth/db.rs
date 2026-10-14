@@ -11,7 +11,8 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
 };
 
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 
 use crate::auth::entities::{api_keys, users};
 

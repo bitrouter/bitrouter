@@ -28,7 +28,7 @@ pub fn socket_path(control: &Path) -> PathBuf {
 /// A bridge owns protocol bytes only; EOF never sends business cancellation.
 pub async fn bridge(
     source: &crate::paths::ConfigSource,
-    config: &bitrouter_sdk::config::Config,
+    config: &crate::config::Config,
     routing: &crate::acp_cli::RoutingOptions,
     read_only: bool,
     turn_timeout: Option<u64>,

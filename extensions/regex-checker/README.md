@@ -12,10 +12,10 @@ protocol. The official `bro` binary does not link the regex implementation.
 ## Register in a custom Rust host
 
 Link `bitrouter-guardrails` with default features. Extension modules register
-`checker::callback(rules)` through the SDK's restricted `ExtensionApi`:
+`checker::callback(rules)` through the application's restricted `ExtensionApi`:
 
 ```rust
-use bitrouter_sdk::extension::ExtensionApi;
+use bitrouter::gateway::extensions::registry::ExtensionApi;
 use bitrouter_guardrails::{checker, rules::RuleSet};
 
 fn register(api: &mut ExtensionApi, rules: RuleSet) -> anyhow::Result<()> {
@@ -87,7 +87,7 @@ and the optional authenticated remote control listener. It reuses configuration
 baselines, reload, signals and shutdown from `bro serve`.
 In a
 separate project, explicitly depend on `bitrouter`, `bitrouter-guardrails`,
-`bitrouter-sdk`, `tokio`, `serde-saphyr` and `anyhow` as used by the example.
+`tokio`, `serde-saphyr` and `anyhow` as used by the example.
 The normal `bro` dependency graph excludes the matcher; example/test dependencies
 are development-only.
 
@@ -122,8 +122,8 @@ resolver. Enabling the Cargo feature alone installs no hooks and activates no
 checker. These adapters preserve global/per-request deposits and streamed
 block/redact behavior; a router-bound input check does not replace them.
 
-The host registration API remains `bitrouter_sdk::extension::ExtensionApi`
-during the service migration. Callback inputs and decisions have moved to
+The host registration API is
+`bitrouter::gateway::extensions::registry::ExtensionApi`. Callback inputs and decisions have moved to
 `bitrouter_ai::extension::request_check`; use those contracts directly. HTTP
 checker declarations remain unsupported. See the
 [service migration plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md).

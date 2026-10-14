@@ -27,7 +27,7 @@
 //! is the published wire contract of `acp prompt`'s NDJSON output.
 //!
 //! Transport configuration is carried by
-//! `bitrouter_sdk::config::agent` alongside the shared product config, without
+//! `bitrouter::config::agent` alongside the shared product config, without
 //! depending on the ACP SDK. This protocol stack belongs to the orchestrator;
 //! the app supplies host configuration, route/cost services and durable capture.
 //!

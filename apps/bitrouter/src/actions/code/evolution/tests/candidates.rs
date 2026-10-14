@@ -773,14 +773,14 @@ async fn candidate_preview_lists_balanced_accounts_without_credentials() -> Resu
         .providers
         .get_mut("fixture")
         .context("provider missing")?;
-    provider.account_strategy = bitrouter_sdk::config::AccountStrategy::Balance;
+    provider.account_strategy = crate::config::AccountStrategy::Balance;
     provider.accounts = vec![
-        bitrouter_sdk::config::ProviderAccount {
+        crate::config::ProviderAccount {
             label: "first".into(),
             api_key: "first-account-secret".into(),
             ..Default::default()
         },
-        bitrouter_sdk::config::ProviderAccount {
+        crate::config::ProviderAccount {
             label: "second".into(),
             api_key: "second-account-secret".into(),
             ..Default::default()

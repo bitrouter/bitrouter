@@ -1,7 +1,7 @@
 //! The managed control surface always requires a real virtual-key principal.
 //! Ordinary inference's skip_auth setting does not authenticate a harness.
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use chrono::Utc;
 use http::{HeaderMap, HeaderValue};
 use sea_orm::DatabaseConnection;

@@ -4,8 +4,9 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_sdk::{BitrouterError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

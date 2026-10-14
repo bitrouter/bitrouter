@@ -2,9 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::config::AccountStrategy;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::pipeline::routing::RoutingTable;
 use anyhow::{Context, Result, ensure};
-use bitrouter_sdk::config::{AccountStrategy, ConfigRoutingTable};
-use bitrouter_sdk::language_model::RoutingTable;
 use serde::{Deserialize, Serialize};
 
 use super::EvolutionRuntime;

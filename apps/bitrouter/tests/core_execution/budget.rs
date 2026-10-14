@@ -331,13 +331,15 @@ impl Executor for HeldExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.add_permits(1);
         self.resume
             .acquire()
             .await
-            .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+            .map_err(|error| {
+                bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+            })?
             .forget();
         self.mock.execute(target, prompt, ctx).await
     }
@@ -346,8 +348,10 @@ impl Executor for HeldExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 

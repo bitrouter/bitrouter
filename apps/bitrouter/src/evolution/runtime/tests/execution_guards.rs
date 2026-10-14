@@ -30,7 +30,7 @@ async fn request_capability_guard_records_the_original_intent_and_actual_fallbac
         .input
         .generation_prompt_mut()
         .ok_or_else(|| {
-            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+            crate::gateway::error::BitrouterError::internal("generation fixture missing")
         })?
         .tools = serde_json::from_value(json!([{
         "type":"function", "name":"read_file", "parameters":{"type":"object"}
@@ -148,7 +148,7 @@ async fn streaming_completion_and_disconnect_both_leave_execution_evidence() -> 
         .input
         .generation_prompt_mut()
         .ok_or_else(|| {
-            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+            crate::gateway::error::BitrouterError::internal("generation fixture missing")
         })?
         .stream = true;
     let mut stream = pipeline.clone().execute_stream(complete_request).await?;
@@ -173,7 +173,7 @@ async fn streaming_completion_and_disconnect_both_leave_execution_evidence() -> 
         .input
         .generation_prompt_mut()
         .ok_or_else(|| {
-            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+            crate::gateway::error::BitrouterError::internal("generation fixture missing")
         })?
         .stream = true;
     let mut stream = pipeline.clone().execute_stream(cancel_request).await?;

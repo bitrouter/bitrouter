@@ -5,16 +5,19 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::native::NativeAttemptReport;
+use crate::gateway::pipeline::native::NativeContextValidationReport;
+use crate::gateway::pipeline::native::NativeExecutionControl;
+use crate::gateway::pipeline::native::NativeInputCountReport;
+use crate::gateway::pipeline::native::NativeModelSelection;
+use crate::gateway::pipeline::native::NativePlan;
+use crate::gateway::pipeline::native::NativePlanAdmission;
 use async_trait::async_trait;
 use bitrouter_ai::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
     ToolChoice,
-};
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::native::{
-    NativeAttemptReport, NativeContextValidationReport, NativeExecutionControl,
-    NativeInputCountReport, NativeModelSelection, NativePlan, NativePlanAdmission,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -178,15 +181,14 @@ pub struct AttemptRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderWorkRecord {
-    pub work: bitrouter_sdk::language_model::native_work::NativeProviderWork,
-    pub report: Option<bitrouter_sdk::language_model::native_work::NativeProviderWorkReport>,
+    pub work: crate::gateway::pipeline::native_work::NativeProviderWork,
+    pub report: Option<crate::gateway::pipeline::native_work::NativeProviderWorkReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreparationWorkRecord {
-    pub work: bitrouter_sdk::language_model::native_preparation::NativePreparationWork,
-    pub report:
-        Option<bitrouter_sdk::language_model::native_preparation::NativePreparationWorkReport>,
+    pub work: crate::gateway::pipeline::native_preparation::NativePreparationWork,
+    pub report: Option<crate::gateway::pipeline::native_preparation::NativePreparationWorkReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,7 +215,7 @@ pub struct ModelStep {
     /// Oversized terminal diagnostic, hashed as a serde JSON string. The
     /// readable original is not retained; terminal_reason explains the omission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_diagnostic: Option<bitrouter_sdk::language_model::native::NativeEvidenceCommitment>,
+    pub failure_diagnostic: Option<crate::gateway::pipeline::native::NativeEvidenceCommitment>,
     pub step_id: String,
     pub decision_id: String,
     pub context_revision: u64,
@@ -3845,7 +3847,7 @@ impl NativeExecutionControl for StepControl {
     async fn prepare_routing(
         &self,
         prompt: &Prompt,
-    ) -> bitrouter_sdk::Result<Option<bitrouter_sdk::routing::preparation::Prepared>> {
+    ) -> crate::gateway::error::Result<Option<crate::gateway::routing::preparation::Prepared>> {
         let step_id = self.step_id.lock().await.clone();
         let result = self
             .session
@@ -3863,8 +3865,8 @@ impl NativeExecutionControl for StepControl {
 
     async fn commit_routing(
         &self,
-        plan: &bitrouter_sdk::routing::plan::Plan,
-    ) -> bitrouter_sdk::Result<()> {
+        plan: &crate::gateway::routing::plan::Plan,
+    ) -> crate::gateway::error::Result<()> {
         if let Some(pending) = self.routing_pending.lock().await.take() {
             let step_id = self.step_id.lock().await.clone();
             self.session
@@ -3896,15 +3898,18 @@ impl NativeExecutionControl for StepControl {
         Some(self.canonical_output_bytes)
     }
 
-    fn auxiliary_report_byte_limit(&self, request_id: &str) -> bitrouter_sdk::Result<Option<u64>> {
-        bitrouter_sdk::language_model::native::auxiliary_report_allowance(request_id).map(Some)
+    fn auxiliary_report_byte_limit(
+        &self,
+        request_id: &str,
+    ) -> crate::gateway::error::Result<Option<u64>> {
+        crate::gateway::pipeline::native::auxiliary_report_allowance(request_id).map(Some)
     }
 
     fn attempt_report_byte_limit(
         &self,
         request_id: &str,
-        route: &bitrouter_sdk::language_model::native::NativeRoute,
-    ) -> bitrouter_sdk::Result<Option<u64>> {
+        route: &crate::gateway::pipeline::native::NativeRoute,
+    ) -> crate::gateway::error::Result<Option<u64>> {
         model_output::report_allowance(self.canonical_output_bytes, request_id, route)
             .map(Some)
             .map_err(sdk_error)
@@ -3919,15 +3924,15 @@ impl NativeExecutionControl for StepControl {
 
     async fn before_preparation_work(
         &self,
-        work: &bitrouter_sdk::language_model::native_preparation::NativePreparationWork,
-    ) -> bitrouter_sdk::Result<()> {
+        work: &crate::gateway::pipeline::native_preparation::NativePreparationWork,
+    ) -> crate::gateway::error::Result<()> {
         self.admit_preparation_work(work).await
     }
 
     async fn after_preparation_work(
         &self,
-        report: bitrouter_sdk::language_model::native_preparation::NativePreparationWorkReport,
-    ) -> bitrouter_sdk::Result<()> {
+        report: crate::gateway::pipeline::native_preparation::NativePreparationWorkReport,
+    ) -> crate::gateway::error::Result<()> {
         self.record_preparation_work(report).await
     }
 
@@ -3939,7 +3944,7 @@ impl NativeExecutionControl for StepControl {
         &self,
         plan: &NativePlan,
         route_index: u32,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let step_id = self.step_id.lock().await.clone();
         self.session
             .transition_for(
@@ -3988,7 +3993,10 @@ impl NativeExecutionControl for StepControl {
             .map_err(sdk_error)
     }
 
-    async fn after_input_count(&self, report: NativeInputCountReport) -> bitrouter_sdk::Result<()> {
+    async fn after_input_count(
+        &self,
+        report: NativeInputCountReport,
+    ) -> crate::gateway::error::Result<()> {
         let step_id = self.step_id.lock().await.clone();
         let active_ms = self
             .session
@@ -4043,7 +4051,10 @@ impl NativeExecutionControl for StepControl {
         recorded.map_err(sdk_error)
     }
 
-    async fn before_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+    async fn before_context_validation(
+        &self,
+        request_id: &str,
+    ) -> crate::gateway::error::Result<()> {
         self.validation_gate_time.reset();
         let step_id = self.step_id.lock().await.clone();
         self.session
@@ -4092,7 +4103,10 @@ impl NativeExecutionControl for StepControl {
         Ok(())
     }
 
-    async fn check_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+    async fn check_context_validation(
+        &self,
+        request_id: &str,
+    ) -> crate::gateway::error::Result<()> {
         let _gate_time = self.validation_gate_time.measure();
         // Pause between guards before waiting for another checkpoint's ACK.
         // ensure_dispatch resumes activity only after its live gate succeeds.
@@ -4131,7 +4145,7 @@ impl NativeExecutionControl for StepControl {
     async fn after_context_validation(
         &self,
         report: NativeContextValidationReport,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let step_id = self.step_id.lock().await.clone();
         let active_ms = self
             .session
@@ -4189,7 +4203,7 @@ impl NativeExecutionControl for StepControl {
         result.map_err(sdk_error)
     }
 
-    async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<NativePlanAdmission> {
+    async fn plan(&self, plan: NativePlan) -> crate::gateway::error::Result<NativePlanAdmission> {
         let step_id = self.step_id.lock().await.clone();
         let mut rejection = None;
         let routes = super::routing::assess_routes(&plan).map_err(sdk_error)?;
@@ -4325,7 +4339,7 @@ impl NativeExecutionControl for StepControl {
     async fn rebuild_context(
         &self,
         plan: &NativePlan,
-    ) -> bitrouter_sdk::Result<Option<Vec<Message>>> {
+    ) -> crate::gateway::error::Result<Option<Vec<Message>>> {
         use super::reconstruction::{RebuildRecord, candidate, digest};
         let step_id = self.step_id.lock().await.clone();
         let snapshot = self.session.snapshot().await;
@@ -4519,7 +4533,7 @@ impl NativeExecutionControl for StepControl {
         &self,
         request_id: &str,
         attempt_index: u32,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let step_id = self.step_id.lock().await.clone();
         self.session.transition_for(Some(&self.agent_id), "model.attempt.intent", |state, _| {
             validate_step_source(state,&self.agent_id,&step_id)?;
@@ -4556,14 +4570,14 @@ impl NativeExecutionControl for StepControl {
 
     async fn before_provider_work(
         &self,
-        work: &bitrouter_sdk::language_model::native_work::NativeProviderWork,
-    ) -> bitrouter_sdk::Result<()> {
+        work: &crate::gateway::pipeline::native_work::NativeProviderWork,
+    ) -> crate::gateway::error::Result<()> {
         self.admit_provider_work(work).await
     }
 
     async fn after_provider_work(
         &self,
-        report: bitrouter_sdk::language_model::native_work::NativeProviderWorkReport,
+        report: crate::gateway::pipeline::native_work::NativeProviderWorkReport,
     ) {
         self.record_provider_work(report).await
     }
@@ -5105,8 +5119,8 @@ fn digest(value: &impl Serialize) -> Result<String, CoreError> {
         .map(|bytes| sha256(&bytes))
         .map_err(json_error)
 }
-fn sdk_error(error: CoreError) -> bitrouter_sdk::BitrouterError {
-    bitrouter_sdk::BitrouterError::internal(error.to_string())
+fn sdk_error(error: CoreError) -> crate::gateway::error::BitrouterError {
+    crate::gateway::error::BitrouterError::internal(error.to_string())
 }
 
 fn now_ms() -> Result<u64, CoreError> {

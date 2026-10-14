@@ -5,11 +5,12 @@
 mod collaboration;
 
 use super::*;
-use bitrouter_sdk::language_model::native_context::metadata;
-use bitrouter_sdk::language_model::native_continuation::{
-    CONTINUATION_FIELD, FullHistoryReason, NativeContinuationInput, NativeContinuationOutput,
-    REQUIRED_STATE_FIELD,
-};
+use bitrouter::gateway::pipeline::native_context::metadata;
+use bitrouter::gateway::pipeline::native_continuation::CONTINUATION_FIELD;
+use bitrouter::gateway::pipeline::native_continuation::FullHistoryReason;
+use bitrouter::gateway::pipeline::native_continuation::NativeContinuationInput;
+use bitrouter::gateway::pipeline::native_continuation::NativeContinuationOutput;
+use bitrouter::gateway::pipeline::native_continuation::REQUIRED_STATE_FIELD;
 
 async fn stored_fixture(private: bool, replayable: bool, counting: bool) -> Result<PrivateFixture> {
     let mut fixture = PrivateFixture::new("responses").await?;
@@ -389,8 +390,13 @@ async fn native_continuation_never_replays_unrepresented_state_without_coverage(
                 .await
                 .is_err()
         );
-        assert_eq!(capture.plans.lock().await[0].routes[0].continuation,
-            NativeContinuationInput::Rejected { reason: bitrouter_sdk::language_model::native_continuation::ContinuationFailure::Required });
+        assert_eq!(
+            capture.plans.lock().await[0].routes[0].continuation,
+            NativeContinuationInput::Rejected {
+                reason:
+                    bitrouter::gateway::pipeline::native_continuation::ContinuationFailure::Required
+            }
+        );
     }
     // Removing the state requirement while leaving its proof invalidates the
     // whole assistant message, before a checker sees the edited input.
@@ -670,7 +676,7 @@ async fn native_continuation_failed_seal_or_storage_preserves_billed_output_and_
             100
         );
         assert!(
-            bitrouter_sdk::language_model::native_continuation::requires_stored_state(
+            bitrouter::gateway::pipeline::native_continuation::requires_stored_state(
                 &generation(&output.result)?.content[0]
             )
         );
@@ -679,7 +685,7 @@ async fn native_continuation_failed_seal_or_storage_preserves_billed_output_and_
         assert_eq!(
             report.continuation.output,
             if key_failure {
-                NativeContinuationOutput::Unverified { reason: bitrouter_sdk::language_model::native_continuation::ContinuationFailure::KeyUnavailable }
+                NativeContinuationOutput::Unverified { reason: bitrouter::gateway::pipeline::native_continuation::ContinuationFailure::KeyUnavailable }
             } else {
                 NativeContinuationOutput::NotStored
             }

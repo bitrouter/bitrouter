@@ -4,9 +4,10 @@
 //! Completion alone never makes evidence optional. Original history remains in
 //! the rejected step's immutable snapshot.
 
+use crate::gateway::pipeline::native::NativePlan;
+use crate::gateway::pipeline::native_projection::ProjectionRecord;
+use crate::gateway::pipeline::native_projection::responses_reasoning;
 use bitrouter_ai::types::{Message, Prompt, Role};
-use bitrouter_sdk::language_model::native::NativePlan;
-use bitrouter_sdk::language_model::native_projection::{ProjectionRecord, responses_reasoning};
 use serde::{Deserialize, Serialize};
 
 use super::checkpoint::sha256;
@@ -89,7 +90,7 @@ pub(crate) fn candidate(
             .get(&step.step_id)
             .and_then(|execution| execution.routing.as_ref())
             .is_some_and(|routing| {
-                routing.strategy == bitrouter_sdk::routing::ContextStrategy::Preserve
+                routing.strategy == crate::gateway::routing::ContextStrategy::Preserve
             })
         && step.decision.as_ref().is_some_and(|decision| {
             decision.routes.iter().any(|route| {

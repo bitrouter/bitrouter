@@ -16,13 +16,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
 use crate::harness::acp::client::SessionInitialSettings;
 use agent_client_protocol::schema::v1::{
     ListSessionsResponse, PermissionOption, SessionConfigOption, SessionConfigOptionValue,
     SessionUpdate, ToolCallUpdate,
 };
 use anyhow::{Context, Result};
-use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};

@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use crate::policy_lock::PolicyDefinition;
 use crate::workflow_state::archive::CloudUsageRecord;
 use crate::workflow_state::fixture::WorkflowTraceFixture;
 use crate::workflow_state::predictive::{PredictiveRouteProjection, predict_next_step};
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::extract_fixture_ir;
-use bitrouter_sdk::{BitrouterError, Result};
 
 const PPM: u64 = 1_000_000;
 

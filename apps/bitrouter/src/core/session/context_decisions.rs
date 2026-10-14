@@ -4,7 +4,8 @@ use super::*;
 use crate::core::context_router::evidence::EvidenceSource;
 use crate::core::context_router::planner::{CandidateSet, CompileOptions, SourceRevision};
 use crate::core::context_router::{DecisionReceipt, ExecutionPlan, FEATURE, WorkUnit};
-use bitrouter_sdk::decision_model::types::{DecisionError, DecisionFailure};
+use crate::gateway::model::decision::types::DecisionError;
+use crate::gateway::model::decision::types::DecisionFailure;
 
 pub(super) fn enabled(state: &SessionSnapshot) -> bool {
     state
@@ -130,7 +131,7 @@ impl CoreSession {
         step_id: &str,
         original: Prompt,
         control: &StepControl,
-    ) -> Result<Option<bitrouter_sdk::routing::preparation::Prepared>, CoreError> {
+    ) -> Result<Option<crate::gateway::routing::preparation::Prepared>, CoreError> {
         let snapshot = self.snapshot().await;
         let agent = snapshot
             .agents
@@ -141,14 +142,14 @@ impl CoreSession {
             .as_ref()
             .ok_or_else(|| reject(ErrorCode::Busy, "context task is absent"))?;
         if !enabled(&snapshot) {
-            let mut prepared = bitrouter_sdk::routing::preparation::Prepared::from_prompt(
+            let mut prepared = crate::gateway::routing::preparation::Prepared::from_prompt(
                 &original, None, step_id,
             )
             .await;
             if portable_reasoning(&snapshot, turn) {
                 prepared
                     .capabilities
-                    .insert(bitrouter_sdk::routing::ContextCapability::OmitPrivateReasoning);
+                    .insert(crate::gateway::routing::ContextCapability::OmitPrivateReasoning);
             }
             return Ok(Some(prepared));
         }
@@ -241,11 +242,11 @@ impl CoreSession {
             CandidateSet::prepare(&store, &task_id, ordered, &snapshot.manifest, &policy)?;
         let mut semantic_prompt = original.clone();
         semantic_prompt.system = Some(agent.required_instructions.join("\n"));
-        let mut input = bitrouter_sdk::routing::input::Input::from_prompt(
+        let mut input = crate::gateway::routing::input::Input::from_prompt(
             &semantic_prompt,
             policy.max_request_bytes / 4,
         );
-        input.task = Some(bitrouter_sdk::routing::input::Task {
+        input.task = Some(crate::gateway::routing::input::Task {
             objective: turn.input.text.clone(),
             acceptance_criteria: turn.input.acceptance_criteria.clone(),
         });
@@ -436,7 +437,7 @@ impl CoreSession {
                 let decoded = outcome
                     .and_then(|outcome| outcome.as_ref().ok())
                     .map(|response| {
-                        bitrouter_sdk::routing::assessment::decode(
+                        crate::gateway::routing::assessment::decode(
                             &receipt.request,
                             response,
                             policy.confidence_threshold,
@@ -450,7 +451,7 @@ impl CoreSession {
                         outcome.and_then(|outcome| outcome.as_ref().err()).cloned(),
                     ),
                 };
-                bitrouter_sdk::routing::preparation::Receipt {
+                crate::gateway::routing::preparation::Receipt {
                     id: receipt.decision_id.clone(),
                     assessment,
                     error,
@@ -467,7 +468,7 @@ impl CoreSession {
                 .map(|(id, (view, _))| (id.into(), view))
                 .collect(),
         });
-        Ok(Some(bitrouter_sdk::routing::preparation::Prepared {
+        Ok(Some(crate::gateway::routing::preparation::Prepared {
             receipt,
             views,
             policy,
@@ -476,14 +477,14 @@ impl CoreSession {
             capabilities: if turn.input.routing.context == super::super::protocol::ContextMode::Auto
             {
                 let mut capabilities = std::collections::BTreeSet::from([
-                    bitrouter_sdk::routing::ContextCapability::OmitEvidence,
-                    bitrouter_sdk::routing::ContextCapability::UseExtract,
-                    bitrouter_sdk::routing::ContextCapability::UseSummary,
-                    bitrouter_sdk::routing::ContextCapability::RecallEvidence,
+                    crate::gateway::routing::ContextCapability::OmitEvidence,
+                    crate::gateway::routing::ContextCapability::UseExtract,
+                    crate::gateway::routing::ContextCapability::UseSummary,
+                    crate::gateway::routing::ContextCapability::RecallEvidence,
                 ]);
                 if portable_reasoning(&snapshot, turn) {
                     capabilities
-                        .insert(bitrouter_sdk::routing::ContextCapability::OmitPrivateReasoning);
+                        .insert(crate::gateway::routing::ContextCapability::OmitPrivateReasoning);
                 }
                 capabilities
             } else {
@@ -497,7 +498,7 @@ impl CoreSession {
         agent_id: &str,
         step_id: &str,
         pending: Pending,
-        plan: &bitrouter_sdk::routing::plan::Plan,
+        plan: &crate::gateway::routing::plan::Plan,
     ) -> Result<(), CoreError> {
         let Pending {
             source,

@@ -248,8 +248,7 @@ enum PrefixResolution {
 const MAX_SEQUENCE_RESERVATION_ATTEMPTS: usize = 32;
 const MAX_LEDGER_MUTATION_ATTEMPTS: usize = 32;
 const MAX_AUDIT_READ_ATTEMPTS: usize = 32;
-pub(crate) const MAX_OUTBOX_BATCH_SIZE: usize =
-    bitrouter_sdk::config::MAX_TRAJECTORY_OUTBOX_BATCH_SIZE;
+pub(crate) const MAX_OUTBOX_BATCH_SIZE: usize = crate::config::MAX_TRAJECTORY_OUTBOX_BATCH_SIZE;
 
 #[cfg(test)]
 #[derive(Clone, Default)]

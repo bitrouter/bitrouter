@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use tempfile::TempDir;
 
 use super::support::{
@@ -554,41 +554,41 @@ async fn startup_record_and_metadata_limits_fail_closed_before_admission()
 }
 
 struct RejectAfterFirstAttempt {
-    mock: bitrouter_sdk::language_model::MockExecutor,
+    mock: crate::gateway::pipeline::executor::MockExecutor,
     calls: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
-impl bitrouter_sdk::language_model::Executor for RejectAfterFirstAttempt {
+impl crate::gateway::pipeline::executor::Executor for RejectAfterFirstAttempt {
     fn native_protocol_validation(
         &self,
-        _: &bitrouter_sdk::language_model::RoutingTarget,
+        _: &crate::gateway::pipeline::types::RoutingTarget,
         _: &bitrouter_ai::types::Prompt,
-        _: &bitrouter_sdk::language_model::PipelineContext,
-    ) -> bitrouter_sdk::language_model::native::NativeProtocolValidation {
+        _: &crate::gateway::pipeline::context::PipelineContext,
+    ) -> crate::gateway::pipeline::native::NativeProtocolValidation {
         if self.calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-            bitrouter_sdk::language_model::native::NativeProtocolValidation::Compatible
+            crate::gateway::pipeline::native::NativeProtocolValidation::Compatible
         } else {
-            bitrouter_sdk::language_model::native::NativeProtocolValidation::Rejected {
+            crate::gateway::pipeline::native::NativeProtocolValidation::Rejected {
                 reason: "fixture rejects the next prepared request".into(),
             }
         }
     }
     async fn execute(
         &self,
-        target: &bitrouter_sdk::language_model::RoutingTarget,
+        target: &crate::gateway::pipeline::types::RoutingTarget,
         prompt: &bitrouter_ai::types::Prompt,
-        ctx: &bitrouter_sdk::language_model::PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
+        ctx: &crate::gateway::pipeline::context::PipelineContext,
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::types::ExecutionResult> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.mock.execute(target, prompt, ctx).await
     }
     async fn execute_stream(
         &self,
-        target: &bitrouter_sdk::language_model::RoutingTarget,
+        target: &crate::gateway::pipeline::types::RoutingTarget,
         prompt: &bitrouter_ai::types::Prompt,
-        ctx: &bitrouter_sdk::language_model::PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+        ctx: &crate::gateway::pipeline::context::PipelineContext,
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::executor::StreamPartStream> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.mock.execute_stream(target, prompt, ctx).await
     }
@@ -600,13 +600,13 @@ async fn terminal_native_plan_without_attempt_does_not_block_fresh_workspace_wor
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("seed.txt"), "source")?;
     let executor = Arc::new(RejectAfterFirstAttempt {
-        mock: bitrouter_sdk::language_model::MockExecutor::new(vec![super::support::mock_stream(
-            turn(vec![tool_call(
+        mock: crate::gateway::pipeline::executor::MockExecutor::new(vec![
+            super::support::mock_stream(turn(vec![tool_call(
                 "read",
                 "read",
                 serde_json::json!({"path":"seed.txt"}),
-            )]),
-        )]),
+            )])),
+        ]),
         calls: std::sync::atomic::AtomicUsize::new(0),
     });
     let store = Arc::new(MemoryExecutionStore::default());

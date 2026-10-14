@@ -2,3 +2,6 @@
 
 #[cfg(feature = "guardrails")]
 pub mod guardrails;
+
+pub mod legacy;
+pub mod registry;

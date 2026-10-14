@@ -2,7 +2,7 @@
 //!
 //! The default OSS binary no longer installs this package. New router-bound
 //! input checks register [`bitrouter_guardrails::checker::callback`] through
-//! `bitrouter_sdk::extension::ExtensionApi`; they do not install global hooks.
+//! `bitrouter::gateway::extensions::registry::ExtensionApi`; they do not install global hooks.
 //! This compatibility API retains its existing global/per-request rule deposits
 //! and stream block/redact behavior. Input-only request checks cannot replace
 //! those output or global protection guarantees, and these hooks do not inherit
@@ -18,12 +18,14 @@
 //! - [`GuardrailsPlugin::dynamic`] — no built-in rules. It installs only the
 //!   two guardrail hooks; the host resolves a per-request (e.g. per-account)
 //!   [`RuleSet`] in an earlier pre-request stage and deposits it via
-//!   [`PipelineContext::insert_extension`](bitrouter_sdk::language_model::PipelineContext::insert_extension).
+//!   [`PipelineContext::insert_extension`](crate::gateway::pipeline::context::PipelineContext::insert_extension).
 //!   With nothing deposited, the hooks no-op.
 
 use std::sync::Arc;
 
-use bitrouter_sdk::{AppBuilder, Plugin, PluginId};
+use crate::gateway::assembly::AppBuilder;
+use crate::gateway::assembly::Plugin;
+use crate::gateway::extensions::legacy::PluginId;
 
 use super::hooks::{DepositRulesHook, GuardrailPreHook, GuardrailStreamHook};
 use bitrouter_guardrails::rules::RuleSet;

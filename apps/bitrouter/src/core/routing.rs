@@ -1,8 +1,10 @@
 //! Immutable context evidence and model-step routing records. Estimates are
 //! distinct from observed usage; unknown token capacity is never a verified fit.
 
+use crate::gateway::pipeline::native::NativeAttemptReport;
+use crate::gateway::pipeline::native::NativeInputCount;
+use crate::gateway::pipeline::native::NativePlan;
 use bitrouter_ai::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
-use bitrouter_sdk::language_model::native::{NativeAttemptReport, NativeInputCount, NativePlan};
 use serde::{Deserialize, Serialize};
 
 use super::checkpoint::sha256;
@@ -146,17 +148,17 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                 unverified_constraints: Vec::new(),
             };
             match &route.protocol_validation {
-                bitrouter_sdk::language_model::native::NativeProtocolValidation::Compatible => {}
-                bitrouter_sdk::language_model::native::NativeProtocolValidation::Unverified => {
+                crate::gateway::pipeline::native::NativeProtocolValidation::Compatible => {}
+                crate::gateway::pipeline::native::NativeProtocolValidation::Unverified => {
                     assessment
                         .unverified_constraints
                         .push("protocol_compatibility_unknown".into())
                 }
-                bitrouter_sdk::language_model::native::NativeProtocolValidation::Rejected {
-                    reason,
-                } => assessment
-                    .rejection_reasons
-                    .push(format!("protocol_incompatible:{reason}")),
+                crate::gateway::pipeline::native::NativeProtocolValidation::Rejected { reason } => {
+                    assessment
+                        .rejection_reasons
+                        .push(format!("protocol_incompatible:{reason}"))
+                }
             }
             let input_tokens = match &route.input_count {
                 Some(NativeInputCount::Counted { input_tokens, .. }) => Some(*input_tokens),

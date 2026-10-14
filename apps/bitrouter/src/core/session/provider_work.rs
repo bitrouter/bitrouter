@@ -1,15 +1,15 @@
 //! Fine-grained durable admission within an already admitted provider attempt.
 
 use super::*;
-use bitrouter_sdk::language_model::native_work::{
-    NativeProviderWork, NativeProviderWorkKind, NativeProviderWorkReport,
-};
+use crate::gateway::pipeline::native_work::NativeProviderWork;
+use crate::gateway::pipeline::native_work::NativeProviderWorkKind;
+use crate::gateway::pipeline::native_work::NativeProviderWorkReport;
 
 impl StepControl {
     pub(super) async fn admit_provider_work(
         &self,
         work: &NativeProviderWork,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let step_id = self.step_id.lock().await.clone();
         let activity_id = format!("{}/{}", work.request_id, work.attempt_index);
         let active_ms = self
@@ -173,7 +173,7 @@ impl StepControl {
                     // The outer attempt's usage can describe only its terminal result.
                     // No usage evidence establishes the earlier HTTP request as free.
                     accounting.record(
-                        &bitrouter_sdk::language_model::native_accounting::NativeTokenCost::unknown(
+                        &crate::gateway::pipeline::native_accounting::NativeTokenCost::unknown(
                             "internal_http_retry_usage_unavailable",
                         ),
                     );

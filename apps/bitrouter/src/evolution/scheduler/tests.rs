@@ -1,12 +1,15 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::assembly::App;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::executor::MockExecutor;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
 use crate::harness::acp::capture::{CaptureDirection, CapturePort};
 use bitrouter_ai::types::ToolChoice;
-use bitrouter_sdk::App;
-use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::executor::MockExecutor;
-use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
 use serde_json::json;
 
 use crate::acp_trajectory::checkpoint::types::AssessmentSource;
@@ -17,7 +20,10 @@ struct CountRequests(Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
 impl PreRequestHook for CountRequests {
-    async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
         self.0.fetch_add(1, Ordering::SeqCst);
         assert!(ctx.require_generation_prompt()?.tools.is_empty());
         assert_eq!(
@@ -55,7 +61,7 @@ async fn fixture_with_storage(mode: EvolutionMode, persistent: bool) -> Result<F
     } else {
         "sqlite::memory:".into()
     };
-    let mut config: Config = bitrouter_sdk::config::parse_with(
+    let mut config: Config = crate::config::parse_with(
         r#"
 server:
   skip_auth: true
@@ -438,7 +444,10 @@ struct ParkJudge(Arc<tokio::sync::Notify>);
 
 #[async_trait::async_trait]
 impl PreRequestHook for ParkJudge {
-    async fn check(&self, _ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        _ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
         self.0.notify_one();
         std::future::pending().await
     }

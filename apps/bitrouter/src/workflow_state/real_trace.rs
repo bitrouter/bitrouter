@@ -5,12 +5,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::gateway::error::Result;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use bitrouter_sdk::Result;
 use chrono::{SecondsFormat, Utc};
 use http::HeaderValue;
 use serde::{Deserialize, Serialize};
@@ -324,7 +324,7 @@ pub fn capture_from_env() -> Result<Option<RealTraceCapture>> {
     let configured_harness =
         std::env::var(WORKFLOW_TRACE_HARNESS_ENV).unwrap_or_else(|_| "generic".to_string());
     let harness = parse_compatibility_harness(&configured_harness).ok_or_else(|| {
-        bitrouter_sdk::BitrouterError::bad_request(format!(
+        crate::gateway::error::BitrouterError::bad_request(format!(
             "{WORKFLOW_TRACE_HARNESS_ENV} has unsupported value '{configured_harness}'"
         ))
     })?;
@@ -439,7 +439,7 @@ fn append_sanitized_trace(
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent).map_err(|e| {
-            bitrouter_sdk::BitrouterError::internal(format!(
+            crate::gateway::error::BitrouterError::internal(format!(
                 "workflow trace archive mkdir {}: {e}",
                 parent.display()
             ))
@@ -452,16 +452,20 @@ fn append_sanitized_trace(
         .append(true)
         .open(path)
         .map_err(|e| {
-            bitrouter_sdk::BitrouterError::internal(format!(
+            crate::gateway::error::BitrouterError::internal(format!(
                 "workflow trace archive append open {}: {e}",
                 path.display()
             ))
         })?;
     serde_json::to_writer(&mut file, &sanitized).map_err(|e| {
-        bitrouter_sdk::BitrouterError::internal(format!("workflow trace archive serialize: {e}"))
+        crate::gateway::error::BitrouterError::internal(format!(
+            "workflow trace archive serialize: {e}"
+        ))
     })?;
     file.write_all(b"\n").map_err(|e| {
-        bitrouter_sdk::BitrouterError::internal(format!("workflow trace archive append: {e}"))
+        crate::gateway::error::BitrouterError::internal(format!(
+            "workflow trace archive append: {e}"
+        ))
     })
 }
 

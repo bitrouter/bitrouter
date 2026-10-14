@@ -1,7 +1,7 @@
 //! Reports for `models` and `providers list`.
 
 use crate::actions::models::{ModelsReport, ModelsSource};
-use bitrouter_sdk::invocation;
+use crate::commands::invocation;
 use serde::Serialize;
 
 use crate::output::CliReport;
@@ -93,8 +93,8 @@ mod tests {
     use super::*;
     use crate::output::{Format, Output};
 
-    fn model(id: &str, providers: &[&str]) -> bitrouter_sdk::language_model::routing::ModelInfo {
-        bitrouter_sdk::language_model::routing::ModelInfo {
+    fn model(id: &str, providers: &[&str]) -> crate::gateway::pipeline::routing::ModelInfo {
+        crate::gateway::pipeline::routing::ModelInfo {
             id: id.into(),
             providers: providers.iter().map(|p| (*p).into()).collect(),
         }

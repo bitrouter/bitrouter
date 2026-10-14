@@ -1,7 +1,9 @@
 //! Authority-bound admission for externally supplied evaluation outcomes.
 
+use crate::config::EvalAuthorityConfig;
+use crate::config::EvalAuthorityKind;
+use crate::config::EvalConfig;
 use anyhow::Result;
-use bitrouter_sdk::config::{EvalAuthorityConfig, EvalAuthorityKind, EvalConfig};
 use serde::Serialize;
 
 use super::store::{EvalStore, ResultInsertOutcome};
@@ -323,7 +325,8 @@ fn verdicts_conflict(left: EvalVerdict, right: EvalVerdict) -> bool {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-    use bitrouter_sdk::config::{EvalAuthorityConfig, EvalAuthorityKind};
+    use crate::config::EvalAuthorityConfig;
+    use crate::config::EvalAuthorityKind;
 
     use super::*;
     use crate::eval::types::{

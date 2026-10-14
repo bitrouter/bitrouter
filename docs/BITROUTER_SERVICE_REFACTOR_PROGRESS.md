@@ -61,7 +61,7 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check contracts and operation scopes moved to AI; matcher detached from old SDK; legacy adapters moved to application; Observation/capability slice verified; shared control/core DTO extraction remains before their final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
-| P0 3 Gateway and lightweight AI | Pending | Service runtime relocation, AI dependency isolation and schema bootstrap |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service/configuration/runtime moved to application; schema generator delegates to its application owner; AI runtime extraction and dependency isolation remain |
 | P0 4 HTTP SDK | Pending | Typed gateway/control client and independent process consumer |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
@@ -168,3 +168,25 @@ serving must retain policy-key projection and published-artifact validation; and
 harness-only recovery must retain shared snapshot decoding and immutable-history
 validation. Their ownership and cross-profile acceptance fixtures are now
 explicit in the implementation plan. Both remain implementation work.
+
+P0 3's old SDK service relocation moves assembly, HTTP routes, configuration,
+pipeline, routing, MCP, extension registration and observation runtime into the
+application. The application and distribution helper no longer depend on the old
+SDK server framework. The SDK package is temporarily reserved for P0 4's client;
+its final API guard and typed HTTP surface remain open.
+
+The targeted gateway/configuration run passed **766 tests**, including all six
+relocated integration suites. Independent review found that those six targets
+were absent from Ubuntu's explicit CI shards and that removed reexports left
+unresolved Rustdoc links. The targets now have a gateway shard and documentation
+links name their defining modules. Strict workspace Rustdoc passed. The first
+doctest run found a missing import in the relocated DispatchExecutor example;
+the example now imports its application-owned executor and routing types.
+The repeated workspace doctest run passed **5 tests**, with the existing one
+ignored protocol sketch. Formatting and diff whitespace checks also passed.
+
+The unchanged `dist-helper generate-schema --check` command now executes the
+application-owned schema generator. It passed against the existing committed
+artifact, preserving its bytes. Registry bootstrap remains independent of the
+application's Cargo dependency graph. Clean-checkout and final feature matrix
+validation remain open P0 gates.

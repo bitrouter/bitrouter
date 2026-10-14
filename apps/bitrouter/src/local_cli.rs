@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use bitrouter_sdk::config::agent::AcpTransport;
+use crate::config::agent::AcpTransport;
 use semver::Version;
 
 /// Follow the adapters' explicit executable override contracts:

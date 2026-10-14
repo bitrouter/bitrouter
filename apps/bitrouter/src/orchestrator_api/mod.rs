@@ -10,12 +10,12 @@ use std::sync::{Arc, Weak};
 
 use crate::core::protocol::{Capabilities, CoreError, ErrorCode, Limits, VERSION};
 use crate::core::session::CoreSession;
+use crate::gateway::assembly::App;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use bitrouter_sdk::App;
 use sea_orm::DatabaseConnection;
 use tokio::sync::{Mutex, Semaphore};
 

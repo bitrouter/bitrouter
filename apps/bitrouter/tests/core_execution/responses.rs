@@ -1,7 +1,7 @@
 use super::*;
 use bitrouter::core::protocol::{ToolObservation, ToolStatus};
 use bitrouter::core::session::AgentStatus;
-use bitrouter_sdk::language_model::hooks::HopOutcome;
+use bitrouter::gateway::pipeline::hooks::HopOutcome;
 
 #[derive(Clone)]
 struct HeldHop {
@@ -171,7 +171,7 @@ async fn exchange_commits_failure_and_blocks_release_until_closed() -> TestResul
     let harness = Arc::new(Harness::new(None, None));
     let (session, _, _) = setup(
         vec![MockResponse::Error(
-            bitrouter_sdk::BitrouterError::Upstream {
+            bitrouter::gateway::error::BitrouterError::Upstream {
                 status: 400,
                 message: "fixture rejection".into(),
             },

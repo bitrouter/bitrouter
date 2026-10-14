@@ -2,19 +2,20 @@
 
 use std::sync::Arc;
 
+use crate::gateway::caller::CallerContext;
+use crate::gateway::http::AppState;
+use crate::gateway::http::build_router;
+use crate::gateway::pipeline::builder::PipelineBuilder;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::executor::HttpExecutor;
+use crate::gateway::pipeline::hooks::RouteHook;
+use crate::gateway::pipeline::routing::StaticRoutingTable;
+use crate::gateway::pipeline::types::RoutingTarget;
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use bitrouter_ai::types::OperationScope;
 use bitrouter_ai::types::{ApiProtocol, Usage, UsageOrigin};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::builder::PipelineBuilder;
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::executor::HttpExecutor;
-use bitrouter_sdk::language_model::hooks::RouteHook;
-use bitrouter_sdk::language_model::routing::StaticRoutingTable;
-use bitrouter_sdk::language_model::types::RoutingTarget;
-use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::json;
 use tower::ServiceExt;
 use wiremock::matchers::{method, path};
@@ -90,7 +91,7 @@ impl RouteHook for OverrideEndpoint {
         &self,
         chain: &mut Vec<RoutingTarget>,
         _ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         for target in chain {
             target.api_base_override = Some(self.0.clone());
         }
@@ -442,7 +443,7 @@ fn published_global_tariffs_cannot_rebind_to_configured_regional_endpoints() -> 
             Some(Some(regional_profile))
         );
     }
-    let invalid: std::result::Result<bitrouter_sdk::config::PricingConfig, _> =
+    let invalid: std::result::Result<crate::config::PricingConfig, _> =
         serde_json::from_value(json!({"endpoint_profile":"private-unsupported-profile"}));
     assert!(invalid.is_err());
     Ok(())
@@ -472,7 +473,7 @@ async fn known_price_admission_rejects_native_cache_uncertainty_before_http() ->
     }))?;
     let outcome = pipeline
         .execute(
-            bitrouter_sdk::language_model::types::PipelineRequest::new_decisions(
+            crate::gateway::pipeline::types::PipelineRequest::new_decisions(
                 "test",
                 CallerContext::local(),
                 request,
@@ -481,7 +482,7 @@ async fn known_price_admission_rejects_native_cache_uncertainty_before_http() ->
         .await;
     assert!(matches!(
         outcome,
-        Err(bitrouter_sdk::BitrouterError::BadRequest { .. })
+        Err(crate::gateway::error::BitrouterError::BadRequest { .. })
     ));
     assert!(
         upstream
@@ -497,10 +498,10 @@ async fn known_price_admission_rejects_native_cache_uncertainty_before_http() ->
 async fn native_gateway_enforces_shared_auth_acl_expiry_spend_and_rate() -> anyhow::Result<()> {
     use crate::auth::db::{NewApiKey, insert_api_key, upsert_user};
     use crate::auth::hook::AuthHook;
+    use crate::gateway::pipeline::operations::HookStage;
     use crate::policy::hook::PolicyHook;
     use crate::policy::policy::Policy;
     use crate::policy::store::PolicyStore;
-    use bitrouter_sdk::language_model::operations::HookStage;
     use sea_orm::ConnectionTrait;
 
     for (policy, credential_mode, first_status, second_status) in [
@@ -704,7 +705,7 @@ async fn observed_native_disconnect_and_shutdown_preserve_sqlite_settlement() ->
     let routes = Arc::new(StaticRoutingTable::new());
     routes.insert("test", vec![native]);
     let executor = Arc::new(HttpExecutor::with_defaults()?);
-    let app = bitrouter_sdk::App::builder()
+    let app = crate::gateway::assembly::App::builder()
         .skip_auth(true)
         .language_model(|lm| {
             lm.routing_table(routes)

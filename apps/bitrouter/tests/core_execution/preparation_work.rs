@@ -1,16 +1,23 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::core::protocol::ModelMode;
+use bitrouter::gateway::pipeline::hooks::HookDecision;
+use bitrouter::gateway::pipeline::hooks::PreRequestHook;
+use bitrouter::gateway::pipeline::hooks::RouteHook;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostObservation;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostSource;
+use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind as Kind;
+use bitrouter::gateway::pipeline::request_checks::CheckerFailure;
+use bitrouter::gateway::pipeline::request_checks::CheckerResult;
+use bitrouter::gateway::pipeline::request_checks::RequestCheckBinding;
+use bitrouter::gateway::pipeline::request_checks::RequestCheckerRunner;
+use bitrouter::gateway::pipeline::routing::ModelInfo;
+use bitrouter::gateway::pipeline::routing::ModelResolution;
+use bitrouter::gateway::pipeline::routing::ModelSelector;
+use bitrouter::gateway::pipeline::routing::RouterRequestIdentity;
+use bitrouter::gateway::pipeline::routing::RoutingPrefs;
+use bitrouter::gateway::pipeline::routing::RoutingTable;
 use bitrouter_ai::extension::request_check::{Decision, Input};
-use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook, RouteHook};
-use bitrouter_sdk::language_model::native_accounting::{NativeCostObservation, NativeCostSource};
-use bitrouter_sdk::language_model::native_preparation::NativePreparationWorkKind as Kind;
-use bitrouter_sdk::language_model::request_checks::{
-    CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
-};
-use bitrouter_sdk::language_model::routing::{
-    ModelInfo, ModelResolution, ModelSelector, RouterRequestIdentity, RoutingPrefs, RoutingTable,
-};
 
 struct Probe {
     calls: Mutex<Vec<Kind>>,
@@ -37,14 +44,16 @@ impl Probe {
         }
     }
 
-    async fn called(&self, kind: Kind) -> bitrouter_sdk::Result<()> {
+    async fn called(&self, kind: Kind) -> bitrouter::gateway::error::Result<()> {
         self.calls.lock().await.push(kind);
         if self.hold == Some(kind) && !self.held.swap(true, Ordering::SeqCst) {
             self.entered.add_permits(1);
             self.resume
                 .acquire()
                 .await
-                .map_err(|_| bitrouter_sdk::BitrouterError::internal("fixture stopped"))?
+                .map_err(|_| {
+                    bitrouter::gateway::error::BitrouterError::internal("fixture stopped")
+                })?
                 .forget();
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -64,7 +73,7 @@ impl Probe {
     }
 }
 
-impl bitrouter_sdk::app::PromptTransform for Probe {
+impl bitrouter::gateway::assembly::PromptTransform for Probe {
     fn apply(&self, _: &mut Prompt) {
         self.transforms.fetch_add(1, Ordering::SeqCst);
     }
@@ -72,7 +81,10 @@ impl bitrouter_sdk::app::PromptTransform for Probe {
 
 #[async_trait]
 impl RoutingTable for Probe {
-    async fn resolve_model(&self, model: &str) -> bitrouter_sdk::Result<ModelResolution> {
+    async fn resolve_model(
+        &self,
+        model: &str,
+    ) -> bitrouter::gateway::error::Result<ModelResolution> {
         self.called(Kind::RouterLookup).await?;
         let mut resolution = ModelResolution::passthrough(model);
         resolution.router = Some(RouterRequestIdentity {
@@ -97,7 +109,7 @@ impl RoutingTable for Probe {
         _: &str,
         _: &RoutingPrefs,
         _: &CallerContext,
-    ) -> bitrouter_sdk::Result<Vec<RoutingTarget>> {
+    ) -> bitrouter::gateway::error::Result<Vec<RoutingTarget>> {
         self.called(Kind::RouterLookup).await?;
         Ok(vec![target("first")])
     }
@@ -107,7 +119,7 @@ impl RoutingTable for Probe {
     fn model_info(&self, _: &str) -> Option<ModelInfo> {
         None
     }
-    async fn reload(&self) -> bitrouter_sdk::Result<()> {
+    async fn reload(&self) -> bitrouter::gateway::error::Result<()> {
         Ok(())
     }
 }
@@ -119,7 +131,7 @@ impl ModelSelector for Probe {
         _: &str,
         _: Option<&str>,
         _: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> bitrouter::gateway::error::Result<()> {
         self.called(Kind::ModelSelection).await
     }
 }
@@ -134,7 +146,7 @@ impl RequestCheckerRunner for Probe {
         self.called(Kind::RequestCheck)
             .await
             .map_err(|_| CheckerFailure {
-                kind: bitrouter_sdk::language_model::request_checks::CheckerFailureKind::Internal,
+                kind: bitrouter::gateway::pipeline::request_checks::CheckerFailureKind::Internal,
                 detail: None,
             })?;
         Ok(CheckerResult {
@@ -156,7 +168,7 @@ impl NativeCostSource for Probe {
         &self,
         _: &CallerContext,
         ids: &[String],
-    ) -> bitrouter_sdk::Result<Vec<NativeCostObservation>> {
+    ) -> bitrouter::gateway::error::Result<Vec<NativeCostObservation>> {
         self.cost_reads.lock().await.extend_from_slice(ids);
         Ok(ids
             .iter()
@@ -224,7 +236,10 @@ async fn reconnect_retains_preparation_time_without_an_outcome_checkpoint() -> T
 
 #[async_trait]
 impl PreRequestHook for Hook {
-    async fn check(&self, _: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        _: &mut PipelineContext,
+    ) -> bitrouter::gateway::error::Result<HookDecision> {
         self.0.called(self.1).await?;
         Ok(HookDecision::Allow)
     }
@@ -236,7 +251,7 @@ impl RouteHook for Hook {
         &self,
         _: &mut Vec<RoutingTarget>,
         _: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> bitrouter::gateway::error::Result<()> {
         self.0.called(self.1).await
     }
 }
@@ -588,14 +603,19 @@ impl RaceHook {
 
 #[async_trait]
 impl PreRequestHook for RaceHook {
-    async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> bitrouter::gateway::error::Result<HookDecision> {
         if self.is_root(ctx).await {
             self.0.root_seen.add_permits(1);
             self.0
                 .root_resume
                 .acquire()
                 .await
-                .map_err(|_| bitrouter_sdk::BitrouterError::internal("fixture stopped"))?
+                .map_err(|_| {
+                    bitrouter::gateway::error::BitrouterError::internal("fixture stopped")
+                })?
                 .forget();
         }
         Ok(HookDecision::Allow)

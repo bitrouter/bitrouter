@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use tempfile::TempDir;
 
 use super::support::{app, final_turn, input, target, thread_request, tool_call, turn, wait_for};

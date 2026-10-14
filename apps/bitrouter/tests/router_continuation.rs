@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use axum_test::TestServer;
+use bitrouter::config;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use bitrouter::metering::entities::requests;
-use bitrouter_sdk::config;
-use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::EntityTrait;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};

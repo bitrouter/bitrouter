@@ -250,7 +250,7 @@ impl Executor for DisconnectingExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let count = self.calls.fetch_add(1, Ordering::SeqCst);
         let result = MockExecutor::new(vec![if count == 0 {
             if self.size > 0 {
@@ -275,8 +275,10 @@ impl Executor for DisconnectingExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 
@@ -712,7 +714,7 @@ async fn retired_attempt_keeps_output_capacity_and_contract_for_late_evidence() 
         if rejection {
             invalid.report.result = None;
             invalid.report.output_rejection = Some(
-                bitrouter_sdk::language_model::native::NativeOutputRejection {
+                bitrouter::gateway::pipeline::native::NativeOutputRejection {
                     byte_limit: bound + 1,
                     usage: None,
                 },
@@ -787,7 +789,7 @@ impl Executor for PendingExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let _drop = DropFlag(self.dropped.clone());
         self.seen.add_permits(1);
         std::future::pending().await
@@ -797,8 +799,10 @@ impl Executor for PendingExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 #[derive(Clone)]

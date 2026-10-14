@@ -4,7 +4,7 @@ use std::sync::Arc;
 #[cfg(unix)]
 use std::time::Duration;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use tempfile::TempDir;
 
 use super::support::{
@@ -38,7 +38,7 @@ async fn native_turns_restore_the_same_core_and_keep_evidence_and_views()
         "retained native evidence",
     )?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let executor = Arc::new(bitrouter_sdk::language_model::MockExecutor::new(vec![
+    let executor = Arc::new(crate::gateway::pipeline::executor::MockExecutor::new(vec![
         super::support::mock_stream(turn(vec![tool_call(
             "read",
             "read",
@@ -403,7 +403,7 @@ async fn steering_during_verification_resumes_same_turn_with_existing_model_and_
         let store = Arc::new(MemoryExecutionStore::default());
         let service = ThreadService::with_store(
             super::support::app_with_execution_mode(
-                Arc::new(bitrouter_sdk::language_model::MockExecutor::new(vec![
+                Arc::new(crate::gateway::pipeline::executor::MockExecutor::new(vec![
                     super::support::mock_stream(final_turn()),
                     super::support::mock_stream(final_turn()),
                 ])),

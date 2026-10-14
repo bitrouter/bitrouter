@@ -2,13 +2,17 @@
 
 use std::sync::Arc;
 
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::builder::PipelineBuilder;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::executor::MockExecutor;
+use crate::gateway::pipeline::executor::MockResponse;
+use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::routing::StaticRoutingTable;
+use crate::gateway::pipeline::types::PipelineRequest;
+use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{
     ApiProtocol, FinishReason, GenerationParams, Message, Prompt, Role, StreamPart, Usage,
-};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    MockExecutor, MockResponse, PipelineBuilder, PipelineContext, PipelineRequest, PreRequestHook,
-    RoutingTarget, StaticRoutingTable,
 };
 use futures::StreamExt;
 
@@ -57,7 +61,7 @@ async fn pre_hook_allows_clean_request() -> TestResult {
     let mut c = ctx_with_rules("a perfectly normal question")?;
     assert!(matches!(
         hook.check(&mut c).await?,
-        bitrouter_sdk::language_model::HookDecision::Allow
+        crate::gateway::pipeline::hooks::HookDecision::Allow
     ));
     Ok(())
 }
@@ -69,7 +73,7 @@ async fn pre_hook_allows_when_no_rules_deposited() -> TestResult {
     let mut c = ctx("please do the FORBIDDEN thing");
     assert!(matches!(
         hook.check(&mut c).await?,
-        bitrouter_sdk::language_model::HookDecision::Allow
+        crate::gateway::pipeline::hooks::HookDecision::Allow
     ));
     Ok(())
 }
@@ -79,11 +83,11 @@ async fn pre_hook_blocks_forbidden_request() -> TestResult {
     let hook = GuardrailPreHook::new();
     let mut c = ctx_with_rules("please do the FORBIDDEN thing")?;
     match hook.check(&mut c).await? {
-        bitrouter_sdk::language_model::HookDecision::Deny(reason) => {
-            let err: bitrouter_sdk::BitrouterError = reason.into();
+        crate::gateway::pipeline::hooks::HookDecision::Deny(reason) => {
+            let err: crate::gateway::error::BitrouterError = reason.into();
             assert_eq!(err.status(), 400);
         }
-        bitrouter_sdk::language_model::HookDecision::Allow => {
+        crate::gateway::pipeline::hooks::HookDecision::Allow => {
             return Err("forbidden request must be blocked".into());
         }
     }
@@ -119,7 +123,9 @@ fn routing_table() -> Arc<StaticRoutingTable> {
     rt
 }
 
-async fn run_stream(parts: Vec<StreamPart>) -> TestResult<Vec<bitrouter_sdk::Result<StreamPart>>> {
+async fn run_stream(
+    parts: Vec<StreamPart>,
+) -> TestResult<Vec<crate::gateway::error::Result<StreamPart>>> {
     let mut b = PipelineBuilder::new();
     // The deposit hook runs at Stage 1 and the rule set rides the extensions
     // into the StreamContext — end-to-end proof the propagation works.
@@ -230,13 +236,13 @@ struct CountingExecutor {
 }
 
 #[async_trait::async_trait]
-impl bitrouter_sdk::language_model::Executor for CountingExecutor {
+impl crate::gateway::pipeline::executor::Executor for CountingExecutor {
     async fn execute(
         &self,
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::types::ExecutionResult> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.execute(target, prompt, ctx).await
     }
@@ -246,7 +252,7 @@ impl bitrouter_sdk::language_model::Executor for CountingExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::executor::StreamPartStream> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.execute_stream(target, prompt, ctx).await
     }
@@ -273,7 +279,7 @@ fn scripted_executor(texts: &[&str]) -> Arc<CountingExecutor> {
     })
 }
 
-fn output_text(parts: &[bitrouter_sdk::Result<StreamPart>]) -> String {
+fn output_text(parts: &[crate::gateway::error::Result<StreamPart>]) -> String {
     parts
         .iter()
         .filter_map(|part| match part {
@@ -286,7 +292,7 @@ fn output_text(parts: &[bitrouter_sdk::Result<StreamPart>]) -> String {
 #[tokio::test]
 async fn static_plugin_install_preserves_denial_and_stream_protection() -> TestResult {
     let executor = scripted_executor(&["ssn 123-45-6789", "FORBIDDEN"]);
-    let app = bitrouter_sdk::App::builder()
+    let app = crate::gateway::assembly::App::builder()
         .language_model(|lm| {
             lm.routing_table(routing_table()).executor(executor.clone());
         })
@@ -334,11 +340,11 @@ impl PreRequestHook for AccountRules {
     async fn check(
         &self,
         ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::HookDecision> {
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::hooks::HookDecision> {
         if ctx.caller().user_id() == "protected" {
             ctx.insert_extension(self.0.clone());
         }
-        Ok(bitrouter_sdk::language_model::HookDecision::Allow)
+        Ok(crate::gateway::pipeline::hooks::HookDecision::Allow)
     }
 }
 
@@ -346,7 +352,7 @@ impl PreRequestHook for AccountRules {
 async fn dynamic_plugin_install_keeps_rules_request_local() -> TestResult {
     let executor = scripted_executor(&["ssn 123-45-6789", "ssn 123-45-6789"]);
     let rules = Arc::new(rules()?);
-    let app = bitrouter_sdk::App::builder()
+    let app = crate::gateway::assembly::App::builder()
         .language_model(|lm| {
             lm.routing_table(routing_table())
                 .executor(executor.clone())

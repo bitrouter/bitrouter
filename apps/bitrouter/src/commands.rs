@@ -4,11 +4,12 @@
 
 use anyhow::{Context, Result};
 
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::routing::ModelInfo;
-use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::routing::ModelInfo;
+use crate::gateway::pipeline::routing::RoutingPrefs;
+use crate::gateway::pipeline::routing::RoutingTable;
 
 use crate::actions::skills::SkillsReport;
 use crate::auth::{NewApiKey, db as auth_db, generate};
@@ -203,7 +204,7 @@ pub async fn key_sign(
 pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
     config.validate_router_config()?;
     let mut resolved = resolve_static(config.clone());
-    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    crate::config::discover_models(&mut resolved).await;
     Ok(ConfigRoutingTable::from_config(resolved).list_models())
 }
 
@@ -211,7 +212,7 @@ pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
 /// discovery. Route previews and model listings must use the same catalog.
 pub(crate) async fn resolve_discovered(config: Config) -> Config {
     let mut resolved = resolve_static(config);
-    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    crate::config::discover_models(&mut resolved).await;
     resolved
 }
 
@@ -521,15 +522,14 @@ pub async fn login_provider_with_options(
     {
         Some(e) => e,
         None => {
-            let data =
-                crate::bundled_registry::load(&bitrouter_sdk::config::RegistryConfig::default())
-                    .await
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "could not load the provider registry (offline, and nothing cached) \
+            let data = crate::bundled_registry::load(&crate::config::RegistryConfig::default())
+                .await
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "could not load the provider registry (offline, and nothing cached) \
                      to resolve '{provider_id}'"
-                        )
-                    })?;
+                    )
+                })?;
             let provider = data
                 .providers
                 .iter()
@@ -826,7 +826,7 @@ async fn run_pkce_subscription(
     .map_err(|error| match error {
         bitrouter_ai::auth::login::LoginError::EmptyPaste => anyhow::anyhow!(
             "manual redirect paste was empty — re-run `{} providers login <provider>` to try again",
-            bitrouter_sdk::invocation::name()
+            crate::commands::invocation::name()
         ),
         bitrouter_ai::auth::login::LoginError::PinnedPortInUse { provider, port, source } => anyhow::anyhow!(
             "{provider} requires loopback port {port} but it's already in use — quit any other client signing in to this provider (e.g. the official vendor CLI) and retry. ({source})"
@@ -1149,7 +1149,7 @@ mod tests {
         let written = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(written.contains("skip_auth: true"));
         // and it parses back into a valid Config
-        let cfg = bitrouter_sdk::config::parse_with(&written, |_| Some("x".to_string())).unwrap();
+        let cfg = crate::config::parse_with(&written, |_| Some("x".to_string())).unwrap();
         assert!(cfg.server.skip_auth);
         // Without --force, an existing file is left untouched (Skipped) — the
         // wizard's `--yes` run must never clobber a tuned config.
@@ -1191,7 +1191,7 @@ mod tests {
     /// starter config must load with **no** environment variables set.
     #[test]
     fn starter_config_loads_with_all_env_vars_unset() {
-        let cfg = bitrouter_sdk::config::parse_with(STARTER_CONFIG, |_| None)
+        let cfg = crate::config::parse_with(STARTER_CONFIG, |_| None)
             .expect("starter config must load with no env vars set");
         assert!(cfg.server.skip_auth);
     }
@@ -1230,7 +1230,7 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let cfg = bitrouter_sdk::config::parse_with(&uncommented, |_| Some("x".to_string()))
+        let cfg = crate::config::parse_with(&uncommented, |_| Some("x".to_string()))
             .expect("uncommented STARTER_CONFIG must parse against current schema");
         assert!(
             !cfg.mcp_servers.is_empty(),
@@ -1435,7 +1435,7 @@ providers:
     api_key: k2
     models: [{ id: shared }]
 "#;
-        bitrouter_sdk::config::parse_with(yaml, |_| None).unwrap()
+        crate::config::parse_with(yaml, |_| None).unwrap()
     }
 
     /// The config projection is unfiltered and keeps every provider of every
@@ -1532,3 +1532,5 @@ providers:
 pub mod agents;
 /// Shared chat command resolution.
 pub mod chat;
+
+pub mod invocation;

@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use bitrouter_sdk::config::AdequacyConfig;
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::config::AdequacyConfig;
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 

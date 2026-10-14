@@ -331,7 +331,7 @@ fn unexpected_inspection<T>(action: &str, report: DaemonInspectionReport) -> Res
 
 pub fn reject_remote_local_flags(config: Option<&Path>, socket: Option<&Path>) -> Result<()> {
     if config.is_some() || socket.is_some() {
-        return Err(bitrouter_sdk::BitrouterError::bad_request(
+        return Err(crate::gateway::error::BitrouterError::bad_request(
             "a remote context does not accept --config or --socket; the named context is the \
              complete target",
         )

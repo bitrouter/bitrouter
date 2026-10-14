@@ -2,8 +2,10 @@
 
 use std::collections::BTreeSet;
 
+use crate::config::ControlConfig;
+use crate::config::ControlCredentialConfig;
+use crate::config::ControlScope;
 use anyhow::{Result, ensure};
-use bitrouter_sdk::config::{ControlConfig, ControlCredentialConfig, ControlScope};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 

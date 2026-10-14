@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use tempfile::TempDir;
 
 use super::support::{
@@ -45,7 +45,7 @@ async fn native_cold_recovery_reuses_core_evidence_and_views()
     let memory = Arc::new(MemoryExecutionStore::default());
     let make_app = |turns: Vec<bitrouter_ai::types::GenerateResult>| {
         super::support::app_with_execution_mode(
-            Arc::new(bitrouter_sdk::language_model::MockExecutor::new(
+            Arc::new(crate::gateway::pipeline::executor::MockExecutor::new(
                 turns.into_iter().map(super::support::mock_stream).collect(),
             )),
             true,
@@ -1112,23 +1112,23 @@ async fn empty_thread_inspection_releases_a_valid_marker_after_confirmed_recover
 }
 
 #[async_trait::async_trait]
-impl bitrouter_sdk::language_model::Executor for PartialModel {
+impl crate::gateway::pipeline::executor::Executor for PartialModel {
     async fn execute(
         &self,
-        _target: &bitrouter_sdk::language_model::RoutingTarget,
+        _target: &crate::gateway::pipeline::types::RoutingTarget,
         _prompt: &bitrouter_ai::types::Prompt,
-        _ctx: &bitrouter_sdk::language_model::PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
-        Err(bitrouter_sdk::error::BitrouterError::Internal(
+        _ctx: &crate::gateway::pipeline::context::PipelineContext,
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::types::ExecutionResult> {
+        Err(crate::gateway::error::BitrouterError::Internal(
             "stream-only test model".into(),
         ))
     }
     async fn execute_stream(
         &self,
-        _target: &bitrouter_sdk::language_model::RoutingTarget,
+        _target: &crate::gateway::pipeline::types::RoutingTarget,
         _prompt: &bitrouter_ai::types::Prompt,
-        _ctx: &bitrouter_sdk::language_model::PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+        _ctx: &crate::gateway::pipeline::context::PipelineContext,
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::executor::StreamPartStream> {
         use futures::StreamExt;
         Ok(Box::pin(
             futures::stream::once(async {
@@ -1137,7 +1137,7 @@ impl bitrouter_sdk::language_model::Executor for PartialModel {
                 })
             })
             .chain(futures::stream::pending::<
-                bitrouter_sdk::Result<bitrouter_ai::types::StreamPart>,
+                crate::gateway::error::Result<bitrouter_ai::types::StreamPart>,
             >()),
         ))
     }
@@ -2677,7 +2677,7 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
     let memory = Arc::new(MemoryExecutionStore::default());
     let make_app = |turns: Vec<bitrouter_ai::types::GenerateResult>| {
         super::support::app_with_execution_mode(
-            Arc::new(bitrouter_sdk::language_model::MockExecutor::new(
+            Arc::new(crate::gateway::pipeline::executor::MockExecutor::new(
                 turns.into_iter().map(super::support::mock_stream).collect(),
             )),
             true,

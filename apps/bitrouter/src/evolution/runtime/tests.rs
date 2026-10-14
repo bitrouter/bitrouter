@@ -3,11 +3,11 @@ mod execution_guards;
 mod judge_costs;
 mod resource_coverage;
 mod revisions;
+use crate::config::Config;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::types::PipelineRequest;
 use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
 use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::language_model::PipelineRequest;
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -49,7 +49,7 @@ async fn fixture(named: bool) -> Result<Fixture> {
         .await;
     let home = tempfile::tempdir()?;
     let config_path = home.path().join("bitrouter.yaml");
-    let mut config: Config = bitrouter_sdk::config::parse_with(
+    let mut config: Config = crate::config::parse_with(
         &format!(
             r#"
 server:
@@ -446,7 +446,7 @@ async fn named_candidate_keeps_preset_defaults_and_tool_safety_selection() -> Re
         .input
         .generation_prompt_mut()
         .ok_or_else(|| {
-            bitrouter_sdk::error::BitrouterError::internal("generation fixture missing")
+            crate::gateway::error::BitrouterError::internal("generation fixture missing")
         })?
         .tools = serde_json::from_value(json!([{
         "type":"function", "name":"read_file", "description":"Read a file", "parameters":{"type":"object"}

@@ -200,7 +200,7 @@ impl CliReport for UpdateReport {
                     Some("compatible") => h.note(&format!("The running daemon is serving {new}.")),
                     Some("restart_needed") => h.note(&format!(
                         "A daemon is running the old binary. Run `{} restart` to serve {new}.",
-                        bitrouter_sdk::invocation::name()
+                        crate::commands::invocation::name()
                     )),
                     Some("deferred") => h.note(&format!(
                         "Daemon handoff deferred: {}",

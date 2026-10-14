@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::context::StreamContext;
+use crate::gateway::pipeline::hooks::HopOutcome;
+use crate::gateway::pipeline::hooks::ObserveHook;
+use crate::gateway::pipeline::hooks::Phase;
+use crate::gateway::pipeline::hooks::RequestOutcome;
+use crate::gateway::pipeline::stream::StreamInterest;
+use crate::gateway::pipeline::types::RoutingTarget;
 use async_trait::async_trait;
 use bitrouter_ai::types::{Content, StreamPart, Tool};
-use bitrouter_sdk::language_model::{
-    HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome, RoutingTarget, StreamContext,
-    StreamInterest,
-};
 use sha2::{Digest, Sha256};
 
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
@@ -1059,14 +1063,19 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, PoisonError};
 
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::pipeline::context::PipelineContext;
+    use crate::gateway::pipeline::hooks::HopOutcome;
+    use crate::gateway::pipeline::hooks::ObserveHook;
+    use crate::gateway::pipeline::hooks::Phase;
+    use crate::gateway::pipeline::hooks::RequestOutcome;
+    use crate::gateway::pipeline::stream::StreamProcessor;
+    use crate::gateway::pipeline::types::ExecutionResult;
+    use crate::gateway::pipeline::types::PipelineRequest;
+    use crate::gateway::pipeline::types::RoutingTarget;
     use bitrouter_ai::types::AuthScheme;
     use bitrouter_ai::types::{
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, StreamPart, Tool,
-    };
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{
-        ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, PipelineRequest,
-        RequestOutcome, RoutingTarget, StreamProcessor,
     };
 
     use super::{ObservedActionClass, PredictiveResponseObserver};
@@ -2207,9 +2216,7 @@ mod tests {
             model: "model".into(),
             caller,
             headers: http::HeaderMap::new(),
-            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
-                prompt,
-            )),
+            input: crate::gateway::pipeline::types::PipelineInput::Generation(Box::new(prompt)),
             inbound_protocol: Some(ApiProtocol::Responses),
         });
         context.emit(invocation.clone());

@@ -421,7 +421,7 @@ impl RequestsReport {
             (None, Mode::HistoryOnly) => "history only — daemon not running".to_string(),
             (None, _) => format!(
                 "nothing recorded yet — try {} serve",
-                bitrouter_sdk::invocation::name()
+                crate::commands::invocation::name()
             ),
         }
     }

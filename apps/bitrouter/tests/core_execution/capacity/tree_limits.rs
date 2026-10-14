@@ -23,7 +23,7 @@ impl Executor for BoundedExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(active, Ordering::SeqCst);
         if self.entered.fetch_add(1, Ordering::SeqCst) < 4 {
@@ -31,7 +31,9 @@ impl Executor for BoundedExecutor {
             self.release
                 .acquire()
                 .await
-                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .map_err(|error| {
+                    bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                })?
                 .forget();
         }
         let burst = self.burst_agent.lock().await.clone();
@@ -45,7 +47,9 @@ impl Executor for BoundedExecutor {
             self.burst_release
                 .acquire()
                 .await
-                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .map_err(|error| {
+                    bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                })?
                 .forget();
         }
         let result = self.inner.execute(target, prompt, ctx).await;
@@ -58,8 +62,8 @@ impl Executor for BoundedExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal(
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "unexpected streaming",
         ))
     }

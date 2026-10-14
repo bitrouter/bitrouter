@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::eval::compiler::{EvalEvidenceSnapshot, RouteEvalEvidence, TierEvalEvidence};
 use crate::eval::types::EvaluatorKind;
+use crate::gateway::routing::signals::NextStepRole;
 use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, POLICY_COMPILER_ID,
     POLICY_COMPILER_VERSION, POLICY_LOCKFILE_VERSION, PolicyArtifact, PolicyCertificate,
@@ -16,7 +17,6 @@ use crate::policy_lock::{
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::workflow_state::predictive::PredictiveRouteProjection;
-use bitrouter_sdk::routing::signals::NextStepRole;
 
 const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
 
@@ -378,7 +378,7 @@ pub(crate) fn validate_eval_action_treatments(
             if let Some(expected) = policy
                 .tiers
                 .get(&decision.selected_tier)
-                .and_then(bitrouter_sdk::config::PolicyModelTarget::effort)
+                .and_then(crate::config::PolicyModelTarget::effort)
                 && decision.selected_effort != Some(expected)
             {
                 anyhow::bail!(
@@ -394,7 +394,7 @@ pub(crate) fn validate_eval_action_treatments(
                 && let Some(expected) = policy
                     .tiers
                     .get(baseline_tier)
-                    .and_then(bitrouter_sdk::config::PolicyModelTarget::effort)
+                    .and_then(crate::config::PolicyModelTarget::effort)
                 && decision.baseline_effort != Some(expected)
             {
                 anyhow::bail!(
@@ -569,8 +569,9 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use crate::config::AdequacyConfig;
+    use crate::config::PolicyModelTarget;
     use bitrouter_ai::types::ReasoningEffort;
-    use bitrouter_sdk::config::{AdequacyConfig, PolicyModelTarget};
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::types::{
@@ -812,7 +813,7 @@ mod tests {
             .get_mut("auto")
             .and_then(|policy| policy.tiers.get_mut("economy"))
             .ok_or_else(|| anyhow::anyhow!("missing tier"))?
-            .context = bitrouter_sdk::routing::ContextStrategy::Preserve;
+            .context = crate::gateway::routing::ContextStrategy::Preserve;
         assert!(
             super::validate_eval_action_treatments(&current, &eval).is_err(),
             "evidence context cannot be reattributed to preserve"

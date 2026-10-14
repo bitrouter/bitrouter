@@ -8,14 +8,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::pipeline::context::PipelineContext;
+use bitrouter::gateway::pipeline::hooks::ObserveHook;
+use bitrouter::gateway::pipeline::hooks::RequestOutcome;
+use bitrouter::gateway::pipeline::types::PipelineRequest;
 use bitrouter::telemetry::config::OtelConfig;
 use bitrouter::telemetry::exporter::OtelExporter;
 use bitrouter::telemetry::exporter::OtelObserveHook;
 use bitrouter_ai::types::{GenerationParams, Prompt};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    ObserveHook, PipelineContext, PipelineRequest, RequestOutcome,
-};
 use opentelemetry_proto::tonic::collector::metrics::v1::{
     ExportMetricsServiceRequest, ExportMetricsServiceResponse,
     metrics_service_server::{MetricsService, MetricsServiceServer},

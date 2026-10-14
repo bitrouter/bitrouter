@@ -1,8 +1,9 @@
 //! Production settlement evidence imported into durable run ownership.
 use super::*;
 use bitrouter::cloud::settlement::{SettlementReceipt, SettlementState, SettlementUsage};
+use bitrouter::gateway::pipeline::native_accounting::NativeCostBasis;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostScope;
 use bitrouter::metering::store::MeteringStore;
-use bitrouter_sdk::language_model::native_accounting::{NativeCostBasis, NativeCostScope};
 use sea_orm::{ActiveModelTrait, Set};
 
 struct TimingHarness {
@@ -172,7 +173,9 @@ async fn monetary_claims_usage_free_rate_limit_is_unknown_despite_legacy_zero() 
     Ok(())
 }
 
-async fn bind(app: Arc<bitrouter_sdk::App>) -> Result<(CoreSession, Arc<crate::Harness>)> {
+async fn bind(
+    app: Arc<bitrouter::gateway::assembly::App>,
+) -> Result<(CoreSession, Arc<crate::Harness>)> {
     let grant = OwnershipGrant {
         session_id: "cost-session".into(),
         harness_id: "cost-harness".into(),
@@ -188,7 +191,7 @@ async fn bind(app: Arc<bitrouter_sdk::App>) -> Result<(CoreSession, Arc<crate::H
 }
 
 async fn bind_port(
-    app: Arc<bitrouter_sdk::App>,
+    app: Arc<bitrouter::gateway::assembly::App>,
     harness: Arc<dyn bitrouter::core::session::HarnessPort>,
     grant: OwnershipGrant,
 ) -> Result<CoreSession> {

@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-sdk"
-description = "BitRouter SDK: per-protocol pipelines, hook traits, provider adapters"
+description = "HTTP client for the BitRouter service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,62 +14,3 @@ exclude = ["public-api-deps.txt", "public-api.pins"]
 
 [dependencies]
 bitrouter-ai.workspace = true
-async-trait.workspace = true
-serde.workspace = true
-sha2.workspace = true
-hex = { workspace = true, optional = true }
-serde_json.workspace = true
-thiserror.workspace = true
-futures.workspace = true
-futures-core.workspace = true
-tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
-# `rt` feature: `tokio_util::task::TaskTracker`, used to run non-streaming
-# requests to completion after a client disconnect (see `Pipeline::execute_detached`).
-tokio-util = { workspace = true, features = ["rt"] }
-tracing.workspace = true
-http.workspace = true
-pin-project-lite.workspace = true
-async-stream.workspace = true
-reqwest.workspace = true
-eventsource-stream.workspace = true
-url.workspace = true
-uuid.workspace = true
-schemars.workspace = true
-base64.workspace = true
-
-# `server` feature
-axum = { workspace = true, optional = true }
-tower = { workspace = true, optional = true }
-# `config_file` feature
-serde-saphyr = { workspace = true, optional = true }
-
-# `mcp` feature — official Rust MCP SDK.
-# <https://github.com/modelcontextprotocol/rust-sdk>
-rmcp = { workspace = true, optional = true }
-
-[features]
-default = []
-# axum HTTP server + SSE handlers + admin endpoints.
-server = ["dep:axum", "dep:tower", "tokio/signal"]
-# yaml config loading (serde-saphyr + tokio::fs)
-config_file = ["dep:serde-saphyr", "dep:hex", "tokio/fs"]
-# rmcp-backed `RmcpExecutor` + `ConfigMcpRoutingTable` for the `mcp`
-# pure-routing pipeline. Without this feature the SDK still exposes
-# `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
-# can plug in a custom Executor without pulling rmcp.
-mcp = ["dep:rmcp", "tokio/process"]
-[dev-dependencies]
-wiremock = "0.6"
-tokio = { workspace = true, features = [
-    "sync",
-    "rt",
-    "macros",
-    "time",
-    "rt-multi-thread",
-    "test-util",
-] }
-tempfile.workspace = true
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 
 use super::admission::{fingerprint, key_scope};
 use super::commit::lifecycle_fact;

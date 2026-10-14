@@ -64,7 +64,7 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 
 /// Build a router wrapper that opens an OTel SERVER span per inbound request,
 /// parented on any inbound W3C trace context. Pass the returned closure to
-/// [`bitrouter_sdk::server::RouterOptions::with_router_wrapper`].
+/// [`crate::gateway::http::RouterOptions::with_router_wrapper`].
 ///
 /// Takes the exporter because the span is created from **its** tracer. The SDK
 /// deliberately does not install a global `TracerProvider` — doing so would

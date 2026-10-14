@@ -3,9 +3,10 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_ai::types::UsageOrigin;
-use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::cloud::settlement::{SettlementReceipt, SettlementState};

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
+use crate::gateway::pipeline::native_accounting::NativeTokenCost;
 use serde::{Deserialize, Serialize};
 
 use crate::core::protocol::{CoreError, ErrorCode};
@@ -13,7 +13,7 @@ use crate::core::session::{AgentStatus, AgentTurn, ModelStep, SessionSnapshot};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderAttemptSource {
     pub attempt_index: u32,
-    pub route: bitrouter_sdk::language_model::native::NativeRoute,
+    pub route: crate::gateway::pipeline::native::NativeRoute,
     /// Canonical output contract remains live after the original turn retires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_bytes: Option<u64>,
@@ -73,7 +73,7 @@ pub struct CostWork {
     pub generation_usage: Option<bitrouter_ai::types::Usage>,
     /// Typed decision tokens do not provide language-model cache buckets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_usage: Option<bitrouter_sdk::decision_model::types::DecisionUsage>,
+    pub decision_usage: Option<crate::gateway::model::decision::types::DecisionUsage>,
     /// Estimate at the decision intent's frozen prices, never a settled bill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_estimate_micro_usd: Option<u64>,
@@ -94,8 +94,7 @@ pub struct RunCostWork {
     pub work: BTreeMap<String, CostWork>,
     /// Separate bases for each source/bill identity. Never a sum of all bases.
     #[serde(default)]
-    pub charges:
-        BTreeMap<String, bitrouter_sdk::language_model::native_accounting::NativeCostClaim>,
+    pub charges: BTreeMap<String, crate::gateway::pipeline::native_accounting::NativeCostClaim>,
     /// Latest read uncertainty for a request, independent of retained claims.
     #[serde(default)]
     pub charge_unknown: BTreeMap<String, String>,
@@ -188,7 +187,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                     entry.state = CostWorkState::OutcomeRecorded;
                     entry.elapsed_ms = Some(report.elapsed_ms);
                 }
-                let scope = if record.work.kind == bitrouter_sdk::language_model::native_preparation::NativePreparationWorkKind::PromptTransform {
+                let scope = if record.work.kind == crate::gateway::pipeline::native_preparation::NativePreparationWorkKind::PromptTransform {
                     "app"
                 } else {
                     "pipeline"
@@ -253,7 +252,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 }
                 ledger.record(attempt.attempt_id.clone(), entry)?;
                 for record in &attempt.provider_work {
-                    use bitrouter_sdk::language_model::native_work::NativeProviderWorkKind;
+                    use crate::gateway::pipeline::native_work::NativeProviderWorkKind;
                     let kind = match record.work.kind {
                         NativeProviderWorkKind::AuthenticationPreparation => {
                             CostWorkKind::AuthenticationPreparation
@@ -401,7 +400,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
 }
 
 pub(crate) fn report_digest(
-    report: &bitrouter_sdk::language_model::native::NativeAttemptReport,
+    report: &crate::gateway::pipeline::native::NativeAttemptReport,
 ) -> Result<String, CoreError> {
     serde_json::to_vec(report)
         .map(|bytes| crate::core::checkpoint::sha256(&bytes))

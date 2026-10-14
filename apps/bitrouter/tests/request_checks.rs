@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use axum_test::TestServer;
+use bitrouter::config;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use bitrouter_ai::extension::request_check::{Callback, Decision};
-use bitrouter_sdk::config;
-use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use wiremock::matchers::{method, path};
@@ -468,10 +469,10 @@ async fn regex_extensions_preserve_decisions_and_router_bindings() -> Result<()>
 #[tokio::test]
 async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_inert() -> Result<()>
 {
+    use bitrouter::config::router::RouterRequestCheck;
     use bitrouter_ai::extension::request_check::{
         Callback as CheckCallback, Decision as CheckDecision,
     };
-    use bitrouter_sdk::config::router::RouterRequestCheck;
     use std::sync::{Arc, mpsc};
 
     let upstream = MockServer::start().await;

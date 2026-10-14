@@ -45,7 +45,7 @@ impl Executor for HeldExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let held = self
             .0
             .lock()
@@ -57,14 +57,18 @@ impl Executor for HeldExecutor {
                 })
             })
             .map(|(_, held)| held.clone())
-            .ok_or_else(|| bitrouter_sdk::BitrouterError::internal("fixture actor missing"))?;
+            .ok_or_else(|| {
+                bitrouter::gateway::error::BitrouterError::internal("fixture actor missing")
+            })?;
         if held.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             let _stopped = StopNotice(held.clone());
             held.started.add_permits(1);
             held.release
                 .acquire()
                 .await
-                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .map_err(|error| {
+                    bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                })?
                 .forget();
             held.completed.store(true, Ordering::SeqCst);
         }
@@ -78,8 +82,10 @@ impl Executor for HeldExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 

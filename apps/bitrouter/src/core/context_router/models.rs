@@ -1,8 +1,9 @@
 //! Translate provenance-preserving Core views into shared routing candidates.
 
 use super::planner::{ContextRepresentation, ContextView};
+use crate::gateway::routing::ContextCapability;
+use crate::gateway::routing::plan;
 use bitrouter_ai::types::Prompt;
-use bitrouter_sdk::routing::{ContextCapability, plan};
 
 pub(crate) fn view(id: &str, view: &ContextView, prompt: &Prompt) -> plan::View {
     let mut requires = std::collections::BTreeSet::new();

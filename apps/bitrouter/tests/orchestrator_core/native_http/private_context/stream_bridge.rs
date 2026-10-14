@@ -7,17 +7,18 @@ use super::*;
 #[path = "stream_bridge/failures.rs"]
 mod failures;
 use bitrouter::continuation::{ContinuationKeySource, native_context::PrivateContextPolicy};
+use bitrouter::gateway::assembly::App;
+use bitrouter::gateway::pipeline::executor::HttpExecutor;
+use bitrouter::gateway::pipeline::native::InputTokenCounting;
+use bitrouter::gateway::pipeline::native_context::metadata;
+use bitrouter::gateway::pipeline::native_continuation::CONTINUATION_FIELD;
+use bitrouter::gateway::pipeline::native_continuation::ContinuationFailure;
+use bitrouter::gateway::pipeline::native_continuation::NativeContinuationInput;
+use bitrouter::gateway::pipeline::native_continuation::NativeContinuationOutput;
+use bitrouter::gateway::pipeline::native_continuation::REQUIRED_STATE_FIELD;
+use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
+use bitrouter::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{ApiProtocol, FinishReason};
-use bitrouter_sdk::App;
-use bitrouter_sdk::language_model::executor::HttpExecutor;
-use bitrouter_sdk::language_model::native::InputTokenCounting;
-use bitrouter_sdk::language_model::native_context::metadata;
-use bitrouter_sdk::language_model::native_continuation::{
-    CONTINUATION_FIELD, ContinuationFailure, NativeContinuationInput, NativeContinuationOutput,
-    REQUIRED_STATE_FIELD,
-};
-use bitrouter_sdk::language_model::routing::StaticRoutingTable;
-use bitrouter_sdk::language_model::types::RoutingTarget;
 
 fn bridge_prompt() -> Prompt {
     let mut value = prompt();
@@ -67,7 +68,7 @@ fn configured_app(
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
-            model_constraints: bitrouter_sdk::language_model::native::NativeRouteConstraints {
+            model_constraints: bitrouter::gateway::pipeline::native::NativeRouteConstraints {
                 input_token_counting: counting.then_some(InputTokenCounting::Responses),
                 ..Default::default()
             },

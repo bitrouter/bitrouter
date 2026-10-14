@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
-use bitrouter_sdk::error::BitrouterError;
 use serde::{Deserialize, Serialize};
 
 use crate::output::CliReport;

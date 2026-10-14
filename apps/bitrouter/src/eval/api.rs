@@ -249,8 +249,8 @@ impl IntoResponse for ApiError {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use crate::config::EvalConfig;
     use axum_test::TestServer;
-    use bitrouter_sdk::config::EvalConfig;
     use sea_orm::DatabaseConnection;
 
     use super::router;

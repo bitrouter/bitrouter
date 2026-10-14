@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::pipeline::Pipeline;
+use crate::gateway::pipeline::types::PipelineRequest;
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::{Content, GenerationParams, Message, Prompt, Role, ToolChoice, Usage};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::pipeline::Pipeline;
-use bitrouter_sdk::language_model::types::PipelineRequest;
 use serde::{Deserialize, Serialize};
 
 use super::rubric::{RubricEvaluation, digest};

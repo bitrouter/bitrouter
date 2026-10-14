@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 /// only when the caller explicitly permits local startup.
 pub(crate) async fn ensure_daemon(
     source: &ConfigSource,
-    config: &bitrouter_sdk::config::Config,
+    config: &crate::config::Config,
     no_start: bool,
 ) -> Result<PathBuf> {
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {

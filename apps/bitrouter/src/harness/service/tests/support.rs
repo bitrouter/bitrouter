@@ -5,15 +5,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::executor::Executor;
+use crate::gateway::pipeline::executor::MockExecutor;
+use crate::gateway::pipeline::executor::MockResponse;
+use crate::gateway::pipeline::executor::StreamPartStream;
+use crate::gateway::pipeline::routing::StaticRoutingTable;
+use crate::gateway::pipeline::types::ExecutionResult;
+use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::AuthScheme;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, Prompt, StreamPart, Usage,
-};
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    ExecutionResult, Executor, MockExecutor, MockResponse, PipelineContext, RoutingTarget,
-    StaticRoutingTable, StreamPartStream,
 };
 use tempfile::TempDir;
 
@@ -51,13 +55,13 @@ pub(super) fn app(turns: Vec<GenerateResult>) -> std::io::Result<Arc<App>> {
 }
 
 pub(super) fn app_with_executor(
-    executor: Arc<dyn bitrouter_sdk::language_model::Executor>,
+    executor: Arc<dyn crate::gateway::pipeline::executor::Executor>,
 ) -> std::io::Result<Arc<App>> {
     app_with_execution_mode(executor, false)
 }
 
 pub(super) fn app_with_execution_mode(
-    executor: Arc<dyn bitrouter_sdk::language_model::Executor>,
+    executor: Arc<dyn crate::gateway::pipeline::executor::Executor>,
     native: bool,
 ) -> std::io::Result<Arc<App>> {
     let table = StaticRoutingTable::new();
@@ -66,7 +70,7 @@ pub(super) fn app_with_execution_mode(
         builder.routing_table(Arc::new(table)).executor(executor);
     });
     if native {
-        builder = builder.decision_model(bitrouter_sdk::decision_model::DecisionRuntime {
+        builder = builder.decision_model(crate::gateway::model::decision::DecisionRuntime {
             model: "fixture-decision".into(),
             executor: Arc::new(UnavailableDecision),
             policy: Default::default(),
@@ -79,17 +83,17 @@ pub(super) fn app_with_execution_mode(
 struct UnavailableDecision;
 
 #[async_trait::async_trait]
-impl bitrouter_sdk::decision_model::DecisionExecutor for UnavailableDecision {
+impl crate::gateway::model::decision::DecisionExecutor for UnavailableDecision {
     async fn execute(
         &self,
-        _: &bitrouter_sdk::decision_model::types::DecisionRequest,
+        _: &crate::gateway::model::decision::types::DecisionRequest,
         _: &tokio_util::sync::CancellationToken,
     ) -> Result<
-        bitrouter_sdk::decision_model::types::DecisionResponse,
-        bitrouter_sdk::decision_model::types::DecisionError,
+        crate::gateway::model::decision::types::DecisionResponse,
+        crate::gateway::model::decision::types::DecisionError,
     > {
         Err(
-            bitrouter_sdk::decision_model::types::DecisionError::invalid_request(
+            crate::gateway::model::decision::types::DecisionError::invalid_request(
                 "fixture uses conservative context",
             ),
         )
@@ -418,7 +422,7 @@ impl Executor for HeldModel {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> crate::gateway::error::Result<ExecutionResult> {
         self.inner.execute(target, prompt, ctx).await
     }
     async fn execute_stream(
@@ -426,7 +430,7 @@ impl Executor for HeldModel {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
+    ) -> crate::gateway::error::Result<StreamPartStream> {
         let stream = self.inner.execute_stream(target, prompt, ctx).await?;
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.entered.notify_one();

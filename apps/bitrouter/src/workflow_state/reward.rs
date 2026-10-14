@@ -3,7 +3,8 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 

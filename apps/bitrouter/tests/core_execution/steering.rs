@@ -305,7 +305,7 @@ async fn steering_before_first_or_fallback_attempt_preserves_attribution_without
         let mut responses = Vec::new();
         if fallback {
             responses.push(MockResponse::Error(
-                bitrouter_sdk::BitrouterError::Upstream {
+                bitrouter::gateway::error::BitrouterError::Upstream {
                     status: 503,
                     message: "fixture failure".into(),
                 },
@@ -366,7 +366,7 @@ impl Executor for TwoHeldAgents {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         if child_prompt(prompt) {
             self.child.hold().await;
         } else if self.first_root.swap(false, Ordering::SeqCst) {
@@ -381,8 +381,10 @@ impl Executor for TwoHeldAgents {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 
@@ -807,14 +809,16 @@ impl Executor for HeldExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         self.prompts.lock().await.push(prompt.clone());
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.seen.add_permits(1);
             self.resume
                 .acquire()
                 .await
-                .map_err(|_| bitrouter_sdk::BitrouterError::internal("fixture stopped"))?
+                .map_err(|_| {
+                    bitrouter::gateway::error::BitrouterError::internal("fixture stopped")
+                })?
                 .forget();
         }
         self.mock.execute(target, prompt, ctx).await
@@ -824,8 +828,10 @@ impl Executor for HeldExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 

@@ -65,7 +65,7 @@ impl WorkflowStateExtractor for CodexResponsesExtractor {
     }
 }
 
-fn header_contains(headers: &bitrouter_sdk::HeaderMap, name: &str, needle: &str) -> bool {
+fn header_contains(headers: &http::HeaderMap, name: &str, needle: &str) -> bool {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
@@ -86,7 +86,7 @@ mod tests {
     use super::*;
 
     use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
-    use bitrouter_sdk::HeaderMap;
+    use http::HeaderMap;
     use http::HeaderValue;
 
     use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};

@@ -5,7 +5,7 @@
 pub(crate) mod claims;
 pub mod work;
 
-use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
+use crate::gateway::pipeline::native_accounting::NativeTokenCost;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl RunTokenAccounting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::language_model::native_accounting::NativeTokenRates;
+    use crate::gateway::pipeline::native_accounting::NativeTokenRates;
 
     #[test]
     fn run_subtotal_overflow_stays_unknown_after_later_receipts() {

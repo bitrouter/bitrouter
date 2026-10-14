@@ -1,14 +1,16 @@
 //! Fail-closed runtime for compiled request-check extensions.
 
+use crate::config::Config;
+use crate::config::checker::CheckerConfig;
+use crate::config::router::MAX_CHECKER_TIMEOUT_MS;
+use crate::gateway::pipeline::request_checks::CheckerFailure;
+use crate::gateway::pipeline::request_checks::CheckerFailureKind;
+use crate::gateway::pipeline::request_checks::CheckerResult;
+use crate::gateway::pipeline::request_checks::RequestCheckBinding;
+use crate::gateway::pipeline::request_checks::RequestCheckerRunner;
 use async_trait::async_trait;
 use bitrouter_ai::extension::request_check::{
     Decision, Input, Registration, RequestCheckCoverageStatus, validate_revision,
-};
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::config::checker::CheckerConfig;
-use bitrouter_sdk::config::router::MAX_CHECKER_TIMEOUT_MS;
-use bitrouter_sdk::language_model::request_checks::{
-    CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -231,14 +233,16 @@ impl RequestCheckerRunner for RequestCheckRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RoutingConfig;
+    use crate::config::router::DEFAULT_CHECKER_MAX_INPUT_BYTES;
+    use crate::config::router::RouterChecks;
+    use crate::config::router::RouterConfig;
+    use crate::config::router::RouterDefaults;
+    use crate::config::router::RouterRequestCheck;
+    use crate::config::router::RouterSelection;
     use bitrouter_ai::extension::request_check::{
         Callback as CheckCallback, ContentFragment, ContentFragmentKind, ContentRole, Decision,
         RequestCheckCoverage, RequestCheckCoverageScope,
-    };
-    use bitrouter_sdk::config::RoutingConfig;
-    use bitrouter_sdk::config::router::{
-        DEFAULT_CHECKER_MAX_INPUT_BYTES, RouterChecks, RouterConfig, RouterDefaults,
-        RouterRequestCheck, RouterSelection,
     };
     use std::sync::Mutex;
     use std::sync::atomic::Ordering;
@@ -301,7 +305,7 @@ mod tests {
         config.checkers.insert(
             "safety".to_owned(),
             CheckerConfig::Native {
-                native: bitrouter_sdk::config::checker::NativeCheckerConfig {
+                native: crate::config::checker::NativeCheckerConfig {
                     revision: "rules-v1".to_owned(),
                 },
             },

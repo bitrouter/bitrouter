@@ -327,7 +327,7 @@ fn add_metric(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use bitrouter_sdk::config::EvalConfig;
+    use crate::config::EvalConfig;
 
     use super::*;
     use crate::eval::EvalService;

@@ -15,8 +15,9 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
 
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::RequestOutcome;
 use bitrouter_ai::types::StreamPart;
-use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome};
 
 use crate::telemetry::cardinality::CardinalityLimiter;
 use crate::telemetry::config::OtelConfig;
@@ -230,9 +231,10 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::pipeline::types::ExecutionResult;
+    use crate::gateway::pipeline::types::PipelineRequest;
     use bitrouter_ai::types::{GenerateResult, GenerationParams, Prompt};
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{ExecutionResult, PipelineRequest};
 
     use super::*;
 
@@ -461,7 +463,7 @@ mod tests {
         // the schema.
         metrics.record_request(
             &ctx,
-            &RequestOutcome::Failed(bitrouter_sdk::error::BitrouterError::Unauthorized(
+            &RequestOutcome::Failed(crate::gateway::error::BitrouterError::Unauthorized(
                 "test".into(),
             )),
         );

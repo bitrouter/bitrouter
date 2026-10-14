@@ -113,7 +113,7 @@ async fn failed_and_cancelled_runs_pause_queue_across_restore_until_explicit_res
         let harness = Arc::new(Harness::new(None, None));
         let (session, executor, _) = setup(
             vec![MockResponse::Error(
-                bitrouter_sdk::BitrouterError::Upstream {
+                bitrouter::gateway::error::BitrouterError::Upstream {
                     status: 400,
                     message: "fixture rejection".into(),
                 },

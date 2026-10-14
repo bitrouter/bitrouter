@@ -9,57 +9,61 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 
+use crate::commands::invocation;
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::assembly::App;
+use crate::gateway::assembly::PromptTransform;
+use crate::gateway::mcp::aggregating_executor::AggregatingExecutor;
+use crate::gateway::mcp::caching_executor::CacheTtls;
+use crate::gateway::mcp::caching_executor::CachingExecutor;
+use crate::gateway::mcp::config_routing::ConfigMcpRoutingTable;
+use crate::gateway::mcp::config_routing::McpServerAggregateConfig;
+use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
+use crate::gateway::pipeline::builder::PipelineBuilder;
+use crate::gateway::pipeline::executor::HttpExecutor;
+use crate::gateway::pipeline::operations::HookStage;
+use crate::gateway::pipeline::server_tools::advisor::AdvisorToolset;
+use crate::gateway::pipeline::server_tools::approval::AllowAll;
+use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
+use crate::gateway::pipeline::server_tools::declarations::ServerToolDeclarationsHook;
+use crate::gateway::pipeline::server_tools::declarations::forwarded_tools;
+use crate::gateway::pipeline::server_tools::fusion::FusionToolset;
+use crate::gateway::pipeline::server_tools::fusion::alias::FusionAliasConfig;
+use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
+use crate::gateway::pipeline::server_tools::mcp_toolset::McpRouterToolset;
+use crate::gateway::pipeline::server_tools::nested::NestedRunner;
+use crate::gateway::pipeline::server_tools::nested::PipelineNestedRunner;
+use crate::gateway::pipeline::server_tools::sub_agent::SubAgentToolset;
+use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
+use crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry;
+use crate::gateway::pipeline::server_tools::web_fetch::backend::WebFetchBackend;
+use crate::gateway::pipeline::server_tools::web_fetch::config::DEFAULT_MAX_CONTENT_TOKENS;
+use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchBackendConfig;
+use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchSettings;
+use crate::gateway::pipeline::server_tools::web_fetch::http::HttpFetchBackend;
+use crate::gateway::pipeline::server_tools::web_fetch::http::HttpFetchEngine;
+use crate::gateway::pipeline::server_tools::web_fetch::toolset::WebFetchToolset;
+use crate::gateway::pipeline::server_tools::web_search::backend::WebSearchBackend;
+use crate::gateway::pipeline::server_tools::web_search::config::DEFAULT_MAX_RESULTS;
+use crate::gateway::pipeline::server_tools::web_search::config::WebSearchBackendConfig;
+use crate::gateway::pipeline::server_tools::web_search::config::WebSearchSettings;
+use crate::gateway::pipeline::server_tools::web_search::http::HttpEngine;
+use crate::gateway::pipeline::server_tools::web_search::http::HttpSearchBackend;
+use crate::gateway::pipeline::server_tools::web_search::nested::NestedSearchBackend;
+use crate::gateway::pipeline::server_tools::web_search::toolset::WebSearchToolset;
 use bitrouter_ai::auth::AuthAppliers;
 use bitrouter_ai::client::HttpTimeouts;
 use bitrouter_ai::protocol::OutboundDispatch;
 use bitrouter_ai::types::OperationScope;
-use bitrouter_sdk::App;
-use bitrouter_sdk::PromptTransform;
-use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::operations::HookStage;
-use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
-use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
-use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
-use bitrouter_sdk::language_model::server_tools::declarations::ServerToolDeclarationsHook;
-use bitrouter_sdk::language_model::server_tools::declarations::forwarded_tools;
-use bitrouter_sdk::language_model::server_tools::fusion::FusionToolset;
-use bitrouter_sdk::language_model::server_tools::fusion::alias::FusionAliasConfig;
-use bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop;
-use bitrouter_sdk::language_model::server_tools::mcp_toolset::McpRouterToolset;
-use bitrouter_sdk::language_model::server_tools::nested::{NestedRunner, PipelineNestedRunner};
-use bitrouter_sdk::language_model::server_tools::sub_agent::SubAgentToolset;
-use bitrouter_sdk::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
-use bitrouter_sdk::language_model::server_tools::web_fetch::backend::WebFetchBackend;
-use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
-    DEFAULT_MAX_CONTENT_TOKENS, WebFetchBackendConfig, WebFetchSettings,
-};
-use bitrouter_sdk::language_model::server_tools::web_fetch::http::{
-    HttpFetchBackend, HttpFetchEngine,
-};
-use bitrouter_sdk::language_model::server_tools::web_fetch::toolset::WebFetchToolset;
-use bitrouter_sdk::language_model::server_tools::web_search::backend::WebSearchBackend;
-use bitrouter_sdk::language_model::server_tools::web_search::config::{
-    DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
-};
-use bitrouter_sdk::language_model::server_tools::web_search::http::{
-    HttpEngine, HttpSearchBackend,
-};
-use bitrouter_sdk::language_model::server_tools::web_search::nested::NestedSearchBackend;
-use bitrouter_sdk::language_model::server_tools::web_search::toolset::WebSearchToolset;
-use bitrouter_sdk::language_model::{HttpExecutor, PipelineBuilder};
-use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
-use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
-use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
-use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
+use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::telemetry::OTEL_ENABLED;
 use crate::telemetry::config::ContentCaptureMode;
 use crate::telemetry::config::MetricsConfig;
 use crate::telemetry::config::OtelConfig;
 use crate::telemetry::exporter::OtelExporter;
 use crate::telemetry::exporter::OtelObserveHook;
-use bitrouter_sdk::MetricsRenderer;
 
 use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
@@ -241,7 +245,7 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
         !config.plugins.contains_key("bitrouter-guardrails"),
         "plugins.bitrouter-guardrails requires migration: the default bro no longer \
          includes the guardrails matcher. Compile the regex extension into a custom host, \
-         register it through bitrouter_sdk::extension::ExtensionApi, and bind it through \
+         register it through crate::gateway::extensions::registry::ExtensionApi, and bind it through \
          routers.<id>.checks.request. The request-check capability checks input \
          only and does not replace global or output block/redact protection. Review \
          every protected entry point and output requirement before explicitly removing \
@@ -404,9 +408,9 @@ pub async fn build_app_with_path(
 pub async fn build_app_with_extensions(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
-    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
+    let mut extensions = crate::gateway::extensions::registry::ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
     let native = extensions
         .into_registrations()
@@ -434,13 +438,13 @@ async fn assemble_app(
                     decision.api_key_env
                 )
             })?;
-            let executor = bitrouter_sdk::decision_model::typesafe::TypeSafeExecutor::new(
+            let executor = crate::gateway::model::decision::typesafe::TypeSafeExecutor::new(
                 &decision.base_url,
                 &credential,
                 std::time::Duration::from_millis(decision.timeout_ms),
                 decision.max_response_bytes,
             )?;
-            Ok::<_, anyhow::Error>(bitrouter_sdk::decision_model::DecisionRuntime {
+            Ok::<_, anyhow::Error>(crate::gateway::model::decision::DecisionRuntime {
                 model: decision.model.clone(),
                 executor: Arc::new(executor),
                 policy: decision.policy.clone(),
@@ -542,7 +546,7 @@ async fn assemble_app(
     if let Ok(store) = crate::provider_credentials::load_default() {
         crate::providers::apply::activate_stored_credential_providers(&mut resolved, &store);
     }
-    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    crate::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
         None => ConfigRoutingTable::from_config(resolved),
@@ -704,7 +708,7 @@ async fn assemble_app(
     // invalidates that server's slice.
     let mcp_executor = mcp_routing.as_ref().map(|_| {
         let rmcp: Arc<RmcpExecutor> = Arc::new(RmcpExecutor::new().with_protocol_version(
-            bitrouter_sdk::mcp::upstream_protocol_version(config.mcp.upstream_protocol),
+            crate::gateway::mcp::upstream_protocol_version(config.mcp.upstream_protocol),
         ));
         let inner_for_cache: Arc<RmcpExecutor> = rmcp.clone();
         if config.mcp.cache.enabled {
@@ -713,10 +717,10 @@ async fn assemble_app(
                 CachingExecutor::new(inner_for_cache, ttls)
                     .with_invalidation(rmcp.invalidation_receiver()),
             );
-            Arc::new(AggregatingExecutor::new(cached)) as Arc<dyn bitrouter_sdk::mcp::Executor>
+            Arc::new(AggregatingExecutor::new(cached)) as Arc<dyn crate::gateway::mcp::Executor>
         } else {
             Arc::new(AggregatingExecutor::new(inner_for_cache))
-                as Arc<dyn bitrouter_sdk::mcp::Executor>
+                as Arc<dyn crate::gateway::mcp::Executor>
         }
     });
 
@@ -1084,7 +1088,7 @@ pub async fn merge_registry_into(config: &mut Config) {
 fn build_server_tool_loop(
     config: &Config,
     mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
-    mcp_executor: &Option<Arc<dyn bitrouter_sdk::mcp::Executor>>,
+    mcp_executor: &Option<Arc<dyn crate::gateway::mcp::Executor>>,
     nested_runner: Option<Arc<dyn NestedRunner>>,
 ) -> Option<Arc<ServerToolLoop>> {
     let settings = &config.server_tools;
@@ -1093,7 +1097,7 @@ fn build_server_tool_loop(
     // MCP-backed server tools.
     if !settings.mcp_servers.is_empty() {
         if let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) {
-            let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
+            let routing: Arc<dyn crate::gateway::mcp::RoutingTable> = routing.clone();
             for name in &settings.mcp_servers {
                 let Some(server) = config.mcp_servers.get(name) else {
                     tracing::warn!(server = %name,
@@ -1301,7 +1305,7 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
     if let Some(key) = explicit.as_ref().filter(|k| !k.is_empty()) {
         return Some(key.clone());
     }
-    match bitrouter_sdk::config::env_lookup(env_var) {
+    match crate::config::env_lookup(env_var) {
         Some(key) if !key.is_empty() => Some(key),
         _ => {
             tracing::warn!(
@@ -1467,7 +1471,7 @@ mod pricing_assembly_tests {
 
     #[test]
     fn provider_native_model_id_reuses_registry_pricing() -> anyhow::Result<()> {
-        let config = bitrouter_sdk::config::parse_with(
+        let config = crate::config::parse_with(
             r#"
 providers:
   example:
@@ -2326,10 +2330,10 @@ mod otel_config_tests {
 mod server_tools_tests {
     use std::sync::Arc;
 
-    use bitrouter_sdk::language_model::server_tools::nested::{
-        NestedOutcome, NestedRequest, NestedRunner,
-    };
-    use bitrouter_sdk::language_model::server_tools::toolset::ToolContext;
+    use crate::gateway::pipeline::server_tools::nested::NestedOutcome;
+    use crate::gateway::pipeline::server_tools::nested::NestedRequest;
+    use crate::gateway::pipeline::server_tools::nested::NestedRunner;
+    use crate::gateway::pipeline::server_tools::toolset::ToolContext;
 
     use super::{Config, build_fusion_alias, build_server_tool_loop};
 
@@ -2382,7 +2386,7 @@ mod server_tools_tests {
     fn assembly_rejects_a_fusion_alias_that_hijacks_reserved_routing() {
         let mut config = Config::default();
         config.server_tools.fusion = Some(
-            bitrouter_sdk::language_model::server_tools::fusion::config::FusionSettings {
+            crate::gateway::pipeline::server_tools::fusion::config::FusionSettings {
                 alias: Some("bitrouter/auto".to_string()),
                 outer_model: Some("anthropic/claude-opus-4.8".to_string()),
                 ..Default::default()
@@ -2408,9 +2412,8 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_nested_backend_builds_loop() {
-        use bitrouter_sdk::language_model::server_tools::web_search::config::{
-            WebSearchBackendConfig, WebSearchSettings,
-        };
+        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchBackendConfig;
+        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchSettings;
         // A native (nested) backend resolves over the runner and builds the loop.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2427,9 +2430,8 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use bitrouter_sdk::language_model::server_tools::web_search::config::{
-            WebSearchBackendConfig, WebSearchSettings,
-        };
+        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchBackendConfig;
+        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchSettings;
         // An HTTP backend with an explicit key resolves with no nested runner.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2444,9 +2446,8 @@ mod server_tools_tests {
 
     #[test]
     fn web_fetch_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
-            WebFetchBackendConfig, WebFetchSettings,
-        };
+        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchBackendConfig;
+        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchSettings;
         // A web_fetch-only config (no advisor/subagent/fusion/web_search) must
         // still build the server-tool loop, proving server_tools_enabled covers
         // web_fetch. An HTTP backend with an explicit key resolves without a
@@ -2464,9 +2465,8 @@ mod server_tools_tests {
 
     #[test]
     fn assembles_web_fetch_exa_backend_from_explicit_key() {
-        use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
-            WebFetchBackendConfig, WebFetchSettings,
-        };
+        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchBackendConfig;
+        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchSettings;
         // An HTTP backend with an explicit key resolves without needing an env
         // var, mirroring the sibling web_search assembly test's approach.
         let backends = super::build_web_fetch_backends(&WebFetchSettings {
@@ -2485,9 +2485,9 @@ mod server_tools_tests {
 mod trajectory_assembly_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::pipeline::types::PipelineRequest;
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::PipelineRequest;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2550,7 +2550,7 @@ presets:
 "#,
             upstream_uri = upstream.uri(),
         );
-        let config = bitrouter_sdk::config::parse_with(&yaml, |_| None)?;
+        let config = crate::config::parse_with(&yaml, |_| None)?;
         let guarded = progress_guard.is_some();
         const ROUTE_KEY: &str = "semantic_route/v1|unknown|unknown|guarded";
         const TEST_DIGEST: &str =
@@ -2775,10 +2775,12 @@ presets:
     async fn enabled_guarded_policy_persists_its_first_route_atomically() -> anyhow::Result<()> {
         use std::collections::{BTreeMap, BTreeSet};
 
+        use crate::config::PresetConfig;
+        use crate::gateway::caller::CallerContext;
+        use crate::gateway::pipeline::context::PipelineContext;
+        use crate::gateway::pipeline::routing::ModelSelector;
+        use crate::gateway::pipeline::types::PipelineRequest;
         use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-        use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::config::PresetConfig;
-        use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, PipelineRequest};
 
         use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
         use crate::trajectory::correlation::CorrelatedRequest;

@@ -58,7 +58,7 @@ pub struct EvalExperimentRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteActionCandidate {
-    pub context: bitrouter_sdk::routing::ContextStrategy,
+    pub context: crate::gateway::routing::ContextStrategy,
     pub tier: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,7 +475,7 @@ pub(crate) fn validate_route_measurement_for_experiment(
 
 fn candidate_key(
     candidate: &RouteActionCandidate,
-) -> (&str, &str, &str, bitrouter_sdk::routing::ContextStrategy) {
+) -> (&str, &str, &str, crate::gateway::routing::ContextStrategy) {
     (
         candidate.tier.as_str(),
         candidate.model.as_str(),

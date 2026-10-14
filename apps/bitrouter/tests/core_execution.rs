@@ -63,20 +63,26 @@ use bitrouter::core::protocol::{
     TaskInput, ToolEffect, ToolExecute, ToolOutcome, ToolResult, Verification,
 };
 use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
+use bitrouter::gateway::assembly::App;
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::pipeline::context::PipelineContext;
+use bitrouter::gateway::pipeline::context::StreamContext;
+use bitrouter::gateway::pipeline::executor::Executor;
+use bitrouter::gateway::pipeline::executor::MockExecutor;
+use bitrouter::gateway::pipeline::executor::MockResponse;
+use bitrouter::gateway::pipeline::executor::StreamPartStream;
+use bitrouter::gateway::pipeline::hooks::ObserveHook;
+use bitrouter::gateway::pipeline::hooks::Phase;
+use bitrouter::gateway::pipeline::hooks::RequestOutcome;
+use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
+use bitrouter::gateway::pipeline::settlement::SettlementContext;
+use bitrouter::gateway::pipeline::settlement::SettlementRecorder;
+use bitrouter::gateway::pipeline::types::ExecutionResult;
+use bitrouter::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{
     ApiProtocol, AuthScheme, Content, FinishReason, GenerateResult, Prompt, StreamPart, ToolChoice,
     Usage,
 };
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::context::{PipelineContext, StreamContext};
-use bitrouter_sdk::language_model::executor::{
-    Executor, MockExecutor, MockResponse, StreamPartStream,
-};
-use bitrouter_sdk::language_model::hooks::{ObserveHook, Phase, RequestOutcome};
-use bitrouter_sdk::language_model::routing::StaticRoutingTable;
-use bitrouter_sdk::language_model::settlement::{SettlementContext, SettlementRecorder};
-use bitrouter_sdk::language_model::types::{ExecutionResult, RoutingTarget};
 use serde_json::json;
 use support::DurableHarness;
 use tokio::sync::{Mutex, Semaphore};
@@ -462,7 +468,7 @@ impl Executor for WakeExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let child = prompt
             .messages
             .iter()
@@ -473,7 +479,9 @@ impl Executor for WakeExecutor {
             self.child_release
                 .acquire()
                 .await
-                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .map_err(|error| {
+                    bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                })?
                 .forget();
             vec![text("held child finished")]
         } else if self.root_calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -481,14 +489,13 @@ impl Executor for WakeExecutor {
                 self.child_seen
                     .acquire()
                     .await
-                    .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                    .map_err(|error| {
+                        bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                    })?
                     .forget();
-                let child = self
-                    .child_id
-                    .lock()
-                    .await
-                    .clone()
-                    .ok_or_else(|| bitrouter_sdk::BitrouterError::internal("missing child"))?;
+                let child = self.child_id.lock().await.clone().ok_or_else(|| {
+                    bitrouter::gateway::error::BitrouterError::internal("missing child")
+                })?;
                 vec![core_call(
                     "wait_agent",
                     json!({"agent_ids":[child],"timeout_ms":50}),
@@ -510,8 +517,8 @@ impl Executor for WakeExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal(
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "unexpected streaming",
         ))
     }
@@ -524,7 +531,7 @@ impl Executor for CollaborationExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let child = prompt.messages.iter().any(|message| message.content.iter().any(|content| matches!(content, Content::Text { text, .. } if text == "child-a" || text == "child-b")));
         let content = if child {
             if prompt
@@ -573,8 +580,8 @@ impl Executor for CollaborationExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal(
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "unexpected streaming",
         ))
     }
@@ -587,7 +594,7 @@ impl Executor for ConcurrentExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(active, Ordering::SeqCst);
         let child = prompt.messages.iter().any(|message| message.content.iter().any(|content| matches!(content, Content::Text { text, .. } if text == "child-a" || text == "child-b")));
@@ -596,7 +603,9 @@ impl Executor for ConcurrentExecutor {
             self.release
                 .acquire()
                 .await
-                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .map_err(|error| {
+                    bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                })?
                 .forget();
             "child completed"
         } else if self.root_calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -613,8 +622,8 @@ impl Executor for ConcurrentExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal(
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "unexpected streaming",
         ))
     }
@@ -627,7 +636,7 @@ impl Executor for RecordingExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.prompts.lock().await.push(prompt.clone());
         let content = {
@@ -654,8 +663,8 @@ impl Executor for RecordingExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal(
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "unexpected streaming execution",
         ))
     }
@@ -664,7 +673,7 @@ impl Executor for RecordingExecutor {
 struct Recorder(Arc<AtomicUsize>);
 #[async_trait]
 impl SettlementRecorder for Recorder {
-    async fn record(&self, _: &mut SettlementContext) -> bitrouter_sdk::Result<()> {
+    async fn record(&self, _: &mut SettlementContext) -> bitrouter::gateway::error::Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -689,7 +698,7 @@ struct RemoveTools;
 struct RemoveRequiredContext(bool);
 
 struct ChangeOutputReservation(Option<u32>);
-impl bitrouter_sdk::app::PromptTransform for ChangeOutputReservation {
+impl bitrouter::gateway::assembly::PromptTransform for ChangeOutputReservation {
     fn apply(&self, prompt: &mut Prompt) {
         prompt.params.max_tokens = self.0;
     }
@@ -716,9 +725,9 @@ impl bitrouter_ai::auth::AuthApplier for NoOutputLimitAuth {
 
 #[tokio::test]
 async fn unsupported_output_reservation_rejects_before_authentication_or_attempt() -> TestResult {
+    use bitrouter::gateway::pipeline::executor::HttpExecutor;
     use bitrouter_ai::auth::AuthAppliers;
     use bitrouter_ai::protocol::OutboundDispatch;
-    use bitrouter_sdk::language_model::executor::HttpExecutor;
     let calls = Arc::new(AtomicUsize::new(0));
     let executor = HttpExecutor::with_dispatch_and_auth(
         Default::default(),
@@ -755,9 +764,9 @@ async fn unsupported_output_reservation_rejects_before_authentication_or_attempt
 
 #[tokio::test]
 async fn model_ceiling_reserves_uncapped_output_before_authentication() -> TestResult {
+    use bitrouter::gateway::pipeline::executor::HttpExecutor;
     use bitrouter_ai::auth::AuthAppliers;
     use bitrouter_ai::protocol::OutboundDispatch;
-    use bitrouter_sdk::language_model::executor::HttpExecutor;
     for ceiling in [None, Some(0), Some(127), Some(128), Some(129)] {
         let calls = Arc::new(AtomicUsize::new(0));
         let executor = HttpExecutor::with_dispatch_and_auth(
@@ -821,7 +830,7 @@ async fn setup_capacity_routes(
     let config = serde_json::from_value(json!({
         "providers":providers, "models":{"fixture-model":{"endpoints":endpoints}}
     }))?;
-    let table = bitrouter_sdk::config::ConfigRoutingTable::from_config(config);
+    let table = bitrouter::config::routing_table::ConfigRoutingTable::from_config(config);
     let executor = Arc::new(RecordingExecutor {
         mock: MockExecutor::new(responses),
         agent_once: Mutex::new(Default::default()),
@@ -850,7 +859,7 @@ async fn capacity_admission_skips_infeasible_routes_and_keeps_fallback_identity(
             json!({"max_output_tokens":256,"max_input_tokens":1}),
         ],
         vec![
-            MockResponse::Error(bitrouter_sdk::BitrouterError::Upstream {
+            MockResponse::Error(bitrouter::gateway::error::BitrouterError::Upstream {
                 status: 503,
                 message: "retry fixture".into(),
             }),
@@ -1040,7 +1049,7 @@ async fn zero_output_is_rejected_and_omission_reserves_an_explicit_default() -> 
     Ok(())
 }
 
-impl bitrouter_sdk::app::PromptTransform for RemoveRequiredContext {
+impl bitrouter::gateway::assembly::PromptTransform for RemoveRequiredContext {
     fn apply(&self, prompt: &mut Prompt) {
         if self.0 {
             prompt.system = Some("replaced instructions".into());
@@ -1182,14 +1191,14 @@ async fn fresh_child_keeps_user_constraints_and_inherited_child_refreshes_materi
     Ok(())
 }
 
-impl bitrouter_sdk::app::PromptTransform for RemoveTools {
+impl bitrouter::gateway::assembly::PromptTransform for RemoveTools {
     fn apply(&self, prompt: &mut Prompt) {
         prompt.tools.clear();
     }
 }
 
 struct ForceToolChoice(ToolChoice);
-impl bitrouter_sdk::app::PromptTransform for ForceToolChoice {
+impl bitrouter::gateway::assembly::PromptTransform for ForceToolChoice {
     fn apply(&self, prompt: &mut Prompt) {
         prompt.tool_choice = Some(self.0.clone());
         prompt.params.parallel_tool_calls = Some(false);
@@ -4279,7 +4288,7 @@ async fn fallbacks_have_separate_committed_attempts_and_actual_providers() -> Te
     let harness = Arc::new(Harness::new(None, None));
     let (session, executor, _) = setup(
         vec![
-            MockResponse::Error(bitrouter_sdk::BitrouterError::Upstream {
+            MockResponse::Error(bitrouter::gateway::error::BitrouterError::Upstream {
                 status: 503,
                 message: "fixture retry".into(),
             }),
@@ -4968,7 +4977,7 @@ async fn truncated_output_cannot_authorize_an_otherwise_valid_tool() -> TestResu
 
 #[tokio::test]
 async fn http_provider_request_and_fixture_file_tool_complete_a_root_task() -> TestResult {
-    use bitrouter_sdk::language_model::executor::HttpExecutor;
+    use bitrouter::gateway::pipeline::executor::HttpExecutor;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 

@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
+use crate::gateway::mcp::transport::McpServerConfig;
+use crate::gateway::mcp::transport::McpTransport;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest, Implementation,
     ListToolsRequest, PaginatedRequestParams, ProtocolVersion, ServerResult,

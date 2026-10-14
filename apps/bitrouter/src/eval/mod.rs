@@ -7,7 +7,7 @@ pub mod settlement;
 pub mod store;
 pub mod types;
 
-use bitrouter_sdk::config::EvalConfig;
+use crate::config::EvalConfig;
 
 use self::admission::{AdmissionOutcome, SubmissionPrincipal};
 use self::store::EvalStore;

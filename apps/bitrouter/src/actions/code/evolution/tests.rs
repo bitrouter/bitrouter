@@ -20,7 +20,7 @@ struct Fixture {
     recorder: Arc<Recorder>,
     session: SessionRef,
     evolution: crate::evolution::runtime::EvolutionRuntime,
-    routing: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
+    routing: Arc<crate::config::routing_table::ConfigRoutingTable>,
     server: tokio::task::JoinHandle<Result<()>>,
     _home: tempfile::TempDir,
 }
@@ -61,7 +61,7 @@ presets:
     params: {temperature: 0.1}
 "#;
     tokio::fs::write(&config_path, config_text).await?;
-    let config = bitrouter_sdk::config::parse_with(config_text, |_| None)?;
+    let config = crate::config::parse_with(config_text, |_| None)?;
     let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
     let canonical = CanonicalStore::new(assembled.db.clone());
     let recorder = canonical

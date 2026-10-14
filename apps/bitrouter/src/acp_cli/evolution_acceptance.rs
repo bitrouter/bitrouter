@@ -11,8 +11,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::gateway::http::AppState;
+use crate::gateway::http::build_router;
 use anyhow::ensure;
-use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
@@ -37,7 +38,7 @@ struct Fixture {
     canonical: CanonicalStore,
     config: Config,
     source: ConfigSource,
-    pipeline: Arc<bitrouter_sdk::language_model::Pipeline>,
+    pipeline: Arc<crate::gateway::pipeline::pipeline::Pipeline>,
     ingress: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     upstream: MockServer,
@@ -209,7 +210,7 @@ async fn fixture_with_response(
         .await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let listen = listener.local_addr()?.to_string();
-    let mut config: Config = bitrouter_sdk::config::parse_with(
+    let mut config: Config = crate::config::parse_with(
         &format!(
             r#"
 server:
@@ -283,7 +284,7 @@ models:
     );
     config.agents.insert(
         agent.into(),
-        bitrouter_sdk::config::agent::AcpAgentConfig {
+        crate::config::agent::AcpAgentConfig {
             name: agent.into(),
             transport: AcpTransport::Stdio {
                 command: wrapper.display().to_string(),

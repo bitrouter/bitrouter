@@ -8,8 +8,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::gateway::caller::CallerContext;
 use bitrouter_ai::types::{Content, Message, Role};
-use bitrouter_sdk::caller::CallerContext;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -75,7 +75,7 @@ struct Rebuild {
     checkpoint_pages: super::checkpoint_pages::Reader,
     native: Option<crate::harness::agent::native::Saved>,
     unfinished_close: Option<String>,
-    servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
+    servers: Option<Vec<crate::gateway::mcp::transport::McpServerConfig>>,
     caller: CallerContext,
     view: ThreadView,
     messages: Vec<Message>,

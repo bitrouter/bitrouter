@@ -183,7 +183,7 @@ mod tests {
     fn server_config_default_log_level_is_a_valid_filter() {
         // The default that ships in `ServerConfig` (and the JSON Schema) must
         // survive the same parse path a user-supplied value takes.
-        let default_level = bitrouter_sdk::config::ServerConfig::default().log_level;
+        let default_level = crate::config::ServerConfig::default().log_level;
         let (filter, warning) = resolve_env_filter_from(None, Some(&default_level));
         assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
         assert!(warning.is_none());

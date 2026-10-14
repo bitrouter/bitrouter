@@ -2,20 +2,20 @@
 //! installation can list providers and resolve login/models without a cache;
 //! fetched metadata takes precedence when it is available.
 
+use crate::config::RegistryConfig;
 use anyhow::Result;
 use bitrouter_ai::catalog::types::RegistryData;
-use bitrouter_sdk::config::RegistryConfig;
 
 /// OAuth providers have no credential env var, so the generic registry merge
 /// cannot auto-add them. A saved CLI login supplies the activation signal.
-pub(crate) fn enable_logged_in(config: &mut bitrouter_sdk::config::Config) {
+pub(crate) fn enable_logged_in(config: &mut crate::config::Config) {
     if let Ok(store) = crate::provider_credentials::load_default() {
         enable_with_store(config, &store);
     }
 }
 
 fn enable_with_store(
-    config: &mut bitrouter_sdk::config::Config,
+    config: &mut crate::config::Config,
     store: &bitrouter_ai::auth::file::snapshot::CredentialStore,
 ) {
     if !config.inherit_defaults
@@ -153,7 +153,7 @@ mod tests {
         use bitrouter_ai::auth::file::snapshot::CredentialStore;
         let dir = tempfile::tempdir()?;
         let mut store = CredentialStore::load(dir.path().join("credentials.json"))?;
-        let mut config = bitrouter_sdk::config::Config::default();
+        let mut config = crate::config::Config::default();
         enable_with_store(&mut config, &store);
         assert!(!config.providers.contains_key("openai-codex"));
         store.set("openai-codex", "default", Credential::api_key("test-only"))?;

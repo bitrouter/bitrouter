@@ -2,6 +2,12 @@
 
 use std::sync::Arc;
 
+use crate::gateway::caller::CallerContext;
+use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::types::PipelineRequest;
 use crate::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, MeteringStore, PricingSource,
     RequestMetric,
@@ -10,11 +16,6 @@ use crate::policy::hook::PolicyHook;
 use crate::policy::policy::Policy;
 use crate::policy::store::PolicyStore;
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role, Tool};
-use bitrouter_sdk::PluginId;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{
-    HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
-};
 
 #[tokio::test]
 async fn router_authorization_checks_the_requested_selector() -> anyhow::Result<()> {
@@ -146,7 +147,7 @@ async fn denied_model_is_forbidden() {
     let mut denied = ctx("forbidden-model", Some("p1"));
     match hook.check(&mut denied).await.unwrap() {
         HookDecision::Deny(reason) => {
-            let err: bitrouter_sdk::BitrouterError = reason.into();
+            let err: crate::gateway::error::BitrouterError = reason.into();
             assert_eq!(err.status(), 403);
         }
         HookDecision::Allow => panic!("denied model must be forbidden"),
@@ -271,7 +272,7 @@ async fn tool_rules_gate_requested_tools() {
     let mut nope = ctx_with_tools(&["search", "filesystem"], Some("p1"));
     match hook.check(&mut nope).await.unwrap() {
         HookDecision::Deny(reason) => {
-            let err: bitrouter_sdk::BitrouterError = reason.into();
+            let err: crate::gateway::error::BitrouterError = reason.into();
             assert_eq!(err.status(), 403);
         }
         HookDecision::Allow => panic!("disallowed tool must be forbidden"),
@@ -363,7 +364,7 @@ async fn spend_cap_is_enforced_via_metering_store() {
     let mut c2 = ctx("gpt-5", Some("p1"));
     match hook.check(&mut c2).await.unwrap() {
         HookDecision::Deny(reason) => {
-            let err: bitrouter_sdk::BitrouterError = reason.into();
+            let err: crate::gateway::error::BitrouterError = reason.into();
             assert_eq!(err.status(), 403);
         }
         HookDecision::Allow => panic!("110µ$ > 100µ$ cap should deny"),
@@ -424,7 +425,7 @@ async fn spend_cap_fails_closed_when_prior_charge_is_unknown() {
 
     match hook.check(&mut request).await.unwrap() {
         HookDecision::Deny(reason) => {
-            let error: bitrouter_sdk::BitrouterError = reason.into();
+            let error: crate::gateway::error::BitrouterError = reason.into();
             assert_eq!(error.status(), 403);
         }
         HookDecision::Allow => panic!("unknown historical spend must fail a hard ceiling closed"),
@@ -479,7 +480,7 @@ async fn rate_limit_is_enforced_via_metering_store() {
     let mut c = ctx("gpt-5", Some("p1"));
     match hook.check(&mut c).await.unwrap() {
         HookDecision::Deny(reason) => {
-            let err: bitrouter_sdk::BitrouterError = reason.into();
+            let err: crate::gateway::error::BitrouterError = reason.into();
             assert_eq!(err.status(), 429);
         }
         HookDecision::Allow => panic!("at-limit request must be rate-limited"),

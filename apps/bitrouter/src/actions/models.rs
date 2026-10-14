@@ -12,11 +12,14 @@
 
 use std::collections::BTreeSet;
 
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::router::{RouterConfigSource, RouterInventorySelection};
-use bitrouter_sdk::config::{Config, ConfigRoutingTable, RoutingConfig};
-use bitrouter_sdk::language_model::RoutingTable;
-use bitrouter_sdk::language_model::routing::ModelInfo;
+use crate::config::Config;
+use crate::config::RoutingConfig;
+use crate::config::router::RouterConfigSource;
+use crate::config::router::RouterInventorySelection;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::routing::ModelInfo;
+use crate::gateway::pipeline::routing::RoutingTable;
 
 use super::ToolError;
 
@@ -210,7 +213,7 @@ impl RoutableModels {
         // started.
         let config = crate::paths::load_config(&self.source).await?;
         let mut resolved = crate::commands::resolve_static(config.clone());
-        bitrouter_sdk::config::discover_models(&mut resolved).await;
+        crate::config::discover_models(&mut resolved).await;
         let models = ConfigRoutingTable::from_config(resolved.clone()).list_models();
         let policies = disk_policy_report(&config, &self.source).await;
         let policy_readiness = match &policies {
@@ -397,7 +400,7 @@ pub(crate) async fn disk_router_statuses_for_config(
     source: &ConfigSource,
 ) -> Option<Vec<RouterStatus>> {
     let mut resolved = crate::commands::resolve_static(config.clone());
-    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    crate::config::discover_models(&mut resolved).await;
     let policies = disk_policy_report(config, source).await;
     let policy_readiness = match &policies {
         Ok(report) => PolicyReadiness::Known(report),
@@ -569,7 +572,7 @@ providers:
     #[tokio::test]
     async fn router_inventory_is_redacted_and_coding_is_not_callable_until_bound()
     -> anyhow::Result<()> {
-        let config = bitrouter_sdk::config::parse(
+        let config = crate::config::parse(
             r#"
 inherit_defaults: false
 providers:

@@ -6,9 +6,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
+use crate::config::PolicyKeyStrategy;
+use crate::config::PolicyModelTarget;
+use crate::config::PolicyTableConfig;
 use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role, Tool};
-use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyModelTarget, PolicyTableConfig};
+use http::HeaderMap;
 
 use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{
@@ -17,6 +19,7 @@ use crate::eval::settlement::{
 use crate::eval::types::{
     EvalExperimentRef, ExperimentArm, RouteActionCandidate, RouteDecisionMeasurement,
 };
+use crate::gateway::routing::signals::NextStepRole;
 use crate::optimization::exploration::RouteExploration;
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
@@ -26,7 +29,6 @@ use crate::workflow_state::online::OnlineWorkflowState;
 use crate::workflow_state::predictive::{
     NextActionClass, PredictiveEvidence, is_predictive_reason_code, is_task_family_reason_code,
 };
-use bitrouter_sdk::routing::signals::NextStepRole;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionReason {
@@ -275,7 +277,7 @@ impl PolicyTable {
         &self,
         model: &str,
         effort: Option<ReasoningEffort>,
-        context: bitrouter_sdk::routing::ContextStrategy,
+        context: crate::gateway::routing::ContextStrategy,
     ) -> Option<&str> {
         self.tiers
             .iter()
@@ -572,7 +574,7 @@ impl PolicyTableRouter {
     pub fn apply(
         &self,
         prompt: &mut Prompt,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> bool {
         self.route_prompt(prompt, &HeaderMap::new(), assessment)
     }
@@ -583,7 +585,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         respect_explicit_route: bool,
         apply_tool_floor: bool,
-        assessment: Option<&bitrouter_sdk::routing::assessment::Assessment>,
+        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> PolicyDecision {
         // Keep this exact immutable table alive through guards, recording, and
         // final target materialization, even if a concurrent reload swaps the
@@ -740,7 +742,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &mut Prompt,
         headers: &HeaderMap,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> bool {
         let input_model = prompt.model.clone();
         let input_effort = prompt.params.reasoning_effort;
@@ -769,7 +771,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, true, Some(assessment))
     }
@@ -779,7 +781,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, false, Some(assessment))
     }
@@ -788,7 +790,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: Option<&bitrouter_sdk::routing::assessment::Assessment>,
+        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
         guarded: bool,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, !guarded, assessment)
@@ -824,7 +826,7 @@ impl PolicyTableRouter {
         &self,
         decision: &mut PolicyDecision,
         adjustment: &ContinuationAdjustment,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         decision.continuation_proposed_tier = decision.selected_tier.clone();
         decision.continuation_proposed_model = decision.selected_model.clone();
         decision.continuation_proposed_effort = decision.selected_effort;
@@ -853,7 +855,7 @@ impl PolicyTableRouter {
                             .unwrap_or_default(),
                     )
                     .ok_or_else(|| {
-                        bitrouter_sdk::BitrouterError::bad_request(
+                        crate::gateway::error::BitrouterError::bad_request(
                             "provider continuation model is unavailable in the active policy",
                         )
                     })?;
@@ -1178,9 +1180,7 @@ fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
 /// rewritten by the legacy inline policy table instead of reaching the signed
 /// policy its slug addresses.
 fn is_explicitly_routed(model: &str) -> bool {
-    model.starts_with('@')
-        || model.contains(':')
-        || bitrouter_sdk::config::presets::is_reserved(model)
+    model.starts_with('@') || model.contains(':') || crate::config::presets::is_reserved(model)
 }
 
 /// Whether the request carries a bitrouter server-tool declaration — a
@@ -1210,6 +1210,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::config::PolicyKeyStrategy;
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::settlement::EvalSettlementRecorder;
     use crate::eval::store::EvalStore;
@@ -1217,6 +1218,10 @@ mod tests {
         EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
         ExperimentAssignmentUnit,
     };
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::observability::event::EventBus;
+    use crate::gateway::pipeline::settlement::SettlementContext;
+    use crate::gateway::pipeline::settlement::SettlementRecorder;
     use crate::optimization::exploration::{OptimizationGate, RouteExploration};
     use crate::policy_compile::{CompileInput, compile_candidate};
     use crate::policy_lock::{PolicyLock, semantic_digest};
@@ -1228,28 +1233,25 @@ mod tests {
     use bitrouter_ai::types::{
         GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
     };
-    use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::config::PolicyKeyStrategy;
-    use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+    use http::HeaderMap;
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
-    use bitrouter_sdk::routing::{
-        assessment::{Assessment, Judgment},
-        signals::{NextStepRole, ProgressState, TaskFamily},
-    };
+    use crate::gateway::routing::assessment::Assessment;
+    use crate::gateway::routing::assessment::Judgment;
+    use crate::gateway::routing::signals::NextStepRole;
+    use crate::gateway::routing::signals::ProgressState;
+    use crate::gateway::routing::signals::TaskFamily;
 
     fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStepRole) -> Assessment {
         let labels = [
-            (bitrouter_sdk::routing::assessment::TASK, task_family.key()),
+            (crate::gateway::routing::assessment::TASK, task_family.key()),
             (
-                bitrouter_sdk::routing::assessment::ROLE,
+                crate::gateway::routing::assessment::ROLE,
                 next_step_role.key(),
             ),
-            (bitrouter_sdk::routing::assessment::PROGRESS, "progressing"),
+            (crate::gateway::routing::assessment::PROGRESS, "progressing"),
         ];
         Assessment {
             model: "semantic-fixture-v1".into(),
@@ -1257,7 +1259,7 @@ mod tests {
             confidence_threshold: 0.85,
             classifier_digest: format!("sha256:{}", "a".repeat(64)),
             input_digest: format!("sha256:{}", "b".repeat(64)),
-            contract_digest: bitrouter_sdk::routing::assessment::contract_digest(),
+            contract_digest: crate::gateway::routing::assessment::contract_digest(),
             history_complete: false,
             history_truncated: false,
             task_family,
@@ -1996,7 +1998,7 @@ mod tests {
         assert_eq!(records[0].prediction_confidence_ppm, Some(990_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some(bitrouter_sdk::routing::assessment::contract_digest().as_str())
+            Some(crate::gateway::routing::assessment::contract_digest().as_str())
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),
@@ -2922,7 +2924,7 @@ mod tests {
             .get("auto")
             .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?;
         let table = PolicyTable::from_config(
-            &policy.as_table_config(bitrouter_sdk::config::PolicyRuntimeMode::Frozen),
+            &policy.as_table_config(crate::config::PolicyRuntimeMode::Frozen),
         )
         .ok_or_else(|| anyhow::anyhow!("template policy table missing"))?;
         let route_baselines = active.certificates["auto"]
@@ -3452,7 +3454,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            Err(bitrouter_sdk::BitrouterError::BadRequest { ref message })
+            Err(crate::gateway::error::BitrouterError::BadRequest { ref message })
                 if message.contains("unavailable in the active policy")
         ));
         assert_eq!(decision.selected_model, original_selected);

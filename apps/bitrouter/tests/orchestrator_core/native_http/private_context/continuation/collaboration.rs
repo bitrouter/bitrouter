@@ -4,7 +4,7 @@ use super::*;
 use bitrouter::core::allocation::ContextKind;
 use bitrouter::core::collaboration::{Action, Work};
 use bitrouter::core::session::SessionSnapshot;
-use bitrouter_sdk::language_model::native_continuation::ContinuationFailure;
+use bitrouter::gateway::pipeline::native_continuation::ContinuationFailure;
 
 #[derive(Clone)]
 struct Wire {
@@ -54,7 +54,9 @@ async fn fixture(replayable: bool, spawn: Option<Work>) -> Result<(PrivateFixtur
     Ok((fixture, observed))
 }
 
-async fn bind(app: bitrouter_sdk::App) -> Result<(CoreSession, Arc<crate::Harness>)> {
+async fn bind(
+    app: bitrouter::gateway::assembly::App,
+) -> Result<(CoreSession, Arc<crate::Harness>)> {
     let grant = OwnershipGrant {
         session_id: "joint-session".into(),
         harness_id: "joint-harness".into(),

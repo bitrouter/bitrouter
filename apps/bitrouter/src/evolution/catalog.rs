@@ -2,13 +2,16 @@
 
 use std::collections::BTreeMap;
 
+use crate::config::AccountStrategy;
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::routing::RoutingTable;
+use crate::gateway::pipeline::types::PipelineRequest;
+use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::ApiProtocol;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::{AccountStrategy, Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::{
-    PipelineContext, PipelineRequest, RoutingTable, RoutingTarget,
-};
 use serde_json::{Value, json};
 
 use super::control::BlockDefinition;

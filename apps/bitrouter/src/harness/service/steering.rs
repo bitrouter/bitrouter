@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 
 use super::admission::{fingerprint, key_scope};
 use super::{ErrorCode, ServiceError, ThreadService, now_ms, unknown_turn};

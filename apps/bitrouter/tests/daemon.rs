@@ -10,12 +10,13 @@ use std::time::Duration;
 
 use bitrouter::build_app_with_path;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, NoopObserveStatus, NoopReloader};
+use bitrouter::gateway::assembly::App;
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::pipeline::settlement::SettlementContext;
+use bitrouter::gateway::pipeline::settlement::SettlementRecorder;
 use bitrouter::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use bitrouter::session_identity::{RequestOrigin, SessionIdentityObserved};
 use bitrouter_ai::types::UsageOrigin;
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 
 /// A reloader that re-reads only the routing table. Used by the reload test —
 /// production callers use the AppReloader in main.rs which also reloads the
@@ -31,7 +32,7 @@ impl daemon::DaemonReloader for RoutingTableReloader {
         Ok(())
     }
 }
-use bitrouter_sdk::config;
+use bitrouter::config;
 
 #[tokio::test]
 async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() -> anyhow::Result<()>
@@ -933,7 +934,7 @@ async fn client_fails_clearly_when_no_daemon_is_listening() {
 async fn settle_attributed_request(metering: MeteringStore, controller: &str, root: &str) {
     let mut pricing = PricingTable::new();
     pricing.insert("openai", "gpt-5", ModelPricing::new(2.0, 10.0));
-    let target = bitrouter_sdk::language_model::types::RoutingTarget {
+    let target = bitrouter::gateway::pipeline::types::RoutingTarget {
         model_constraints: Default::default(),
         provider_name: "openai".into(),
         service_id: "gpt-5".into(),
@@ -983,7 +984,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         first_token_kind: None,
         finish_reason: None,
         error: None,
-        events: bitrouter_sdk::event::EventBus::new(),
+        events: bitrouter::gateway::observability::event::EventBus::new(),
     };
     settled.emit(tariff);
     settled.emit(SessionIdentityObserved {

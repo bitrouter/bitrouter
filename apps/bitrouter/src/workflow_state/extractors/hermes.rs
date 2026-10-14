@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
-    use bitrouter_sdk::HeaderMap;
+    use http::HeaderMap;
     use http::HeaderValue;
 
     use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};

@@ -6,9 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use crate::gateway::pipeline::pipeline::Pipeline;
 use crate::harness::acp::capture::{CaptureEvent, CaptureKind};
 use anyhow::{Context, Result, ensure};
-use bitrouter_sdk::language_model::pipeline::Pipeline;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder, TransactionTrait,

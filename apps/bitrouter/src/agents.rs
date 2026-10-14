@@ -18,8 +18,8 @@
 
 use std::time::Duration;
 
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::invocation;
+use crate::commands::invocation;
+use crate::config::Config;
 
 use crate::agent_registry::{InstallSupport, Registry, RegistryAgent};
 use crate::harness::catalog::{self as harness, Harness};
@@ -79,8 +79,8 @@ pub fn list(config: &Config) -> Vec<ListRow> {
     ids.into_values().collect()
 }
 
-fn describe_invocation(cfg: &bitrouter_sdk::config::agent::AcpAgentConfig) -> String {
-    use bitrouter_sdk::config::agent::AcpTransport;
+fn describe_invocation(cfg: &crate::config::agent::AcpAgentConfig) -> String {
+    use crate::config::agent::AcpTransport;
     let full = match &cfg.transport {
         AcpTransport::Stdio { command, args, .. } => {
             if args.is_empty() {
@@ -103,7 +103,7 @@ fn describe_invocation(cfg: &bitrouter_sdk::config::agent::AcpAgentConfig) -> St
 /// `bro agents check` — spawn each *configured* agent, send an
 /// `initialize` request, and report whether the round-trip succeeded.
 pub async fn check(config: &Config) -> Vec<CheckRow> {
-    use bitrouter_sdk::config::agent::AcpTransport;
+    use crate::config::agent::AcpTransport;
     let mut out = Vec::with_capacity(config.agents.len());
     let mut sorted: Vec<_> = config.agents.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
@@ -361,7 +361,8 @@ fn parses_as_non_string(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
+    use crate::config::agent::AcpAgentConfig;
+    use crate::config::agent::AcpTransport;
     use std::collections::HashMap;
 
     fn agent(name: &str, cmd: &str) -> AcpAgentConfig {

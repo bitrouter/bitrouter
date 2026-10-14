@@ -20,7 +20,7 @@ impl Drop for ControlServer {
 
 async fn serve_control(
     mock: &MockAcp,
-    config: &bitrouter_sdk::config::Config,
+    config: &bitrouter::config::Config,
 ) -> Result<(
     bitrouter::evolution::runtime::EvolutionRuntime,
     CanonicalStore,
@@ -174,7 +174,7 @@ models:
         .enable_all()
         .build()?;
     let (evolution, _server) = runtime.block_on(async {
-        let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+        let config = bitrouter::config::parse_with(&config_text, |_| None)?;
         let (evolution, _, server) = serve_control(&mock, &config).await?;
         evolution
             .register(
@@ -329,7 +329,7 @@ fn code_checkpoint_history_displays_recorded_revisions_without_changing_the_curr
         std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
     config_text.push_str(&format!("\nserver:\n  skip_auth: true\n  control_socket: history.sock\ndatabase:\n  url: {}\nregistry:\n  enabled: false\nacp_recording:\n  enabled: true\n", serde_json::to_string(&database)?));
     std::fs::write(&mock.config_path, &config_text)?;
-    let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+    let config = bitrouter::config::parse_with(&config_text, |_| None)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()

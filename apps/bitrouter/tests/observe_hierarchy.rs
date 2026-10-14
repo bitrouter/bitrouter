@@ -31,8 +31,10 @@
 use std::time::Duration;
 
 use axum_test::TestServer;
-use bitrouter_sdk::config;
-use bitrouter_sdk::server::{AppState, RouterOptions, build_router_with_options};
+use bitrouter::config;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::RouterOptions;
+use bitrouter::gateway::http::build_router_with_options;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

@@ -4,15 +4,21 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::context::StreamContext;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::HopOutcome;
+use crate::gateway::pipeline::hooks::ObserveHook;
+use crate::gateway::pipeline::hooks::Phase;
+use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::hooks::RequestOutcome;
+use crate::gateway::pipeline::settlement::SettlementContext;
+use crate::gateway::pipeline::settlement::SettlementRecorder;
+use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{StreamPart, ToolChoice, UsageOrigin};
-use bitrouter_sdk::language_model::hooks::{HopOutcome, Phase, RequestOutcome};
-use bitrouter_sdk::language_model::{
-    HookDecision, ObserveHook, PipelineContext, PreRequestHook, RoutingTarget, SettlementContext,
-    SettlementRecorder, StreamContext,
-};
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Serialize};
 
@@ -233,8 +239,8 @@ impl JudgeCosts {
     }
 }
 
-fn internal(error: anyhow::Error) -> bitrouter_sdk::BitrouterError {
-    bitrouter_sdk::BitrouterError::internal(error.to_string())
+fn internal(error: anyhow::Error) -> crate::gateway::error::BitrouterError {
+    crate::gateway::error::BitrouterError::internal(error.to_string())
 }
 
 fn hops(observed: &JudgeAttemptObserved) -> std::sync::MutexGuard<'_, Vec<ExecutionHop>> {
@@ -249,18 +255,21 @@ impl PreRequestHook for JudgeCosts {
     async fn revalidate_context(
         &self,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<HookDecision> {
+    ) -> crate::gateway::error::Result<HookDecision> {
         if ctx.request_id().starts_with("brjudge_")
             || ctx.get_event::<JudgeAttemptObserved>().is_some()
         {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(crate::gateway::error::BitrouterError::bad_request(
                 "reserved judge input cannot be reconstructed",
             ));
         }
         Ok(HookDecision::Allow)
     }
 
-    async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
         self.admit(ctx).await.map_err(internal)?;
         Ok(HookDecision::Allow)
     }
@@ -269,17 +278,17 @@ impl PreRequestHook for JudgeCosts {
 #[cfg(test)]
 mod native_admission_tests {
     use super::*;
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::pipeline::builder::PipelineBuilder;
+    use crate::gateway::pipeline::executor::MockExecutor;
+    use crate::gateway::pipeline::operations::HookStage;
+    use crate::gateway::pipeline::routing::StaticRoutingTable;
+    use crate::gateway::pipeline::types::PipelineRequest;
     use crate::metering::pricing::PricingTable;
     use crate::metering::recorder::MeteringRecorder;
     use crate::metering::store::{MeteringStore, TimeWindow};
     use bitrouter_ai::protocol::decisions::DecisionsCodec;
     use bitrouter_ai::types::OperationScope;
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::builder::PipelineBuilder;
-    use bitrouter_sdk::language_model::executor::MockExecutor;
-    use bitrouter_sdk::language_model::operations::HookStage;
-    use bitrouter_sdk::language_model::routing::StaticRoutingTable;
-    use bitrouter_sdk::language_model::types::PipelineRequest;
 
     #[tokio::test]
     async fn native_reserved_identity_rejection_keeps_metering_namespace_untouched() -> Result<()> {
@@ -395,7 +404,7 @@ impl ObserveHook for JudgeCosts {
 
 #[async_trait]
 impl SettlementRecorder for JudgeCosts {
-    async fn record(&self, ctx: &mut SettlementContext) -> bitrouter_sdk::Result<()> {
+    async fn record(&self, ctx: &mut SettlementContext) -> crate::gateway::error::Result<()> {
         let Some(observed) = ctx.get_event::<JudgeAttemptObserved>() else {
             return Ok(());
         };

@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use bitrouter::gateway::extensions::registry::ExtensionApi;
 use bitrouter_guardrails::{checker, config::InputGuardrailConfig};
-use bitrouter_sdk::extension::ExtensionApi;
 
 fn register(api: &mut ExtensionApi, rules: InputGuardrailConfig) -> Result<()> {
     Ok(api.request_check(

@@ -1,5 +1,5 @@
 use bitrouter_ai::types::Prompt;
-use bitrouter_sdk::HeaderMap;
+use http::HeaderMap;
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::extractors::{
@@ -101,12 +101,14 @@ impl OnlineWorkflowState {
     pub(crate) fn from_assessment(
         headers: &HeaderMap,
         prompt: &Prompt,
-        assessment: Option<&bitrouter_sdk::routing::assessment::Assessment>,
+        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
+        use crate::gateway::routing::signals::NextStepRole;
+        use crate::gateway::routing::signals::ProgressState;
+        use crate::gateway::routing::signals::TaskFamily;
         use crate::workflow_state::predictive::{
             NextActionClass, PredictiveHistoryCompleteness, TaskComplexity,
         };
-        use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
         let (harness_hint, protocol_hint) = infer_online_context(headers, prompt);
         let raw_body = serde_json::Value::Object(
             prompt
@@ -161,9 +163,11 @@ impl OnlineWorkflowState {
     /// not silently reuse the offline deterministic scorecard as serving policy.
     pub(crate) fn with_assessment(
         mut self,
-        assessment: Option<&bitrouter_sdk::routing::assessment::Assessment>,
+        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
-        use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+        use crate::gateway::routing::signals::NextStepRole;
+        use crate::gateway::routing::signals::ProgressState;
+        use crate::gateway::routing::signals::TaskFamily;
         self.predictive.task_family =
             assessment.map_or(TaskFamily::Unknown, |value| value.task_family);
         self.predictive.next_step_role =
@@ -189,20 +193,20 @@ impl OnlineWorkflowState {
             .and_then(|value| {
                 value
                     .judgments
-                    .get(bitrouter_sdk::routing::assessment::ROLE)
+                    .get(crate::gateway::routing::assessment::ROLE)
             })
             .map_or(0.0, |value| value.confidence as f32);
         self.predictive.task_family_confidence = assessment
             .and_then(|value| {
                 value
                     .judgments
-                    .get(bitrouter_sdk::routing::assessment::TASK)
+                    .get(crate::gateway::routing::assessment::TASK)
             })
             .map_or(0.0, |value| value.confidence as f32);
         self.predictive.confidence_kind = "provider_probability".into();
         self.predictive.predictor_contract_digest = assessment
             .map(|value| value.contract_digest.clone())
-            .unwrap_or_else(bitrouter_sdk::routing::assessment::contract_digest);
+            .unwrap_or_else(crate::gateway::routing::assessment::contract_digest);
         self.predictive.evidence.clear();
         self.predictive.task_family_evidence.clear();
         let projection = PredictiveRouteProjection::new(
@@ -265,7 +269,7 @@ mod tests {
     use bitrouter_ai::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
     };
-    use bitrouter_sdk::HeaderMap;
+    use http::HeaderMap;
     use http::HeaderValue;
 
     use crate::workflow_state::ir::{HarnessId, ProtocolKind};

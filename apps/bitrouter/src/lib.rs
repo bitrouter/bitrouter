@@ -1,12 +1,12 @@
 //! # bitrouter (library)
 //!
-//! Assembly layer: turns a [`bitrouter_sdk::config::Config`] into a running
-//! [`bitrouter_sdk::App`], and carries the management-command logic.
+//! Assembly layer: turns a [`crate::config::Config`] into a running
+//! [`crate::gateway::assembly::App`], and carries the management-command logic.
 //! The external-agent ACP controller, client and process transport live in
 //! `crate::harness::acp`; this app assembles their product adapters.
 //!
 //! Foreground custom hosts register typed capabilities through
-//! [`bitrouter_sdk::extension::ExtensionApi`] and [`host::serve_with_extensions`],
+//! [`crate::gateway::extensions::registry::ExtensionApi`] and [`host::serve_with_extensions`],
 //! sharing the product's complete service and management lifecycle. Embeddings
 //! that own their listeners can use [`assemble::build_app_with_extensions`].
 //! Router configuration explicitly binds capabilities; host assembly retains
@@ -37,6 +37,7 @@ pub mod claude_code;
 pub mod cloud;
 mod codex_router;
 pub mod commands;
+pub mod config;
 pub mod config_synthesis;
 pub mod conformance;
 pub mod contexts;

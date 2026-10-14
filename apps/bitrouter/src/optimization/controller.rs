@@ -107,7 +107,7 @@ pub struct PreparedOptimizationStep {
     pub policy_path: PathBuf,
     pub parent_policy_digest: String,
     pub config_before: String,
-    pub policy_mode: bitrouter_sdk::config::PolicyRuntimeMode,
+    pub policy_mode: crate::config::PolicyRuntimeMode,
     eval_snapshot: EvalSnapshot,
     database_url: String,
 }
@@ -129,7 +129,7 @@ pub struct OptimizationPublication {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OptimizationStatus {
     pub policy: String,
-    pub policy_mode: bitrouter_sdk::config::PolicyRuntimeMode,
+    pub policy_mode: crate::config::PolicyRuntimeMode,
     pub active_policy_digest: String,
     pub parent_policy_digest: Option<String>,
     pub eval_snapshot_root: Option<String>,
@@ -735,7 +735,7 @@ pub async fn prepare_files(
     let config_before = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&config_before)
+    let config = crate::config::parse(&config_before)
         .with_context(|| format!("parsing {}", config_path.display()))?;
     let active = crate::policy_lock::load_for_config(&config, Some(config_path))
         .await?
@@ -878,7 +878,7 @@ where
             config_path.display()
         );
     }
-    let parsed = bitrouter_sdk::config::parse(&current_config)
+    let parsed = crate::config::parse(&current_config)
         .with_context(|| format!("parsing {}", config_path.display()))?;
     let active = crate::policy_lock::load_for_config(&parsed, Some(&config_path))
         .await?
@@ -890,16 +890,16 @@ where
             active.digest
         );
     }
-    let config_after = if policy_mode == bitrouter_sdk::config::PolicyRuntimeMode::Frozen {
+    let config_after = if policy_mode == crate::config::PolicyRuntimeMode::Frozen {
         crate::policy_lock::edit_config_mode(
             &config_before,
-            bitrouter_sdk::config::PolicyRuntimeMode::Adaptive,
+            crate::config::PolicyRuntimeMode::Adaptive,
         )?
     } else {
         config_before.clone()
     };
-    let candidate_config = bitrouter_sdk::config::parse(&config_after)
-        .context("validating optimization config activation")?;
+    let candidate_config =
+        crate::config::parse(&config_after).context("validating optimization config activation")?;
     crate::policy_lock::validate_for_config(&candidate_config, &successor)?;
     let database = crate::db::connect(&database_url).await?;
     let store = crate::eval::store::EvalStore::new(database);
@@ -1046,8 +1046,8 @@ pub async fn read_status(config_path: &Path, policy_name: &str) -> Result<Optimi
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw)
-        .with_context(|| format!("parsing {}", config_path.display()))?;
+    let config =
+        crate::config::parse(&raw).with_context(|| format!("parsing {}", config_path.display()))?;
     let active = crate::policy_lock::load_for_config(&config, Some(config_path))
         .await?
         .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
@@ -1086,8 +1086,8 @@ pub async fn read_status(config_path: &Path, policy_name: &str) -> Result<Optimi
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use crate::config::PolicyModelTarget;
     use anyhow::{Context, Result};
-    use bitrouter_sdk::config::PolicyModelTarget;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::types::{
@@ -2398,8 +2398,9 @@ mod file_tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
 
+    use crate::config::PolicyModelTarget;
+    use crate::config::PolicyRuntimeMode;
     use anyhow::{Context, Result};
-    use bitrouter_sdk::config::{PolicyModelTarget, PolicyRuntimeMode};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use crate::eval::EvalService;
@@ -2551,8 +2552,7 @@ mod file_tests {
             let db = crate::db::connect(&self.database_url).await?;
             crate::db::run_migrations(&db).await?;
             let store = EvalStore::new(db);
-            let service =
-                EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+            let service = EvalService::new(store.clone(), crate::config::EvalConfig::default());
             for (scope, id, cost) in [
                 (
                     EvalScope::Request,
@@ -2676,7 +2676,7 @@ mod file_tests {
             };
             let store = EvalStore::new(crate::db::connect(&self.database_url).await?);
             store.insert_subject(&subject).await?;
-            EvalService::new(store, bitrouter_sdk::config::EvalConfig::default())
+            EvalService::new(store, crate::config::EvalConfig::default())
                 .submit(
                     EvaluationResult {
                         schema_version: EVAL_SCHEMA_VERSION,
@@ -2712,8 +2712,7 @@ mod file_tests {
                 .and_then(|state| state.active.as_ref())
                 .context("passing experiment is not active")?;
             let store = EvalStore::new(crate::db::connect(&self.database_url).await?);
-            let service =
-                EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+            let service = EvalService::new(store.clone(), crate::config::EvalConfig::default());
             for (arm, tier, cost) in [
                 (ExperimentArm::Control, "strong", 1_000),
                 (ExperimentArm::Challenger, "economy", 700),
@@ -3553,7 +3552,7 @@ mod file_tests {
 
         let raw = std::fs::read_to_string(&harness.config_path)?;
         assert_eq!(
-            bitrouter_sdk::config::parse(&raw)?.policy.mode,
+            crate::config::parse(&raw)?.policy.mode,
             PolicyRuntimeMode::Adaptive
         );
         Ok(())

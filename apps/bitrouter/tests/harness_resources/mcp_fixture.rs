@@ -1,4 +1,4 @@
-use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
+use super::{McpServerConfig, McpTransport};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};

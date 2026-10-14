@@ -7,10 +7,10 @@ use anyhow::Context;
 
 use crate::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
 use crate::core::session::RunStatus;
+use crate::gateway::caller::CallerContext;
 use crate::harness::agent::ToolMode;
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession};
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_sdk::caller::CallerContext;
 use tokio_util::sync::CancellationToken;
 
 pub struct Options {

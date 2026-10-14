@@ -5,6 +5,8 @@ use std::future::IntoFuture;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
+use crate::config::AgentApiConfig;
+use crate::gateway::caller::CallerContext;
 use crate::harness::agent::AgentConfig;
 use crate::harness::service::{ErrorCode, ServiceError, ThreadService};
 use crate::harness::thread::{
@@ -19,8 +21,6 @@ use axum::response::{IntoResponse, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::AgentApiConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;

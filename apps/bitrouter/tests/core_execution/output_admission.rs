@@ -8,7 +8,7 @@ struct UsageRecords(Arc<Mutex<Vec<(u64, u64, bool)>>>);
 
 #[async_trait]
 impl SettlementRecorder for UsageRecords {
-    async fn record(&self, ctx: &mut SettlementContext) -> bitrouter_sdk::Result<()> {
+    async fn record(&self, ctx: &mut SettlementContext) -> bitrouter::gateway::error::Result<()> {
         self.0.lock().await.push((
             ctx.prompt_tokens,
             ctx.completion_tokens,
@@ -157,26 +157,34 @@ impl Executor for ConcurrentOutput {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.add_permits(1);
         self.resume
             .acquire()
             .await
-            .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+            .map_err(|error| {
+                bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+            })?
             .forget();
         let MockResponse::Generate(mut result) = output(vec![text("")]) else {
-            return Err(bitrouter_sdk::BitrouterError::internal("fixture result"));
+            return Err(bitrouter::gateway::error::BitrouterError::internal(
+                "fixture result",
+            ));
         };
         let used = serde_json::to_vec(&result)
-            .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+            .map_err(|error| {
+                bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+            })?
             .len();
         let padding = self
             .bytes
             .load(Ordering::SeqCst)
             .checked_sub(used)
             .ok_or_else(|| {
-                bitrouter_sdk::BitrouterError::internal("fixture output bound is too small")
+                bitrouter::gateway::error::BitrouterError::internal(
+                    "fixture output bound is too small",
+                )
             })?;
         result.content = vec![text(&"x".repeat(padding))];
         MockExecutor::new(vec![MockResponse::Generate(result)])
@@ -189,8 +197,10 @@ impl Executor for ConcurrentOutput {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 
@@ -209,7 +219,7 @@ impl ObserveHook for HeldReports {
         &self,
         _: &PipelineContext,
         _: &RoutingTarget,
-        _: bitrouter_sdk::language_model::hooks::HopOutcome<'_>,
+        _: bitrouter::gateway::pipeline::hooks::HopOutcome<'_>,
     ) {
         self.seen.add_permits(1);
         if let Ok(permit) = self.resume.acquire().await {
@@ -756,7 +766,7 @@ impl Executor for WaitDeliveryExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         let child = self.child_id.lock().await.clone();
         if prompt.system.as_deref().is_some_and(|system| {
             system.starts_with(&format!("You are agent {child} for this task."))
@@ -781,8 +791,10 @@ impl Executor for WaitDeliveryExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 
@@ -1041,7 +1053,7 @@ async fn oversized_attempt_error_commits_terminal_failure_without_fallback() -> 
         };
         let (session, executor, _) = setup(
             vec![
-                MockResponse::Error(bitrouter_sdk::BitrouterError::Upstream {
+                MockResponse::Error(bitrouter::gateway::error::BitrouterError::Upstream {
                     status: 500,
                     message: "\0\"error".repeat(100_000),
                 }),
@@ -1108,12 +1120,12 @@ struct MetadataCost {
     non_finite: bool,
 }
 
-impl bitrouter_sdk::language_model::native_accounting::NativeCostEstimator for MetadataCost {
+impl bitrouter::gateway::pipeline::native_accounting::NativeCostEstimator for MetadataCost {
     fn estimate(
         &self,
-        report: &bitrouter_sdk::language_model::native::NativeAttemptReport,
-    ) -> bitrouter_sdk::language_model::native_accounting::NativeTokenCost {
-        use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
+        report: &bitrouter::gateway::pipeline::native::NativeAttemptReport,
+    ) -> bitrouter::gateway::pipeline::native_accounting::NativeTokenCost {
+        use bitrouter::gateway::pipeline::native_accounting::NativeTokenCost;
         let mut cost = accounting::FixtureCost.estimate(report);
         if let NativeTokenCost::ConfiguredEstimate {
             micro_usd,

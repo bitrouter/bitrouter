@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 
 use crate::harness::agent::AgentConfig;

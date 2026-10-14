@@ -4,12 +4,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
+use crate::gateway::caller::CallerContext;
+use crate::gateway::mcp::transport::McpServerConfig;
+use crate::gateway::mcp::transport::McpTransport;
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectTo, ConnectionTo, Dispatch, Error, HandleDispatchFrom,
     Handled,
 };
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, Semaphore, watch};

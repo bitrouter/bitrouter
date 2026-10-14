@@ -23,8 +23,9 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use bitrouter_ai::types::{Usage, UsageOrigin};
-use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::cloud::settlement::{SettlementReceipt, SettlementState};
 use crate::metering::db::{ReconciliationStatus, RequestMetric};
@@ -879,7 +880,7 @@ impl MeteringStore {
     /// and foreign rows are indistinguishable to the reader.
     pub(super) async fn native_request_rows(
         &self,
-        caller: &bitrouter_sdk::caller::CallerContext,
+        caller: &crate::gateway::caller::CallerContext,
         request_ids: &[String],
     ) -> Result<Vec<requests::Model>> {
         if request_ids.is_empty() {

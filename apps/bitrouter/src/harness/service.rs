@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bitrouter_sdk::App;
+use crate::gateway::assembly::App;
 use serde::{Deserialize, Serialize};
 use tokio_util::task::TaskTracker;
 

@@ -57,10 +57,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::commands::invocation;
+use crate::config::Config;
+use crate::config::agent::AcpAgentConfig;
+use crate::config::agent::AcpTransport;
 use anyhow::{Context, Result};
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
-use bitrouter_sdk::invocation;
 use futures::{FutureExt, StreamExt};
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -127,8 +128,9 @@ pub fn resolve_agent_id(config: &Config, requested: &str) -> Result<String> {
 
 #[cfg(test)]
 mod agent_resolution_tests {
-    use bitrouter_sdk::config::Config;
-    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
+    use crate::config::Config;
+    use crate::config::agent::AcpAgentConfig;
+    use crate::config::agent::AcpTransport;
 
     use super::resolve_agent_id;
 
@@ -174,8 +176,9 @@ mod session_host_tests {
         RoutingOptions, SessionHost, SessionSelection, SpawnContext, is_lifecycle_cancelled,
         launch_options,
     };
-    use bitrouter_sdk::config::Config;
-    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
+    use crate::config::Config;
+    use crate::config::agent::AcpAgentConfig;
+    use crate::config::agent::AcpTransport;
 
     const STUB: &str = r#"
 while read line; do

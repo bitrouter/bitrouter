@@ -5,7 +5,10 @@
 //! driver as a success: JSON `{"error": {"kind", "message", …}}` on stdout by
 //! default, or the human `error:` / `while:` / `hint:` block under `--human`.
 
-use bitrouter_sdk::error::{BitrouterError, ErrorBody, ErrorEnvelope, ErrorKind};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::ErrorBody;
+use crate::gateway::error::ErrorEnvelope;
+use crate::gateway::error::ErrorKind;
 
 use crate::error_report::{hint_for, strip_status_prefix};
 use crate::output::CliReport;

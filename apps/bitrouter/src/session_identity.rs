@@ -2,10 +2,12 @@
 
 use std::sync::Arc;
 
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::ApiProtocol;
-use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
 use serde::Serialize;
 
 use crate::acp_runtime::AcpRuntime;
@@ -199,9 +201,9 @@ impl PreRequestHook for SessionContextHook {
     async fn revalidate_context(
         &self,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<HookDecision> {
+    ) -> crate::gateway::error::Result<HookDecision> {
         let frozen = ctx.extension::<RequestSessionContext>().ok_or_else(|| {
-            bitrouter_sdk::BitrouterError::bad_request(
+            crate::gateway::error::BitrouterError::bad_request(
                 "session revalidation lost its identity binding",
             )
         })?;
@@ -211,7 +213,7 @@ impl PreRequestHook for SessionContextHook {
             || frozen.claimed_controller_instance_id.is_some()
             || frozen.route_lease.is_some()
         {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(crate::gateway::error::BitrouterError::bad_request(
                 "context rebuild cannot rebind a controller session",
             ));
         }
@@ -228,14 +230,17 @@ impl PreRequestHook for SessionContextHook {
             prompt: ctx.require_generation_prompt()?,
         });
         if native != frozen.native || legacy.signal.key != frozen.legacy_workflow_session_id {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(crate::gateway::error::BitrouterError::bad_request(
                 "context rebuild changed session attribution",
             ));
         }
         Ok(HookDecision::Allow)
     }
 
-    async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
         let api_principal_id = ctx.caller().api_key_id().to_string();
         let route_principal = if ctx.caller().is_local() {
             "local".to_string()
@@ -775,11 +780,12 @@ fn push_unique(values: &mut Vec<String>, candidate: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::pipeline::context::PipelineContext;
+    use crate::gateway::pipeline::hooks::HookDecision;
+    use crate::gateway::pipeline::hooks::PreRequestHook;
+    use crate::gateway::pipeline::types::PipelineRequest;
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{
-        HookDecision, PipelineContext, PipelineRequest, PreRequestHook,
-    };
     use std::collections::BTreeSet;
     use std::sync::Arc;
 

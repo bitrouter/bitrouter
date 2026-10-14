@@ -3,8 +3,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::config::Config;
+use crate::config::PolicyModelTarget;
+use crate::config::routing_table::ConfigRoutingTable;
 use anyhow::Result;
-use bitrouter_sdk::config::{Config, ConfigRoutingTable, PolicyModelTarget};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -203,8 +205,8 @@ impl PolicyReport {
             .into(),
             digest: loaded.map(|loaded| loaded.digest.clone()),
             mode: match config.policy.mode {
-                bitrouter_sdk::config::PolicyRuntimeMode::Frozen => "frozen",
-                bitrouter_sdk::config::PolicyRuntimeMode::Adaptive => "adaptive",
+                crate::config::PolicyRuntimeMode::Frozen => "frozen",
+                crate::config::PolicyRuntimeMode::Adaptive => "adaptive",
             }
             .into(),
             policies: definitions.keys().cloned().collect(),
@@ -321,7 +323,7 @@ mod tests {
 
     #[test]
     fn custom_agent_commands_are_never_reported() -> Result<()> {
-        let config = bitrouter_sdk::config::parse(
+        let config = crate::config::parse(
             "agents:\n  custom:\n    name: custom\n    transport:\n      type: stdio\n      command: secret-command\n      args: [secret-token]\n",
         )?;
         let report = serde_json::to_string(&agents(&config, "live"))?;
@@ -361,7 +363,7 @@ mod snapshot_tests {
         };
         std::fs::write(&path, initial_yaml)?;
         std::fs::write(&lock, policy_yaml("old"))?;
-        let initial = bitrouter_sdk::config::load(&path).await?;
+        let initial = crate::config::load(&path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let runtime = PolicyRuntime::new(
@@ -390,7 +392,7 @@ mod snapshot_tests {
         assert_eq!(still_active.bindings, active_before.bindings);
         assert_eq!(still_active.digest, active_before.digest);
 
-        let candidate = bitrouter_sdk::config::load(&path).await?;
+        let candidate = crate::config::load(&path).await?;
         let prepared = runtime.prepare_for_config(&candidate, Some(&path)).await?;
         assert_eq!(
             runtime.administration_snapshot().digest,

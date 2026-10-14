@@ -70,7 +70,7 @@ fn cli_preview_apply_and_legacy_validation_guidance() -> Result<()> {
     ensure!(result["applied"] == true && result["restart_required"] == true);
     let backup = result["backup"].as_str().context("missing backup")?;
     ensure!(std::fs::read_to_string(home.join(backup))? == raw);
-    let migrated = bitrouter_sdk::config::parse(&std::fs::read_to_string(source)?)?;
+    let migrated = bitrouter::config::parse(&std::fs::read_to_string(source)?)?;
     ensure!(migrated.presets.is_empty());
     ensure!(migrated.resolve_router("@coding")?.clean_model == "fixture:base");
     ensure!(migrated.resolve_router("bitrouter/coding")?.clean_model == "fixture:base");

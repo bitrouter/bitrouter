@@ -1,11 +1,12 @@
 use super::*;
+use crate::gateway::model::decision::DecisionRuntime;
+use crate::gateway::model::decision::policy::DecisionPolicy;
+use crate::gateway::model::decision::typesafe::TypeSafeExecutor;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::executor::Executor;
+use crate::gateway::pipeline::executor::StreamPartStream;
+use crate::gateway::pipeline::types::ExecutionResult;
 use bitrouter_ai::types::Prompt;
-use bitrouter_sdk::decision_model::DecisionRuntime;
-use bitrouter_sdk::decision_model::policy::DecisionPolicy;
-use bitrouter_sdk::decision_model::typesafe::TypeSafeExecutor;
-use bitrouter_sdk::language_model::ExecutionResult;
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::executor::{Executor, StreamPartStream};
 use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -199,8 +200,8 @@ impl Executor for Recording {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
-        Err(bitrouter_sdk::error::BitrouterError::internal(
+    ) -> crate::gateway::error::Result<ExecutionResult> {
+        Err(crate::gateway::error::BitrouterError::internal(
             "native fixture requires streaming",
         ))
     }
@@ -209,7 +210,7 @@ impl Executor for Recording {
         target: &RoutingTarget,
         prompt: &Prompt,
         context: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
+    ) -> crate::gateway::error::Result<StreamPartStream> {
         self.prompts.lock().await.push(prompt.clone());
         self.mock.execute_stream(target, prompt, context).await
     }

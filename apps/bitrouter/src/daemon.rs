@@ -18,9 +18,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::RoutingPrefs;
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::routing::RoutingPrefs;
 
 use chrono::{DateTime, Utc};
 
@@ -328,7 +328,7 @@ pub enum DaemonResponse {
     /// The live routing table's catalog.
     Models {
         /// Every routable model, each with all the providers declaring it.
-        models: Vec<bitrouter_sdk::language_model::routing::ModelInfo>,
+        models: Vec<crate::gateway::pipeline::routing::ModelInfo>,
         /// Routers from the same live routing snapshot.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         routers: Option<Vec<crate::actions::models::RouterStatus>>,
@@ -342,7 +342,7 @@ pub enum DaemonResponse {
         resolved_model: Option<String>,
         /// Stable named-router identity, when the selector resolved one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+        router: Option<crate::gateway::pipeline::routing::RouterRequestIdentity>,
         /// Canonical or legacy source of the named-router definition.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         router_source: Option<crate::actions::models::RouterSource>,
@@ -581,7 +581,7 @@ pub struct ReadyInfo {
 /// `start`, and `spawn`.
 pub fn socket_path_for(
     source: &crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
 ) -> PathBuf {
     match source {
         crate::paths::ConfigSource::File(path) => {
@@ -1372,8 +1372,8 @@ struct RouterState {
 }
 
 fn router_configuration_restart_required(
-    saved: &bitrouter_sdk::config::Config,
-    running: &bitrouter_sdk::config::Config,
+    saved: &crate::config::Config,
+    running: &crate::config::Config,
 ) -> bool {
     saved.routers != running.routers
 }
@@ -1618,7 +1618,7 @@ pub(crate) mod transport {
             format!(
                 "connecting to {} — is the daemon running? (`{cli} start`)",
                 path.display(),
-                cli = bitrouter_sdk::invocation::name()
+                cli = crate::commands::invocation::name()
             )
         })
     }
@@ -1732,7 +1732,7 @@ pub(crate) mod transport {
                     return Err(e).with_context(|| {
                         format!(
                             "connecting to {name} — is the daemon running? (`{cli} start`)",
-                            cli = bitrouter_sdk::invocation::name()
+                            cli = crate::commands::invocation::name()
                         )
                     });
                 }
@@ -1947,7 +1947,7 @@ fn spawn_detached_serve(
     let child = cmd.spawn().with_context(|| {
         format!(
             "spawning detached `{} serve`",
-            bitrouter_sdk::invocation::name()
+            crate::commands::invocation::name()
         )
     })?;
     Ok((child, log_size_before))
@@ -2291,10 +2291,10 @@ mod tests {
 
     #[test]
     fn router_restart_detection_uses_secret_defaults_without_exposing_them() -> anyhow::Result<()> {
-        let saved = bitrouter_sdk::config::parse(
+        let saved = crate::config::parse(
             "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: saved secret\n      params:\n        temperature: 0.2\n",
         )?;
-        let running = bitrouter_sdk::config::parse(
+        let running = crate::config::parse(
             "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: prior secret\n      params:\n        temperature: 0.8\n",
         )?;
 

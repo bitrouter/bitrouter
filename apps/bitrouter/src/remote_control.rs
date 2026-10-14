@@ -18,6 +18,9 @@ use std::sync::Arc;
 use crate::actions::models::ModelsReport;
 use crate::actions::route::{RouteInput, RouteReport};
 use crate::actions::status::StatusReport;
+use crate::config::ControlConfig;
+use crate::config::ControlScope;
+use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
 use axum::extract::{
     DefaultBodyLimit, MatchedPath, Path, Query, Request, State,
@@ -28,8 +31,6 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use bitrouter_sdk::config::{ControlConfig, ControlScope};
-use bitrouter_sdk::error::BitrouterError;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1358,7 +1359,7 @@ providers:
     #[tokio::test]
     #[ignore = "long-running Docker HTTP fault fixture"]
     async fn docker_partial_fixture() -> anyhow::Result<()> {
-        use bitrouter_sdk::config::ControlCredentialConfig;
+        use crate::config::ControlCredentialConfig;
         let config = ControlConfig {
             credentials: vec![
                 ControlCredentialConfig {
@@ -1398,7 +1399,7 @@ providers:
 
     #[tokio::test]
     async fn http_mutations_enforce_scope_shape_owner_and_boot() -> anyhow::Result<()> {
-        use bitrouter_sdk::config::ControlCredentialConfig;
+        use crate::config::ControlCredentialConfig;
         let (_directory, source) = default_source()?;
         let reloader = Arc::new(ImmediateReloader(
             crate::reload::ReloadCoordinator::new(),
@@ -1609,7 +1610,7 @@ providers:
     #[tokio::test]
     async fn ambiguous_post_response_retains_ids_without_an_automatic_retry() -> anyhow::Result<()>
     {
-        use bitrouter_sdk::config::ControlCredentialConfig;
+        use crate::config::ControlCredentialConfig;
         use std::sync::atomic::{AtomicUsize, Ordering};
         let (_directory, source) = default_source()?;
         let reloader = Arc::new(ImmediateReloader(
@@ -1829,7 +1830,7 @@ providers:
 
     #[tokio::test]
     async fn remote_state_uses_daemon_reloader_configuration_evidence() -> anyhow::Result<()> {
-        use bitrouter_sdk::config::ControlCredentialConfig;
+        use crate::config::ControlCredentialConfig;
 
         let (_directory, source) = default_source()?;
         let reloader = Arc::new(ImmediateReloader(
@@ -1936,7 +1937,7 @@ providers:
             .chain()
             .find_map(|error| error.downcast_ref::<BitrouterError>())
             .map(BitrouterError::kind);
-        assert_eq!(kind, Some(bitrouter_sdk::error::ErrorKind::Unauthorized));
+        assert_eq!(kind, Some(crate::gateway::error::ErrorKind::Unauthorized));
 
         let _ = shutdown_tx.send(());
         task.await??;

@@ -38,7 +38,7 @@ enum SubmissionMode {
 struct Session {
     model_mode: crate::core::protocol::ModelMode,
     max_output_tokens: Option<u32>,
-    model_config: Option<bitrouter_sdk::config::Config>,
+    model_config: Option<crate::config::Config>,
     thread_id: Option<String>,
     create_key: String,
     create_uncertain: bool,
@@ -911,7 +911,7 @@ fn update_snapshot(state: &mut NativeState, snapshot: &TurnSnapshot) {
     state.workflow = routing
         .and_then(|routing| routing.workflow.as_ref())
         .map(|workflow| {
-            use bitrouter_sdk::routing::signals::TaskFamily;
+            use crate::gateway::routing::signals::TaskFamily;
             let family = match workflow.task_family {
                 TaskFamily::CodeGeneration => "code",
                 TaskFamily::CodeDebugging => "debug",

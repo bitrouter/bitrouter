@@ -1,6 +1,6 @@
 //! A durable, single-Thread close operation outlives its transport caller.
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 
 use super::admission::{fingerprint, key_scope};
 use super::commit::lifecycle_fact;

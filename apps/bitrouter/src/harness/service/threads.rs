@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
 
 use super::admission::{fingerprint, key_scope};
 use super::state::{State, ThreadRecord};
@@ -158,7 +158,7 @@ impl ThreadService {
         &self,
         server_instance_id: &str,
         request: ThreadRequest,
-        servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
+        servers: Option<Vec<crate::gateway::mcp::transport::McpServerConfig>>,
     ) -> Result<ThreadSnapshot, ServiceError> {
         if let Some(servers) = &servers {
             if servers.len() > 32
@@ -371,7 +371,7 @@ impl ThreadService {
         &self,
         target: &ThreadTarget,
         caller: &CallerContext,
-        servers: &[bitrouter_sdk::mcp::transport::McpServerConfig],
+        servers: &[crate::gateway::mcp::transport::McpServerConfig],
     ) -> Result<(), ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
         let state = self.lock_state();

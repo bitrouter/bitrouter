@@ -35,7 +35,7 @@ async fn fixture() -> Result<(ManagedCoreApi, Principal, Create), Box<dyn std::e
         .await
         .map_err(|error| error.0)?;
     let api = ManagedCoreApi::new(
-        Arc::new(bitrouter_sdk::App::builder().build()?),
+        Arc::new(crate::gateway::assembly::App::builder().build()?),
         connection,
         "core".into(),
     );

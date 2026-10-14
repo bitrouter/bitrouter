@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;

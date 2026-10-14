@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
 use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_ai::types::{Message, Role, ToolResultOutput, Usage};
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 

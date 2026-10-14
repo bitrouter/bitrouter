@@ -583,8 +583,8 @@ fn now_rfc3339() -> String {
 /// when its current runtime consumer can observe a replacement without
 /// rebuilding the daemon pipeline.
 fn restart_required_fields(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
+    current: &crate::config::Config,
+    candidate: &crate::config::Config,
     unclassified_fields: Option<&BTreeSet<String>>,
 ) -> Vec<String> {
     let mut fields = BTreeSet::new();
@@ -713,7 +713,7 @@ struct UnclassifiedConfigValue {
 type UnclassifiedConfigValues = BTreeMap<String, UnclassifiedConfigValue>;
 
 fn unclassified_config(value: &serde_json::Value) -> (BTreeSet<String>, UnclassifiedConfigValues) {
-    let schema = schemars::schema_for!(bitrouter_sdk::config::Config);
+    let schema = schemars::schema_for!(crate::config::Config);
     let root = schema.as_value();
     let mut fields = BTreeSet::new();
     let mut values = BTreeMap::new();
@@ -1008,10 +1008,7 @@ fn serialized_values_differ<T: Serialize>(current: &T, candidate: &T) -> bool {
     }
 }
 
-fn mcp_config_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
-) -> bool {
+fn mcp_config_changed(current: &crate::config::Config, candidate: &crate::config::Config) -> bool {
     let current = &current.mcp;
     let candidate = &candidate.mcp;
     current.aggregate.enabled != candidate.aggregate.enabled
@@ -1026,10 +1023,7 @@ fn mcp_config_changed(
         || current.upstream_protocol != candidate.upstream_protocol
 }
 
-fn mcp_servers_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
-) -> bool {
+fn mcp_servers_changed(current: &crate::config::Config, candidate: &crate::config::Config) -> bool {
     current.mcp_servers.len() != candidate.mcp_servers.len()
         || current.mcp_servers.iter().any(|(id, current_server)| {
             candidate
@@ -1044,10 +1038,7 @@ fn mcp_servers_changed(
         })
 }
 
-fn agents_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
-) -> bool {
+fn agents_changed(current: &crate::config::Config, candidate: &crate::config::Config) -> bool {
     current.agents.len() != candidate.agents.len()
         || current.agents.iter().any(|(id, current_agent)| {
             candidate.agents.get(id).is_none_or(|candidate_agent| {
@@ -1058,8 +1049,8 @@ fn agents_changed(
 }
 
 fn server_tools_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
+    current: &crate::config::Config,
+    candidate: &crate::config::Config,
 ) -> bool {
     // This comparison never leaves the process. Several tool settings contain
     // credential-bearing values but do not implement `Serialize`; `Debug` is
@@ -1067,7 +1058,7 @@ fn server_tools_changed(
     format!("{:?}", current.server_tools) != format!("{:?}", candidate.server_tools)
 }
 
-fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
+fn pricing_signature(config: &crate::config::Config) -> Vec<String> {
     let mut entries = Vec::new();
     for (provider_id, provider) in &config.providers {
         if provider
@@ -1111,7 +1102,7 @@ fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
 /// default store. Best-effort: an unreadable store is a no-op. Mirrors the
 /// startup pass in `assemble.rs` so a subscription / Claude Code session
 /// provider survives a hot-reload instead of dropping out of routing.
-fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Config) {
+fn activate_stored_credential_providers(config: &mut crate::config::Config) {
     if let Ok(store) = crate::provider_credentials::load_default() {
         crate::providers::apply::activate_stored_credential_providers(config, &store);
     }
@@ -1120,13 +1111,13 @@ fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Conf
 /// Apply the same non-mutating configuration enrichment used when the daemon
 /// constructs a replacement routing snapshot. Keeping this in one helper makes
 /// the current and candidate shapes comparable before remote classification.
-async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
+async fn resolve_reloadable_config(config: &mut crate::config::Config) {
     crate::providers::apply::apply_builtin_defaults(config);
     crate::claude_code::enable_if_logged_in(config);
     crate::assemble::merge_registry_into(config).await;
     activate_stored_credential_providers(config);
     // Discovery is bounded by the SDK and completes before any live swap.
-    bitrouter_sdk::config::discover_models(config).await;
+    crate::config::discover_models(config).await;
 }
 
 /// Whether the daemon is running against a `bitrouter.yaml` on disk
@@ -1160,14 +1151,14 @@ pub struct ConfigurationBaseline {
     /// Source actually read. A Default source can observe a newly created
     /// `<home>/bitrouter.yaml` without treating it as applied to the daemon.
     loaded_source: crate::paths::ConfigSource,
-    config: bitrouter_sdk::config::Config,
+    config: crate::config::Config,
     revision: ConfigurationRevision,
     unclassified_fields: Option<BTreeSet<String>>,
     unclassified_values: Option<UnclassifiedConfigValues>,
 }
 
 impl ConfigurationBaseline {
-    pub fn config(&self) -> &bitrouter_sdk::config::Config {
+    pub fn config(&self) -> &crate::config::Config {
         &self.config
     }
 }
@@ -1398,12 +1389,13 @@ async fn load_configuration_baseline_at(
                 }
             })?;
             let mut config =
-                bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
-                    .map_err(|error| ConfigurationLoadError {
+                crate::config::parse_with(&raw, crate::config::env_lookup).map_err(|error| {
+                    ConfigurationLoadError {
                         saved: SavedConfigState::Invalid,
                         error: anyhow::Error::new(error),
                         guardrails_migration_required: false,
-                    })?;
+                    }
+                })?;
             crate::policy_lock::apply_defaults(&mut config, Some(path));
             let guardrails_migration_required = config.plugins.contains_key("bitrouter-guardrails");
             crate::assemble::validate_host_configuration(&config).map_err(|error| {
@@ -1413,13 +1405,12 @@ async fn load_configuration_baseline_at(
                     guardrails_migration_required,
                 }
             })?;
-            let substituted = bitrouter_sdk::config::substitute_env(&raw).map_err(|error| {
-                ConfigurationLoadError {
+            let substituted =
+                crate::config::substitute_env(&raw).map_err(|error| ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error: anyhow::Error::new(error),
                     guardrails_migration_required: false,
-                }
-            })?;
+                })?;
             let document =
                 serde_saphyr::from_str::<serde_json::Value>(&substituted).map_err(|error| {
                     ConfigurationLoadError {
@@ -1471,13 +1462,13 @@ pub struct AppReloader {
     /// fresh `Config` in the app layer — so product provider
     /// defaults can be applied above the SDK — and swap it in
     /// via `ConfigRoutingTable::replace_config`.
-    routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
+    routing_table: Arc<crate::config::routing_table::ConfigRoutingTable>,
     /// The fully assembled configuration at daemon startup. Every reload
     /// entrypoint compares startup-owned fields to this immutable baseline and
     /// rejects drift before any live participant changes.
-    startup_config: bitrouter_sdk::config::Config,
+    startup_config: crate::config::Config,
     /// Primary source parsed before registry/default/discovery enrichment.
-    startup_source_config: Option<bitrouter_sdk::config::Config>,
+    startup_source_config: Option<crate::config::Config>,
     /// Exact source selected when the daemon started, including the home for a
     /// zero-config process that may later gain `bitrouter.yaml`.
     startup_configuration_source: Option<crate::paths::ConfigSource>,
@@ -1491,7 +1482,7 @@ pub struct AppReloader {
     environment_revision: AtomicU64,
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
-    upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+    upstream_executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
     /// Owns admission for local IPC, SIGHUP, and guarded remote reloads. The
     /// routing table's own lock is narrower and cannot protect preparation or
@@ -1535,8 +1526,8 @@ impl TestPreparationPause {
 
 struct PreparedReload {
     baseline: ConfigurationBaseline,
-    config: bitrouter_sdk::config::Config,
-    timeout_clients: bitrouter_sdk::language_model::executor::PreparedProviderTimeouts,
+    config: crate::config::Config,
+    timeout_clients: crate::gateway::pipeline::executor::PreparedProviderTimeouts,
     named_policy_runtime: Option<crate::policy_lock::PreparedPolicySnapshot>,
     access_policy_store: Option<crate::policy::store::PreparedPolicyStore>,
 }
@@ -1572,8 +1563,8 @@ impl AppReloader {
     /// Build a reloader over the daemon's reloadable subsystems.
     pub fn new(
         policy_store: Arc<PolicyStore>,
-        routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
-        upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+        routing_table: Arc<crate::config::routing_table::ConfigRoutingTable>,
+        upstream_executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
         source: ReloadSource,
     ) -> Self {
         let startup_config = routing_table.snapshot_config();
@@ -1813,7 +1804,7 @@ impl AppReloader {
         // that same critical section; remote requests never pass an override.
         if matches!(invocation, ReloadInvocation::Local) && !env.is_empty() {
             let overrides = env.into_iter().collect();
-            bitrouter_sdk::config::set_env_overrides(overrides);
+            crate::config::set_env_overrides(overrides);
             // Keep the saturating update and publication ordering on our MSRV;
             // `try_update` is newer and `fetch_update` is deprecated in Rust 1.99.
             let mut revision = self.environment_revision.load(Ordering::Acquire);
@@ -2243,12 +2234,15 @@ impl DaemonReloader for AppReloader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config;
+    use crate::config::routing_table::ConfigRoutingTable;
+    use crate::gateway::pipeline::context::PipelineContext;
+    use crate::gateway::pipeline::executor::Executor;
+    use crate::gateway::pipeline::executor::HttpExecutor;
+    use crate::gateway::pipeline::types::PipelineRequest;
+    use crate::gateway::pipeline::types::RoutingTarget;
     use bitrouter_ai::client::HttpTimeouts;
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-    use bitrouter_sdk::config::{self, ConfigRoutingTable};
-    use bitrouter_sdk::language_model::{
-        Executor, HttpExecutor, PipelineContext, PipelineRequest, RoutingTarget,
-    };
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -2516,7 +2510,7 @@ policies:
         let prompt = prompt();
         let ctx = PipelineContext::new(PipelineRequest::new(
             "m",
-            bitrouter_sdk::caller::CallerContext::local(),
+            crate::gateway::caller::CallerContext::local(),
             prompt.clone(),
         ));
 
@@ -2528,7 +2522,7 @@ policies:
         std::fs::remove_dir_all(dir).ok();
 
         match result {
-            Err(bitrouter_sdk::BitrouterError::UpstreamTimeout) => Ok(()),
+            Err(crate::gateway::error::BitrouterError::UpstreamTimeout) => Ok(()),
             Err(other) => Err(anyhow::anyhow!("expected UpstreamTimeout, got {other:?}")),
             Ok(_) => Err(anyhow::anyhow!("stalled body unexpectedly completed")),
         }
@@ -2540,8 +2534,8 @@ policies:
     /// cannot be re-registered, so nothing swapped its spec.
     #[tokio::test]
     async fn invalid_policy_candidate_does_not_swap_routing_or_policy() {
+        use crate::config::PolicyRuntimeMode;
         use crate::policy_lock::PolicyRuntime;
-        use bitrouter_sdk::config::PolicyRuntimeMode;
 
         let (path, dir) = temp_config_path();
         let config_yaml = |model: &str| {
@@ -2862,7 +2856,7 @@ policies:
             "BITROUTER_RELOAD_CONCURRENCY_{}",
             uuid::Uuid::new_v4().simple()
         );
-        assert!(bitrouter_sdk::config::env_lookup(&override_name).is_none());
+        assert!(crate::config::env_lookup(&override_name).is_none());
         let local = tokio::time::timeout(
             Duration::from_secs(1),
             fixture.reloader.reload_with_env(vec![(
@@ -2876,7 +2870,7 @@ policies:
             Err(error) => error,
         };
         assert!(local_error.to_string().contains("reload_in_progress"));
-        assert!(bitrouter_sdk::config::env_lookup(&override_name).is_none());
+        assert!(crate::config::env_lookup(&override_name).is_none());
 
         // `main.rs` invokes `reload()` from SIGHUP. It must take the exact
         // same admission path rather than starting a second reload.
@@ -3326,7 +3320,7 @@ presets:
     fn protocol_tariffs_endpoint_profiles_and_known_price_policy_require_restart()
     -> anyhow::Result<()> {
         use bitrouter_ai::types::ApiProtocol;
-        let current: bitrouter_sdk::config::Config = serde_json::from_value(serde_json::json!({
+        let current: crate::config::Config = serde_json::from_value(serde_json::json!({
             "providers":{"fixture":{"api_base":"https://api.openai.com/v1", "models":[{
                 "id":"test", "pricing_by_protocol":{"decisions":{"input_micro_usd_per_token":0.1,"output_micro_usd_per_token":0}}
             }]}}
@@ -3433,7 +3427,7 @@ presets:
                 .checkers
                 .get("company")
                 .map(|checker| match checker {
-                    bitrouter_sdk::config::checker::CheckerConfig::Native { native } =>
+                    crate::config::checker::CheckerConfig::Native { native } =>
                         native.revision.as_str(),
                 }),
             Some("rules-18081")

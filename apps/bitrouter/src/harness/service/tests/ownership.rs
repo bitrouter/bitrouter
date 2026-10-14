@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitrouter_sdk::caller::CallerContext;
+use crate::gateway::caller::CallerContext;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
@@ -311,7 +311,7 @@ async fn changed_workspace_marker_blocks_an_approved_effect_and_independent_stor
         let workspace = TempDir::new()?;
         let first = ThreadService::new(
             super::support::app_with_execution_mode(
-                Arc::new(bitrouter_sdk::language_model::MockExecutor::new(vec![
+                Arc::new(crate::gateway::pipeline::executor::MockExecutor::new(vec![
                     super::support::mock_stream(turn(vec![tool_call(
                         "write",
                         "write",

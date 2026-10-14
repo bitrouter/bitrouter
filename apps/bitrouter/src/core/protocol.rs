@@ -658,7 +658,7 @@ pub struct RunActivityReconciliation {
 pub struct ProviderAttemptEvidence {
     pub run_id: String,
     pub attempt_id: String,
-    pub report: bitrouter_sdk::language_model::native::NativeAttemptReport,
+    pub report: crate::gateway::pipeline::native::NativeAttemptReport,
     /// Original run's measured cumulative active time, if known. A provider's
     /// elapsed duration alone cannot establish a concurrent run's active time.
     pub active_ms: Option<u64>,

@@ -3,9 +3,9 @@
 use crate::actions::administration::{
     AgentsReport, ObserveReport, PolicyReport, PolicyView, ProvidersReport,
 };
+use crate::commands::invocation;
 use crate::output::CliReport;
 use crate::output::human::{Health, Human, Table};
-use bitrouter_sdk::invocation;
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }

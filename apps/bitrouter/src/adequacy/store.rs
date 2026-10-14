@@ -11,7 +11,8 @@ use chrono::Utc;
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
 
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use serde::Serialize;
 
 use self::adequacy_exploration::Entity as Exploration;

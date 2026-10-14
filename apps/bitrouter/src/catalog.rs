@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::config::RegistryConfig;
 use bitrouter_ai::catalog::Catalog;
 use bitrouter_ai::catalog::fetch::NetworkPolicy;
 use bitrouter_ai::catalog::store::{CatalogSnapshot, CatalogStore, Durability, StoreError};
 use bitrouter_ai::catalog::types::RegistryData;
-use bitrouter_sdk::config::RegistryConfig;
 use serde::{Deserialize, Serialize};
 
 const TTL: Duration = Duration::from_secs(24 * 60 * 60);

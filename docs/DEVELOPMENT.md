@@ -1,12 +1,12 @@
 # Development Guide
 
-This document is the workspace-level guide for BitRouter internals. Start with [`README.md`](../README.md) for the product introduction, then use this guide when you need to understand how the workspace is assembled or how to build on top of the SDK.
+This document is the workspace-level guide for BitRouter internals. Start with [`README.md`](../README.md) for the product introduction, then use this guide when you need to understand how the workspace is assembled or how to extend or operate the service.
 
 ## Workspace Architecture
 
 The table below describes the current implementation during P0. Core, harness,
-TUI and telemetry have moved into the application; AI runtime and the old SDK
-server are still being migrated. The accepted final
+TUI, telemetry and the old SDK server have moved into the application. AI runtime
+extraction and the new HTTP client remain in progress. The accepted final
 architecture and migration gates are in the
 [service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 
@@ -15,13 +15,12 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-ai`            | crate   | Model semantics, three-protocol codecs, SSE framing, selected-model HTTP calls, injected auth transactions and explicit catalog runtime; no router/application dependency |
-| `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, staged AI executor integration, config loading, the axum HTTP server, and host-side observation hooks |
+| `crates/bitrouter-sdk` | crate | Reserved service-client package after server removal; HTTP methods are the next migration stage |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, terminal UI, optional OTLP and management commands |
+| `helpers/dist-helper` | helper | Unpublished registry/chart tooling; configuration schema delegates to the application-owned generator |
 
-| `helpers/dist-helper` | helper | Unpublished registry, configuration-schema and chart tooling; schema ownership moves to the application in P0 3 |
-
-The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter_sdk::extension::ExtensionApi` inside `assemble::build_app_with_extensions`; the SDK also retains legacy `Plugin`/hook interfaces for host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
+The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter::gateway::extensions::registry::ExtensionApi` inside `assemble::build_app_with_extensions`; the application also retains legacy `Plugin`/hook interfaces for trusted host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
 
 For the native runtime module map, execution reading order and test layout, see
 the [core and harness source guide](../apps/bitrouter/HARNESS.md).
@@ -32,83 +31,25 @@ Clients reach BitRouter through its external **interfaces** — the ways *in*. T
 
 | Interface                 | Where it lives                                                                                            | Entry point              |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
-| **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bro serve`        |
-| **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
+| **API** (HTTP LLM router) | application `gateway::http` over `gateway::pipeline` | `bro serve`        |
+| **MCP gateway**           | application `mcp` feature and gateway assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
 | **ACP**                   | application `harness` feature (`apps/bitrouter/src/harness/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner, and Code session all consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve <agent>`; `bro run` |
 | **Native ACP** | `bitrouter::harness::acp::native`: negotiated v1/v2 handlers, projectors, approval delivery and native controls over the host's single ThreadService. `apps/bitrouter/src/native_acp.rs` owns the OS-local endpoint and stdio bridge; EOF detaches. | bare `bro acp serve` |
 | **ACP (interactive)**     | `apps/bitrouter/src/tui/code.rs` owns conversation state and rendering; `apps/bitrouter/src/chat/code.rs` drives asynchronous effects and ACP turns, with injected services in `actions/code.rs` and the shared `SessionHost` in `acp_cli.rs`. | `bro code <agent>` |
 | **BRO native agent** | `bitrouter::harness::service::ThreadService` owns one Thread/Turn execution path, durable context, FIFO/steering, owner/workspace fencing and bounded observation. App owns the database and transport adapters. Safe hot unload/reload and cold public queries share the same authority. | Bare `bro code` (`--thread-id`); `bro task run` (create/start client); local v17 native socket (including cold Thread directory); opt-in `/agent/v2` HTTP API |
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
 
-**`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
-is the boundary, and Cargo enforces it: the app depends on the crate by path,
-so the reverse edge is a cyclic-package error, not a review question. What it
-prevents is **reachability** — daemon-wide data (the metering store, the
-control socket, request history) is unreachable from the renderer rather than
-merely unused. The previous terminal UI lived inside the application, could
-reach any function in it, and accreted verbs with no command-line equivalent
-until it was deleted; a module boundary was a promise, this one is a compiler
-error.
+The TUI is an internal application module. It consumes shared presentation
+values and command vocabulary; drawing code does not access provider credentials,
+database repositories or service execution. `source_boundaries` checks these
+imports now that Cargo no longer supplies a separate crate boundary. Permission
+policy belongs to the harness, and command resolution belongs to `commands`.
+Cost attribution remains explicit, missing cost is unreported, and cancelling a
+permission prompt never grants consent.
 
-**The ACP-generic charter is retired.** The crate was once forbidden from
-naming any BitRouter concept. The check for it began life unanchored — as
-`grep -rn "bitrouter/"`, which matched the doc comment that stated it — and was
-later tightened to
-`rg -n "bitrouter.dev/cost|COST_PROVENANCE_META_KEY" crates/bitrouter-tui/src`.
-That tightened form worked, and this change deliberately breaks it: the
-cost-provenance wire spelling now lives in `apps/bitrouter/src/tui/cost.rs`
-(and is pinned equal to the controller's by a test in `acp_cli.rs`), because
-splitting one `_meta` key across a crate boundary bought nothing but two
-places to look. This is BitRouter's TUI and may name BitRouter's concepts.
-Conforming to ACP is still how the renderer works, and a non-BitRouter agent
-still renders — it lands in the honest-default branch of every control.
-
-What has *not* changed is why any of it was chosen. The honesty rules are now
-pinned by named tests rather than by an absent dependency: a cost nobody can
-vouch for is never drawn as ours (the harness's own figure is labelled the
-agent's, an unknown marker is not drawn, and no figure renders `unreported`,
-never `$0.00`); a controller that advertises no route control gets no picker
-rather than a dead one; a cancelled permission never resolves to consent. Those tests are the guard — deleting one is the change to refuse in
-review.
-
-Where a control's honesty depends on something ACP does not carry, the crate
-takes it as a **parameter** rather than inferring it — `Picker::open` takes
-whether the controller advertised route control, `Cost::new` takes who wrote
-the figure — so there is no constructor that skips the question.
-
-The rule these add up to, and it is enforced rather than agreed:
-
-> **`apps/bitrouter` may touch the terminal. Only `bitrouter-tui` may draw on
-> it.**
-
-`apps/bitrouter` does not depend on `ratatui`. It cannot construct a widget, so
-every drawn thing goes through the renderer crate and the compiler says so —
-adding `ratatui` back to that manifest is the change to refuse in review.
-
-What the app keeps is `crossterm`, and that is the rule rather than an exception
-to it: crossterm is terminal **I/O** (owning stdin, bracketed paste, reading key
-events), which is this process's, while ratatui is **drawing**, which is the
-crate's.
-
-The last surface short of this was `status --watch`, a self-refreshing ratatui
-table over daemon-wide request rows. It could not move to `bitrouter-tui` —
-those rows come from the metering store and cover every caller, most of which
-never speak ACP, so importing them would have put a daemon-wide model inside a
-session-scoped crate. It was removed instead, and `bro requests`
-reports the same data through the ordinary CLI report layer
-(`apps/bitrouter/src/output/reports/requests.rs`) — JSON by default, `--human`
-for the table, and no terminal code anywhere in it.
-
-The second line, which keeps the crate synchronous, is **meaning vs
-transport**. What a key *means* is a terminal fact and lives in the crate
-(`editor`: multiline composition; `code`: focus and interaction transitions). *Owning stdin and
-delivering events* is a fact about the host process — what else it selects
-over, and which runtime it has — so the pump stays in the app
-(`apps/bitrouter/src/chat/code.rs`). The same cut keeps signal handling out
-(`crate::chat::signals::Shutdown`) while terminal enter/restore stays in.
-`bitrouter-tui` therefore depends on no async runtime at all, and
-`cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
-checked.
+Terminal-free log tails and shared values live in `presentation`. Plain ACP
+transcript formatting still uses the old renderer while its neutral formatting
+is extracted. Complete headless dependency isolation remains a P0 gate.
 
 BRO native tools are `read`, `glob`, `grep`, `write`, `edit`, and `shell`.
 `read` dispatches known workspace paths to file lines or direct directory
@@ -138,14 +79,13 @@ Harness; the standalone implementation does not prove that integration.
 Router metering and external ACP session ownership retain their own boundaries.
 
 The CLI is the **host** interface: it owns `main()` and mounts the other
-interfaces as subcommands. The SDK owns protocol interop such as the MCP
-gateway and ACP pipeline; the app owns local actions, composition, and human
-presentation.
+interfaces as subcommands. The gateway owns model/MCP interop; the harness
+owns ACP execution. The application also owns local actions and presentation.
 
 ### Dependency Logic
 
 Model semantic types, wire codecs, authentication contracts and credential values
-have one owner in **`bitrouter-ai`**. The SDK, provider integrations and application
+have one owner in **`bitrouter-ai`**. The gateway, provider integrations and application
 consumers depend directly on AI; AI has no SDK, application or agent-runtime
 dependency. AI owns three generation codecs, the native Decisions codec, SSE framing and selected-model HTTP
 invocation (`ModelClient` and `HttpTimeouts`); its errors carry domain facts rather
@@ -154,7 +94,7 @@ authenticate and recover the same selected account once after a 401. `ModelClien
 performs no implicit catalog loading, account selection, login or routing fallback.
 
 Native Decisions uses `DecisionRequest`/`DecisionResult` and
-`ModelClient::decide`. SDK envelopes distinguish `PipelineInput::Generation`
+`ModelClient::decide`. Gateway envelopes distinguish `PipelineInput::Generation`
 from `PipelineInput::Decisions`, and the output variants likewise retain their
 semantic operation. The HTTP gateway serves `POST /v1/decisions` through the
 shared execution, delivery and settlement lifecycle. Streaming and generative
@@ -172,7 +112,7 @@ Published tariffs retain their optional `endpoint_profile` provenance across
 registry merge and configuration changes, so global rates cannot silently rebind
 to a regional endpoint. Legacy/custom tariffs without a declaration bind to the
 configured endpoint. Metering and evaluation use that snapshot; `UsagePricingSnapshot` projects the
-same rates to the SDK's conservative stream usage selection. Unknown frozen
+same rates to the gateway's conservative stream usage selection. Unknown frozen
 prices disable live price lookup. Custom hosts composing `MeteringRecorder`
 must also install `recorder.tariff_capture(require_known)` at the route stage.
 
@@ -184,7 +124,7 @@ with an unavailable cost. See [Decisions specification](DECISIONS_API_SPEC.md)
 and the shipped [setup reference](../skills/bitrouter/references/decisions.md).
 
 Codex subscription `generate` calls use upstream SSE and AI's canonical stream
-collector; the SDK shares that collector and retains its gateway request policy
+collector; the gateway shares that collector and retains its gateway request policy
 and execution envelope. Collection requires a terminal and consumes through EOF
 before returning success. It preserves fields already present in canonical
 events. Completed Responses reasoning now has a redacted AI-owned native capsule
@@ -194,11 +134,11 @@ lanes remain separate. Snapshot consistency checks prevent native data from
 restoring text changed by hooks. Responses ingress retains native reasoning, including
 encrypted-only items. Native replay still requires future target/account authority
 proofs. AI's content-free `ConversionReport` covers initial native-reasoning and
-structured-output admission; direct invocation and SDK HTTP preflight use the same
+structured-output admission; direct invocation and gateway HTTP preflight use the same
 request preparation. Router exclusions reach `ObserveHook::on_conversion_excluded`
 before hop observers or provider execution, while an all-excluded chain returns a
 typed incompatibility report. Other client codecs return output incompatibility
-when they cannot retain native reasoning. Gateway status mapping stays in the SDK.
+when they cannot retain native reasoning. Gateway status mapping stays in the gateway.
 Built-in request parsing now also refuses initial ingress omissions before any partial
 Prompt can enter the pipeline: unknown items/blocks, unsupported content values,
 lossy system/tool-result shapes and unsigned Messages thinking.
@@ -220,7 +160,7 @@ string-only tool slots remains eligible; error/denial status is checked separate
 `ConversionReport.admitted` retains classified JSON encoding separately from refusal issues.
 Selected-target preparation can return
 the report through `ModelClient::render_request_with_report`; executor preflight returns
-that assessment. The SDK rechecks refusals and invokes `on_conversion_admitted` for
+that assessment. The gateway rechecks refusals and invokes `on_conversion_admitted` for
 eligible detected effects before hop start, without counting a candidate as an HTTP
 attempt. Empty assessments emit no conversion callback. Remaining ingress attributes,
 media/options/boundary effects, schema/model validation, other admitted classifications,
@@ -278,9 +218,9 @@ external consumer migration and publication remain separate verification work.
 Native Gemini Generate Content and the private `google-ai` Antigravity transport are retired. Metered Google calls use the official Chat endpoint. Tool signatures retain canonical metadata and a selected-credential replay proof; clients must echo the entire tool-call `extra_content`. The proof is removed before upstream dispatch. See [retirement progress](GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md) for the actual SDK limitation and live validation gates.
 
 `ModelTarget` carries effective connection values, compatibility and an optional
-caller-selected account label. SDK routing, header policy, continuation admission
+caller-selected account label. Gateway routing, header policy, continuation admission
 and public error policy remain above AI. Stable credential/scheme proof primitives
-live in AI; the SDK enforces bindings against the final outbound request. SDK
+live in AI; the gateway enforces bindings against the final outbound request. Gateway
 `HttpExecutor` delegates projection, HTTP I/O and decoding while retaining its
 pipeline retry budget, hooks and settlement integration.
 
@@ -301,11 +241,14 @@ manager assembles a process-local file backend, while model calls, telemetry and
 Cloud management all resolve through the same AI session. File policy, account
 activation, CLI defaults and onboarding text stay above AI. See
 [implementation progress](BITROUTER_AI_REFACTOR_PROGRESS.md).
-**`apps`** composes the libraries, and the SDK never depends back on the host.
+The application owns service execution and composition. AI supplies public
+contracts and currently still supplies model runtime during extraction. The
+matcher depends only on AI. The repurposed SDK is a client package and never
+owns gateway assembly, configuration discovery or provider authentication.
 
-Note what that does *not* say: it constrains the direction of dependencies, not how much lives in the SDK. A capability belongs in the SDK when it is an **interop surface** — a *contract* the SDK's own domain model is rendered into, which must be identical across deployments to mean anything — and it goes behind a default-off feature so consumers who skip it pay nothing. Deployment business logic (auth, policy, charging, metering, content policy) stays out, whether it would point down cleanly or not.
-
-Observability is the case in point, and it is the one the workspace previously got wrong in both directions. The contract is the **span schema** — the span names (`chat`, `route`, `settle`, the per-hop `chat`), the `bitrouter.*` attribute vocabulary, and the invariants that fail silently when a deployment re-derives them wrong (a hop is not a `gen_ai` generation; stamping it as one makes gen_ai-aware backends double-count cost). *That* is BitRouter semantics, it lives in `bitrouter-ai` as `observe`, and it is behind no feature gate at all, because a deployment implementing the contract must not have to enable a renderer it is not using.
+The span names, attribute vocabulary and lifecycle invariants belong to the AI
+observation contract. The committed schema and conformance tests preserve those
+semantics independently of their optional OTLP rendering.
 
 Application `telemetry` owns OTLP transport, bearer resolution, batching,
 endpoint configuration, cardinality limiting, span construction and the tracing
@@ -317,32 +260,28 @@ usage even when OTLP is absent. The contract carries no OTel types. See the
 
 Because the schema is the contract, it is written down rather than inferred from a renderer's call sites. `crates/bitrouter-ai/src/observe/schema.rs` declares every span, attribute, event, metric and silent-failure invariant, names no `opentelemetry` type, depends on nothing but `serde`, and renders to the committed artifact `crates/bitrouter-ai/span-schema.json` — regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-ai committed_artifact` (default features: the module is ungated, and a staleness guard that only fired under `--all-features` would let the artifact rot everywhere else), and the ordinary test run fails when it is stale. It ships with the AI contract crate because it is the interop surface. The declaration is `pub` for the same reason: a second renderer needs it at compile time, not just as JSON. The three helpers only a conformance suite calls — `span_def_for`, `value_type_matches` and `render_json` — sit behind the default-off `testing` feature instead, since public API with no production caller is what CLAUDE.md rule 4 forbids; the feature carries no dependency, so a renderer enables it under `[dev-dependencies]` and pays nothing. Conformance tests in application `telemetry/exporter.rs`, `telemetry/acp.rs` and `telemetry/http_layer.rs` drive real lifecycles and assert that nothing reaches the wire the declaration does not describe, so the artifact is checked rather than aspirational. See [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md).
 
-1. **`bitrouter-sdk`** — the pipeline and gateway foundation. Knows nothing about which providers exist or how the binary is wired. It consumes model semantics from `bitrouter-ai` and owns:
-   - **Three independent pipelines**, one per wire family. They are deliberately *not* generic over a shared hook trait — each has its own hook set:
-     - `language_model` — the main pipeline: LLM completions with the full hook chain (pre-request → route → execute → settle), an interleaved stream stage, and read-only observation.
-     - `mcp` — Model Context Protocol routing (pure routing, no settlement).
-     - `acp` — Agent Client Protocol routing (pure routing, no settlement).
-   - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — trusted host assembly interfaces used by builtins and legacy packages. New request-check extensions use the restricted author API rather than mutable pipeline hooks.
-   - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
-   - The **axum HTTP server** and the `App` builder.
-2. **`bitrouter-ai`** — owns catalog metadata, protocol codecs, selected-target invocation and authentication. It has no SDK or application dependency. Explicit login and ordinary file storage are opt-in features; external CLI/Keychain discovery, account selection, product activation and Cloud management remain in the application.
-3. **`bitrouter-guardrails`** provides the regex matcher and callback against `bitrouter-ai` contracts, with no SDK dependency. Legacy global/stream hooks live in `bitrouter::gateway::extensions::guardrails` behind the application’s optional `guardrails` feature; installation remains explicit. The default host still has no normal/build dependency on the matcher. Application telemetry owns optional `otel-http` / `otel-grpc` transports.
-   HTTP wins when both are selected; gRPC uses static metadata and HTTP supports
-   refresh-aware bearer resolution. The final feature CI matrix also checks that
-   no exporter dependency reaches AI or the client SDK. Complete minimum-profile
-   isolation remains an implementation gate, not a claim of the module move.
+The application gateway owns `assembly`, `http`, `pipeline`, `mcp`, `routing`,
+`observability` and `extensions`. Configuration lives in application `config`.
+The generation pipeline retains its hooks, request checks, execution, stream
+processing and settlement; MCP has its own routing contract. ACP belongs to
+harness execution, not a gateway protocol pipeline.
 
-4. **`apps/bitrouter`** — owns `providers::{apply,builtin,entry,registry,import,claude_code,antigravity}` for configuration, activation and credential-source policy; `cloud::account::{credentials,transaction,manager,settings}` retains Cloud account files and shared AI session assembly. The only compiled-in provider entry is `apps/bitrouter/providers/bitrouter.toml`; other providers come from AI catalog metadata and the product registry bridge. The app assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound native request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
+`bitrouter-ai` currently still owns catalog metadata, model codecs, selected
+upstream calls and authentication. These runtime modules move into the gateway
+in the next P0 slice, leaving only public contracts in AI. The application owns
+provider activation, credential-source policy, account integration and host
+lifecycle. Optional guardrails adapters and telemetry are application modules;
+neither is activated merely by enabling its Cargo feature.
 
 ### Extension authors and host assembly
 
 New request-check authors use an ordinary function accepting
-`bitrouter_sdk::extension::ExtensionApi` and call
+`bitrouter::gateway::extensions::registry::ExtensionApi` and call
 `request_check(id, revision, callback)`. Business inputs and decisions live in
-`extension::request_check`, without a wire envelope. The custom host passes the
+`bitrouter_ai::extension::request_check`, without a wire envelope. The custom host passes the
 registration function to `host::serve_with_extensions` for the shared foreground
 daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
-Fragment and coverage types also live in `extension::request_check`.
+Fragment and coverage types also live in `bitrouter_ai::extension::request_check`.
 Router bindings
 control execution scope and order; registration is not global activation.
 Beta supports compiled extensions only: no HTTP checker service, wire crate,
@@ -354,36 +293,28 @@ The regex example uses the same inference, local/remote management, reload and
 shutdown path as `bro serve`. Restart custom hosts with their own executable;
 the example does not implement the default CLI's background-launch protocol.
 
-The SDK entry does not expose host builders, migrations, credentials or mutable
+The restricted registrar does not expose host builders, migrations, credentials or mutable
 pipeline context. The host retains resource bounds, fixed binding identity and
 bounded content-free tracing. Synchronous callbacks cannot be forcibly
 terminated by deadlines; they are trusted in-process code.
 
 Legacy `Plugin` / `AppBuilder::plugin` and optional `GuardrailsPlugin` retain
 custom-host global, stream/output and migration semantics. Input-only checks do
-not replace those capabilities. The recently introduced app ExtensionApi and
-Native map assembly entry migrate to the SDK entry. `PluginId`, existing
+not replace those capabilities. The registrar and legacy host assembly now live in the application. `PluginId`, existing
 `Config::plugins` consumers, Context extensions and external agent-plugin
 manifests retain their separate meanings. See [migration](GUARDRAILS_EXTENSION.md).
 
-### SDK feature flags
+### Service and client feature ownership
 
-The SDK keeps its default dependency tree minimal — capabilities that pull weight are feature-gated:
+The old SDK `server`, `config_file` and `mcp` flags are retired. Gateway HTTP
+and configuration parsing always belong to the application; concrete MCP
+transports use application `mcp`. ACP uses application `harness`. Existing
+`agents:` configuration and its schema remain compatible. The SDK currently has
+no server API; its HTTP client is implemented in the next migration stage.
 
-| Feature        | Pulls in                              | Purpose                                                       |
-| -------------- | ------------------------------------- | ------------------------------------------------------------- |
-| `server`       | axum, tower                           | The HTTP server, SSE handlers, admin endpoints                |
-| `config_file`  | serde-saphyr, `tokio::fs`             | YAML `bitrouter.yaml` loading                                 |
-| `mcp`          | rmcp                                  | The bundled `RmcpExecutor` for the `mcp` pipeline             |
-
-ACP is no longer an SDK feature. The controller, client, capture port,
-translation and agent-process transport live under application `harness::acp`.
-`config::agent` still retains `AcpAgentConfig`, `AcpTransport` and validation until
-application configuration moves out of the old SDK. Existing `agents:` YAML and
-its schema remain compatible. Core scheduling and durable harness execution have
-separate authority even when the full product cohosts them.
-
-`observe` — the span schema and the `SpanAttributes` hatch — is otherwise **not** in this table: the declaration itself is ungated and carries no dependency beyond `serde`. The three conformance helpers use AI’s default-off `testing` feature, which adds no dependency.
+AI observation declarations are ungated. Its pure conformance helpers use the
+default-off `testing` feature. The [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
+defines the final feature graph and isolated validation matrix.
 
 ### Application telemetry feature flags
 
@@ -405,7 +336,7 @@ the `bitrouter` meter and `bitrouter::observe::*` log targets unchanged.
 A streaming LLM request moves through the workspace like this:
 
 1. The `bitrouter` binary resolves the config source (see *Configuration*), loads or synthesises a `Config`, and `assemble.rs` builds an `App` — the `language_model` pipeline with the builtin hooks wired on.
-2. The SDK's axum server receives the inbound HTTP request on one of the protocol routes and the matching **inbound adapter** parses it into a canonical `PipelineRequest` (model name, messages, tools, params).
+2. The application's gateway HTTP server receives the inbound HTTP request on one of the protocol routes and the matching **inbound adapter** parses it into a canonical `PipelineRequest` (model name, messages, tools, params).
 3. The `language_model` pipeline runs its stages:
    - **Pre-request** — local policy hooks, followed by explicitly bound external request checks. Authentication and normalization occur before router admission.
    - **Route** — the `RoutingTable` resolves the model name to a fallback chain of `RoutingTarget`s (provider + upstream model id + protocol); `RouteHook`s may rewrite the chain.
@@ -414,7 +345,8 @@ A streaming LLM request moves through the workspace like this:
 4. For streaming, the canonical `StreamPart` stream flows through the `StreamHook` stage and is re-encoded by the inbound adapter into the **client's** protocol — so a client written for the Responses protocol can transparently use a Messages upstream, and vice versa.
 5. `ObserveHook`s receive read-only lifecycle events throughout; application telemetry turns them into OTLP traces and metrics, and the binary's own observers consume the same events.
 
-The `mcp` and `acp` pipelines are simpler: pure routing with no settlement.
+The gateway MCP pipeline has no model settlement; ACP execution has separate
+harness session and lifecycle ownership.
 
 ## Configuration Model
 
@@ -436,7 +368,7 @@ In zero-config mode `bitrouter::providers::apply::zero_config()` builds a `Confi
 
 ## HTTP Server Surface
 
-The axum server lives behind the SDK's `server` feature (`crates/bitrouter-sdk/src/server.rs`):
+The axum server is application-owned (`apps/bitrouter/src/gateway/http.rs`):
 
 | Route                               | Handler                          |
 | ----------------------------------- | -------------------------------- |
@@ -449,7 +381,7 @@ The axum server lives behind the SDK's `server` feature (`crates/bitrouter-sdk/s
 | `GET  /metrics`                     | OTLP-migration banner (see below)|
 | `GET  /health`                      | health check                    |
 
-`GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by application telemetry, and the endpoint serves a short banner pointing at `plugins.bitrouter-telemetry.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The SDK's `MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
+`GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by application telemetry, and the endpoint serves a short banner pointing at `plugins.bitrouter-telemetry.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The gateway `observability::metrics::MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
 
 Daemon mutation (`stop` / `restart` / `reload`) runs over a Unix domain socket.
 When the optional authenticated HTTP control listener is enabled, it exposes
@@ -469,13 +401,14 @@ the builder in `main.rs` polls the metering store and the control socket, and
 `Human::table` / `Human::status_block` render it. There is no second table
 implementation and no terminal-only path.
 
-The `apps/bitrouter/src/tui/` module it replaced is **deleted**. It had become a
+The earlier status-only TUI module was deleted before the conversation renderer
+was moved into `apps/bitrouter/src/tui/`. It had become a
 618-line private implementation of one public function that bypassed `Output`
 (so `--json` was silently ignored) and reimplemented `output/human.rs`'s table.
 Its signal arm moved to `chat/signals.rs`, next to its only caller.
 
-`apps/bitrouter` no longer depends on `ratatui`; `crates/bitrouter-tui` owns
-drawn terminal UI for ACP chat.
+The current application TUI owns drawn ACP/native conversation UI; ordinary
+request reports remain independent of that renderer.
 
 The hosted mode `bro launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
 
@@ -495,13 +428,21 @@ Protocol adapters live in `crates/bitrouter-ai/src/protocol/`. A new protocol ne
 
 Rare — no current registry provider needs this. The big clouds (Bedrock, Azure) speak one of BitRouter's built-in protocols over SSE and are ordinary Bearer registry providers. Only if an upstream uses a wire an existing outbound adapter can't decode (e.g. a vendor SDK's binary event-stream) do you add an `ApiProtocol::Custom` outbound adapter + `Transport` in a standalone crate, registered on the dispatch executor at startup. See the `Custom` escape-hatch docs in `crates/bitrouter-ai/src/protocol/mod.rs`.
 
-### Add a hook (auth, policy, metering, guardrail, observability)
+### Add a hook or compiled capability
 
-Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook`) and wire it onto the pipeline in `apps/bitrouter/src/assemble.rs`. A hook that brings real dependency weight belongs in its own `crates/` library behind a default-off feature — the telemetry pattern. Guardrails run as an independently deployed input checker in the default product; the library's optional SDK hooks are for explicit trusted-host assembly. What goes in the SDK is the *contract* such a hook binds to, not the hook: `observe::schema` is in the SDK, its OTLP renderer is not. A lightweight hook can live in the binary.
+Trusted custom hosts use application `gateway::pipeline::hooks` and
+`gateway::pipeline::settlement` when they need global pipeline integration.
+New request-check implementations consume the AI capability contract and register
+through `gateway::extensions::registry::ExtensionApi`. The optional legacy regex
+adapter is in application `gateway::extensions::guardrails`; it preserves global
+input/output behavior and requires explicit installation.
 
-### Embed the SDK in your own service
+### Run the official gateway or assemble an advanced host
 
-`apps/bitrouter/src/assemble.rs` is the worked example: it builds an `App` via `App::builder()`, registers the `language_model` pipeline with a routing table, an executor, and the hook chain, then serves it. A consumer that wants BitRouter's routing + protocol conversion without the stock CLI composes the same builder with its own hooks and routing table.
+Ordinary service consumers run `bro serve` with configuration and use its HTTP
+interfaces. The new HTTP SDK will provide typed clients. Advanced trusted Rust
+hosts can use `gateway::assembly::App` and the shared `host::serve_with_extensions`
+lifecycle; adding compiled extension code requires rebuilding that custom host.
 
 ## Validation
 
@@ -515,28 +456,19 @@ cargo test --workspace --all-features
 
 CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum, the OTel stack never reaches the SDK at any feature combination, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).
 
-### The `sdk-public-api` job
+### Public API dependency guards
 
-`bitrouter-sdk` owns the observability contract without owning a renderer of it, which only holds while no `opentelemetry*` or `tracing_opentelemetry` type appears in any public SDK signature. `feature-isolation` now proves the stronger form — the stack is not in the SDK's tree at all — so this job is the *forward* guard: it is what catches the next change that pulls a renderer back in. The job renders the SDK's entire public surface with [`cargo public-api`](https://github.com/cargo-public-api/cargo-public-api) — one fully-qualified line per public item — greps that rendering for forbidden types, then reduces it to the set of foreign crates the public API reaches and diffs that against `crates/bitrouter-sdk/public-api-deps.txt`. That second half is the broader guard: a grep can only find a type you already know to look for, whereas the manifest catches the SDK quietly gaining a *new* public dependency — which is how `tracing_core` got there, through a generic bound. Full rationale in [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md).
-
-**If this job fails on your PR**, read which step failed. A forbidden-type or re-export failure is a real design problem — keep the OTel type out of the public signature (make it `pub(crate)`, or return `impl Trait`), do not regenerate around it. A public-dependency failure means your change added or removed a crate from the SDK's public API; a `+` line means an upstream breaking release in that crate now becomes a BitRouter breaking release, so confirm that is intended before regenerating:
-
-```sh
-rustup toolchain install nightly-2026-05-05
-cargo install cargo-public-api --locked --version 0.52.0
-cargo +nightly-2026-05-05 public-api \
-  -p bitrouter-sdk --all-features --simplified \
-  | grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' \
-  | cut -d: -f1 | sort -u \
-  | grep -vxE 'bitrouter_sdk|core|std|alloc'
-```
-
-Append the output under the comment header in `public-api-deps.txt` — the header is stripped before comparison, so keep it out of the generated part. Both versions are pinned in `crates/bitrouter-sdk/public-api.pins`, which the CI job reads; take them from there rather than from this snippet if the two ever disagree. They are pinned because the manifest is derived from `cargo public-api`'s rendering, and both rustdoc's JSON format and that rendering change across releases. Run it on Linux or macOS; the SDK has `#[cfg(unix)]` items, so a Windows-generated listing will not match.
+Public API guards must track both AI contracts and the new SDK client surface.
+AI must not expose service handles, credentials, database or OTel types, including
+through trait bounds. The SDK must not expose the retired server framework.
+The existing pinned SDK listing is being replaced with the client implementation;
+it is not a passing final acceptance gate during this intermediate migration.
+Do not regenerate an API baseline merely to conceal an unwanted dependency.
 
 ### Named-router request checks
 
-Named-router entry checks use the SDK's typed `language_model::request_checks`
-contract. The app assembles startup-owned compiled registrations in
+Named-router entry checks use AI capability types and the application
+`gateway::pipeline::request_checks` runner. The app assembles startup-owned compiled registrations in
 `request_checks`; a custom host supplies callbacks through
 `extension::ExtensionApi`. The official `bro` binary has no custom
 registrations, and there is no request-check inventory or receipt store.
@@ -564,5 +496,5 @@ input-only scope, explicit migration blockers, and process-level verification.
 `bitrouter-orchestrator::harness` owns direct MCP connections and local skills
 discovery. The app supplies daemon-owned transport configuration and global roots;
 active ThreadService Turns freeze inventories and execute MCP through existing
-durable approval/tool barriers. SDK gateway interop and routed provider generation
+durable approval/tool barriers. Gateway interop and routed provider generation
 retain their existing responsibilities. See [BRO harness resources](BRO_HARNESS_RESOURCES.md).

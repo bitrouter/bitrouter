@@ -69,7 +69,7 @@ impl CliReport for AgentsListReport {
             h.line("")?;
             h.line(&format!(
                 "  install a stub with: {} agents install <id>",
-                bitrouter_sdk::invocation::name()
+                crate::commands::invocation::name()
             ))?;
         }
         Ok(())
@@ -156,7 +156,7 @@ impl CliReport for BackgroundRunReport {
         h.line(&format!("agent run {} · {}", self.agent_run_id, self.state))?;
         h.line(&format!(
             "attach: {} agents attach {}",
-            bitrouter_sdk::invocation::name(),
+            crate::commands::invocation::name(),
             self.agent_run_id
         ))
     }

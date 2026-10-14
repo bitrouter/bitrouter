@@ -3,7 +3,7 @@
 
 use crate::actions::route::{ResolvedVia, RouteReport};
 use crate::actions::status::StatusReport;
-use bitrouter_sdk::invocation;
+use crate::commands::invocation;
 use serde::Serialize;
 
 use crate::output::CliReport;

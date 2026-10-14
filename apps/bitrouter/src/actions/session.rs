@@ -197,7 +197,7 @@ impl SessionPorts {
 ///
 /// It cannot live in the SDK: the check needs the app-owned `ACTIONS` table.
 pub fn prompt_commands(
-    config: &bitrouter_sdk::config::ChatConfig,
+    config: &crate::config::ChatConfig,
 ) -> anyhow::Result<Vec<crate::commands::chat::PromptCommand>> {
     let mut seen: Vec<&str> = Vec::new();
     let mut commands = Vec::with_capacity(config.commands.len());
@@ -283,7 +283,8 @@ providers:
     /// the two sets cannot overlap.
     #[test]
     fn a_config_command_may_not_shadow_a_bitrouter_one() {
-        use bitrouter_sdk::config::{ChatConfig, PromptCommandConfig};
+        use crate::config::ChatConfig;
+        use crate::config::PromptCommandConfig;
 
         let entry = |name: &str| PromptCommandConfig {
             name: name.to_string(),

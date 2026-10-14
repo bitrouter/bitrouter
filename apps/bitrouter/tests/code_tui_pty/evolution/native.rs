@@ -7,7 +7,8 @@ use bitrouter::evolution::evidence::{EvidenceKind, EvidencePacket};
 use bitrouter::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
 use bitrouter::evolution::runtime::EvolutionRuntime;
 use bitrouter::evolution::scheduler::EvolutionScheduler;
-use bitrouter_sdk::server::{AppState, build_router};
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers};
 
@@ -116,7 +117,8 @@ async fn setup_with_reply(
     worker_env: &str,
     responder: fn(&Request) -> Result<ResponseTemplate>,
 ) -> Result<NativeService> {
-    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
+    use bitrouter::config::agent::AcpAgentConfig;
+    use bitrouter::config::agent::AcpTransport;
     use std::collections::HashMap;
     use std::os::unix::fs::PermissionsExt;
 
@@ -238,7 +240,7 @@ models:
         serde_json::to_string(&HashMap::from([(agent, agent_config)]))?
     ));
     std::fs::write(&mock.config_path, &config_text)?;
-    let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+    let config = bitrouter::config::parse_with(&config_text, |_| None)?;
     let assembled =
         bitrouter::assemble::build_app_with_path(&config, Some(&mock.config_path)).await?;
     let evolution = assembled.evolution.clone();

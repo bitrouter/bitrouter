@@ -11,18 +11,22 @@ use bitrouter::eval::types::{
     EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
     EvaluatorIdentity, EvaluatorKind, evidence_digest,
 };
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::observability::event::EventBus;
+use bitrouter::gateway::pipeline::context::PipelineContext;
+use bitrouter::gateway::pipeline::hooks::HopOutcome;
+use bitrouter::gateway::pipeline::hooks::ObserveHook;
+use bitrouter::gateway::pipeline::settlement::SettlementContext;
+use bitrouter::gateway::pipeline::settlement::SettlementRecorder;
+use bitrouter::gateway::pipeline::types::ExecutionResult;
+use bitrouter::gateway::pipeline::types::PipelineRequest;
+use bitrouter::gateway::pipeline::types::RoutingTarget;
 use bitrouter::policy_compile::{CompileInput, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
 use bitrouter_ai::types::AuthScheme;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
-};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::event::EventBus;
-use bitrouter_sdk::language_model::{
-    ExecutionResult, HopOutcome, ObserveHook, PipelineContext, PipelineRequest, RoutingTarget,
-    SettlementContext, SettlementRecorder,
 };
 
 fn base_lock() -> PolicyLock {
@@ -261,7 +265,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         model: "model".into(),
         caller: CallerContext::local(),
         headers: http::HeaderMap::new(),
-        input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(Prompt {
+        input: bitrouter::gateway::pipeline::types::PipelineInput::Generation(Box::new(Prompt {
             model: "model".into(),
             system: None,
             system_provider_metadata: BTreeMap::new(),

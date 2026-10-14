@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

@@ -2,20 +2,26 @@
 
 mod continuation;
 
+use crate::gateway::caller::CallerContext;
+use crate::gateway::error::Result;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::native_context::NativePrivateContextPolicy;
+use crate::gateway::pipeline::native_context::ORIGIN_FIELD;
+use crate::gateway::pipeline::native_context::ORIGIN_NAMESPACE;
+use crate::gateway::pipeline::native_context::PrivateContextFailure;
+use crate::gateway::pipeline::native_context::is_private;
+use crate::gateway::pipeline::native_context::message_commitment;
+use crate::gateway::pipeline::native_context::metadata;
+use crate::gateway::pipeline::native_context::metadata_mut;
+use crate::gateway::pipeline::native_context::requires_origin_validation;
+use crate::gateway::pipeline::native_context::validate_managed_history;
+use crate::gateway::pipeline::types::RoutingTarget;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_ai::auth::ContinuationAuthority;
 use bitrouter_ai::types::{AuthScheme, Content, Prompt, Role};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::error::Result;
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook};
-use bitrouter_sdk::language_model::native_context::{
-    NativePrivateContextPolicy, ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextFailure, is_private,
-    message_commitment, metadata, metadata_mut, requires_origin_validation,
-    validate_managed_history,
-};
-use bitrouter_sdk::language_model::types::RoutingTarget;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -218,14 +224,14 @@ impl NativePrivateContextPolicy for PrivateContextPolicy {
         caller: &CallerContext,
         target: &RoutingTarget,
     ) -> continuation::PolicyResult<
-        bitrouter_sdk::language_model::native_continuation::NativeContinuationPlan,
+        crate::gateway::pipeline::native_continuation::NativeContinuationPlan,
     > {
         continuation::plan(self, prompt, caller, target)
     }
 
     fn validate_continuation_authority(
         &self,
-        binding: &bitrouter_sdk::language_model::native_continuation::NativeContinuationBinding,
+        binding: &crate::gateway::pipeline::native_continuation::NativeContinuationBinding,
         caller: &CallerContext,
         target: &RoutingTarget,
         authority: &ContinuationAuthority,
@@ -235,7 +241,7 @@ impl NativePrivateContextPolicy for PrivateContextPolicy {
 
     fn seal_continuation(
         &self,
-        source: bitrouter_sdk::language_model::native_continuation::NativeContinuationSource<'_>,
+        source: crate::gateway::pipeline::native_continuation::NativeContinuationSource<'_>,
         content: &mut [Content],
     ) -> continuation::PolicyResult<()> {
         continuation::seal(self, source, content)

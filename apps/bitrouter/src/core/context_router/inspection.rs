@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::session::{AgentStatus, ModelStep, SessionSnapshot};
-use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+use crate::gateway::routing::signals::NextStepRole;
+use crate::gateway::routing::signals::ProgressState;
+use crate::gateway::routing::signals::TaskFamily;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Inspection {
@@ -250,7 +252,7 @@ fn task_routing(state: &SessionSnapshot, work: &super::WorkUnit) -> Option<Routi
         .filter(|receipt| !receipt.stale);
     let workflow = assessment_receipt.and_then(|receipt| {
         let response = receipt.outcome.as_ref()?.as_ref().ok()?;
-        let assessment = bitrouter_sdk::routing::assessment::decode(
+        let assessment = crate::gateway::routing::assessment::decode(
             &receipt.request,
             response,
             receipt.policy.confidence_threshold,

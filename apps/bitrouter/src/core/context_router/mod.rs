@@ -11,9 +11,12 @@ pub(crate) mod validation;
 
 use std::collections::BTreeMap;
 
-use bitrouter_sdk::decision_model::policy::{DecisionPolicy, DecisionPricing};
-use bitrouter_sdk::decision_model::types::{DecisionError, DecisionRequest, DecisionResponse};
-use bitrouter_sdk::language_model::native::NativePlan;
+use crate::gateway::model::decision::policy::DecisionPolicy;
+use crate::gateway::model::decision::policy::DecisionPricing;
+use crate::gateway::model::decision::types::DecisionError;
+use crate::gateway::model::decision::types::DecisionRequest;
+use crate::gateway::model::decision::types::DecisionResponse;
+use crate::gateway::pipeline::native::NativePlan;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{CoreError, ErrorCode};
@@ -94,7 +97,7 @@ pub struct ExecutionPlan {
     pub model: Option<NativePlan>,
     /// Finite model/view optimization and its explicit local cost assumptions.
     #[serde(default)]
-    pub routing: Option<bitrouter_sdk::routing::plan::Selection>,
+    pub routing: Option<crate::gateway::routing::plan::Selection>,
 }
 
 pub(super) fn invalid(message: impl Into<String>) -> CoreError {

@@ -4,10 +4,12 @@ use super::entities::requests;
 use super::pricing::{ChargeEvidence, ChargeStatus, PricingSource};
 use super::store::MeteringStore;
 use crate::cloud::settlement::{SettlementReceipt, SettlementState, validate_receipt};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::native_accounting::{
-    NativeCostBasis, NativeCostClaim, NativeCostObservation, NativeCostScope, NativeCostSource,
-};
+use crate::gateway::caller::CallerContext;
+use crate::gateway::pipeline::native_accounting::NativeCostBasis;
+use crate::gateway::pipeline::native_accounting::NativeCostClaim;
+use crate::gateway::pipeline::native_accounting::NativeCostObservation;
+use crate::gateway::pipeline::native_accounting::NativeCostScope;
+use crate::gateway::pipeline::native_accounting::NativeCostSource;
 
 #[async_trait::async_trait]
 impl NativeCostSource for MeteringStore {
@@ -15,7 +17,7 @@ impl NativeCostSource for MeteringStore {
         &self,
         caller: &CallerContext,
         ids: &[String],
-    ) -> bitrouter_sdk::Result<Vec<NativeCostObservation>> {
+    ) -> crate::gateway::error::Result<Vec<NativeCostObservation>> {
         let rows = self.native_request_rows(caller, ids).await?;
         ids.iter()
             .map(|id| {
@@ -38,7 +40,7 @@ fn claim(
     scope: NativeCostScope,
     amount: u64,
     evidence: &impl serde::Serialize,
-) -> bitrouter_sdk::Result<NativeCostClaim> {
+) -> crate::gateway::error::Result<NativeCostClaim> {
     Ok(NativeCostClaim {
         request_id: row.request_id.clone(),
         source: "request_metering_v1".into(),
@@ -46,14 +48,15 @@ fn claim(
         basis,
         scope,
         micro_usd: amount,
-        evidence_sha256: crate::eval::types::canonical_digest(evidence)
-            .map_err(|_| bitrouter_sdk::BitrouterError::internal("invalid monetary evidence"))?,
+        evidence_sha256: crate::eval::types::canonical_digest(evidence).map_err(|_| {
+            crate::gateway::error::BitrouterError::internal("invalid monetary evidence")
+        })?,
         provider: row.provider_id.clone(),
         model: row.model_id.clone(),
     })
 }
 
-fn observation(row: &requests::Model) -> bitrouter_sdk::Result<NativeCostObservation> {
+fn observation(row: &requests::Model) -> crate::gateway::error::Result<NativeCostObservation> {
     let mut result = NativeCostObservation {
         request_id: row.request_id.clone(),
         claims: Vec::new(),

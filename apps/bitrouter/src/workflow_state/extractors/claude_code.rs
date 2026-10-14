@@ -52,7 +52,7 @@ impl WorkflowStateExtractor for ClaudeCodeExtractor {
     }
 }
 
-pub(crate) fn headers_indicate_claude_code(headers: &bitrouter_sdk::HeaderMap) -> bool {
+pub(crate) fn headers_indicate_claude_code(headers: &http::HeaderMap) -> bool {
     headers
         .get_all("anthropic-beta")
         .iter()
@@ -93,7 +93,7 @@ mod tests {
     use super::*;
 
     use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
-    use bitrouter_sdk::HeaderMap;
+    use http::HeaderMap;
     use http::HeaderValue;
 
     use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};

@@ -1,11 +1,15 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::gateway::pipeline::native::NativeAttemptReport;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostBasis;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostClaim;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostEstimator;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostObservation;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostScope;
+use bitrouter::gateway::pipeline::native_accounting::NativeCostSource;
+use bitrouter::gateway::pipeline::native_accounting::NativeTokenCost;
+use bitrouter::gateway::pipeline::native_accounting::NativeTokenRates;
 use bitrouter_ai::types::UsageOrigin;
-use bitrouter_sdk::language_model::native::NativeAttemptReport;
-use bitrouter_sdk::language_model::native_accounting::{
-    NativeCostBasis, NativeCostClaim, NativeCostEstimator, NativeCostObservation, NativeCostScope,
-    NativeCostSource, NativeTokenCost, NativeTokenRates,
-};
 
 pub(super) struct FixtureCost;
 impl NativeCostEstimator for FixtureCost {
@@ -41,10 +45,10 @@ impl NativeCostSource for ClaimsSource {
         &self,
         _: &CallerContext,
         ids: &[String],
-    ) -> bitrouter_sdk::Result<Vec<NativeCostObservation>> {
+    ) -> bitrouter::gateway::error::Result<Vec<NativeCostObservation>> {
         let mode = self.mode.load(Ordering::SeqCst);
         if mode == 1 {
-            return Err(bitrouter_sdk::BitrouterError::internal(
+            return Err(bitrouter::gateway::error::BitrouterError::internal(
                 "fixture source unavailable",
             ));
         }
@@ -119,17 +123,19 @@ impl NativeCostSource for DelayedFailure {
         &self,
         _: &CallerContext,
         _: &[String],
-    ) -> bitrouter_sdk::Result<Vec<NativeCostObservation>> {
+    ) -> bitrouter::gateway::error::Result<Vec<NativeCostObservation>> {
         if self.first.swap(false, Ordering::SeqCst) {
             self.entered.add_permits(1);
             self.resume
                 .acquire()
                 .await
-                .map_err(|_| bitrouter_sdk::BitrouterError::internal("fixture stopped"))?
+                .map_err(|_| {
+                    bitrouter::gateway::error::BitrouterError::internal("fixture stopped")
+                })?
                 .forget();
             self.returned.add_permits(1);
         }
-        Err(bitrouter_sdk::BitrouterError::internal(
+        Err(bitrouter::gateway::error::BitrouterError::internal(
             "fixture source unavailable",
         ))
     }
@@ -216,7 +222,7 @@ impl NativeCostSource for PendingSource {
         &self,
         _: &CallerContext,
         _: &[String],
-    ) -> bitrouter_sdk::Result<Vec<NativeCostObservation>> {
+    ) -> bitrouter::gateway::error::Result<Vec<NativeCostObservation>> {
         self.entered.add_permits(1);
         std::future::pending().await
     }
@@ -560,7 +566,7 @@ async fn unknown_failed_fallback_keeps_known_subtotal_incomplete() -> TestResult
     let session = session(
         Arc::new(Harness::new(None, None)),
         vec![
-            MockResponse::Error(bitrouter_sdk::BitrouterError::Upstream {
+            MockResponse::Error(bitrouter::gateway::error::BitrouterError::Upstream {
                 status: 503,
                 message: "retry".into(),
             }),

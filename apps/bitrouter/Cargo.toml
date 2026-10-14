@@ -20,9 +20,10 @@ name = "bro"
 path = "src/main.rs"
 
 [features]
-default = ["core", "harness", "tui", "otel-http"]
+default = ["core", "harness", "tui", "mcp", "otel-http"]
 core = []
-harness = []
+harness = ["mcp"]
+mcp = []
 tui = ["harness"]
 guardrails = ["dep:bitrouter-guardrails"]
 
@@ -34,8 +35,6 @@ otel-http = [
     "dep:opentelemetry-semantic-conventions",
     "dep:tracing-opentelemetry",
     "dep:dashmap",
-    "dep:futures-core",
-    "dep:pin-project-lite",
     "dep:opentelemetry-http",
     "dep:bytes",
     "opentelemetry-otlp/http-proto",
@@ -49,23 +48,24 @@ otel-grpc = [
     "dep:opentelemetry-semantic-conventions",
     "dep:tracing-opentelemetry",
     "dep:dashmap",
-    "dep:futures-core",
-    "dep:pin-project-lite",
     "dep:tonic",
     "opentelemetry-otlp/grpc-tonic",
     "opentelemetry-otlp/tls-roots",
 ]
 
 [dependencies]
+async-stream.workspace = true
+eventsource-stream.workspace = true
+tower.workspace = true
 bytes = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
-futures-core = { workspace = true, optional = true }
+futures-core.workspace = true
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry-semantic-conventions = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
-pin-project-lite = { workspace = true, optional = true }
+pin-project-lite.workspace = true
 tonic = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 
@@ -81,7 +81,6 @@ agent-client-protocol-conductor.workspace = true
 tokio-stream = { workspace = true, features = ["sync"] }
 bitrouter-guardrails = { workspace = true, optional = true }
 bitrouter-ai = { workspace = true, features = ["pkce", "hosted-login", "file-store"] }
-bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp"] }
 # Product-only OS keyring discovery for explicitly adopted external CLI sessions.
 keyring.workspace = true
 chrono.workspace = true

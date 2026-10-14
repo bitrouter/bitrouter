@@ -1,7 +1,8 @@
 use super::*;
 use bitrouter::core::protocol::{ContextMode, DiscardableHistory};
+use bitrouter::gateway::pipeline::native::InputTokenCounting;
+use bitrouter::gateway::pipeline::native::NativeInputCount;
 use bitrouter_ai::types::Role;
-use bitrouter_sdk::language_model::native::{InputTokenCounting, NativeInputCount};
 
 struct RebuildExecutor {
     mock: MockExecutor,
@@ -17,10 +18,11 @@ impl Executor for RebuildExecutor {
         _: &RoutingTarget,
         prompt: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<NativeInputCount> {
+    ) -> bitrouter::gateway::error::Result<NativeInputCount> {
         self.counts.lock().await.push(prompt.clone());
-        let wire = serde_json::to_string(prompt)
-            .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?;
+        let wire = serde_json::to_string(prompt).map_err(|error| {
+            bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+        })?;
         // Scripted provider observations, not a byte-to-token estimate.
         let large = wire.contains("current-result")
             && (wire.contains("historical-result") || self.mandatory_too_large);
@@ -36,7 +38,7 @@ impl Executor for RebuildExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
+    ) -> bitrouter::gateway::error::Result<ExecutionResult> {
         self.generated.lock().await.push(prompt.clone());
         self.mock.execute(target, prompt, ctx).await
     }
@@ -46,14 +48,16 @@ impl Executor for RebuildExecutor {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    ) -> bitrouter::gateway::error::Result<StreamPartStream> {
+        Err(bitrouter::gateway::error::BitrouterError::internal(
+            "unexpected stream",
+        ))
     }
 }
 
 struct ReferToPriorPlan;
 
-impl bitrouter_sdk::app::PromptTransform for ReferToPriorPlan {
+impl bitrouter::gateway::assembly::PromptTransform for ReferToPriorPlan {
     fn apply(&self, prompt: &mut Prompt) {
         prompt.messages.push(bitrouter_ai::types::Message::text(
             Role::User,
@@ -85,7 +89,7 @@ async fn historical_task_with_guards(
     with_material: bool,
     with_transform: bool,
     validation: Option<Arc<ValidationBarrier>>,
-    transform: Option<Arc<dyn bitrouter_sdk::app::PromptTransform>>,
+    transform: Option<Arc<dyn bitrouter::gateway::assembly::PromptTransform>>,
 ) -> Result<(CoreSession, Arc<RebuildExecutor>, TaskInput), Box<dyn std::error::Error>> {
     let executor = Arc::new(RebuildExecutor {
         mock: MockExecutor::new(vec![
@@ -576,25 +580,28 @@ struct ValidationHook {
     first: bool,
 }
 #[async_trait]
-impl bitrouter_sdk::language_model::hooks::PreRequestHook for ValidationHook {
+impl bitrouter::gateway::pipeline::hooks::PreRequestHook for ValidationHook {
     async fn check(
         &self,
         _: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::hooks::HookDecision> {
-        Ok(bitrouter_sdk::language_model::hooks::HookDecision::Allow)
+    ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::hooks::HookDecision> {
+        Ok(bitrouter::gateway::pipeline::hooks::HookDecision::Allow)
     }
     async fn revalidate_context(
         &self,
         _: &PipelineContext,
-    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::hooks::HookDecision> {
-        use bitrouter_sdk::language_model::hooks::{DenyReason, HookDecision};
+    ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::hooks::HookDecision> {
+        use bitrouter::gateway::pipeline::hooks::DenyReason;
+        use bitrouter::gateway::pipeline::hooks::HookDecision;
         if self.first {
             self.state.entered.add_permits(1);
             self.state
                 .release
                 .acquire()
                 .await
-                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .map_err(|error| {
+                    bitrouter::gateway::error::BitrouterError::internal(error.to_string())
+                })?
                 .forget();
             self.state.returned.add_permits(1);
             if self.state.deny {
@@ -822,17 +829,21 @@ async fn checkpoint_wait_between_validation_guards_does_not_spend_active_budget(
         .as_object_mut()
         .ok_or("report object")?
         .remove("work_elapsed_ms");
-    let legacy: bitrouter_sdk::language_model::native::NativeContextValidationReport =
+    let legacy: bitrouter::gateway::pipeline::native::NativeContextValidationReport =
         serde_json::from_value(legacy)?;
     assert!(legacy.work_elapsed_ms.is_none());
     Ok(())
 }
 
 struct RejectHistoryRemoval;
-impl bitrouter_sdk::app::PromptTransform for RejectHistoryRemoval {
+impl bitrouter::gateway::assembly::PromptTransform for RejectHistoryRemoval {
     fn apply(&self, _: &mut Prompt) {}
-    fn validate_context_rebuild(&self, _: &Prompt, _: &Prompt) -> bitrouter_sdk::Result<()> {
-        Err(bitrouter_sdk::BitrouterError::bad_request(
+    fn validate_context_rebuild(
+        &self,
+        _: &Prompt,
+        _: &Prompt,
+    ) -> bitrouter::gateway::error::Result<()> {
+        Err(bitrouter::gateway::error::BitrouterError::bad_request(
             "this workflow still needs prior evidence",
         ))
     }

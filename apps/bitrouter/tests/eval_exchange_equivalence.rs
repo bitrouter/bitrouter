@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use axum_test::TestServer;
+use bitrouter::config::EvalConfig;
 use bitrouter::eval::EvalService;
 use bitrouter::eval::api;
 use bitrouter::eval::store::EvalStore;
@@ -9,7 +10,6 @@ use bitrouter::eval::types::{
     EVAL_SCHEMA_VERSION, EvalScope, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity,
     EvaluatorKind, MetricUnit, MetricValue, evidence_digest,
 };
-use bitrouter_sdk::config::EvalConfig;
 
 #[tokio::test]
 async fn cli_and_rest_are_idempotent_semantic_equivalents() -> anyhow::Result<()> {

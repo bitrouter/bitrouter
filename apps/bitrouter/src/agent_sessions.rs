@@ -899,7 +899,7 @@ impl BackgroundClient {
 /// Ensure the selected daemon owns the supervisor before accepting a run.
 pub async fn start_background(
     source: &ConfigSource,
-    config: &bitrouter_sdk::config::Config,
+    config: &crate::config::Config,
     no_start: bool,
     request: StartRunRequest,
 ) -> Result<RunSnapshot> {

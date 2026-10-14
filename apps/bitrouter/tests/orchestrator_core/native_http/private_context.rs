@@ -9,10 +9,12 @@ use super::*;
 mod continuation;
 #[path = "private_context/stream_bridge.rs"]
 mod stream_bridge;
+use bitrouter::gateway::pipeline::native_context::ORIGIN_FIELD;
+use bitrouter::gateway::pipeline::native_context::ORIGIN_NAMESPACE;
+use bitrouter::gateway::pipeline::native_context::PrivateContextEvidence;
+use bitrouter::gateway::pipeline::native_context::is_private;
+use bitrouter::gateway::pipeline::native_context::metadata_mut;
 use bitrouter_ai::types::{Content, ToolResultOutput};
-use bitrouter_sdk::language_model::native_context::{
-    ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextEvidence, is_private, metadata_mut,
-};
 
 struct PrivateFixture {
     app: bitrouter::assemble::Assembled,
@@ -126,7 +128,7 @@ async fn assemble(
 ) -> Result<bitrouter::assemble::Assembled> {
     let config_path = home.path().join("bitrouter.yaml");
     std::fs::write(&config_path, source)?;
-    let config = bitrouter_sdk::config::parse_with(source, |_| None)?;
+    let config = bitrouter::config::parse_with(source, |_| None)?;
     bitrouter::assemble::build_app_with_extensions(&config, Some(&config_path), |api| {
         api.request_check(
             "private",
@@ -946,7 +948,8 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
 
 #[tokio::test]
 async fn private_history_seal_failure_retains_real_output_usage_and_settlement() -> Result<()> {
-    use bitrouter_sdk::language_model::native_context::{PrivateContextFailure, metadata};
+    use bitrouter::gateway::pipeline::native_context::PrivateContextFailure;
+    use bitrouter::gateway::pipeline::native_context::metadata;
     let fixture = PrivateFixture::new("messages").await?;
     std::fs::write(fixture.home.path().join("continuation.key"), "invalid-key")?;
     let capture = Arc::new(Capture::default());

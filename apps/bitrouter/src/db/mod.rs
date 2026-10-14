@@ -18,7 +18,8 @@ pub mod migration;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 
 /// Open a pooled connection to `url`. Accepts any backend sea-orm supports
 /// (`sqlite` / `postgres` / `mysql`).

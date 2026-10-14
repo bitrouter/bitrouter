@@ -15,12 +15,14 @@
 
 use std::time::{Duration, Instant};
 
+use crate::config::Config;
+use crate::gateway::caller::CallerContext;
+use crate::gateway::mcp::Executor;
+use crate::gateway::mcp::McpRequest;
+use crate::gateway::mcp::McpTarget;
+use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
+use crate::gateway::mcp::transport::McpTransport;
 use crate::harness::resources::mcp::McpConnections;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
-use bitrouter_sdk::mcp::transport::McpTransport;
-use bitrouter_sdk::mcp::{Executor, McpRequest, McpTarget};
 
 /// One row in `bro tools list`.
 #[derive(Debug, Clone)]
@@ -72,7 +74,7 @@ pub async fn check(config: &Config, only: Option<&str>) -> Result<Vec<McpCheck>,
         return Err(format!("no mcp server configured for '{name}'"));
     }
     let workspace = std::env::current_dir().map_err(|error| error.to_string())?;
-    let protocol = bitrouter_sdk::mcp::upstream_protocol_version(config.mcp.upstream_protocol);
+    let protocol = crate::gateway::mcp::upstream_protocol_version(config.mcp.upstream_protocol);
     let mut servers: Vec<_> = config
         .mcp_servers
         .iter()
@@ -290,7 +292,7 @@ fn render_discovery(server: &str, transport: &McpTransport, tools: &[ToolSummary
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::mcp::transport::McpServerConfig;
+    use crate::gateway::mcp::transport::McpServerConfig;
     use std::collections::HashMap;
 
     fn cfg_with(server_id: &str, server_cfg: McpServerConfig) -> Config {

@@ -2,10 +2,10 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::gateway::pipeline::executor::HttpExecutor;
+use bitrouter::gateway::pipeline::native_work::NativeProviderWorkKind;
 use bitrouter_ai::auth::{AuthApplier, AuthAppliers};
 use bitrouter_ai::client::HttpTimeouts;
-use bitrouter_sdk::language_model::executor::HttpExecutor;
-use bitrouter_sdk::language_model::native_work::NativeProviderWorkKind;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -59,7 +59,7 @@ struct UsageRecords(Arc<Mutex<Vec<(String, u64, u64)>>>);
 
 #[async_trait]
 impl SettlementRecorder for UsageRecords {
-    async fn record(&self, ctx: &mut SettlementContext) -> bitrouter_sdk::Result<()> {
+    async fn record(&self, ctx: &mut SettlementContext) -> bitrouter::gateway::error::Result<()> {
         self.0.lock().await.push((
             ctx.request_id.clone(),
             ctx.prompt_tokens,
@@ -458,7 +458,7 @@ async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry
             );
             if index == 2 {
                 assert_eq!(attempt.receipt.as_ref().ok_or("receipt")?.report.continuation.input,
-                bitrouter_sdk::language_model::native_continuation::NativeContinuationInput::Unknown);
+                bitrouter::gateway::pipeline::native_continuation::NativeContinuationInput::Unknown);
             }
         }
     }
@@ -597,7 +597,7 @@ async fn committed_run_cancel_stops_provider_without_waiting_for_its_response() 
         let dispatch = attempt.provider_work.last().ok_or("work")?;
         assert_eq!(
             dispatch.work.kind,
-            bitrouter_sdk::language_model::native_work::NativeProviderWorkKind::HttpDispatch
+            bitrouter::gateway::pipeline::native_work::NativeProviderWorkKind::HttpDispatch
         );
         assert!(
             dispatch.report.is_none(),

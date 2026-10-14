@@ -109,7 +109,7 @@ impl Drop for MockAcp {
         let Ok(text) = std::fs::read_to_string(&self.config_path) else {
             return;
         };
-        let Ok(config) = bitrouter_sdk::config::parse_with(&text, |_| None) else {
+        let Ok(config) = bitrouter::config::parse_with(&text, |_| None) else {
             return;
         };
         let source = bitrouter::paths::ConfigSource::File(self.config_path.clone());

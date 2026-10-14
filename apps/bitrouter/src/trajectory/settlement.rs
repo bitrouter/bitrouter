@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::gateway::pipeline::settlement::SettlementContext;
 use anyhow::{Context, Result};
-use bitrouter_sdk::language_model::SettlementContext;
 use chrono::{DateTime, SecondsFormat, TimeDelta};
 
 use crate::eval::settlement::PredictionObservationSnapshot;
@@ -258,13 +258,14 @@ fn digest_hex(digest: &str) -> Result<&str> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use crate::config::EvalConfig;
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::observability::event::EventBus;
+    use crate::gateway::pipeline::settlement::SettlementContext;
+    use crate::gateway::pipeline::settlement::SettlementRecorder;
     use bitrouter_ai::types::{
         ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role, UsageOrigin,
     };
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::config::EvalConfig;
-    use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{

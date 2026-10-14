@@ -1,11 +1,13 @@
-use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+use crate::gateway::routing::signals::NextStepRole;
+use crate::gateway::routing::signals::ProgressState;
+use crate::gateway::routing::signals::TaskFamily;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::parse_semantic_route_key;
 use bitrouter_ai::types::{Content, Prompt, Role};
-use bitrouter_sdk::config::parse_semantic_route_key;
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
 use crate::workflow_state::extractors::terminus_2::{
@@ -914,7 +916,7 @@ pub fn compiled_predictor_contract() -> PredictorContract {
     PredictorContract {
         algorithm: "system_one".into(),
         version: 1,
-        config_digest: bitrouter_sdk::routing::assessment::contract_digest(),
+        config_digest: crate::gateway::routing::assessment::contract_digest(),
         confidence_kind: "provider_probability".into(),
         calibration_digest: None,
     }
@@ -1930,7 +1932,7 @@ mod tests {
     use bitrouter_ai::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
     };
-    use bitrouter_sdk::HeaderMap;
+    use http::HeaderMap;
     use sha2::{Digest, Sha256};
 
     use crate::workflow_state::extractors::generic::GenericPromptExtractor;

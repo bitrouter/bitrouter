@@ -51,9 +51,9 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::commands::invocation;
+use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
-use bitrouter_sdk::error::BitrouterError;
-use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -183,7 +183,7 @@ pub(crate) fn resolve_launch_token(
 fn mint_launch_token() -> String {
     format!(
         "{}{}",
-        bitrouter_sdk::caller::LAUNCH_TOKEN_PREFIX,
+        crate::gateway::caller::LAUNCH_TOKEN_PREFIX,
         uuid::Uuid::new_v4().simple()
     )
 }
@@ -191,7 +191,7 @@ fn mint_launch_token() -> String {
 /// Whether a resolved credential is one we minted — i.e. whether this launch's
 /// requests will carry its own attribution, or fall back to the window.
 pub(crate) fn is_launch_token(token: &str) -> bool {
-    bitrouter_sdk::caller::launch_tag(Some(&format!("Bearer {token}"))).is_some()
+    crate::gateway::caller::launch_tag(Some(&format!("Bearer {token}"))).is_some()
 }
 
 /// Options gathered from the CLI for one `launch` invocation.
@@ -326,7 +326,7 @@ pub struct Prepared<'a> {
 /// `git <subcommand>` propagates its child's status.
 pub async fn run(
     source: &crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     opts: SpawnOptions,
 ) -> Result<()> {
     let prepared = prepare(source, cfg, opts).await?;
@@ -340,7 +340,7 @@ pub async fn run(
 /// up to, but not including, the child process.
 pub async fn prepare<'a>(
     source: &'a crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     opts: SpawnOptions,
 ) -> Result<Prepared<'a>> {
     let harness = opts.agent;
@@ -631,7 +631,7 @@ async fn print_exit_summary(
 /// no injectable MCP surface and ignore these servers; that ceiling is the
 /// harnesses', not BitRouter's.
 fn launch_gateways(
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     base_url: &str,
     owns_local_daemon: bool,
 ) -> Vec<crate::harness::catalog::McpServer> {
@@ -718,10 +718,7 @@ async fn fetch_daemon_models(base_url: &str) -> Vec<String> {
 }
 
 /// Check a launch invocation without launching the child process.
-pub async fn check(
-    cfg: &bitrouter_sdk::config::Config,
-    opts: &SpawnOptions,
-) -> Result<SpawnCheckReport> {
+pub async fn check(cfg: &crate::config::Config, opts: &SpawnOptions) -> Result<SpawnCheckReport> {
     let harness = opts.agent;
     let agent_id = harness_id(harness);
     let binary = harness.interactive_binary.unwrap_or(harness.id);
@@ -1032,7 +1029,7 @@ pub(crate) fn listen_from_base_url(url: &str) -> Option<String> {
 /// spawn's "never block the launch" stance.
 pub(crate) async fn ensure_local_daemon(
     source: &crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     no_start: bool,
 ) {
     let socket = crate::daemon::socket_path_for(source, cfg);
@@ -1553,8 +1550,8 @@ mod tests {
         assert!(line.contains("tools ✗"), "{line}");
     }
 
-    fn config_with_mcp_upstream() -> anyhow::Result<bitrouter_sdk::config::Config> {
-        let mut cfg = bitrouter_sdk::config::Config::default();
+    fn config_with_mcp_upstream() -> anyhow::Result<crate::config::Config> {
+        let mut cfg = crate::config::Config::default();
         cfg.mcp_servers.insert(
             "fixture".into(),
             serde_json::from_value(serde_json::json!({
@@ -1617,7 +1614,7 @@ mod tests {
 
     #[test]
     fn launch_gateways_drops_tools_when_the_aggregate_is_disabled() {
-        let mut cfg = bitrouter_sdk::config::Config::default();
+        let mut cfg = crate::config::Config::default();
         cfg.mcp.aggregate.enabled = false;
         let servers = launch_gateways(&cfg, "http://127.0.0.1:4356", true);
         let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
@@ -1626,14 +1623,14 @@ mod tests {
 
     #[test]
     fn launch_without_mcp_upstreams_does_not_advertise_an_unmounted_gateway() {
-        let cfg = bitrouter_sdk::config::Config::default();
+        let cfg = crate::config::Config::default();
         assert!(cfg.mcp_servers.is_empty());
         assert!(launch_gateways(&cfg, "http://127.0.0.1:4356", true).is_empty());
     }
 
     #[test]
     fn external_launch_keeps_mcp_gateway_without_local_upstreams() {
-        let mut cfg = bitrouter_sdk::config::Config::default();
+        let mut cfg = crate::config::Config::default();
         assert!(cfg.mcp_servers.is_empty());
         let servers = launch_gateways(&cfg, "https://router.example", false);
         assert_eq!(servers.len(), 1);
@@ -1816,7 +1813,7 @@ mod tests {
             let err = resolve_launch_agent(bad).expect_err("rejected");
             assert_eq!(
                 crate::output::error::envelope_from_anyhow(&err).error.kind,
-                bitrouter_sdk::error::ErrorKind::BadRequest,
+                crate::gateway::error::ErrorKind::BadRequest,
                 "{bad}"
             );
         }
@@ -1907,7 +1904,7 @@ mod tests {
 
     #[tokio::test]
     async fn codex_preflight_resolves_native_subscription_model() -> anyhow::Result<()> {
-        let cfg = bitrouter_sdk::config::parse_with(
+        let cfg = crate::config::parse_with(
             r#"
 inherit_defaults: false
 providers:

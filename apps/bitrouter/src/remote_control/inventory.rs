@@ -1,6 +1,6 @@
 //! Explicit control exposure, independent of the cloud MCP profile.
 
-use bitrouter_sdk::config::ControlScope;
+use crate::config::ControlScope;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
