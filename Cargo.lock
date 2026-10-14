@@ -752,9 +752,7 @@ dependencies = [
 name = "bitrouter-guardrails"
 version = "1.0.0-alpha.33"
 dependencies = [
- "async-trait",
  "bitrouter-ai",
- "bitrouter-sdk",
  "futures",
  "regex",
  "schemars 1.2.1",

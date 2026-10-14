@@ -8,9 +8,18 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{BitrouterError, Result};
-use crate::language_model::operations::OperationScope;
-use bitrouter_ai::types::ModelOperation;
+use crate::types::{ModelOperation, OperationScope};
+
+/// Invalid bounded metadata supplied by a capability implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ValidationError {
+    /// A denial reason is empty, too long or contains unsupported characters.
+    #[error("request-check reason code must be 1–64 ASCII letters, digits, or . _ - :")]
+    InvalidReasonCode,
+    /// A revision is empty, too long or contains unsupported characters.
+    #[error("native revision must be 1–128 ASCII letters, digits, or . _ + - /")]
+    InvalidRevision,
+}
 
 /// Maximum fragments in the projected entry request.
 pub const MAX_CONTENT_FRAGMENTS: usize = 4096;
@@ -140,7 +149,7 @@ pub enum Decision {
 
 impl Decision {
     /// Reject malformed denial codes before recording a decision.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), ValidationError> {
         if let Self::Deny { reason_code } = self
             && (reason_code.is_empty()
                 || reason_code.len() > 64
@@ -148,9 +157,7 @@ impl Decision {
                     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':')
                 }))
         {
-            return Err(BitrouterError::bad_request(
-                "request-check reason code must be 1–64 ASCII letters, digits, or . _ - :",
-            ));
+            return Err(ValidationError::InvalidReasonCode);
         }
         Ok(())
     }
@@ -190,16 +197,14 @@ impl Registration {
 }
 
 /// Validate a code/rules revision consistently in configuration and registration.
-pub fn validate_revision(revision: &str) -> Result<()> {
+pub fn validate_revision(revision: &str) -> Result<(), ValidationError> {
     if revision.is_empty()
         || revision.len() > 128
         || !revision.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-' | b'/')
         })
     {
-        return Err(BitrouterError::bad_request(
-            "native revision must be 1–128 ASCII letters, digits, or . _ + - /",
-        ));
+        return Err(ValidationError::InvalidRevision);
     }
     Ok(())
 }

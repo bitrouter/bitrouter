@@ -319,7 +319,7 @@ pub struct Model {
     pub output_microusd_per_million: Option<u64>,
 }
 
-impl crate::event::PipelineEvent for Selection {
+impl bitrouter_ai::event::PipelineEvent for Selection {
     fn event_name(&self) -> &'static str {
         "routing.selected"
     }

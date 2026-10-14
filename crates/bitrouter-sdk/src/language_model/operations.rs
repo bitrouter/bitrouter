@@ -4,34 +4,7 @@ use std::any::TypeId;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use bitrouter_ai::types::ModelOperation;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-/// Operations explicitly supported by a host, hook, or native checker.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum OperationScope {
-    /// Generative calls only; the default for existing registrations.
-    #[default]
-    Generation,
-    /// Native decision calls only.
-    Decisions,
-    /// Both implemented model operations.
-    Both,
-}
-
-impl OperationScope {
-    /// Whether this scope includes one operation.
-    pub fn contains(self, operation: ModelOperation) -> bool {
-        matches!(self, Self::Both)
-            || matches!(
-                (self, operation),
-                (Self::Generation, ModelOperation::Generation)
-                    | (Self::Decisions, ModelOperation::Decisions)
-            )
-    }
-}
+use bitrouter_ai::types::{ModelOperation, OperationScope};
 
 /// Stage where a host requires a concrete protection to be installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

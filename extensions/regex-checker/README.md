@@ -60,7 +60,7 @@ A native declaration alone cannot install code into standard `bro`: adding or
 upgrading extension code requires rebuilding the custom host.
 
 All author input, fragment, coverage and decision types live in
-`bitrouter_sdk::extension::request_check`. The callback receives `Input` and returns
+`bitrouter_ai::extension::request_check`. The callback receives `Input` and returns
 `Decision::Allow` or `Decision::Deny { reason_code }`. Input contains bounded entry
 text and coverage information, without an HTTP envelope. Fragment order and
 newline boundaries are preserved by the regex matcher. Denials return a fixed
@@ -107,35 +107,32 @@ completion. The request-check capability does not inspect generated output or
 provide redaction. Extensions can call external services themselves, but the host
 does not provide a remote extension transport.
 
-## Legacy SDK compatibility
+## Legacy host adapters
 
-The matcher's optional `sdk` feature retains `GuardrailsPlugin` and old
-input/output hook APIs for legacy custom-host assembly. Those hooks have
-global/per-request rule deposits and stream block/redact semantics. They are
-distinct from the router-bound request-check capability. New request checks use
-`ExtensionApi` and do not require this feature.
+Global input hooks and stream block/redact hooks now live in
+`bitrouter::gateway::extensions::guardrails`, behind the application's
+`guardrails` feature. Import `plugin::GuardrailsPlugin` or individual `hooks`
+from that module. The matcher no longer exposes an `sdk` feature or depends on
+the server framework; configuration and rule types use their owning `config`
+and `rules` modules.
 
-The alpha `NativeChecker` / `build_app_with_checkers` map entry and
-`bitrouter::extension` import are removed. Migrate registration to
-`bitrouter_sdk::extension::ExtensionApi` and host assembly to
-`build_app_with_extensions`. HTTP checker declarations are rejected during
-configuration loading; keep the router binding and replace the service with a
-compiled implementation and matching `native.revision`. Legacy `Plugin` /
-`AppBuilder::plugin` still permit host hooks and migrations; these privileges are
-not exposed by `ExtensionApi`.
+A custom host explicitly installs `GuardrailsPlugin::with_static(rules)` for a
+global rule set, or `GuardrailsPlugin::dynamic()` after its request-specific rule
+resolver. Enabling the Cargo feature alone installs no hooks and activates no
+checker. These adapters preserve global/per-request deposits and streamed
+block/redact behavior; a router-bound input check does not replace them.
 
-The legacy `Plugin` and hook APIs are retained during the current alpha SDK
-compatibility window.
-Removal requires an explicitly announced breaking SDK release and migration
-notes; no removal date is scheduled. Preserve a compatible custom host or prior
-deployment when global or output protection is required: binding an input check
-to a router does not reproduce those guarantees. See the
-[operation and migration guide](../../docs/GUARDRAILS_EXTENSION.md).
+The host registration API remains `bitrouter_sdk::extension::ExtensionApi`
+during the service migration. Callback inputs and decisions have moved to
+`bitrouter_ai::extension::request_check`; use those contracts directly. HTTP
+checker declarations remain unsupported. See the
+[service migration plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md).
 
 ## Verification
 
 ```sh
 cargo check -p bitrouter-guardrails --no-default-features
 cargo test -p bitrouter-guardrails --all-features
+cargo test -p bitrouter --features guardrails gateway::extensions::guardrails
 cargo test -p bitrouter --test request_checks
 ```

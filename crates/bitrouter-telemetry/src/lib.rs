@@ -1,7 +1,7 @@
 //! # bitrouter-telemetry
 //!
 //! Optional telemetry egress for BitRouter: it renders the observability
-//! contract declared in [`bitrouter_sdk::observe`] onto a wire and ships it
+//! contract declared in [`bitrouter_ai::observe`] onto a wire and ships it
 //! somewhere. It binds to that contract; it never defines it.
 //!
 //! Today there is exactly one renderer — [`otel`], an OpenTelemetry exporter
@@ -22,7 +22,7 @@
 //! and `BITROUTER_TELEMETRY_*`, while `io.bitrouter.observe` (the
 //! instrumentation scope downstream dashboards select on), the
 //! `bitrouter::observe::*` `RUST_LOG` targets, and
-//! [`bitrouter_sdk::observe`] (the contract) keep the other word — permanently,
+//! [`bitrouter_ai::observe`] (the contract) keep the other word — permanently,
 //! and for reasons that have nothing to do with tidiness. See
 //! `docs/TELEMETRY_CRATE_SPEC.md` D5 and D6.
 //!
@@ -40,8 +40,8 @@
 //!
 //! Not here: the span names, the `bitrouter.*` attribute vocabulary, the
 //! invariants, or the extension region. Those are
-//! [`bitrouter_sdk::observe::schema`] and the committed
-//! `crates/bitrouter-sdk/span-schema.json` rendered from it, and this crate's
+//! [`bitrouter_ai::observe::schema`] and the committed
+//! `crates/bitrouter-ai/span-schema.json` rendered from it, and this crate's
 //! conformance tests assert that what it emits matches them.
 
 #![forbid(unsafe_code)]

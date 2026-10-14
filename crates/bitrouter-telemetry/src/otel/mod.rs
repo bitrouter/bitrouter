@@ -7,7 +7,7 @@
 //! outbound `traceparent` is injected on every upstream hop.
 //!
 //! Every one of those names, and every attribute stamped on them, is declared
-//! in [`bitrouter_sdk::observe::schema`] rather than here. This module is one
+//! in [`bitrouter_ai::observe::schema`] rather than here. This module is one
 //! renderer of that declaration, and its conformance tests assert as much: an
 //! attribute this module emits that the schema does not declare is a test
 //! failure, not a new attribute.

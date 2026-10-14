@@ -12,18 +12,19 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use bitrouter_ai::decisions::DecisionRequest;
+use bitrouter_ai::extension::request_check::{ContentFragmentKind, Decision, Input};
 use bitrouter_ai::protocol::decisions::DecisionsCodec;
+use bitrouter_ai::types::OperationScope;
 use bitrouter_ai::types::{ApiProtocol, ModelOperation, UsageOrigin};
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::error::{BitrouterError, Result};
-use bitrouter_sdk::extension::request_check::{ContentFragmentKind, Decision, Input};
 use bitrouter_sdk::language_model::builder::PipelineBuilder;
 use bitrouter_sdk::language_model::context::PipelineContext;
 use bitrouter_sdk::language_model::executor::{HttpExecutor, MockExecutor, MockResponse};
 use bitrouter_sdk::language_model::hooks::{FallbackDecision, HookDecision, PreRequestHook};
-use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
+use bitrouter_sdk::language_model::operations::HookStage;
 use bitrouter_sdk::language_model::request_checks::{
     CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };

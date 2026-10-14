@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_sdk::Result as BitrouterResult;
-use bitrouter_sdk::event::PipelineEvent;
 use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};

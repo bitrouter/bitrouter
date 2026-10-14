@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
-use crate::event::{EventBus, PipelineEvent};
+use crate::event::EventBus;
 use crate::language_model::routing::RouterRequestIdentity;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
@@ -24,6 +24,7 @@ use crate::language_model::types::{
 };
 use crate::plugin::PluginId;
 use bitrouter_ai::auth::ContinuationAuthority;
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
     assistant_turn_commitment, extend_causal_prefix,

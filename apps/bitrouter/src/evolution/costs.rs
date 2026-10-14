@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{StreamPart, ToolChoice, UsageOrigin};
-use bitrouter_sdk::PipelineEvent;
 use bitrouter_sdk::language_model::hooks::{HopOutcome, Phase, RequestOutcome};
 use bitrouter_sdk::language_model::{
     HookDecision, ObserveHook, PipelineContext, PreRequestHook, RoutingTarget, SettlementContext,
@@ -273,10 +273,11 @@ mod native_admission_tests {
     use crate::metering::recorder::MeteringRecorder;
     use crate::metering::store::{MeteringStore, TimeWindow};
     use bitrouter_ai::protocol::decisions::DecisionsCodec;
+    use bitrouter_ai::types::OperationScope;
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::language_model::builder::PipelineBuilder;
     use bitrouter_sdk::language_model::executor::MockExecutor;
-    use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
+    use bitrouter_sdk::language_model::operations::HookStage;
     use bitrouter_sdk::language_model::routing::StaticRoutingTable;
     use bitrouter_sdk::language_model::types::PipelineRequest;
 

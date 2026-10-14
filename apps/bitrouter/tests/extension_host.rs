@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail, ensure};
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
 use bitrouter::paths::ConfigSource;
 use bitrouter::reload::RunningConfigState;
-use bitrouter_sdk::extension::request_check::Decision;
+use bitrouter_ai::extension::request_check::Decision;
 use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::{body_partial_json, method, path};

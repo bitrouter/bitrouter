@@ -219,10 +219,13 @@ async fn managed_rebuild_rechecks_frozen_binding_before_any_new_egress() -> Resu
             .routing_table(Arc::new(RebuildTable(resolutions.clone())))
             // These hooks reject revalidation by default but never admitted
             // this generation request, so they cannot block its rebuild.
-            .pre_resolution_hook_for(AllowHook, operations::OperationScope::Decisions)
-            .router_preparation_hook_for(AllowHook, operations::OperationScope::Decisions)
-            .pre_request_hook_for(AllowHook, operations::OperationScope::Decisions)
-            .route_hook_for(EmitRouteHook, operations::OperationScope::Decisions)
+            .pre_resolution_hook_for(AllowHook, bitrouter_ai::types::OperationScope::Decisions)
+            .router_preparation_hook_for(AllowHook, bitrouter_ai::types::OperationScope::Decisions)
+            .pre_request_hook_for(AllowHook, bitrouter_ai::types::OperationScope::Decisions)
+            .route_hook_for(
+                EmitRouteHook,
+                bitrouter_ai::types::OperationScope::Decisions,
+            )
             .executor(executor.clone())
             .model_selector(Arc::new(ModelAndEffortSelector(selections.clone())))
             .route_hook(ReadOnlyGuard {

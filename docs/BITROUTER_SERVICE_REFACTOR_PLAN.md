@@ -5,7 +5,7 @@ Status: **accepted architecture direction; implementation pending.**
 Date: 2026-10-15. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
 on `main`, version `1.0.0-alpha.33`.
 
-BitRouter ships as an independently running service assembled by the `bitrouter`
+BitRouter will ship as an independently running service assembled by the `bitrouter`
 package. Gateway execution is always available. Core scheduling, the headless
 harness and the TUI are internal application modules selected by Cargo features.
 `bitrouter-ai` becomes the lightweight public contract library;
@@ -63,6 +63,13 @@ link the server library, share the server database, or compile a custom host.
 Existing trusted custom-host extensions remain an advanced integration path;
 this requirement does not turn arbitrary Rust callbacks into remotely loadable
 code.
+
+P0 retains existing principal, authorization, policy and usage behavior. It does
+not introduce a new enterprise account system or require external operators to
+move payment and business RBAC logic into BitRouter. P1 makes gateway resource
+authority consistent across instances. Keep the service seams concrete in P0;
+do not add unused distributed-store traits, leases or a plugin loader in
+anticipation of P1.
 
 ### Scheduling and execution state
 
@@ -263,6 +270,11 @@ model attempts, fallback and usage spans. Preserve the trust rules for incoming
 trace context when separating processes. An external host using the old exporter
 must migrate deliberately; package removal is not evidence of consumer migration.
 
+Preserve the current transport distinction: HTTP takes precedence when both
+transport features are enabled; refresh-aware bearer resolution is HTTP-only,
+while gRPC uses configured static metadata. Moving the exporter does not add
+new gRPC authentication behavior. Verify each transport in its own build.
+
 ### Extension boundary and guardrails compatibility
 
 `extensions/<name>/<package>` groups implementations and documentation; it
@@ -367,7 +379,7 @@ crate-root module declarations at the inventory baseline.
 | `request_checks` | `gateway::extensions` registration binding, runner assembly and execution limits |
 | `result_contract` | Harness result validation; shared externally serialized result definitions to AI |
 | `router_migration` | `config::router_migration` explicit compatibility parse/write operations |
-| `session_identity` | `gateway::session_identity` request correlation; no ownership of harness session history |
+| `session_identity` | `gateway::session_identity` request correlation and pure extraction; move its ACP runtime/route-lease lookup adapter behind harness and its workflow-analysis integration behind core; no ownership of harness session history |
 | `skills` | Harness workspace material discovery; gateway Skills-over-MCP relay remains gateway; shared CLI entry delegates to the correct owner |
 | `spawn` | `cli::spawn` plus `harness::spawn` process execution/cleanup |
 | `style` | TUI styling; CLI output uses plain presentation values and optional color without a Ratatui dependency |
@@ -385,6 +397,11 @@ core worker. Preserve necessary gateway evidence writers and usage finalization;
 enable higher-level analysis and policy work only with `core`. Do not move
 everything named "trajectory" into a scheduler or everything named "session"
 into core storage.
+
+In particular, `session_identity` currently imports both `AcpRuntime` and
+`workflow_state` extractors. Move reusable identity extraction below those
+optional consumers; gating the whole observer would lose gateway attribution,
+while retaining those imports would defeat the minimum feature profile.
 
 ### Current bitrouter-ai
 
@@ -667,6 +684,14 @@ duplicate model types or service runtime in the final SDK/AI graph remain.
   representative serialized fixtures.
 - Record full-product behavior and minimum relevant request/stream/daemon paths,
   including Decisions, native continuations, auth refresh and optional tools.
+- Retain baseline-written database/checkpoint bytes as compatibility fixtures;
+  accepting a historical version number is not proof of decoding its payload.
+  Identify the evidence for each supported historical format separately.
+- Cover legacy guardrails through the real plugin installation entry point,
+  including hook order, pre-dispatch denial, streamed block/redact and dynamic
+  per-request rule isolation. Hook unit tests alone do not establish registration
+  behavior. Establish HTTP-only and gRPC-only collector baselines before moving
+  telemetry.
 - Inventory known external Rust consumers of old SDK/AI/telemetry/guardrails
   APIs. Prepare their destination/import/behavior mapping without claiming that
   external repositories have migrated.
@@ -685,7 +710,8 @@ requirement and a regression fixture or existing test family.
   their wire representation. Keep lifecycle definitions distinct from event
   dispatch and stream runtime.
 - Change matcher default to depend on AI contracts. Move legacy hook/plugin
-  adapters into the application and update the custom-host example.
+  adapters into the application and update the custom-host example. Move the
+  real plugin-installation tests with those adapters.
 - Update existing consumers to owning paths; remove duplicate definitions and
   public forwarding exports as the owner changes.
 
@@ -700,7 +726,8 @@ pass. AI becomes fully lightweight after its runtime moves in P0 3.
 - Absorb TUI after extracting command vocabulary, approval policy and presentation
   data. Remove Ratatui types from headless output.
 - Move the telemetry implementation into the application, keeping schema
-  conformance tests and frozen names intact.
+  conformance tests, independent HTTP/gRPC transport tests and frozen names
+  intact.
 - Remove the three retired packages after consumers/tests/examples have moved.
   Their relocated code may still use the old SDK during this intermediate stage.
 
@@ -759,27 +786,33 @@ supported remote control without custom server code or access to server files.
   up owned resources; reload reports applied versus restart-required state.
 - Preserve session/credential/config locations and serialized formats.
   Unsupported-feature activation fails clearly before readiness.
+- Execute core-only and harness-only behavioral suites, not just compilation.
+  Reopen the baseline data through full-product, minimum and full-product builds
+  in sequence; no feature selection may discard another subsystem's records.
 
 Exit: all supported isolated feature combinations build, headless output has no
 TUI dependency, and a gateway starts with agent/UI resources unavailable.
 
-### P0 6 Validate and publish the reorganized delivery
+### P0 6 Validate and prepare the reorganized delivery
 
 - Run the compatibility and feature gates below; repair behavioral regressions
   within the migration rather than rewriting fixtures to accept new behavior.
 - Update release/package manifests, gateway artifacts, CI package names,
   install/container examples and public API guards.
-- Publish the AI contract package before dependent packages; publish the repurposed
-  SDK with explicit breaking migration notes. Remove retired packages from future
-  release automation without yanking previous releases.
+- Prepare release order so the AI contract package precedes dependent packages,
+  and the repurposed SDK carries explicit breaking migration notes. Remove
+  retired packages from future release automation without yanking previous
+  releases. Actual publication follows the normal release process; preparing an
+  implementation PR does not require publishing packages.
 - Update development docs, CLI references, affected specs, skills and distribution
   manifests in the same implementation changes where their facts change.
 - Record known external consumer migrations or explicit remaining blockers to
   those consumers' releases. The SDK-only integration example proves the generic
   microservice boundary, not completion of an external product migration.
 
-Exit: all P0 acceptance criteria pass for released/supported profiles, and the
-migration/release notes identify every retired or repurposed Rust API surface.
+Exit: all P0 acceptance criteria pass for the supported profiles and candidate
+artifacts, and the migration/release notes identify every retired or repurposed
+Rust API surface. Record publication separately from implementation acceptance.
 
 ## P0 acceptance criteria
 
@@ -796,11 +829,11 @@ refactor has already been implemented or tested.
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state |
 | A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds |
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees |
-| A09 Data compatibility | Existing SQLite/PostgreSQL/MySQL full-product schemas, credential/config formats and session/checkpoint reads work; migration ledger is identical across feature profiles |
-| A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; local bridge cannot bypass checkpoint ACK or recovery checks |
+| A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full preserves records and the migration ledger; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
+| A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
 | A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui |
-| A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP/gRPC, ingress body lifetime, trace names, attribution, opt-in and flush behavior pass regression coverage |
-| A13 Extensions | Matcher needs only contracts; moved legacy adapters preserve global/output behavior; native checker fail-closed, revision/binding and permit lifetime tests pass; default activation is unchanged |
+| A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
+| A13 Extensions | Matcher needs only contracts; real plugin installation preserves legacy global/output behavior and rule isolation; native checker fail-closed, revision/binding and permit lifetime tests pass; default activation is unchanged |
 | A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct |
 | A15 External migration | Old SDK builder, AI ModelClient, telemetry imports and guardrails SDK adapter each have an explicit migration example; no claim that HTTP transparently replaces arbitrary custom hooks |
 | A16 Performance | Compare size, normal dependency graph, idle memory and bounded throughput/stream behavior against P0 0; explain and resolve regressions outside the agreed budget |
@@ -825,6 +858,29 @@ Gateway-only normal/build closures exclude Ratatui/Crossterm, ACP conductor and
 agent runtimes; minimum additionally excludes optional MCP, OTel and non-SQLite
 drivers. Plain CLI setup and management remain available. Tests can depend on
 fixtures without changing the production closure.
+
+Pair the isolated builds with these behavioral gates. Record the selected and
+executed test identities, so a broad feature gate cannot silently remove the
+coverage that justifies a profile.
+
+| Profile or boundary | Required behavior evidence |
+| --- | --- |
+| Minimum gateway | Real-process inference/control, configured authentication, usage finalization and shutdown without agent resources or a terminal |
+| Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness |
+| Harness only | ThreadService ownership/queue/approval/recovery and supported headless execution tests, without production core or terminal drawing |
+| Core and harness | Existing managed execution, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
+| TUI | Existing PTY actions and terminal restoration; shared command results agree with the corresponding headless paths |
+| Guardrails | Real `GuardrailsPlugin::install` path plus native checker host tests; denied input makes zero upstream calls, output block/redact works, dynamic rules do not leak between requests |
+| HTTP-only telemetry | Trace/metric delivery to a test collector, configured headers, current bearer-refresh behavior and shutdown flushing |
+| gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |
+| No telemetry | Essential request/usage facts and finalization remain available with no exporter |
+| Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
+
+Historical-format compatibility requires payload fixtures with known provenance,
+not newly written data with a different version field. Reuse existing historical
+fixtures where available and record any unsupported evidence claim as an open
+acceptance item. Likewise, a PostgreSQL/MySQL driver build does not establish
+that migrations or reads have been exercised against that backend.
 
 The independent process test starts the official gateway with a Rust mock
 provider and a private temporary server configuration/database directory.
@@ -936,13 +992,20 @@ as permanent product requirements:
 - [PR 701](https://github.com/bitrouter/bitrouter/pull/701) folded the old plugin
   directory into shared crates because directory taxonomy obstructed real
   dependencies.
-- [PR 810](https://github.com/bitrouter/bitrouter/pull/810) and
-  [PR 851](https://github.com/bitrouter/bitrouter/pull/851) changed exporter
-  placement. This plan retains the contract/implementation separation while
-  moving implementation into its service owner.
+- [PR 810](https://github.com/bitrouter/bitrouter/pull/810) proposed placing the
+  exporter with the SDK because its spans encode BitRouter semantics.
+  [PR 851](https://github.com/bitrouter/bitrouter/pull/851) separated it again
+  after the schema became an independent contract, avoiding OTel-related public
+  dependency commitments in the foundation library. That rationale requires
+  separating the contract from implementation; it does not require a permanent
+  exporter package. This plan keeps the contract in AI and the implementation
+  with the service that emits it.
 - [PR 923](https://github.com/bitrouter/bitrouter/pull/923) established compiled
-  capability extensions and shared custom-host startup. P0 preserves those
-  behaviors with new import ownership.
+  capability extensions and shared custom-host startup. The nested extension
+  directory groups the regex capability and its matcher package; it does not
+  establish a dynamic plugin mechanism. P0 preserves those behaviors with new
+  import ownership. Telemetry is service observability implementation and has no
+  need to join that capability-extension directory.
 - [PR 962](https://github.com/bitrouter/bitrouter/pull/962) extracted a standalone
   selected-model integration library. This plan deliberately replaces that
   library product promise with a public-contract library and service client.

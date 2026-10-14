@@ -10,6 +10,8 @@ rust-version.workspace = true
 
 [features]
 default = []
+# Pure observation-schema helpers for exporter conformance suites.
+testing = []
 hosted = ["dep:chrono"]
 pkce = ["dep:rand", "tokio/net", "tokio/io-util"]
 hosted-login = ["hosted", "dep:rand"]

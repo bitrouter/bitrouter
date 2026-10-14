@@ -12,11 +12,12 @@ use sea_orm::DatabaseConnection;
 use bitrouter_ai::auth::AuthAppliers;
 use bitrouter_ai::client::HttpTimeouts;
 use bitrouter_ai::protocol::OutboundDispatch;
+use bitrouter_ai::types::OperationScope;
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
+use bitrouter_sdk::language_model::operations::HookStage;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
 use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
@@ -414,10 +415,7 @@ pub async fn build_app_with_extensions(
 async fn assemble_app(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    native: std::collections::HashMap<
-        String,
-        bitrouter_sdk::extension::request_check::Registration,
-    >,
+    native: std::collections::HashMap<String, bitrouter_ai::extension::request_check::Registration>,
 ) -> Result<Assembled> {
     let mut effective_config = config.clone();
     crate::policy_lock::apply_defaults(&mut effective_config, config_path);

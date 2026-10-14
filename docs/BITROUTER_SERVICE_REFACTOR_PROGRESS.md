@@ -13,7 +13,7 @@ completing one extraction does not complete the milestone.
   `bitrouter-guardrails` and unpublished `dist-helper`.
 - Application root inventory: 72 modules; the plan maps all package roots and
   their descendant ownership.
-- Existing native runtime format: 7; accepted readers include 2, 3, 4, 5 and 6.
+- Existing native runtime format: 7; the version validator accepts 2–7. Historical payload decoding still requires independent serialized fixtures.
 - Database migration sequence: existing `m20240101_000001` through
   `m20240101_000027`, with the intentionally unused `000014` slot.
 - Existing product executable: `bro`; the package remains `bitrouter`.
@@ -36,14 +36,28 @@ Debug symbols are disabled consistently for local baseline and migration builds
 to bound link/disk pressure. This setting does not disable tests or change runtime
 feature selection.
 
-Baseline test outcome and retained binary measurements: pending.
+The first baseline run stopped after 1,755 tests: 1,754 passed and the PTY
+`code_agents_navigation_keeps_normal_buffer_and_defers_foreground_output` timed
+out. That case passed in the subsequent run. The subsequent run is not a clean
+baseline: three MCP fixture tests invoked Cargo while migration edits were in
+progress, and encountered a temporarily invalid manifest. That run was stopped;
+a fresh, detached source worktree at the baseline commit now runs the complete
+suite independently of implementation edits. Its final outcome is pending.
+
+A baseline executable is retained outside the source worktree for later
+process/performance comparisons. The initial build is 322,416,544 bytes with
+SHA-256 `7336ae5ab9e36fd4af5e4fc78766ac0ad914f04b6d639ee3c6b9ec913cfccf6b`.
+This is a debug-symbol-free development build, not a release-size claim.
+The observation artifact hash is
+`0b316b6afd7098e62db397000f2f725f4c9c88408ad73e58e08f65b03604ac0b`;
+the contract move must preserve its bytes.
 
 ## Stages
 
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Inventory and persisted format recorded; test baseline and measurements pending |
-| P0 1 Public contracts | Pending | Observation/capability extraction and matcher dependency separation |
+| P0 1 Public contracts | In progress | Observation/event/request-check contracts and operation scopes moved to AI; matcher detached from old SDK; legacy adapters moved to application; Observation/capability slice verified; shared control/core DTO extraction remains before their final service/client split |
 | P0 2 Application consolidation | Pending | Core/harness, TUI and telemetry relocation with preserved behavior |
 | P0 3 Gateway and lightweight AI | Pending | Service runtime relocation, AI dependency isolation and schema bootstrap |
 | P0 4 HTTP SDK | Pending | Typed gateway/control client and independent process consumer |
@@ -81,5 +95,31 @@ workspace tests.
 
 ## Review evidence
 
-Stage reviews and the final requirement audit will be recorded here as the
-implementation reaches them.
+P0 0 independent review identified four gaps, now included in the plan:
+real legacy plugin installation tests; behavioral tests for isolated core/harness
+profiles; a gRPC-only collector test; and historical payload fixtures distinct
+from version-number acceptance. The two new plugin installation tests passed
+against the original adapter before relocation, proving static input denial,
+stream block/redact, hook order and per-request rule isolation. gRPC and persisted
+payload baseline evidence remain open.
+
+P0 1 independent review found one stale SDK observation rustdoc link in
+`metrics.rs`. It now links to the AI contract and describes host seams accurately.
+The review found no other actionable ownership, activation or behavior issue.
+Current validation:
+
+- `cargo check -p bitrouter-guardrails --all-features`: passed.
+- `cargo check --workspace --all-features --all-targets`: passed.
+- Relevant nextest run: **1,495 passed**, including AI/SDK/matcher/telemetry
+  suites, moved plugin-installation tests, request-check real-process hosts,
+  observation hierarchy, metering and session identity. The filter deliberately
+  excluded unrelated application/agent suites; this is not final P0 coverage.
+- Matcher all-feature normal/build tree contains no `bitrouter-sdk`.
+- Default application normal/build tree contains no matcher.
+- Observation artifact retains the baseline SHA-256 above.
+- Formatting and diff whitespace checks: passed.
+- Strict workspace rustdoc: passed.
+- Workspace doctests: passed (6 passed, 1 ignored across the workspace).
+
+AI still contains its original model runtime at this intermediate stage; complete
+lightweight dependency isolation is a P0 3 gate, not a claim of this extraction.

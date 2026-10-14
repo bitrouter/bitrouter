@@ -288,7 +288,7 @@ pub struct UsagePricingSnapshot {
     pub pricing: Option<UsagePricing>,
 }
 
-impl crate::event::PipelineEvent for UsagePricingSnapshot {
+impl bitrouter_ai::event::PipelineEvent for UsagePricingSnapshot {
     fn event_name(&self) -> &'static str {
         "pricing.usage_snapshot"
     }

@@ -296,8 +296,8 @@ mod tests {
     fn agent_spans_conform_to_the_committed_span_schema() {
         // Same contract the exporter's conformance tests enforce for the HTTP
         // plane: nothing reaches the wire that
-        // `crates/bitrouter-sdk/span-schema.json` does not describe.
-        use bitrouter_sdk::observe::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
+        // `crates/bitrouter-ai/span-schema.json` does not describe.
+        use bitrouter_ai::observe::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
 
         let (tracer, captured) = capturing_tracer();
         let recorder = AcpSpanRecorder::with_tracer(tracer, "claude-acp", "rec-1");

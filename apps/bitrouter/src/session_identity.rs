@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::ApiProtocol;
-use bitrouter_sdk::PipelineEvent;
 use bitrouter_sdk::language_model::{HookDecision, PipelineContext, PreRequestHook};
 use serde::Serialize;
 

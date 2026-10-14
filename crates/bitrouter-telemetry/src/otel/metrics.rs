@@ -72,7 +72,7 @@ impl OtelMetrics {
     /// Split from [`OtelMetrics::new`] so the reader is a parameter rather
     /// than a hard-wired OTLP `PeriodicReader`: the conformance test below
     /// drives a real request lifecycle through a capturing exporter and checks
-    /// what came out against `bitrouter_sdk::observe::schema`, which is not
+    /// what came out against `bitrouter_ai::observe::schema`, which is not
     /// possible against a provider that can only talk to a collector.
     fn from_provider(
         provider: SdkMeterProvider,
@@ -433,7 +433,7 @@ mod tests {
     /// instrument set is small enough to exercise completely in one lifecycle.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn emitted_metrics_conform_to_the_committed_schema() {
-        use bitrouter_sdk::observe::schema::{Instrument, Requirement, SCHEMA};
+        use bitrouter_ai::observe::schema::{Instrument, Requirement, SCHEMA};
 
         let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
         let reader = PeriodicReader::builder(
@@ -486,7 +486,7 @@ mod tests {
                     panic!(
                         "instrument `{}` is exported but not declared in otel::schema — \
                          instrument names are wire contract (`wire-visible-names`); declare it \
-                         and regenerate crates/bitrouter-sdk/span-schema.json, or stop emitting \
+                         and regenerate crates/bitrouter-ai/span-schema.json, or stop emitting \
                          it",
                         metric.name
                     )

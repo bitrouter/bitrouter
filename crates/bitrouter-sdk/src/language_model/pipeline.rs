@@ -16,7 +16,6 @@ use super::native_preparation::{
     runtime as preparation_runtime,
 };
 use crate::error::{BitrouterError, Result};
-use crate::extension::request_check::{Decision, Input};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
@@ -26,7 +25,7 @@ use crate::language_model::hooks::{
 use crate::language_model::native::{
     NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan, NativeRoute,
 };
-use crate::language_model::operations::{HookRegistration, OperationScope, applicable};
+use crate::language_model::operations::{HookRegistration, applicable};
 use crate::language_model::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
     RequestCheckBinding, RequestCheckerRunner, content_fragments, decision_content_fragments,
@@ -40,6 +39,8 @@ use crate::language_model::settlement::{
     DeliveryAcknowledgement, RequiredDeliveryHandshake, RequiredFinalizationContext,
     RequiredFinalizationReceipt, RequiredFinalizer, SettlementContext, SettlementRecorder,
 };
+use bitrouter_ai::extension::request_check::{Decision, Input};
+use bitrouter_ai::types::OperationScope;
 
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 

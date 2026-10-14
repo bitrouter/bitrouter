@@ -411,12 +411,12 @@ impl McpContext {
     }
 
     /// Emit a typed pipeline event.
-    pub fn emit<E: crate::event::PipelineEvent>(&mut self, event: E) {
+    pub fn emit<E: bitrouter_ai::event::PipelineEvent>(&mut self, event: E) {
         self.events.emit(event);
     }
 
     /// Whether an event of type `E` was emitted.
-    pub fn has_event<E: crate::event::PipelineEvent>(&self) -> bool {
+    pub fn has_event<E: bitrouter_ai::event::PipelineEvent>(&self) -> bool {
         self.events.has::<E>()
     }
 }

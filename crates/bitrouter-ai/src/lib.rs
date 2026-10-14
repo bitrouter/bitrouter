@@ -8,6 +8,7 @@
 //! here. The application supplies offline baselines, paths and activation policy.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod auth;
 pub mod catalog;
@@ -16,6 +17,9 @@ pub mod conversion;
 pub mod decisions;
 pub mod diagnostics;
 pub mod error;
+pub mod event;
+pub mod extension;
+pub mod observe;
 pub mod protocol;
 pub mod providers;
 pub mod stream;

@@ -30,13 +30,12 @@
 //!   - [`caller`] — [`CallerContext`] (identity-only; business
 //!     classifications like payment method live in deployment code, not
 //!     here).
-//!   - [`event`] — typed [`PipelineEvent`] bus.
+//!   - [`event`] — typed [`PipelineEvent`](bitrouter_ai::event::PipelineEvent) bus.
 //!   - [`metrics`] — the [`MetricsRenderer`] trait (the `GET /metrics`
 //!     endpoint contract; spend / token / rate aggregation are
 //!     deployment-specific concerns).
-//!   - [`observe`] — the observability *contract*: the span schema
-//!     ([`observe::schema`], rendered to the committed `span-schema.json`) and
-//!     the [`SpanAttributes`](observe::SpanAttributes) extension hatch.
+//!   - [`bitrouter_ai::observe`] supplies the shared observation schema and
+//!     attribute vocabulary consumed by host observers.
 //!     Ungated and dependency-free; rendering it onto a wire is
 //!     `bitrouter-telemetry`'s job.
 //!   - [`plugin`] — [`PluginId`] and SQL [`MigrationItem`]s.
@@ -121,15 +120,8 @@
 //! The dividing line is **contracts and the seams they plug into ship here;
 //! renderers of them, and deployment business logic, do not.**
 //!
-//! [`observe`] is the case in point, and it is the one that used to be
-//! misdrawn. What the SDK owns is the **span schema** — the span names
-//! (`chat`, `route`, `settle`, the per-hop `chat`), the `bitrouter.*`
-//! attribute vocabulary, and the invariants that fail silently and expensively
-//! when a deployment gets them wrong: a hop is not a `gen_ai` generation, and
-//! stamping it as one makes every gen_ai-aware backend double-count the
-//! reported cost. That schema has to be identical across every deployment or
-//! "interop surface" means nothing, and it is declared here as data, under no
-//! feature gate, so a deployment can implement it without taking a renderer.
+//! The public observation schema is declared by [`bitrouter_ai::observe`].
+//! Hosts implement that schema independently of their telemetry transport.
 //!
 //! What the SDK does *not* own is any rendering of it. OTLP transport,
 //! credentials, batch processing, endpoint configuration and cardinality
@@ -172,11 +164,6 @@ pub mod routing;
 // every layer that renders a "run `… <subcommand>`" hint needs it.
 pub mod invocation;
 pub mod metrics;
-// The observability contract — the span schema and the attribute extension
-// hatch. Ungated and dependency-free on purpose: a deployment implementing the
-// contract must not have to enable a renderer it is not using. Rendering it
-// onto a wire is `bitrouter-telemetry`'s job, not this crate's.
-pub mod observe;
 pub mod plugin;
 pub mod url_validator;
 
@@ -197,7 +184,6 @@ pub use app::{App, AppBuilder, Plugin, PromptTransform};
 // passed to `apply_with_headers` without taking a direct `http` dependency.
 pub use caller::CallerContext;
 pub use error::{BitrouterError, Result};
-pub use event::{EventBus, PipelineEvent};
 pub use http::HeaderMap;
 pub use language_model::{
     FallbackPolicy, HookDecision, PreRequestHook, RoutingTable, RoutingTarget,

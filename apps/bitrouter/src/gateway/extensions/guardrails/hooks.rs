@@ -28,7 +28,7 @@ use bitrouter_sdk::language_model::{
     StreamHook, StreamInterest, StreamOutcome,
 };
 
-use crate::rules::{RuleSet, SlidingWindowMatcher, WindowResult};
+use bitrouter_guardrails::rules::{RuleSet, SlidingWindowMatcher, WindowResult};
 
 fn plugin_id() -> PluginId {
     PluginId::new("bitrouter-guardrails")
@@ -93,7 +93,7 @@ fn request_text(ctx: &PipelineContext) -> Result<String> {
 /// extensions, so [`GuardrailPreHook`] / [`GuardrailStreamHook`] (which read
 /// the rule set from the extensions) enforce a fixed, process-global set.
 ///
-/// Used by [`crate::GuardrailsPlugin::with_static`]. A multi-tenant host
+/// Used by [`super::plugin::GuardrailsPlugin::with_static`]. A multi-tenant host
 /// instead resolves a per-account rule set in its own pre-request stage and
 /// calls [`PipelineContext::insert_extension`] directly — no deposit hook.
 pub struct DepositRulesHook {

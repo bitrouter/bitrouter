@@ -12,12 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
-use crate::event::PipelineEvent;
 use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::FallbackDecision;
 use crate::language_model::request_checks::RequestCheckBinding;
 use crate::language_model::stream::UsagePricing;
 use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{ApiProtocol, Capability, ModelOperation};
 
 /// How a cascade chain should be ordered.

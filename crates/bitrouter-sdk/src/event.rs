@@ -1,24 +1,10 @@
-//! Typed pipeline event system (`PipelineEvent` trait + `EventBus`).
+//! Per-request storage and queries for typed lifecycle events.
 //!
-//! The core crate defines only the trait and the bus;
-//! concrete event types are declared by the plugin crates that emit them.
-//!
-//! `Serialize` is a mandatory supertrait used as a guardrail: closures, pointers
-//! and channel senders are not `Serialize`, so events are structurally forced to
-//! be plain data. It also lets the whole bus be dumped to JSON for logging /
-//! receipts. The core trait deliberately does **not** require `Deserialize` —
-//! JSON is dump-only.
+//! The event contract lives in `bitrouter-ai`; this bus owns host-side state.
 
-use serde::Serialize;
+use bitrouter_ai::event::PipelineEvent;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
-
-/// A typed pipeline event. Each event is an independent struct declared by the
-/// crate that emits it.
-pub trait PipelineEvent: Serialize + Any + Send + Sync + 'static {
-    /// Human-readable event name, used for logs and JSON dumps.
-    fn event_name(&self) -> &'static str;
-}
 
 /// A single stored event: a typed handle plus its pre-serialized JSON.
 ///

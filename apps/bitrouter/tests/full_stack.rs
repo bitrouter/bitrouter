@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum_test::TestServer;
+use bitrouter_ai::extension::request_check::Decision;
 use bitrouter_sdk::config;
-use bitrouter_sdk::extension::request_check::Decision;
 use bitrouter_sdk::server::{AppState, build_router};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path as wm_path};

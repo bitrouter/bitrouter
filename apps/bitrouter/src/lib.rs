@@ -49,6 +49,7 @@ pub mod db;
 pub mod error_report;
 pub mod eval;
 pub mod evolution;
+pub mod gateway;
 pub mod gateways;
 pub mod harness;
 pub mod host;

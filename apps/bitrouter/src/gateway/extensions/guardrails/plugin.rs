@@ -1,16 +1,16 @@
 //! [`GuardrailsPlugin`] — legacy [`Plugin`] assembly for trusted custom hosts.
 //!
 //! The default OSS binary no longer installs this package. New router-bound
-//! input checks register [`crate::checker::callback`] through
-//! `bitrouter::extension::ExtensionApi`; they do not require the `sdk` feature.
+//! input checks register [`bitrouter_guardrails::checker::callback`] through
+//! `bitrouter_sdk::extension::ExtensionApi`; they do not install global hooks.
 //! This compatibility API retains its existing global/per-request rule deposits
 //! and stream block/redact behavior. Input-only request checks cannot replace
 //! those output or global protection guarantees, and these hooks do not inherit
 //! the router binding or bounded diagnostics of native request checks.
 //!
-//! The current alpha SDK API retains this path. Removal requires an explicitly
-//! announced breaking SDK release with migration notes; no removal date is
-//! scheduled. Keep a compatible custom host when those semantics are required.
+//! The application owns this adapter under the `guardrails` feature. Installing
+//! it is explicit; merely enabling that feature leaves the official host's
+//! activation behavior unchanged.
 //!
 //! - [`GuardrailsPlugin::with_static`] — a fixed, process-global rule set. It
 //!   installs a [`DepositRulesHook`] (which inserts the shared rule set into
@@ -25,14 +25,13 @@ use std::sync::Arc;
 
 use bitrouter_sdk::{AppBuilder, Plugin, PluginId};
 
-use crate::hooks::{DepositRulesHook, GuardrailPreHook, GuardrailStreamHook};
-use crate::rules::RuleSet;
+use super::hooks::{DepositRulesHook, GuardrailPreHook, GuardrailStreamHook};
+use bitrouter_guardrails::rules::RuleSet;
 
 /// Legacy custom-host package for upstream and downstream guardrail hooks.
 ///
-/// Retained for the current alpha SDK API; removal requires an explicitly
-/// announced breaking SDK release with migration notes. Unlike new router-bound
-/// request-check registration, installation activates global hooks immediately.
+/// Unlike router-bound request-check registration, installing this adapter
+/// activates global hooks immediately.
 pub struct GuardrailsPlugin {
     id: PluginId,
     static_rules: Option<Arc<RuleSet>>,

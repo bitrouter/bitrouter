@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::error::{BitrouterError, Result};
 use request_check::{Callback, Registration};
 
-pub mod request_check;
+use bitrouter_ai::extension::request_check;
 
 /// Collects trusted, statically linked capability implementations for a host.
 ///
@@ -48,7 +48,7 @@ impl ExtensionApi {
             id,
             revision,
             callback,
-            crate::language_model::operations::OperationScope::Generation,
+            bitrouter_ai::types::OperationScope::Generation,
         )
     }
 
@@ -58,7 +58,7 @@ impl ExtensionApi {
         id: &str,
         revision: &str,
         callback: Arc<Callback>,
-        supported_operations: crate::language_model::operations::OperationScope,
+        supported_operations: bitrouter_ai::types::OperationScope,
     ) -> Result<()> {
         if let Some(message) = &self.invalid {
             return Err(BitrouterError::bad_request(message.clone()));

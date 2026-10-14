@@ -75,7 +75,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         first_token_kind: None,
         finish_reason: None,
         error: None,
-        events: bitrouter_sdk::EventBus::new(),
+        events: bitrouter_sdk::event::EventBus::new(),
     };
     freeze_tariff(&mut context, &pricing());
     context
@@ -201,7 +201,7 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
     );
 
     let span = attributed
-        .get_event::<bitrouter_sdk::observe::SpanAttributes>()
+        .get_event::<bitrouter_ai::observe::span_attributes::SpanAttributes>()
         .expect("session span attributes");
     assert_eq!(
         span.0

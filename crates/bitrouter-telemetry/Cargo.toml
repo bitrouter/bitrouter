@@ -11,7 +11,7 @@ rust-version.workspace = true
 [dependencies]
 bitrouter-ai.workspace = true
 # The observability contract this crate renders. Default-features off: the
-# contract (`bitrouter_sdk::observe`) is ungated, so nothing here needs the
+# contract (`bitrouter_ai::observe`) is ungated, so nothing here needs the
 # SDK's server, config or protocol features — `server` below adds the one that
 # is genuinely required, and only when the ingress span is wanted.
 bitrouter-sdk.workspace = true
@@ -116,20 +116,8 @@ __otel-core = [
 ]
 
 [dev-dependencies]
-# The schema's conformance helpers (`span_def_for`, `value_type_matches`,
-# `render_json`) are behind the SDK's default-off `testing` feature: they have
-# no production callers, here or anywhere. This crate's conformance tests are
-# the beneficiary, so the feature is enabled here and nowhere else. It carries
-# no dependency of its own.
-#
-# Path-only on purpose — NOT `workspace = true`, which would inherit a
-# `version` alongside the path. `cargo package` resolves a versioned
-# dev-dependency against the *registry*, and the published `bitrouter-sdk`
-# 1.0.0-alpha.27 predates the `testing` feature, so inheriting the version made
-# `cargo publish` fail on a feature that exists only in this tree. Dropping the
-# version makes cargo strip this entry from the packaged manifest, which is
-# correct: it is a test-only edge that no consumer of the published crate has.
-bitrouter-sdk = { path = "../bitrouter-sdk", features = ["testing"] }
+# Contract conformance helpers are test-only and carry no runtime dependencies.
+bitrouter-ai = { path = "../bitrouter-ai", features = ["testing"] }
 tokio = { workspace = true, features = [
     "sync",
     "rt",

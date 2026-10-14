@@ -9,10 +9,9 @@
 //! [`ObserveHook`](crate::language_model::ObserveHook) and points this trait
 //! at it.
 //!
-//! The trait and the accumulator are the same split the rest of the
-//! observability story is drawn on: the SDK owns the contract — this trait,
-//! `ObserveHook`, and the span schema in [`observe`](crate::observe) — and
-//! never a renderer of it.
+//! This trait and `ObserveHook` are host-side rendering seams. The shared span
+//! schema and attribute vocabulary live in [`bitrouter_ai::observe`], without
+//! depending on a renderer or this host runtime.
 //!
 //! Spend / token / rate aggregations are *not* SDK concerns. Any deployment
 //! that needs them owns its own storage; see the OSS binary's `metering`

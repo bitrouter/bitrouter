@@ -10,7 +10,7 @@
 //!
 //! Three consumers, all of them checked rather than advisory:
 //!
-//! 1. `crates/bitrouter-sdk/span-schema.json` is rendered from
+//! 1. `crates/bitrouter-ai/span-schema.json` is rendered from
 //!    [`render_json`] and committed, and an ordinary test fails when it goes
 //!    stale — so the declaration cannot drift from the renderers without a
 //!    visible diff. It ships with the crate: it is the file a deployment
@@ -37,7 +37,7 @@
 //! dependency, so a renderer enables it under `[dev-dependencies]` and pays
 //! nothing at build time.
 //!
-//! [`SpanAttributes`]: crate::observe::SpanAttributes
+//! [`SpanAttributes`]: crate::observe::span_attributes::SpanAttributes
 
 use serde::Serialize;
 
@@ -1136,7 +1136,7 @@ pub fn span_def_for(name: &str, kind: SpanKind) -> Option<&'static SpanDef> {
 
 /// Render the declaration as the committed JSON artifact.
 ///
-/// The output is `crates/bitrouter-sdk/span-schema.json`, kept in step by the
+/// The output is `crates/bitrouter-ai/span-schema.json`, kept in step by the
 /// test below. Ordering is declaration order throughout, so the diff is
 /// stable, and a schema change shows up in review as a diff of the wire
 /// surface rather than as a line buried in a renderer.
@@ -1158,14 +1158,14 @@ mod tests {
 
     /// Regeneration command, quoted in the failure message so the fix is in
     /// front of whoever hits it.
-    const REGENERATE: &str = "UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-sdk committed_artifact";
+    const REGENERATE: &str = "UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-ai committed_artifact";
 
     fn artifact_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("span-schema.json")
     }
 
     #[test]
-    fn the_committed_artifact_matches_the_declaration() {
+    fn the_committed_artifact_matches_the_declaration() -> Result<(), Box<dyn std::error::Error>> {
         // The diff-in-CI half of the guard. It rides the ordinary test job
         // rather than a bespoke one: `cargo nextest run --all-features` is
         // already what CI and CLAUDE.md run, and a schema artifact nobody
@@ -1179,33 +1179,33 @@ mod tests {
         // stack into that helper's tree, which `feature-isolation` forbids by
         // name; with the declaration ungated and dependency-free that
         // objection is gone. What remains is placement: this artifact IS the
-        // interop surface and ships with the crate, so it belongs beside
-        // `public-api-deps.txt` — the crate's other generated, review-facing
-        // manifest — and not in a tree of build outputs.
+        // interop surface and ships with the contract crate rather than in
+        // a tree of build outputs.
         let path = artifact_path();
-        let rendered = render_json().expect("a tree of &'static str serializes");
+        let rendered = render_json()?;
 
         if std::env::var_os("UPDATE_SPAN_SCHEMA").is_some() {
-            std::fs::write(&path, &rendered).expect("writing the span-schema artifact");
-            return;
+            std::fs::write(&path, &rendered)?;
+            return Ok(());
         }
 
-        let committed = std::fs::read_to_string(&path).unwrap_or_else(|err| {
-            panic!("reading {} ({err}) - run `{REGENERATE}`", path.display())
-        });
+        let committed = std::fs::read_to_string(&path)
+            .map_err(|err| format!("reading {} ({err}) - run `{REGENERATE}`", path.display()))?;
         assert_eq!(
             committed,
             rendered,
             "{} is stale - run `{REGENERATE}` and commit the result",
             path.display()
         );
+        Ok(())
     }
 
     #[test]
-    fn the_declaration_renders() {
-        let rendered = render_json().expect("a tree of &'static str serializes");
+    fn the_declaration_renders() -> Result<(), serde_json::Error> {
+        let rendered = render_json()?;
         assert!(rendered.ends_with('\n'), "artifact ends with a newline");
         assert!(rendered.contains("io.bitrouter.observe"));
+        Ok(())
     }
 
     #[test]
@@ -1228,19 +1228,20 @@ mod tests {
     }
 
     #[test]
-    fn every_declared_span_resolves_to_itself() {
+    fn every_declared_span_resolves_to_itself() -> Result<(), String> {
         // The matcher has to be unambiguous or both conformance tests would
         // check exported spans against the wrong declaration and pass.
         for span in SCHEMA.spans {
             let sample = format!("{}sample", literal_prefix(span.name));
             let resolved = span_def_for(&sample, span.kind)
-                .unwrap_or_else(|| panic!("{} does not resolve through span_def_for", span.name));
+                .ok_or_else(|| format!("{} does not resolve through span_def_for", span.name))?;
             assert_eq!(
                 resolved.name, span.name,
                 "{} resolves to {} — the (name prefix, kind) pair is ambiguous",
                 span.name, resolved.name
             );
         }
+        Ok(())
     }
 
     #[test]

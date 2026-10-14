@@ -167,6 +167,33 @@ pub enum ModelOperation {
     Decisions,
 }
 
+/// Operations explicitly supported by a host, hook, or native checker.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationScope {
+    /// Generative calls only; the default for existing registrations.
+    #[default]
+    Generation,
+    /// Native decision calls only.
+    Decisions,
+    /// Both implemented model operations.
+    Both,
+}
+
+impl OperationScope {
+    /// Whether this scope includes one operation.
+    pub fn contains(self, operation: ModelOperation) -> bool {
+        matches!(self, Self::Both)
+            || matches!(
+                (self, operation),
+                (Self::Generation, ModelOperation::Generation)
+                    | (Self::Decisions, ModelOperation::Decisions)
+            )
+    }
+}
+
 /// A wire protocol always (de)serializes as a string: one of the known
 /// values, or any other string for an externally-registered `Custom` protocol.
 /// Hand-written because the `Custom(String)` variant means the value is an

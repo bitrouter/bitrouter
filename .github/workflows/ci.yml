@@ -287,7 +287,7 @@ jobs:
       - run: cargo check -p bitrouter-sdk --no-default-features
       - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
       - run: cargo check -p bitrouter-guardrails
-      - run: cargo check -p bitrouter-guardrails --no-default-features --features sdk
+      - run: cargo check -p bitrouter --features guardrails
       - name: guardrails and the default host have separate dependency trees
         shell: bash
         run: |
@@ -515,13 +515,11 @@ jobs:
           # Prove the surface under test is in the listing before trusting
           # anything the listing does not say.
           #
-          # Both sentinels name the observability contract, which is what the
-          # negative gates are ultimately about. They are ungated, so unlike
-          # their predecessors they cannot go missing because a feature stopped
-          # resolving — if they are absent, the listing itself is broken.
+          # Verify ungated host API declarations before using negative checks.
+          # Contract declarations now belong to bitrouter-ai.
           for sentinel in \
-            'pub mod bitrouter_sdk::observe' \
-            'pub fn bitrouter_sdk::observe::schema::is_reserved_attribute_key'; do
+            'pub mod bitrouter_sdk::extension' \
+            'pub fn bitrouter_sdk::extension::ExtensionApi::request_check'; do
             if ! grep -qF "$sentinel" "$RUNNER_TEMP/public-api.txt"; then
               echo "::error::'$sentinel' is missing — the listing is not real; do not trust the negative gates below"
               exit 1

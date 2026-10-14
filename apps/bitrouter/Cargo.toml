@@ -19,7 +19,12 @@ path = "src/lib.rs"
 name = "bro"
 path = "src/main.rs"
 
+[features]
+default = []
+guardrails = ["dep:bitrouter-guardrails"]
+
 [dependencies]
+bitrouter-guardrails = { workspace = true, optional = true }
 bitrouter-ai = { workspace = true, features = ["pkce", "hosted-login", "file-store"] }
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp"] }
 bitrouter-orchestrator = { workspace = true, features = ["acp"] }

@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{ApiProtocol, Usage, UsageOrigin};
-use bitrouter_sdk::event::PipelineEvent;
 use bitrouter_sdk::language_model::context::PipelineContext;
 use bitrouter_sdk::language_model::hooks::RouteHook;
 use bitrouter_sdk::language_model::settlement::SettlementContext;

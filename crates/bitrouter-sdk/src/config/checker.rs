@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::error::{BitrouterError, Result};
-use crate::extension::request_check::validate_revision;
+use bitrouter_ai::extension::request_check::validate_revision;
 
 /// A request-check implementation explicitly linked by a custom host.
 ///

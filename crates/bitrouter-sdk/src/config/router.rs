@@ -54,11 +54,11 @@ pub struct RouterRequestCheck {
 /// Default total checker deadline.
 pub const DEFAULT_CHECKER_TIMEOUT_MS: u64 = 500;
 /// Longest configurable checker deadline.
-pub const MAX_CHECKER_TIMEOUT_MS: u64 = crate::extension::request_check::MAX_TIMEOUT_MS;
+pub const MAX_CHECKER_TIMEOUT_MS: u64 = bitrouter_ai::extension::request_check::MAX_TIMEOUT_MS;
 /// Default projected-text byte limit.
 pub const DEFAULT_CHECKER_MAX_INPUT_BYTES: u64 = 256 * 1024;
 /// Largest configurable projected-text byte limit.
-pub const MAX_CHECKER_INPUT_BYTES: u64 = crate::extension::request_check::MAX_INPUT_BYTES;
+pub const MAX_CHECKER_INPUT_BYTES: u64 = bitrouter_ai::extension::request_check::MAX_INPUT_BYTES;
 const fn default_checker_timeout_ms() -> u64 {
     DEFAULT_CHECKER_TIMEOUT_MS
 }

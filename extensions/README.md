@@ -34,7 +34,7 @@ This is one typed author entry point, currently exposing only request-check.
 It is not a generic event handler, dynamic loader or permission sandbox, and
 it does not expose the host builder, global hooks, credentials or migrations.
 Capability inputs and decisions live alongside this entry point in
-`bitrouter_sdk::extension::request_check`; they contain no HTTP envelope.
+`bitrouter_ai::extension::request_check`; they contain no HTTP envelope.
 Extensions may call external services internally, without a host-managed remote
 extension transport.
 

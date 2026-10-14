@@ -983,7 +983,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         first_token_kind: None,
         finish_reason: None,
         error: None,
-        events: bitrouter_sdk::EventBus::new(),
+        events: bitrouter_sdk::event::EventBus::new(),
     };
     settled.emit(tariff);
     settled.emit(SessionIdentityObserved {

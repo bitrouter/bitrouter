@@ -11,7 +11,7 @@ use crate::language_model::executor::Executor;
 use crate::language_model::hooks::{
     ExecutionHook, ObserveHook, PreRequestHook, RouteHook, StreamHook,
 };
-use crate::language_model::operations::{HookRegistration, HookStage, OperationScope};
+use crate::language_model::operations::{HookRegistration, HookStage};
 use crate::language_model::pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 use crate::language_model::request_checks::RequestCheckerRunner;
 use crate::language_model::routing::ModelSelector;
@@ -19,6 +19,7 @@ use crate::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy, Rout
 use crate::language_model::server_tools::loop_controller::ServerToolLoop;
 use crate::language_model::settlement::{RequiredFinalizer, SettlementRecorder};
 use bitrouter_ai::types::ModelOperation;
+use bitrouter_ai::types::OperationScope;
 
 /// Builds a [`Pipeline`] for the `language_model` protocol. Every method takes
 /// `&mut self` and returns `&mut Self`, so it composes both inside the

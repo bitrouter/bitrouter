@@ -1,17 +1,9 @@
-//! [`SpanAttributes`] — a generic, serialize-only pipeline event that carries
-//! extra span attributes forward to the OTel exporter's `on_request_end`.
+//! Additional observation attributes supplied by a host or extension.
 //!
-//! A deployment (e.g. `bitrouter-cloud`) that computes attributes the SDK does
-//! not know about — request cost, namespace, routing profile — emits a
-//! `SpanAttributes` from its [`SettlementRecorder`]; the exporter stamps every
-//! entry onto the request's root `chat` span. Keeping it a plain
-//! `serde_json::Map` means no backend concept (billing, tenancy, …) leaks into
-//! the SDK: every future attribute rides for free, named by the emitter (e.g.
-//! PostHog's `$ai_total_cost_usd`).
-//!
-//! [`SettlementRecorder`]: crate::language_model::SettlementRecorder
+//! Hosts emit this event during settlement. Exporters apply the schema's
+//! reserved-key and scalar-value rules without exposing transport types here.
 
-use crate::PipelineEvent;
+use crate::event::PipelineEvent;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -32,7 +24,7 @@ use serde_json::{Map, Value};
 /// `$ai_total_cost_usd`).
 ///
 /// The full reserved region is the committed artifact
-/// `crates/bitrouter-sdk/span-schema.json`.
+/// `crates/bitrouter-ai/span-schema.json`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SpanAttributes(pub Map<String, Value>);
 

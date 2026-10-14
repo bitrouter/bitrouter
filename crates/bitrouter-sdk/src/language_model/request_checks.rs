@@ -9,11 +9,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::extension::request_check::{
+use bitrouter_ai::decisions::{DecisionRequest, DecisionTextKind};
+use bitrouter_ai::extension::request_check::{
     ContentFragment, ContentFragmentKind, ContentRole, Decision, Input, RequestCheckCoverage,
     RequestCheckCoverageScope, RequestCheckCoverageStatus,
 };
-use bitrouter_ai::decisions::{DecisionRequest, DecisionTextKind};
 use bitrouter_ai::types::{
     Content, ModelOperation, Prompt, Role, ToolResultContentPart, ToolResultOutput,
 };
@@ -34,14 +34,12 @@ pub struct RequestCheckBinding {
     pub timeout_ms: u64,
 }
 
-impl From<Role> for ContentRole {
-    fn from(value: Role) -> Self {
-        match value {
-            Role::System => Self::System,
-            Role::User => Self::User,
-            Role::Assistant => Self::Assistant,
-            Role::Tool => Self::Tool,
-        }
+fn content_role(value: Role) -> ContentRole {
+    match value {
+        Role::System => ContentRole::System,
+        Role::User => ContentRole::User,
+        Role::Assistant => ContentRole::Assistant,
+        Role::Tool => ContentRole::Tool,
     }
 }
 
@@ -107,7 +105,8 @@ pub trait RequestCheckerRunner: Send + Sync {
     ) -> std::result::Result<CheckerResult, CheckerFailure>;
 }
 
-const MAX_PROJECTED_FRAGMENTS: u64 = crate::extension::request_check::MAX_CONTENT_FRAGMENTS as u64;
+const MAX_PROJECTED_FRAGMENTS: u64 =
+    bitrouter_ai::extension::request_check::MAX_CONTENT_FRAGMENTS as u64;
 
 struct ContentProjection {
     fragments: Vec<ContentFragment>,
@@ -279,7 +278,7 @@ pub(crate) fn content_fragments(
         projection.push(ContentRole::System, ContentFragmentKind::Text, system)?;
     }
     for message in &prompt.messages {
-        let role = ContentRole::from(message.role);
+        let role = content_role(message.role);
         for content in &message.content {
             if super::native_context::is_opaque_reasoning(content) {
                 continue;
