@@ -10,6 +10,7 @@ pub(super) enum Scope {
     Decision(String, String),
     Acceptance(String, String),
     Budget(String),
+    Withdrawal(String, String),
 }
 
 impl Scope {
@@ -23,7 +24,12 @@ impl Scope {
     pub(super) fn effect(effect: &Effect) -> Option<Self> {
         match effect {
             Effect::Create { .. } => Some(Self::New),
-            Effect::Submit { goal_id, .. } => Some(Self::Input(goal_id.clone())),
+            Effect::Submit { goal_id, text } => {
+                match bitrouter_orchestrator::goal::input::withdrawal_reference(text) {
+                    Ok(Some(id)) => Some(Self::Withdrawal(goal_id.clone(), id.into())),
+                    _ => Some(Self::Input(goal_id.clone())),
+                }
+            }
             Effect::Control { goal_id, .. } => Some(Self::Control(goal_id.clone())),
             Effect::Respond {
                 goal_id,
@@ -55,6 +61,9 @@ impl Scope {
                 ..
             } => Ok(Self::Acceptance(goal_id.clone(), attempt_id.clone())),
             GoalCommand::SetBudget { goal_id, .. } => Ok(Self::Budget(goal_id.clone())),
+            GoalCommand::WithdrawInput {
+                goal_id, input_id, ..
+            } => Ok(Self::Withdrawal(goal_id.clone(), input_id.clone())),
             _ => anyhow::bail!("client admission must be a mutation"),
         }
     }

@@ -1,7 +1,412 @@
 use super::*;
 use bitrouter_orchestrator::goal::input::{
-    ControlProposal, Event, Interpretation, Stage, TaskUpdate,
+    ClarificationKind, ControlProposal, Event, Interpretation, Resolution, ResolutionKind, Stage,
+    TaskUpdate,
 };
+
+#[tokio::test]
+async fn clarification_resolution_preserves_scope_and_rejects_false_or_stale_closure() -> Result<()>
+{
+    let db = database().await?;
+    let goals = service(db.clone());
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let operation = admit(&goals, &id, "left-question", Some("left")).await?;
+    begin(&goals, &id, operation).await?;
+    finish(
+        &goals,
+        &id,
+        "left-question",
+        Interpretation {
+            clarification: Some("Which left regression should be added?".into()),
+            clarification_kind: Some(ClarificationKind::Change),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let operation = admit(&goals, &id, "resolution-reply", Some("left")).await?;
+    begin(&goals, &id, operation).await?;
+    let head = snapshot(&goals, &id).await?;
+    let resolution = Resolution {
+        input_id: "left-question".into(),
+        source_requirements_revision: 1,
+        kind: ResolutionKind::Applied,
+    };
+    for candidate in [
+        Resolution {
+            input_id: "absent-question".into(),
+            ..resolution.clone()
+        },
+        Resolution {
+            source_requirements_revision: 2,
+            ..resolution.clone()
+        },
+        Resolution {
+            kind: ResolutionKind::Answered,
+            ..resolution.clone()
+        },
+        resolution.clone(),
+    ] {
+        let mut proposal = query("A factual answer is not implementation of a requested change");
+        proposal.resolutions = vec![candidate];
+        assert!(
+            finish(&goals, &id, "resolution-reply", proposal)
+                .await
+                .is_err()
+        );
+        let unchanged = snapshot(&service(db.clone()), &id).await?;
+        assert_eq!(unchanged.revision, head.revision);
+        assert_eq!(unchanged.inputs.unresolved_inputs().len(), 1);
+    }
+    let mut proposal = query("Save the specifically requested left requirement");
+    proposal.resolutions = vec![resolution];
+    proposal.task_updates = vec![TaskUpdate {
+        task_id: "left".into(),
+        instruction: "Original work plus the clarified left regression".into(),
+        resources: None,
+    }];
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    db.execute(Statement::from_string(DatabaseBackend::Sqlite,
+        "CREATE TRIGGER reject_resolution BEFORE INSERT ON bro_goal_operations WHEN NEW.id = 'resolution-reply-finish' BEGIN SELECT RAISE(ABORT, 'fixture resolution persistence failure'); END".to_owned())).await?;
+    assert!(matches!(
+        finish(&goals, &id, "resolution-reply", proposal.clone()).await,
+        Err(error) if matches!(error.downcast_ref::<GoalError>(), Some(GoalError::Storage { .. }))
+    ));
+    assert_eq!(snapshot(&service(db.clone()), &id).await?, head);
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "DROP TRIGGER reject_resolution".to_owned(),
+    ))
+    .await?;
+    finish(&goals, &id, "resolution-reply", proposal).await?;
+    let saved = snapshot(&service(db), &id).await?;
+    assert_eq!(saved.requirements_revision, 2);
+    assert!(saved.inputs.unresolved_inputs().is_empty());
+    assert_eq!(saved.workflow.tasks[0].requirements_revision, 2);
+    assert_eq!(saved.workflow.tasks[1].requirements_revision, 1);
+    assert_eq!(saved.workflow.tasks[2].requirements_revision, 2);
+    assert_eq!(
+        saved
+            .inputs
+            .latest
+            .context("missing resolution result")?
+            .resolutions[0]
+            .input_id,
+        "left-question"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_clarification_reference_closes_only_that_request_and_never_another_goal()
+-> Result<()> {
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    for (key, task) in [("first-question", "left"), ("second-question", "right")] {
+        let operation = admit(&goals, &id, key, Some(task)).await?;
+        begin(&goals, &id, operation).await?;
+        finish(
+            &goals,
+            &id,
+            key,
+            Interpretation {
+                clarification: Some(format!("Which {task} requirement should change?")),
+                clarification_kind: Some(ClarificationKind::Change),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    let head = snapshot(&goals, &id).await?;
+    let operation = accepted(
+        goals
+            .execute(
+                "local",
+                GoalCommand::Input {
+                    operation_id: "explicit-withdrawal".into(),
+                    goal_id: id.clone(),
+                    expected_revision: head.revision,
+                    text: "/input first-question Withdraw that request only".into(),
+                    task_reference: None,
+                },
+                100,
+            )
+            .await?,
+    )?;
+    begin(&goals, &id, operation).await?;
+    let mut proposal = query("This request was withdrawn; other work is unchanged");
+    proposal.resolutions = vec![Resolution {
+        input_id: "second-question".into(),
+        source_requirements_revision: 1,
+        kind: ResolutionKind::Withdrawn,
+    }];
+    assert!(
+        finish(&goals, &id, "explicit-withdrawal", proposal.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        snapshot(&goals, &id)
+            .await?
+            .inputs
+            .unresolved_inputs()
+            .len(),
+        2
+    );
+    proposal.resolutions[0].input_id = "first-question".into();
+    finish(&goals, &id, "explicit-withdrawal", proposal).await?;
+    let saved = snapshot(&goals, &id).await?;
+    assert_eq!(saved.inputs.unresolved_inputs().len(), 1);
+    assert_eq!(
+        saved.inputs.unresolved_inputs()[0].input_id,
+        "second-question"
+    );
+    assert_eq!(saved.requirements_revision, 1);
+    assert_eq!(saved.run_intent, RunIntent::Run);
+    let other = accepted(
+        goals
+            .execute(
+                "local",
+                GoalCommand::Create {
+                    operation_id: "other-goal".into(),
+                    title: "Other Goal".into(),
+                    workspace: workspace.path().into(),
+                    objective: "Independent work".into(),
+                    budget_limits: Default::default(),
+                },
+                120,
+            )
+            .await?,
+    )?
+    .goal_id;
+    assert!(matches!(
+        goals
+            .execute(
+                "local",
+                GoalCommand::Input {
+                    operation_id: "foreign-reference".into(),
+                    goal_id: other.clone(),
+                    expected_revision: 1,
+                    text: "/input second-question Withdraw the other Goal request".into(),
+                    task_reference: None,
+                },
+                130
+            )
+            .await,
+        Err(GoalError::NotFound)
+    ));
+    assert!(matches!(
+        goals
+            .clarification_context("local", &other, Some("second-question"))
+            .await,
+        Err(GoalError::NotFound)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_latest_only_question_retains_its_original_scope_after_query_and_reload()
+-> Result<()> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    let db = database().await?;
+    let goals = service(db.clone());
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let operation = admit(&goals, &id, "legacy-question", Some("left")).await?;
+    begin(&goals, &id, operation).await?;
+    finish(
+        &goals,
+        &id,
+        "legacy-question",
+        Interpretation {
+            clarification: Some("Original unresolved left request".into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let mut legacy = serde_json::to_value(snapshot(&goals, &id).await?)?;
+    legacy["inputs"]
+        .as_object_mut()
+        .context("inputs must be an object")?
+        .remove("unresolved");
+    let latest = legacy["inputs"]["latest"]
+        .as_object_mut()
+        .context("latest must be an object")?;
+    latest.remove("clarification_kind");
+    latest.remove("resolutions");
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE bro_goals SET payload = ? WHERE owner = ? AND id = ?",
+            vec![
+                serde_json::to_vec(&legacy)?.into(),
+                "local".into(),
+                id.clone().into(),
+            ],
+        ))
+        .await?;
+    assert_eq!(result.rows_affected(), 1);
+    let restored = service(db.clone());
+    assert!(
+        snapshot(&restored, &id)
+            .await?
+            .inputs
+            .completion_waits_for_input()
+    );
+    let operation = admit(&restored, &id, "legacy-unrelated-query", None).await?;
+    begin(&restored, &id, operation).await?;
+    finish(
+        &restored,
+        &id,
+        "legacy-unrelated-query",
+        query("An unrelated factual answer"),
+    )
+    .await?;
+    let saved = snapshot(&service(db), &id).await?;
+    assert_eq!(saved.inputs.unresolved.len(), 1);
+    assert_eq!(saved.inputs.unresolved[0].input_id, "legacy-question");
+    assert_eq!(
+        saved.inputs.unresolved[0].task_reference.as_deref(),
+        Some("left")
+    );
+    assert!(saved.inputs.completion_waits_for_input());
+    assert_eq!(saved.requirements_revision, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn direct_withdrawal_works_without_model_or_budget_and_preserves_other_inputs() -> Result<()>
+{
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    let db = database().await?;
+    let goals = service(db.clone());
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    for key in ["withdraw-first", "retain-second"] {
+        let operation = admit(&goals, &id, key, None).await?;
+        begin(&goals, &id, operation).await?;
+        finish(
+            &goals,
+            &id,
+            key,
+            Interpretation {
+                clarification: Some("Which required addition?".into()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    let queued = admit(&goals, &id, "retain-queued-input", None).await?;
+    let head = snapshot(&goals, &id).await?;
+    goals
+        .execute(
+            "local",
+            GoalCommand::Control {
+                operation_id: "pause-before-withdrawal".into(),
+                goal_id: id.clone(),
+                expected_revision: head.revision,
+                intent: RunIntent::Pause,
+            },
+            200,
+        )
+        .await?;
+    let head = snapshot(&goals, &id).await?;
+    goals
+        .execute(
+            "local",
+            GoalCommand::SetBudget {
+                operation_id: "cap-before-withdrawal".into(),
+                goal_id: id.clone(),
+                expected_revision: head.revision,
+                limits: bitrouter_orchestrator::goal::budget::Limits {
+                    elapsed_ms: Some(1),
+                    managed_token_estimates_micro_usd: None,
+                },
+            },
+            210,
+        )
+        .await?;
+    let before = snapshot(&goals, &id).await?;
+    let command = GoalCommand::WithdrawInput {
+        operation_id: "direct-withdrawal".into(),
+        goal_id: id.clone(),
+        expected_revision: before.revision,
+        input_id: "withdraw-first".into(),
+        source_requirements_revision: 1,
+    };
+    let mut wrong = command.clone();
+    if let GoalCommand::WithdrawInput {
+        source_requirements_revision,
+        ..
+    } = &mut wrong
+    {
+        *source_requirements_revision = 2;
+    }
+    assert!(matches!(
+        goals.execute("local", wrong, 220).await,
+        Err(GoalError::Conflict)
+    ));
+    db.execute(Statement::from_string(DatabaseBackend::Sqlite,
+        "CREATE TRIGGER reject_direct_withdrawal BEFORE INSERT ON bro_goal_operations WHEN NEW.id = 'direct-withdrawal' BEGIN SELECT RAISE(ABORT, 'fixture withdrawal persistence failure'); END".to_owned())).await?;
+    assert!(matches!(
+        goals.execute("local", command.clone(), 220).await,
+        Err(GoalError::Storage { .. })
+    ));
+    assert_eq!(snapshot(&service(db.clone()), &id).await?, before);
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "DROP TRIGGER reject_direct_withdrawal".to_owned(),
+    ))
+    .await?;
+    let first = goals.execute("local", command.clone(), 230).await?;
+    let replay = goals.execute("local", command, 240).await?;
+    assert_eq!(serde_json::to_value(first)?, serde_json::to_value(replay)?);
+    let after = snapshot(&service(db), &id).await?;
+    assert_eq!(after.inputs.unresolved_inputs().len(), 1);
+    assert_eq!(
+        after.inputs.unresolved_inputs()[0].input_id,
+        "retain-second"
+    );
+    assert_eq!(after.inputs.after_revision, before.inputs.after_revision);
+    assert_eq!(goals.next_input("local", &id).await?, Some(queued));
+    assert_eq!(after.requirements_revision, before.requirements_revision);
+    assert_eq!(after.run_intent, RunIntent::Pause);
+    assert_eq!(
+        after.control_source_revision,
+        before.control_source_revision
+    );
+    assert_eq!(after.budget, before.budget);
+    assert_eq!(after.accounting, before.accounting);
+    assert!(
+        after
+            .inputs
+            .latest
+            .context("missing direct disposition")?
+            .reasoning_request_id
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn only_an_exact_unquoted_withdrawal_uses_the_direct_path() -> Result<()> {
+    use bitrouter_orchestrator::goal::input::withdrawal_reference;
+    assert_eq!(
+        withdrawal_reference(" /input existing-id /withdraw ")?,
+        Some("existing-id")
+    );
+    for input in [
+        "/input existing-id please withdraw it",
+        "/input existing-id /withdraw please",
+        "\"/input existing-id /withdraw\"",
+        "If I use /input existing-id /withdraw what happens?",
+        "/input existing-id /withdraw\nthen resume",
+    ] {
+        assert_eq!(withdrawal_reference(input)?, None);
+    }
+    Ok(())
+}
 
 async fn admit(
     goals: &GoalService,
@@ -54,6 +459,8 @@ fn query(answer: &str) -> Interpretation {
         task_updates: Vec::new(),
         control: None,
         permission_response: None,
+        clarification_kind: None,
+        resolutions: Vec::new(),
         clarification: None,
     }
 }
@@ -468,6 +875,8 @@ async fn explicit_task_reference_cannot_modify_another_task_or_control_goal() ->
             task_updates: Vec::new(),
             control: None,
             permission_response: None,
+            clarification_kind: None,
+            resolutions: Vec::new(),
             clarification: Some("Clarify the intended task control".into()),
         },
     )

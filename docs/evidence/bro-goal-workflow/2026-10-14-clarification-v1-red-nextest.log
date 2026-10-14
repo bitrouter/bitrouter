@@ -1,0 +1,61 @@
+   Compiling rustls v0.23.41
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-schema v0.16.2
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID f65208e6-a547-464a-bab1-f9336f107710 with nextest profile: default
+    Starting 1 test across 1 binary (63 tests skipped)
+        FAIL [   0.055s] (1/1) bitrouter::goals completion_tests::unresolved_change_survives_a_query_and_fences_ready_completion
+  stdout ───
+
+    running 1 test
+    test completion_tests::unresolved_change_survives_a_query_and_fences_ready_completion ... FAILED
+
+    failures:
+
+    failures:
+        completion_tests::unresolved_change_survives_a_query_and_fences_ready_completion
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 63 filtered out; finished in 0.04s
+
+  stderr ───
+
+    thread 'completion_tests::unresolved_change_survives_a_query_and_fences_ready_completion' (1929686) panicked at apps/bitrouter/tests/goals/completion.rs:501:5:
+    assertion failed: matches!(change(&goals, &id, "clarification-cannot-complete", 1,
+        commit(&artifact)).await, Err(GoalError::Conflict))
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure:
+────────────
+     Summary [   0.062s] 1 test run: 0 passed, 1 failed, 63 skipped
+        FAIL [   0.055s] (1/1) bitrouter::goals completion_tests::unresolved_change_survives_a_query_and_fences_ready_completion
+error: test run failed

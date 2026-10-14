@@ -1,0 +1,31 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 59.51s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID f32e762e-d448-4ba9-a860-042a4210ffde with nextest profile: default
+    Starting 10 tests across 1 binary (1737 tests skipped)
+        PASS [   0.096s] ( 1/10) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work
+        PASS [   0.101s] ( 2/10) bitrouter goal_runtime::model_control::tests::bounded_accounting_conflicts_do_not_poison_model_admission
+        PASS [   0.120s] ( 3/10) bitrouter goal_runtime::model_control::tests::persistent_accounting_failure_retains_its_cause_and_fences_new_work
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::goal_model_route_is_confirmed_before_prompt_and_persisted_through_delivery
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [  76.849s] ( 4/10) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [  81.680s] ( 5/10) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [  81.874s] ( 6/10) bitrouter goal_runtime::tests::goal_model_route_is_confirmed_before_prompt_and_persisted_through_delivery
+        PASS [  81.999s] ( 7/10) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+        PASS [  83.010s] ( 8/10) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [  83.743s] ( 9/10) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [  84.648s] (10/10) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+────────────
+     Summary [  84.657s] 10 tests run: 10 passed (7 slow), 1737 skipped
