@@ -214,17 +214,39 @@ impl GoalStore for DatabaseGoalStore {
             .await
             .map_err(storage_error)?;
         let mut operations = Vec::new();
-        let mut bytes = 0;
+        // Reserve the actual page envelope, using the longest possible cursor.
+        let mut bytes = serde_json::to_vec(&HistoryPage {
+            operations: Vec::new(),
+            cutoff,
+            next_after: Some(u64::MAX),
+        })
+        .map_err(storage_error)?
+        .len();
         let mut cursor = after;
         let mut more = false;
         for row in rows {
-            if operations.len() == limit || bytes + row.payload.len() > MAX_RECORD_BYTES {
+            if operations.len() == limit {
                 more = true;
                 break;
             }
-            bytes += row.payload.len();
-            cursor = unsigned(row.revision)?;
-            operations.push(receipt(row)?);
+            let operation = receipt(row)?;
+            let size = serde_json::to_vec(&operation).map_err(storage_error)?.len()
+                + usize::from(!operations.is_empty());
+            if bytes + size > MAX_RECORD_BYTES {
+                if operations.is_empty() {
+                    return Err(GoalError::Invalid {
+                        message: format!(
+                            "Goal history record {} does not fit a bounded page; query its operation identity",
+                            operation.id
+                        ),
+                    });
+                }
+                more = true;
+                break;
+            }
+            bytes += size;
+            cursor = operation.revision;
+            operations.push(operation);
         }
         Ok(HistoryPage {
             operations,

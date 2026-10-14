@@ -1,0 +1,63 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+error[E0063]: missing field `native_session_id` in initializer of `bitrouter_orchestrator::goal::workflow::Observation`
+  --> apps/bitrouter/tests/goals/archive.rs:59:30
+   |
+59 |                 observation: Observation::Candidate {
+   |                              ^^^^^^^^^^^^^^^^^^^^^^ missing `native_session_id`
+
+error[E0369]: binary operation `==` cannot be applied to type `bitrouter_orchestrator::goal::GoalReply`
+   --> apps/bitrouter/tests/goals/archive.rs:256:5
+    |
+256 | /     assert_eq!(
+257 | |         service(cold_db)
+258 | |             .execute(
+259 | |                 "local",
+...   |
+269 | |     );
+    | |     ^
+    | |     |
+    | |_____bitrouter_orchestrator::goal::GoalReply
+    |       bitrouter_orchestrator::goal::GoalReply
+    |
+note: `bitrouter_orchestrator::goal::GoalReply` does not implement `PartialEq`
+   --> crates/bitrouter-orchestrator/src/goal.rs:190:1
+    |
+190 | pub enum GoalReply {
+    | ^^^^^^^^^^^^^^^^^^ `bitrouter_orchestrator::goal::GoalReply` is defined in another crate
+
+Some errors have detailed explanations: E0063, E0369.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `bitrouter` (test "goals") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter --test goals --all-features --locked` exited with code 101
