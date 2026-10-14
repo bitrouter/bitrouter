@@ -31,11 +31,15 @@ impl Drop for ReleaseReads {
     }
 }
 
+// Debug checkpoint fixtures can delay filesystem workers on shared CI runners.
+// This bounds test synchronization; concurrency is asserted through the read gate.
+const WORKER_TEST_TIMEOUT: Duration = Duration::from_secs(15);
+
 async fn wait_for_reads(
     gate: &crate::harness::tools::ReadGate,
     count: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(WORKER_TEST_TIMEOUT, async {
         loop {
             if gate.entered()?.0.len() >= count {
                 return Ok::<_, String>(());
@@ -43,7 +47,8 @@ async fn wait_for_reads(
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
-    .await??;
+    .await
+    .map_err(|error| format!("waiting for {count} gated reads: {error}"))??;
     Ok(())
 }
 
@@ -833,8 +838,9 @@ async fn independent_tasks_share_the_global_worker_bound() -> Result<(), Box<dyn
     gate.allow(None)?;
     for run in runs {
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(5), run)
-                .await??
+            tokio::time::timeout(WORKER_TEST_TIMEOUT, run)
+                .await
+                .map_err(|error| format!("waiting for a shared-worker run to finish: {error}"))??
                 .status,
             RunStatus::Completed
         );

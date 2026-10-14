@@ -5827,7 +5827,7 @@ presets:
             "auto",
             "auto",
             None,
-            "bitrouter:deepseek/deepseek-v4-flash-0731",
+            "bitrouter:qwen/qwen3.8-max",
         )
         .await?;
         let loaded = load(&update.path).await?;

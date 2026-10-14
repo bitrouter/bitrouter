@@ -18,21 +18,7 @@ api_protocol:
   - "*": openai
 auth_scheme: bearer
 kind: cloud
-models:
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek-v4-pro
-    pricing:
-      input_tokens:
-        no_cache: 1.67
-      output_tokens:
-        text: 3.33
-  - id: deepseek/deepseek-v4-flash
-    provider_model_id: deepseek-v4-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-      output_tokens:
-        text: 0.28
-status: active
+models: []
+status: suspended
 weight: 1
 submitted_at: 2026-07-07

@@ -388,6 +388,29 @@ the application for the next extraction. Eval/core client work, the complete
 feature matrix, compatibility fixtures, final P0 validation and PR remain open.
 
 A read-only history fetch found upstream `main` at `2fd95b1`, one catalog/test
-refresh commit beyond the frozen baseline. It has not yet been merged into this
-implementation branch; its relocated native-agent test changes require explicit
-integration. Baseline compatibility evidence remains tied to `9956a42`.
+refresh commit beyond the frozen baseline. The merge preserves the catalog
+refresh and maps the native-agent test synchronization fixes to their harness
+destination. Independent review found all 32 upstream changes retained and no
+resurrected package or stale ownership paths. Registry validation and generated
+artifact checks passed; the 32 advisory messages concern existing non-curated
+models and unpinned/unverified external agent entries, not validation failures.
+The focused run passed **94 tests**, including the policy/native-agent tests and
+the resized/suspended agent-navigation PTY case. Baseline compatibility evidence
+remains tied to `9956a42`; the catalog refresh is an explicit upstream change.
+The two other affected suspend/resume and standalone-manager/attach PTY paths
+also passed in a focused run. These cases build their process fixture and were
+reported as slow; no retry or assertion relaxation was used. Formatting and
+patch whitespace checks passed after integration.
+
+Historical writer inspection also identified concrete source revisions for
+future persisted-payload fixtures. These are provenance candidates, not claims
+that fixtures have already been generated or replayed:
+
+| Runtime format | Inspected writer revision |
+| --- | --- |
+| 2 | `e2453004734b1a2723b5f7e54087e21f3e64a315` (PR 945, Thread/Turn execution) |
+| 3 | `321ccaad5fe69f7adb39e0230a11f6e1851ff84d` (PR 945, harness resources) |
+| 4 | `6298d781b12883dbc41c913087cd46e9e3c637f9` (PR 945, scoped instructions) |
+| 5 | No writer found in the inspected lineage; `a68c215` advances 4 directly to 6 while accepting 5. Its payload provenance remains an open evidence item. |
+| 6 | `a68c215f0b579aeb34dd15baf1670ef037c310f8` (PR 961, core checkpoints/artifacts) |
+| 7 | Frozen baseline `9956a427bd5d4316b3bf2359f88e293b158781d5` (PR 963, native ACP) |
