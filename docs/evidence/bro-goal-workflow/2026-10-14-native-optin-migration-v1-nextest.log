@@ -1,0 +1,90 @@
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: method `paste` is never used
+   --> apps/bitrouter/tests/code_tui_pty.rs:937:8
+    |
+855 | impl PtyRunner {
+    | -------------- method in this implementation
+...
+937 |     fn paste(&mut self, text: &str) -> Result<()> {
+    |        ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `close_to_composer` is never used
+    --> apps/bitrouter/tests/code_tui_pty.rs:1125:8
+     |
+1124 | impl CodeFixture {
+     | ---------------- method in this implementation
+1125 |     fn close_to_composer(&mut self) -> Result<()> {
+     |        ^^^^^^^^^^^^^^^^^
+
+warning: `bitrouter` (test "code_tui_pty") generated 2 warnings
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 15s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 56d0b89d-b903-464e-846c-672f994bb9f4 with nextest profile: default
+    Starting 30 tests across 1 binary (6 tests skipped)
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        PASS [  77.736s] ( 1/30) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        PASS [  78.055s] ( 2/30) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        PASS [   0.587s] ( 3/30) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        PASS [   0.467s] ( 4/30) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        PASS [   0.633s] ( 5/30) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        PASS [   0.034s] ( 6/30) bitrouter::code_tui_pty background::remote_context_rejects_background_and_session_mutations_before_local_start
+        PASS [   0.551s] ( 7/30) bitrouter::code_tui_pty background::schema_failure_never_becomes_ready_for_review
+        PASS [   1.430s] ( 8/30) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        PASS [   0.587s] ( 9/30) bitrouter::code_tui_pty background_cli_returns_before_settlement_and_run_survives_client_exit
+        PASS [   0.296s] (10/30) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        PASS [   0.564s] (11/30) bitrouter::code_tui_pty evolution::evolution_api_checkpoint_history_keeps_current_reward_and_original_revisions
+        PASS [   0.432s] (12/30) bitrouter::code_tui_pty evolution::native::coding::rust_coding_judge_uses_executed_pass_and_fail_results
+        PASS [   0.532s] (13/30) bitrouter::code_tui_pty evolution::session_api_client_loss_during_startup_keeps_daemon_ownership_until_explicit_stop
+        PASS [   0.442s] (14/30) bitrouter::code_tui_pty evolution::session_api_detach_preserves_pending_permissions_without_answering_or_stopping
+        PASS [   0.387s] (15/30) bitrouter::code_tui_pty evolution::session_api_explicit_detach_keeps_accepted_turn_running_and_delivers_after_client_exit
+        PASS [   0.411s] (16/30) bitrouter::code_tui_pty evolution::session_api_failed_settings_retain_the_last_confirmed_value
+        PASS [   0.434s] (17/30) bitrouter::code_tui_pty evolution::session_api_late_adapter_failure_keeps_completed_transcript_and_native_identity
+        PASS [   0.471s] (18/30) bitrouter::code_tui_pty evolution::session_api_load_replays_history_and_resume_preserves_distinct_native_ids
+        PASS [   1.397s] (19/30) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        PASS [   0.408s] (20/30) bitrouter::code_tui_pty evolution::session_api_overlapping_permissions_keep_identity_and_require_explicit_answers
+        PASS [   0.443s] (21/30) bitrouter::code_tui_pty evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+        PASS [   0.320s] (22/30) bitrouter::code_tui_pty explicit_socket_status_is_readonly_without_starting_an_agent
+        PASS [   0.436s] (23/30) bitrouter::code_tui_pty mock_acp_minimal_lifecycle_logs_exact_multiline_prompt_text
+        PASS [   0.366s] (24/30) bitrouter::code_tui_pty mock_acp_models_delayed_cancellation_and_overlapping_permissions
+        PASS [   0.489s] (25/30) bitrouter::code_tui_pty mock_acp_refusal_settles_the_original_prompt_without_replay
+        PASS [   0.013s] (26/30) bitrouter::code_tui_pty pty_runner_reads_writes_and_resizes_without_a_sleep
+        PASS [   0.016s] (27/30) bitrouter::code_tui_pty remote_cli_failure_keeps_the_remote_error_without_local_model_fallback
+        PASS [   0.038s] (28/30) bitrouter::code_tui_pty remote_cli_read_actions_preserve_authentication_and_never_start_local_work
+        PASS [   1.253s] (29/30) bitrouter::code_tui_pty native_attached_backlog_preserves_all_events_across_resize_and_reconnect
+        PASS [   0.804s] (30/30) bitrouter::code_tui_pty standalone_agents_and_attach_restore_terminal_without_stopping_runs
+────────────
+     Summary [  85.070s] 30 tests run: 30 passed (2 slow), 6 skipped

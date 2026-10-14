@@ -1,0 +1,44 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+    Checking rustls-webpki v0.103.13
+    Checking tokio-rustls v0.26.4
+    Checking rustls-platform-verifier v0.7.0
+    Checking sqlx-core v0.8.6
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.13.4
+    Checking bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+    Checking rmcp v3.3.0
+    Checking tonic v0.14.6
+    Checking tonic-prost v0.14.6
+    Checking opentelemetry-proto v0.32.0
+    Checking bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Checking tonic-types v0.14.6
+    Checking sqlx-sqlite v0.8.6
+    Checking sqlx-mysql v0.8.6
+    Checking sqlx-postgres v0.8.6
+    Checking opentelemetry-http v0.32.0
+    Checking opentelemetry-otlp v0.32.0
+    Checking sqlx v0.8.6
+    Checking sea-query-binder v0.7.0
+    Checking sea-schema v0.16.2
+    Checking sea-orm v1.1.20
+    Checking axoasset v2.0.1
+    Checking axoupdater v0.10.0
+    Checking sea-orm-migration v1.1.20
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Checking bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+    Checking bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+    Checking dist-helper v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/helpers/dist-helper)
+error: the borrowed expression implements the required traits
+   --> apps/bitrouter/tests/code_tui_pty/evolution/native/session.rs:244:46
+    |
+244 |                         serde_json::to_value(&option.kind).is_ok_and(|kind| kind == "allow_once")
+    |                                              ^^^^^^^^^^^^ help: change this to: `option.kind`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_borrows_for_generic_args
+    = note: `-D clippy::needless-borrows-for-generic-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrows_for_generic_args)]`
+
+error: could not compile `bitrouter` (test "code_tui_pty") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
