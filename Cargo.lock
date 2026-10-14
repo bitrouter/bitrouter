@@ -686,6 +686,7 @@ dependencies = [
  "http-body",
  "jsonschema",
  "keyring",
+ "nix 0.28.0",
  "opentelemetry-proto",
  "portable-pty",
  "prost",
@@ -1380,7 +1381,9 @@ checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
 dependencies = [
  "bitflags 2.13.0",
  "crossterm_winapi",
+ "filedescriptor",
  "futures-core",
+ "libc",
  "mio",
  "parking_lot",
  "rustix 0.38.44",

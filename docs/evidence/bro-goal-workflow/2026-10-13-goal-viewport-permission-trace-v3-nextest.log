@@ -1,0 +1,127 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling axoupdater v0.10.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 06s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID a6807f6c-6f25-4392-afe8-1079e243ec23 with nextest profile: default
+    Starting 1 test across 1 binary (2 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        FAIL [ 100.857s] (1/1) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+  stdout ───
+
+    running 1 test
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution has been running for over 60 seconds
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution ... FAILED
+
+    failures:
+
+    failures:
+        active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 100.84s
+
+  stderr ───
+    event trace: Key(KeyEvent { code: Char('r'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goals, false, Some((100, 24))) after=Goals/false/Some((100, 24)) effects=[Refresh]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goals, false, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[Observe("e260eee8-756e-416b-83e0-c7c7cdce9e44")]
+    Paste("  What is currently active? 中文 👩\u{200d}💻\nDo not change anything.  ") before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[Submit { goal_id: "e260eee8-756e-416b-83e0-c7c7cdce9e44", text: "  What is currently active? 中文 👩\u{200d}💻\nDo not change anything.  " }]
+    Key(KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[Submit { goal_id: "e260eee8-756e-416b-83e0-c7c7cdce9e44", text: "  What is currently active? 中文 👩\u{200d}💻\nDo not change anything.  " }]
+    Key(KeyEvent { code: Char('U'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('N'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('S'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('E'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('N'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('T'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('_'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('A'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('C'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('T'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('I'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('V'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('E'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('_'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('D'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('R'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('A'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('F'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('T'), modifiers: KeyModifiers(SHIFT), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Right, modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Workflow/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Workflow, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('e'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('d'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('i'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('t'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char(' '), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('b'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('r'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('a'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('n'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('c'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('h'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[Inspect { goal_id: "e260eee8-756e-416b-83e0-c7c7cdce9e44", artifact_id: "15eeb34285e89cd4be0ad0efff4f0a7b3684f302182184701d5a05d5363dc95c" }]
+    Key(KeyEvent { code: Char('a'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('p'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('x'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('r'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('b'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('f'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('1'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('a'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Esc, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Esc, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Detail/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Esc, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Detail, false, Some((100, 24))) after=Workflow/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Esc, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Workflow, false, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Left, modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goals/false/Some((100, 24)) effects=[Refresh]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goals, false, Some((100, 24))) after=Goal/true/Some((100, 24)) effects=[Observe("e260eee8-756e-416b-83e0-c7c7cdce9e44")]
+    Key(KeyEvent { code: Char('a'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Goal, true, Some((100, 24))) after=Goal/false/Some((100, 24)) effects=[Inspect { goal_id: "e260eee8-756e-416b-83e0-c7c7cdce9e44", artifact_id: "0353142b136b06c0c5692e99ee546d07211188eb8e60fb3686d278f537df2b3e" }]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((100, 24))) after=Goal/false/Some((100, 24)) effects=[]
+    Resize(40, 12) before=(Goal, false, Some((100, 24))) after=Goal/false/Some((100, 24)) effects=[]
+    Resize(30, 10) before=(Goal, false, Some((40, 12))) after=Goal/false/Some((40, 12)) effects=[]
+    Key(KeyEvent { code: Down, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((30, 10))) after=Goal/false/Some((30, 10)) effects=[]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((30, 10))) after=Goal/false/Some((30, 10)) effects=[]
+    Key(KeyEvent { code: Char('1'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((40, 12))) after=Goal/false/Some((40, 12)) effects=[]
+    Key(KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((40, 12))) after=Goal/false/Some((40, 12)) effects=[]
+    Key(KeyEvent { code: Char('p'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((100, 24))) after=Goal/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('x'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((100, 24))) after=Goal/false/Some((100, 24)) effects=[]
+    Key(KeyEvent { code: Char('r'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }) before=(Goal, false, Some((100, 24))) after=Goal/false/Some((100, 24)) effects=[Inspect { goal_id: "e260eee8-756e-416b-83e0-c7c7cdce9e44", artifact_id: "0353142b136b06c0c5692e99ee546d07211188eb8e60fb3686d278f537df2b3e" }]
+    Resize(100, 24) before=(Goal, false, Some((100, 24))) after=Goal/false/Some((100, 24)) effects=[]
+
+    Error: missing "needs you"; screen: "                                                                                                    \n                                                                                                    \nGoal e260eee8 · PTY active parallel Goal                                                            \nOperation 54d6afd4-9efc-44eb-bde0-1e986d0abff5 saved for Goal e260eee8-756e-416b-83e0-c7c7cdce9e44;…\nPermission for task right · harness goal-peer                                                       \nPermission 1/1 · requirements 1 · 42e1c62f4146e9318094fc21e3069cec455a2af69fbdacfc63269154205f5413 …\nRequested operation (harness reported): Write right.txt                                             \nKind (harness reported): other                                                                      \nDeclared locations:                                                                                 \n[{\"path\":\"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpphgyQz/goal-workspaces/e260ee\ne8-756e-416b-83e0-c7c7cdce9e44/ce3b5791-1f09-4a64-a7d6-8911a9df0e12/right.txt\"}]                    \n                                                                                                    \nActual request:                                                                                     \n{                                                                                                   \n  \"permission_id\": \"ca295350-d788-446e-96de-e5773a0f11f2\",                                          \n  \"tool_call\": {                                                                                    \n    \"toolCallId\": \"fixture-write\",                                                                  \n    \"kind\": \"other\",                                                                                \n    \"title\": \"Write right.txt\",                                                                     \n    \"locations\": [                                                                                  \n  Allow this fixture write · allow · once                                                           \n  Deny this fixture write · deny · once                                                             \n↑↓ choose · Enter respond · PgUp/PgDn read · Tab next · r retry                                     \nEsc back · no default consent · saved response is not tool success                                  "; output: "                                            \u{1b}[8;1HKind (harness reported): other                                                                      \u{1b}[9;1HDeclared locations:                                                                                 \u{1b}[10;1H[{\"path\":\"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpphgyQz/goal-workspaces/e260ee\u{1b}[11;1He8-756e-416b-83e0-c7c7cdce9e44/ce3b5791-1f09-4a64-a7d6-8911a9df0e12/right.txt\"}]                    \u{1b}[12;1H                                                                                                    \u{1b}[13;1HActual request:                                                                                     \u{1b}[14;1H{                                                                                                   \u{1b}[15;1H  \"permission_id\": \"ca295350-d788-446e-96de-e5773a0f11f2\",                                          \u{1b}[16;1H  \"tool_call\": {                                                                                    \u{1b}[17;1H    \"toolCallId\": \"fixture-write\",                                                                  \u{1b}[18;1H    \"kind\": \"other\",                                                                                \u{1b}[19;1H    \"title\": \"Write right.txt\",                                                                     \u{1b}[20;1H    \"locations\": [                                                                                  \u{1b}[m\u{1b}[m\u{1b}[m\u{1b}[0m\u{1b}[?2026l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?2026h\u{1b}[?2026l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?2026h\u{1b}[?2026l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?2026h\u{1b}[?2026l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l"
+
+────────────
+     Summary [ 100.859s] 1 test run: 0 passed, 1 failed, 2 skipped
+        FAIL [ 100.857s] (1/1) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+error: test run failed

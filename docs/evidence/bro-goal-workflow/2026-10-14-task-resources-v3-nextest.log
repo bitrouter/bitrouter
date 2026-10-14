@@ -1,0 +1,47 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 24s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 219870e8-67e7-45bb-bf77-d1bf1d08a833 with nextest profile: default
+    Starting 7 tests across 37 binaries (2264 tests skipped)
+        PASS [   0.015s] (1/7) bitrouter::goals resource_tests::resource_material_cannot_expand_selection_or_omit_the_selected_bytes
+        PASS [   0.021s] (2/7) bitrouter goal_runtime::resources::tests::context_capture_refuses_symlink_components_and_special_files
+        PASS [   0.027s] (3/7) bitrouter goal_runtime::resources::tests::selected_descriptors_preserve_config_without_exposing_the_other_servers
+        PASS [   0.046s] (4/7) bitrouter::goals resource_tests::selected_resources_must_be_frozen_before_dispatch_and_survive_reload
+        FAIL [   0.054s] (5/7) bitrouter goal_runtime::resources::tests::advertised_skills_have_stable_distinct_ids_and_validation_rejects_invention
+  stdout ───
+
+    running 1 test
+    test goal_runtime::resources::tests::advertised_skills_have_stable_distinct_ids_and_validation_rejects_invention ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::resources::tests::advertised_skills_have_stable_distinct_ids_and_validation_rejects_invention
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1737 filtered out; finished in 0.04s
+
+  stderr ───
+
+    thread 'goal_runtime::resources::tests::advertised_skills_have_stable_distinct_ids_and_validation_rejects_invention' (1378070) panicked at apps/bitrouter/src/goal_runtime/resources/tests.rs:125:5:
+    assertion `left == right` failed
+      left: 0
+     right: 2
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        LEAK [   0.226s] (6/7) bitrouter goal_runtime::resources::tests::context_capture_is_bounded_and_rejects_escape_and_non_files
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+        PASS [  94.998s] (7/7) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+────────────
+     Summary [  95.008s] 7 tests run: 6 passed (1 slow, 1 leaky), 1 failed, 2264 skipped
+        FAIL [   0.054s] (5/7) bitrouter goal_runtime::resources::tests::advertised_skills_have_stable_distinct_ids_and_validation_rejects_invention
+error: test run failed

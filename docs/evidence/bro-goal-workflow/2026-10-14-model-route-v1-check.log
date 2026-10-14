@@ -1,0 +1,53 @@
+    Checking zerocopy v0.8.54
+    Checking ring v0.17.14
+   Compiling rustls v0.23.41
+    Checking rustls-webpki v0.103.13
+    Checking ppv-lite86 v0.2.21
+    Checking tower v0.5.3
+    Checking rand_chacha v0.9.0
+    Checking rand v0.9.5
+    Checking tower-http v0.6.11
+    Checking tokio-rustls v0.26.4
+    Checking hyper-rustls v0.27.9
+    Checking rustls-platform-verifier v0.7.0
+    Checking rand_chacha v0.3.1
+    Checking reqwest v0.13.4
+    Checking rand v0.8.7
+    Checking tungstenite v0.29.0
+    Checking sqlx-core v0.8.6
+    Checking tokio-tungstenite v0.29.0
+    Checking axum v0.8.9
+    Checking ahash v0.8.12
+    Checking num-bigint-dig v0.8.6
+    Checking rsa v0.9.10
+    Checking sqlx-postgres v0.8.6
+    Checking agent-client-protocol-trace-viewer v2.0.0 (https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc)
+    Checking sqlx-sqlite v0.8.6
+    Checking sqlx-mysql v0.8.6
+    Checking serde-saphyr v0.0.29
+    Checking sqlx v0.8.6
+    Checking rmcp v3.3.0
+    Checking bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+    Checking agent-client-protocol-conductor v2.0.0 (https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc)
+    Checking sea-query-binder v0.7.0
+    Checking bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Checking opentelemetry_sdk v0.32.1
+    Checking opentelemetry-proto v0.32.0
+    Checking opentelemetry-http v0.32.0
+    Checking referencing v0.47.0
+    Checking sea-schema v0.16.2
+    Checking opentelemetry-otlp v0.32.0
+    Checking axoasset v2.0.1
+    Checking sea-orm v1.1.20
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+    Checking jsonschema v0.47.0
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Checking bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+    Checking axoupdater v0.10.0
+    Checking bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+    Checking sea-orm-migration v1.1.20
+    Checking axum-test v21.0.0
+    Checking bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 57.08s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

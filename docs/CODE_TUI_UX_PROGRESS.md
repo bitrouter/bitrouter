@@ -1,5 +1,13 @@
 # Code TUI implementation and acceptance evidence
 
+Current-entry status: the Goal implementation replaces this document's bare
+`bro`/`bro code`, `code <agent>` and hidden `chat/tui` product entry contracts.
+See [the Goal PRD](BRO_GOAL_ORIENTED_PRD.md) and
+[the implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) for current
+behavior and verification limits. This document retains historical design and
+evidence; native task and ACP protocol contracts remain separately supported.
+
+
 Status: **implemented and locally verified**, 2026-09-08.
 
 Implementation follows [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md), including

@@ -1,0 +1,70 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+    Checking rustls-webpki v0.103.13
+    Checking tokio-rustls v0.26.4
+    Checking rustls-platform-verifier v0.7.0
+    Checking sqlx-core v0.8.6
+    Checking hyper-rustls v0.27.9
+    Checking tonic v0.14.6
+    Checking reqwest v0.13.4
+    Checking bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+    Checking rmcp v3.3.0
+    Checking opentelemetry-http v0.32.0
+    Checking axoasset v2.0.1
+    Checking tonic-prost v0.14.6
+    Checking tonic-types v0.14.6
+    Checking opentelemetry-proto v0.32.0
+    Checking axoupdater v0.10.0
+    Checking sqlx-sqlite v0.8.6
+    Checking sqlx-postgres v0.8.6
+    Checking sqlx-mysql v0.8.6
+    Checking opentelemetry-otlp v0.32.0
+    Checking sqlx v0.8.6
+    Checking sea-query-binder v0.7.0
+    Checking sea-orm v1.1.20
+    Checking sea-schema v0.16.2
+    Checking sea-orm-migration v1.1.20
+    Checking bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Checking bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+    Checking bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+    Checking dist-helper v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/helpers/dist-helper)
+error: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+   --> apps/bitrouter/src/goal_runtime/recovery.rs:222:9
+    |
+222 | /         match update["sessionUpdate"].as_str() {
+223 | |             Some("tool_call" | "tool_call_update") => {
+224 | |                 let id = update["toolCallId"]
+225 | |                     .as_str()
+...   |
+239 | |             _ => {}
+240 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#single_match
+    = note: `-D clippy::single-match` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::single_match)]`
+help: try
+    |
+222 ~         if let Some("tool_call" | "tool_call_update") = update["sessionUpdate"].as_str() {
+223 +             let id = update["toolCallId"]
+224 +                 .as_str()
+225 +                 .context("tool history omitted its identity")?;
+226 +             anyhow::ensure!(
+227 +                 approved.contains(id),
+228 +                 "tool execution has no matching scoped permission"
+229 +             );
+230 +             let tool = tools.entry(id.into()).or_default();
+231 +             if let Some(kind) = update["kind"].as_str() {
+232 +                 tool.0 = kind.into();
+233 +             }
+234 +             if let Some(status) = update["status"].as_str() {
+235 +                 tool.1 = status.into();
+236 +             }
+237 +         }
+    |
+
+error: could not compile `bitrouter` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `bitrouter` (lib test) due to 1 previous error

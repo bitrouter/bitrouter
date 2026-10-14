@@ -1,0 +1,46 @@
+   Compiling rustls v0.23.41
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error[E0599]: no method named `clone` found for enum `bitrouter::agent_local::Operation` in the current scope
+   --> apps/bitrouter/tests/native_agent_tui.rs:245:73
+    |
+245 |         let ReplyResult::Receipt { receipt } = client.request(operation.clone()).await? else {
+    |                                                                         ^^^^^ method not found in `bitrouter::agent_local::Operation`
+
+error[E0599]: no method named `clone` found for enum `bitrouter::agent_local::Operation` in the current scope
+   --> apps/bitrouter/tests/native_agent_tui.rs:295:35
+    |
+295 |             client.request(cancel.clone()).await?;
+    |                                   ^^^^^ method not found in `bitrouter::agent_local::Operation`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `bitrouter` (test "native_agent_tui") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter --test native_agent_tui --all-features` exited with code 101

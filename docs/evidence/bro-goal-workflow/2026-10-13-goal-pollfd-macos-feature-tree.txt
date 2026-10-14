@@ -1,0 +1,35 @@
+crossterm v0.28.1
+├── crossterm feature "bracketed-paste"
+│   └── crossterm feature "default"
+│       ├── bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+│       │   └── bitrouter feature "default" (command-line)
+│       ├── bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+│       │   └── bitrouter-tui feature "default"
+│       │       └── bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter) (*)
+│       └── ratatui v0.29.0
+│           ├── ratatui feature "crossterm"
+│           │   └── ratatui feature "default"
+│           │       ├── bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui) (*)
+│           │       └── ratatui-markdown v0.3.6
+│           │           └── ratatui-markdown feature "markdown"
+│           │               └── bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui) (*)
+│           ├── ratatui feature "default" (*)
+│           ├── ratatui feature "underline-color"
+│           │   └── ratatui feature "default" (*)
+│           └── ratatui feature "unstable-rendered-line-info"
+│               └── bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui) (*)
+├── crossterm feature "default" (*)
+├── crossterm feature "event-stream"
+│   ├── bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter) (*)
+│   └── bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui) (*)
+├── crossterm feature "events"
+│   ├── crossterm feature "default" (*)
+│   └── crossterm feature "event-stream" (*)
+├── crossterm feature "filedescriptor"
+│   └── crossterm feature "use-dev-tty"
+│       └── bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter) (*)
+├── crossterm feature "libc"
+│   └── bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter) (*)
+├── crossterm feature "use-dev-tty" (*)
+└── crossterm feature "windows"
+    └── crossterm feature "default" (*)

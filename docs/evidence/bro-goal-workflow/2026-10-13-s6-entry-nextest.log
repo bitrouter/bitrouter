@@ -1,0 +1,110 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.86s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 4ad4a41e-cdd3-4699-bbfb-690c0009fdb3 with nextest profile: default
+    Starting 78 tests across 4 binaries (18 tests skipped)
+        PASS [   4.786s] ( 1/78) bitrouter::onboarding init_yes_rejects_removed_workflow_optimization_before_scaffolding
+        PASS [   4.820s] ( 2/78) bitrouter::onboarding init_yes_cloud_login_without_key_is_reported_and_skipped
+        PASS [   4.820s] ( 3/78) bitrouter::onboarding init_saves_default_harness_model_and_user_home
+        PASS [   4.821s] ( 4/78) bitrouter::onboarding changing_harness_preserves_routes_and_chat_commands
+        PASS [   4.823s] ( 5/78) bitrouter::onboarding init_yes_no_creds_reports_zero_providers_and_scaffolds
+        PASS [   0.044s] ( 6/78) bitrouter::onboarding public_help_exposes_canonical_agent_entry_points
+        PASS [   4.831s] ( 7/78) bitrouter::onboarding init_preserves_existing_settings_unless_force_is_requested
+        PASS [   4.841s] ( 8/78) bitrouter::onboarding goals_on_a_pipe_reject_before_setup_config_or_daemon_access
+        PASS [   4.841s] ( 9/78) bitrouter::onboarding onboarding_launch_and_goal_entries_do_not_start_acp_without_a_terminal
+        PASS [   4.851s] (10/78) bitrouter::acp run_on_a_pipe_preserves_plain_text_and_chat_alias_is_rejected
+        PASS [   0.034s] (11/78) bitrouter::bin/bro tests::bare_invocation_parses_to_no_subcommand
+        PASS [   0.028s] (12/78) bitrouter::bin/bro tests::canonical_agent_commands_are_positional
+        PASS [   0.039s] (13/78) bitrouter::bin/bro tests::background_run_is_explicit_and_not_no_wait
+        PASS [   0.020s] (14/78) bitrouter::bin/bro tests::compatibility_commands_are_hidden_from_help
+        PASS [   0.043s] (15/78) bitrouter::bin/bro tests::agent_and_protocol_help_scopes_global_compatibility_flags
+        PASS [   0.032s] (16/78) bitrouter::bin/bro tests::cli_definition_is_valid
+        PASS [   0.043s] (17/78) bitrouter::bin/bro tests::agents_keeps_catalog_verbs_and_adds_session_management
+        PASS [   0.025s] (18/78) bitrouter::bin/bro tests::cloud_api_owns_header_short_flag_in_full_command_tree
+        PASS [   0.014s] (19/78) bitrouter::bin/bro tests::every_actions_row_resolves_to_a_cli_leaf
+        PASS [   0.016s] (20/78) bitrouter::bin/bro tests::first_party_plugins_are_skill_only
+        PASS [   0.019s] (21/78) bitrouter::bin/bro tests::every_tui_command_has_an_actions_row
+        PASS [   0.017s] (22/78) bitrouter::bin/bro tests::generic_eval_commands_parse_as_nested_exchange_operations
+        PASS [   0.015s] (23/78) bitrouter::bin/bro tests::headless_permission_flags_parse_on_both_front_doors
+        PASS [   0.026s] (24/78) bitrouter::bin/bro tests::every_control_action_parses_and_is_remote_eligible
+        PASS [   0.013s] (25/78) bitrouter::bin/bro tests::local_policy_reads_without_view_keep_the_legacy_contract
+        PASS [   0.038s] (26/78) bitrouter::bin/bro tests::eval_subject_seal_derives_a_digest_without_the_ledger
+        PASS [   0.017s] (27/78) bitrouter::bin/bro tests::init_wizard_flags_parse
+        PASS [   0.018s] (28/78) bitrouter::bin/bro tests::mcp_cli_exposes_check_but_not_the_removed_origin_commands
+        PASS [   0.048s] (29/78) bitrouter::bin/bro tests::config_validate_rejects_a_missing_bound_policy
+        PASS [   0.037s] (30/78) bitrouter::bin/bro tests::goals_entry_rejects_retired_agent_flags_and_aliases
+        PASS [   0.013s] (31/78) bitrouter::bin/bro tests::optimize_status_without_active_exploration_is_idle
+        PASS [   0.037s] (32/78) bitrouter::bin/bro tests::init_onboarding_rejects_removed_optimization_flags
+        PASS [   0.016s] (33/78) bitrouter::bin/bro tests::optimize_status_with_active_exploration_is_exploring
+        PASS [   0.029s] (34/78) bitrouter::bin/bro tests::optimize_accepts_only_history_controller_commands
+        PASS [   0.011s] (35/78) bitrouter::bin/bro tests::policy_oracle_accepts_human_readable_cost_assumptions
+        PASS [   0.014s] (36/78) bitrouter::bin/bro tests::policy_compile_diff_and_rollback_commands_parse
+        PASS [   0.010s] (37/78) bitrouter::bin/bro tests::provider_login_import_existing_flags_parse
+        PASS [   0.010s] (38/78) bitrouter::bin/bro tests::providers_login_api_key_conflicts_with_oauth_flags
+        PASS [   0.010s] (39/78) bitrouter::bin/bro tests::providers_login_api_key_flag_parses
+        PASS [   0.010s] (40/78) bitrouter::bin/bro tests::reconcile_metering_accepts_explicit_cloud_credentials_file
+        PASS [   0.008s] (41/78) bitrouter::bin/bro tests::restart_control_status_pid_survives_missing_pidfile_and_endpoint_release
+        PASS [   0.014s] (42/78) bitrouter::bin/bro tests::remote_control_actions_reject_local_target_flags_before_execution
+        PASS [   0.009s] (43/78) bitrouter::bin/bro tests::restart_control_status_pid_times_out_even_with_different_pidfile
+        PASS [   0.009s] (44/78) bitrouter::bin/bro tests::restart_pid_reuse_timeout_never_signals_the_reused_process
+        PASS [   0.010s] (45/78) bitrouter::bin/bro tests::restart_pidfile_only_target_times_out_without_force_kill
+        PASS [   0.008s] (46/78) bitrouter::bin/bro tests::restart_status_failures_never_promote_pidfile_to_kill_authority
+        PASS [   0.009s] (47/78) bitrouter::bin/bro tests::restart_waits_for_endpoint_after_exact_old_pid_exits
+        PASS [   0.009s] (48/78) bitrouter::bin/bro tests::restart_waits_for_exact_old_pid_after_endpoint_release
+        PASS [   0.009s] (49/78) bitrouter::bin/bro tests::restart_without_valid_pid_uses_endpoint_fallback_without_force_kill
+        PASS [   0.016s] (50/78) bitrouter::bin/bro tests::routing_policy_init_and_evolve_flags_parse
+        PASS [   0.009s] (51/78) bitrouter::bin/bro tests::run_is_the_unambiguous_headless_agent_surface
+        PASS [   0.056s] (52/78) bitrouter::bin/bro tests::settlement_credentials_file_rejects_oauth
+        PASS [   0.052s] (53/78) bitrouter::bin/bro tests::settlement_credentials_file_rejects_wrong_origin
+        PASS [   0.011s] (54/78) bitrouter::bin/bro tests::shadow_classifier_bakeoff_flags_parse_without_a_submission
+        PASS [   0.023s] (55/78) bitrouter::bin/bro tests::settlement_explicit_key_bypasses_malformed_credentials_file
+        PASS [   0.207s] (56/78) bitrouter::bin/bro tests::optimizer_reload_recovery_reports_rejection_and_recovery_failures
+        PASS [   0.014s] (57/78) bitrouter::bin/bro tests::trajectory_inspect_replay_and_prune_flags_parse
+        PASS [   0.010s] (58/78) bitrouter::bin/bro tests::update_flags_parse
+        PASS [   0.010s] (59/78) bitrouter::bin/bro tests::workflow_bundle_allows_eval_exchange_to_own_task_outcomes
+        PASS [   0.009s] (60/78) bitrouter::bin/bro tracing_filter::tests::blank_sources_fall_through_rather_than_erroring
+        PASS [   0.009s] (61/78) bitrouter::bin/bro tests::workflow_state_reliability_report_flags_parse
+        PASS [   0.013s] (62/78) bitrouter::bin/bro tracing_filter::tests::config_log_level_is_used_when_rust_log_is_unset
+        PASS [   0.014s] (63/78) bitrouter::bin/bro tracing_filter::tests::config_log_level_accepts_per_target_filter_syntax
+        PASS [   0.256s] (64/78) bitrouter::bin/bro tests::optimizer_reload_recovery_reconciles_a_post_commit_policy_error
+        PASS [   0.258s] (65/78) bitrouter::bin/bro tests::optimizer_reload_recovery_never_overwrites_a_concurrent_policy_winner
+        PASS [   0.256s] (66/78) bitrouter::bin/bro tests::optimizer_reload_recovery_reconciles_a_post_rename_config_error
+        PASS [   0.250s] (67/78) bitrouter::bin/bro tests::optimizer_reload_recovery_restores_one_disk_and_live_parent_pair
+        PASS [   0.012s] (68/78) bitrouter::bin/bro tracing_filter::tests::rust_log_wins_over_config_log_level
+        PASS [   0.015s] (69/78) bitrouter::bin/bro tracing_filter::tests::every_level_name_is_accepted
+        PASS [   0.014s] (70/78) bitrouter::bin/bro tracing_filter::tests::invalid_rust_log_warns_and_does_not_fall_back_to_config
+        PASS [   0.015s] (71/78) bitrouter::bin/bro tracing_filter::tests::defaults_to_info_when_neither_source_is_set
+        PASS [   0.016s] (72/78) bitrouter::bin/bro tracing_filter::tests::invalid_config_log_level_warns_and_falls_back
+        PASS [   0.014s] (73/78) bitrouter::bin/bro tracing_filter::tests::server_config_default_log_level_is_a_valid_filter
+        PASS [   0.012s] (74/78) bitrouter::bin/bro tracing_filter::tests::typo_level_does_not_silently_mute_the_daemon
+        PASS [   0.399s] (75/78) bitrouter::bin/bro tests::optimize_explore_json_reports_the_explicit_evaluator_pin
+        PASS [   0.222s] (76/78) bitrouter::bin/bro tests::trajectory_store_anchors_file_and_zero_config_databases_to_daemon_home
+        PASS [   0.439s] (77/78) bitrouter::bin/bro tests::optimizer_reload_recovery_restores_an_adaptive_publication_with_identical_config
+        FAIL [  11.195s] (78/78) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+  stdout ───
+
+    running 1 test
+    test bare_and_code_open_goals_without_work_and_preserve_unsent_drafts ... FAILED
+
+    failures:
+
+    failures:
+        bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.18s
+
+  stderr ───
+    Error: Condition failed: `!terminal.screen.screen().alternate_screen()`
+
+  Cancelling due to test failure:
+────────────
+     Summary [  11.196s] 78 tests run: 77 passed, 1 failed, 18 skipped
+        FAIL [  11.195s] (78/78) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+error: test run failed

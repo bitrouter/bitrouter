@@ -13,7 +13,6 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child as ProcessChild, ChildStdin, Command, Stdio};
@@ -38,8 +37,7 @@ const BEGIN_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026h";
 const END_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026l";
 // Each fixture has an empty home/cache. Disable remote catalog loading so
 // daemon readiness and agent lifecycle tests do not depend on public networking.
-const MOCK_DAEMON_CONFIG: &str =
-    "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  enabled: false\n";
+const MOCK_DAEMON_CONFIG: &str = "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  enabled: false\ndatabase:\n  url: \"sqlite::memory:\"\n";
 
 #[path = "code_tui_pty/evolution.rs"]
 mod evolution;
@@ -61,7 +59,6 @@ enum MockScenario {
     DelayedNormal,
     DelayedRefusal,
     OverlappingPermissions,
-    PermissionDuringInspector,
     DetachedBacklog,
     SettingsConfirmed,
     SettingsFailure,
@@ -78,7 +75,6 @@ impl MockScenario {
             Self::DelayedNormal => "delayed-normal",
             Self::DelayedRefusal => "delayed-refusal",
             Self::OverlappingPermissions => "overlapping-permissions",
-            Self::PermissionDuringInspector => "permission-during-inspector",
             Self::DetachedBacklog => "detached-backlog",
             Self::SettingsConfirmed => "settings-confirmed",
             Self::SettingsFailure => "settings-failure",
@@ -132,6 +128,33 @@ impl Drop for MockAcp {
 }
 
 impl MockAcp {
+    async fn shutdown(&self) -> Result<()> {
+        let socket = self.supervisor_socket().await?;
+        let owner = bitrouter::daemon::probe_status(&socket)
+            .await?
+            .context("fixture daemon disappeared before cleanup")?;
+        ensure!(
+            owner.pid != std::process::id(),
+            "process cleanup requires a separately owned fixture daemon"
+        );
+        match bitrouter::daemon::send_command(&socket, &bitrouter::daemon::DaemonCommand::Stop)
+            .await?
+        {
+            bitrouter::daemon::DaemonResponse::Ok => {}
+            response => bail!("fixture daemon stop was not acknowledged: {response:?}"),
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while socket.exists() || bitrouter::daemon::process_is_alive(owner.pid) {
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "fixture daemon {} did not release its process and endpoint",
+                owner.pid
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok(())
+    }
+
     fn bro_command(&self) -> Result<tokio::process::Command> {
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
         command
@@ -357,10 +380,6 @@ impl MockAcp {
         self.control("disconnect")
     }
 
-    fn request_permissions(&self) -> Result<()> {
-        self.control("permission")
-    }
-
     fn release_backlog(&self) -> Result<()> {
         self.control("backlog")
     }
@@ -397,50 +416,6 @@ impl MockAcp {
         );
         Ok(())
     }
-
-    fn visual_editor(&self, text: &str) -> Result<VisualEditor> {
-        let content_path = self._directory.path().join("external-editor-content");
-        let script_path = self._directory.path().join("external-editor.sh");
-        std::fs::write(&content_path, text).context("writing external editor fixture text")?;
-        std::fs::write(
-            &script_path,
-            "#!/bin/sh\ncat \"$BITROUTER_PTY_VISUAL_CONTENT\" > \"$1\"\n",
-        )
-        .context("writing external editor fixture")?;
-        let mut permissions = std::fs::metadata(&script_path)
-            .context("reading external editor fixture permissions")?
-            .permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&script_path, permissions)
-            .context("making external editor fixture executable")?;
-        Ok(VisualEditor {
-            command: shell_word(&script_path),
-            content_path,
-        })
-    }
-
-    fn failing_visual_editor(&self) -> Result<VisualEditor> {
-        let content_path = self._directory.path().join("external-editor-content");
-        let script_path = self._directory.path().join("external-editor-fails.sh");
-        std::fs::write(&content_path, "").context("writing failed external editor fixture text")?;
-        std::fs::write(&script_path, "#!/bin/sh\nexit 42\n")
-            .context("writing failed external editor fixture")?;
-        let mut permissions = std::fs::metadata(&script_path)
-            .context("reading failed external editor fixture permissions")?
-            .permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&script_path, permissions)
-            .context("making failed external editor fixture executable")?;
-        Ok(VisualEditor {
-            command: shell_word(&script_path),
-            content_path,
-        })
-    }
-}
-
-struct VisualEditor {
-    command: String,
-    content_path: PathBuf,
 }
 
 /// The responses one isolated remote-control target exposes to Code.
@@ -476,6 +451,22 @@ struct RemoteFixture {
 }
 
 impl RemoteFixture {
+    fn bro_command(&self) -> Result<tokio::process::Command> {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+        command
+            .args(["--context", "fixture"])
+            .env_clear()
+            .env("PATH", inherited_path()?)
+            .env("HOME", &self.home_path)
+            .env("BITROUTER_HOME", &self.bitrouter_home_path)
+            .env("TMPDIR", &self.temporary_path)
+            .env("NO_COLOR", "1")
+            .env("BITROUTER_A12_TOKEN", REMOTE_FIXTURE_TOKEN)
+            .current_dir(self._directory.path())
+            .kill_on_drop(true);
+        Ok(command)
+    }
+
     fn new(scenario: RemoteScenario) -> Result<Self> {
         let directory = tempfile::tempdir().context("creating remote PTY fixture directory")?;
         let home_path = directory.path().join("home");
@@ -1131,128 +1122,6 @@ struct CodeFixture {
 }
 
 impl CodeFixture {
-    fn agent(scenario: MockScenario) -> Result<Self> {
-        let mock = MockAcp::new(scenario)?;
-        Self::agent_with_mock(mock, None)
-    }
-
-    fn agent_with_selection(
-        scenario: MockScenario,
-        selection_flag: &str,
-        native_id: &str,
-    ) -> Result<Self> {
-        let mock = MockAcp::new(scenario)?;
-        let child_pid_path = mock._directory.path().join("code-child.pid");
-        let mut command = shell_command(&mock, None)?;
-        command.arg("code");
-        command.arg("stub");
-        command.arg("--direct");
-        command.arg(selection_flag);
-        command.arg(native_id);
-        command.arg("--config");
-        command.arg(&mock.config_path);
-        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
-        Ok(Self {
-            mock,
-            child_pid_path,
-            pty,
-        })
-    }
-
-    fn agent_with_mock(mock: MockAcp, visual_editor: Option<&VisualEditor>) -> Result<Self> {
-        let child_pid_path = mock._directory.path().join("code-child.pid");
-        let mut command = shell_command(&mock, visual_editor)?;
-        command.arg("code");
-        command.arg("stub");
-        command.arg("--direct");
-        command.arg("--config");
-        command.arg(&mock.config_path);
-        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
-        Ok(Self {
-            mock,
-            child_pid_path,
-            pty,
-        })
-    }
-
-    fn bare() -> Result<Self> {
-        Self::bare_with_defaults(true)
-    }
-
-    fn bare_with_defaults(inherit: bool) -> Result<Self> {
-        let mock = MockAcp::new(MockScenario::Minimal)?;
-        if !inherit {
-            let raw = std::fs::read_to_string(&mock.config_path)?;
-            std::fs::write(&mock.config_path, format!("inherit_defaults: false\n{raw}"))?;
-        }
-        let child_pid_path = mock._directory.path().join("code-child.pid");
-        let mut command = shell_command(&mock, None)?;
-        command.arg("code");
-        command.arg("--config");
-        command.arg(&mock.config_path);
-        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
-        Ok(Self {
-            mock,
-            child_pid_path,
-            pty,
-        })
-    }
-
-    fn chat(scenario: MockScenario) -> Result<Self> {
-        let mock = MockAcp::new(scenario)?;
-        let child_pid_path = mock._directory.path().join("code-child.pid");
-        let mut command = shell_command(&mock, None)?;
-        command.arg("chat");
-        command.arg("stub");
-        command.arg("--direct");
-        command.arg("--config");
-        command.arg(&mock.config_path);
-        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
-        Ok(Self {
-            mock,
-            child_pid_path,
-            pty,
-        })
-    }
-
-    fn tui_bare() -> Result<Self> {
-        let mock = MockAcp::new(MockScenario::Minimal)?;
-        let child_pid_path = mock._directory.path().join("code-child.pid");
-        let mut command = shell_command(&mock, None)?;
-        command.arg("tui");
-        command.arg("--config");
-        command.arg(&mock.config_path);
-        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
-        Ok(Self {
-            mock,
-            child_pid_path,
-            pty,
-        })
-    }
-
-    fn socket_only() -> Result<Self> {
-        let mock = MockAcp::new(MockScenario::Minimal)?;
-        let child_pid_path = mock._directory.path().join("code-child.pid");
-        let socket = mock._directory.path().join("a12.sock");
-        let mut command = shell_command(&mock, None)?;
-        command.arg("code");
-        command.arg("--config");
-        command.arg(&mock.config_path);
-        command.arg("--socket");
-        command.arg(socket);
-        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
-        Ok(Self {
-            mock,
-            child_pid_path,
-            pty,
-        })
-    }
-
-    fn wait_for_agent_ready(&mut self) -> Result<()> {
-        let _ = self.pty.wait_for_text("FXRD")?;
-        Ok(())
-    }
-
     fn close_to_composer(&mut self) -> Result<()> {
         let checkpoint = self.pty.checkpoint();
         self.pty.send(b"\x1b")?;
@@ -1320,117 +1189,72 @@ impl CodeFixture {
             status.success(),
             "delivering SIG{signal} to Code child {pid} failed with {status}"
         );
-        if signal == "TSTP" {
-            // Terminal restoration is written before the child raises SIGSTOP.
-            // Wait for the stop itself so a following SIGCONT cannot arrive early.
-            loop {
-                let output = Command::new("ps")
-                    .args(["-o", "stat=", "-p"])
-                    .arg(pid.to_string())
-                    .output()
-                    .with_context(|| format!("reading Code child {pid} process state"))?;
-                ensure!(
-                    output.status.success(),
-                    "reading Code child {pid} process state failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                let state = String::from_utf8_lossy(&output.stdout);
-                if state.trim_start().starts_with('T') {
-                    break;
+        Ok(())
+    }
+
+    fn assert_terminal_restored(&mut self) -> Result<()> {
+        let output = self.pty.wait_for_raw_text("__BITROUTER_PTY_SHELL_OK__")?;
+        let start = output
+            .find("__BITROUTER_PTY_TERM__|")
+            .context("finding terminal-restoration marker")?;
+        let marker = output[start..]
+            .lines()
+            .next()
+            .context("reading terminal-restoration marker")?
+            .trim_end_matches('\r');
+        let mut fields = marker.split('|');
+        let name = fields.next().context("reading marker name")?;
+        let status = fields.next().context("reading Code exit status")?;
+        let before = fields.next().context("reading initial terminal state")?;
+        let after = fields.next().context("reading restored terminal state")?;
+
+        ensure!(
+            name == "__BITROUTER_PTY_TERM__",
+            "unexpected terminal marker {name:?}"
+        );
+        ensure!(status == "0", "Code exited with status {status}");
+        ensure!(
+            terminal_configuration(before)? == terminal_configuration(after)?,
+            "terminal state changed across Code: before={before:?}, after={after:?}"
+        );
+        ensure!(
+            output.contains("__BITROUTER_PTY_SHELL_OK__"),
+            "shell command after Code did not run"
+        );
+        Ok(())
+    }
+}
+
+fn terminal_configuration(value: &str) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    let value = {
+        let mut local_fields = 0;
+        let fields = value
+            .split(':')
+            .map(|field| {
+                if let Some(flags) = field.strip_prefix("lflag=") {
+                    local_fields += 1;
+                    let flags = u64::from_str_radix(flags, 16)?;
+                    // XNU's ICANON restoration adds transient PENDIN. All other
+                    // stty fields and raw local flags remain part of the comparison.
+                    Ok(format!("lflag={:x}", flags & !nix::libc::PENDIN))
+                } else {
+                    Ok(field.to_owned())
                 }
-                ensure!(
-                    Instant::now() < deadline,
-                    "timed out waiting for Code child {pid} to stop; state was {state:?}"
-                );
-                thread::sleep(Duration::from_millis(10));
-            }
-        }
-        Ok(())
-    }
-
-    fn assert_terminal_restored(&mut self) -> Result<()> {
-        let output = self.pty.wait_for_raw_text("__BITROUTER_PTY_SHELL_OK__")?;
-        let start = output
-            .find("__BITROUTER_PTY_TERM__|")
-            .context("finding terminal-restoration marker")?;
-        let marker = output[start..]
-            .lines()
-            .next()
-            .context("reading terminal-restoration marker")?
-            .trim_end_matches('\r');
-        let mut fields = marker.split('|');
-        let name = fields.next().context("reading marker name")?;
-        let status = fields.next().context("reading Code exit status")?;
-        let before = fields.next().context("reading initial terminal state")?;
-        let after = fields.next().context("reading restored terminal state")?;
-
+            })
+            .collect::<Result<Vec<_>>>()?;
         ensure!(
-            name == "__BITROUTER_PTY_TERM__",
-            "unexpected terminal marker {name:?}"
+            local_fields == 1,
+            "stty snapshot lacks one unambiguous lflag: {value}"
         );
-        ensure!(status == "0", "Code exited with status {status}");
-        ensure!(
-            before == after,
-            "terminal state changed across Code: before={before:?}, after={after:?}"
-        );
-        ensure!(
-            output.contains("__BITROUTER_PTY_SHELL_OK__"),
-            "shell command after Code did not run"
-        );
-        Ok(())
-    }
+        fields.join(":")
+    };
+    #[cfg(not(target_os = "macos"))]
+    let value = value.to_owned();
+    Ok(value)
 }
 
-/// A remote `bro --context fixture code` process and its loopback target.
-struct RemoteCodeFixture {
-    remote: RemoteFixture,
-    pty: PtyRunner,
-}
-
-impl RemoteCodeFixture {
-    fn new(scenario: RemoteScenario) -> Result<Self> {
-        let remote = RemoteFixture::new(scenario)?;
-        let mut command = remote_shell_command(&remote)?;
-        command.arg("--context");
-        command.arg("fixture");
-        command.arg("code");
-        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
-        Ok(Self { remote, pty })
-    }
-
-    fn assert_terminal_restored(&mut self) -> Result<()> {
-        let output = self.pty.wait_for_raw_text("__BITROUTER_PTY_SHELL_OK__")?;
-        let start = output
-            .find("__BITROUTER_PTY_TERM__|")
-            .context("finding terminal-restoration marker")?;
-        let marker = output[start..]
-            .lines()
-            .next()
-            .context("reading terminal-restoration marker")?
-            .trim_end_matches('\r');
-        let mut fields = marker.split('|');
-        let name = fields.next().context("reading marker name")?;
-        let status = fields.next().context("reading Code exit status")?;
-        let before = fields.next().context("reading initial terminal state")?;
-        let after = fields.next().context("reading restored terminal state")?;
-        ensure!(
-            name == "__BITROUTER_PTY_TERM__",
-            "unexpected terminal marker {name:?}"
-        );
-        ensure!(status == "0", "Code exited with status {status}");
-        ensure!(
-            before == after,
-            "terminal state changed across Code: before={before:?}, after={after:?}"
-        );
-        ensure!(
-            output.contains("__BITROUTER_PTY_SHELL_OK__"),
-            "shell command after Code did not run"
-        );
-        Ok(())
-    }
-}
-
-fn shell_command(mock: &MockAcp, visual_editor: Option<&VisualEditor>) -> Result<CommandBuilder> {
+fn shell_command(mock: &MockAcp) -> Result<CommandBuilder> {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_bro"));
     let mut command = CommandBuilder::new("/bin/sh");
     command.env_clear();
@@ -1459,38 +1283,7 @@ fn shell_command(mock: &MockAcp, visual_editor: Option<&VisualEditor>) -> Result
         "BITROUTER_PTY_CHILD_PID",
         mock._directory.path().join("code-child.pid"),
     );
-    if let Some(visual_editor) = visual_editor {
-        command.env("VISUAL", &visual_editor.command);
-        command.env("BITROUTER_PTY_VISUAL_CONTENT", &visual_editor.content_path);
-    }
     command.cwd(mock._directory.path());
-    Ok(command)
-}
-
-fn remote_shell_command(remote: &RemoteFixture) -> Result<CommandBuilder> {
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_bro"));
-    let mut command = CommandBuilder::new("/bin/sh");
-    command.env_clear();
-    command.arg("-c");
-    command.arg(
-        "before=$(stty -g)\n\
-         \"$@\"\n\
-         status=$?\n\
-         after=$(stty -g)\n\
-         printf '\\n__BITROUTER_PTY_TERM__|%s|%s|%s|\\n' \"$status\" \"$before\" \"$after\"\n\
-         printf '__BITROUTER_PTY_SHELL_OK__\\n'\n\
-         exit \"$status\"",
-    );
-    command.arg("bitrouter-remote-pty-shell");
-    command.arg(binary);
-    command.env("PATH", inherited_path()?);
-    command.env("HOME", &remote.home_path);
-    command.env("BITROUTER_HOME", &remote.bitrouter_home_path);
-    command.env("TMPDIR", &remote.temporary_path);
-    command.env("TERM", "xterm-256color");
-    command.env("NO_COLOR", "1");
-    command.env("BITROUTER_A12_TOKEN", REMOTE_FIXTURE_TOKEN);
-    command.cwd(remote._directory.path());
     Ok(command)
 }
 
@@ -1696,487 +1489,173 @@ fn mock_acp_models_delayed_cancellation_and_overlapping_permissions() -> Result<
 }
 
 #[test]
-fn code_minimal_agent_preserves_multiline_prompt_history_and_terminal() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
-    code.wait_for_agent_ready()?;
-    let prompt = "  中文 👩‍💻\nsecond line  ";
-    code.pty.paste(prompt)?;
-    ensure!(
-        code.mock.captured_prompt()?.is_none(),
-        "bracketed paste submitted before Enter"
-    );
-    let command_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&command_checkpoint, "Commands ─")?;
-    let restored = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code.pty.wait_for_text_since(&restored, "second line")?;
-    code.pty.send(b"\r")?;
-    let output = code.pty.wait_for_text("Turn completed")?;
-    ensure!(output.contains("FXRP1"), "agent reply was not rendered");
-    ensure!(
-        !output.contains("Home")
-            && !output.replace("/ Agents", "").contains("Agents")
-            && !output.contains("Requests"),
-        "legacy permanent navigation appeared in the Code transcript"
-    );
-    ensure!(
-        code.mock.captured_prompts()? == vec![prompt.to_string()],
-        "Code changed the prompt bytes before sending"
-    );
-
-    let history_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[A")?;
-    code.pty.send(b"\r")?;
-    let _ = code.pty.wait_for_text_since(&history_checkpoint, "FXRP2")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&history_checkpoint, "Turn completed")?;
-    ensure!(
-        code.mock.captured_prompts()? == vec![prompt.to_string(), prompt.to_string()],
-        "up-arrow history changed the accepted prompt bytes"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_uses_normal_buffer_until_an_explicit_inspector() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
-    code.wait_for_agent_ready()?;
-    ensure!(
-        !code
-            .pty
-            .output
-            .windows(ENTER_ALTERNATE_SCREEN.len())
-            .any(|window| window == ENTER_ALTERNATE_SCREEN.as_bytes()),
-        "Code entered the alternate screen before an explicit inspector"
-    );
-
-    code.pty.send(b"inspect this turn\r")?;
-    let _ = code.pty.wait_for_text("Turn completed")?;
-    let open = code.pty.checkpoint();
-    code.pty.send(b"/open transcript\r")?;
-    let _ = code
-        .pty
-        .wait_for_raw_text_since(&open, ENTER_ALTERNATE_SCREEN)?;
-    let _ = code.pty.wait_for_text_since(&open, "Full transcript")?;
-
-    let close = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_raw_text_since(&close, LEAVE_ALTERNATE_SCREEN)?;
-    let normal = code.pty.wait_for_text_since(&close, "Message")?;
-    ensure!(
-        normal.contains("inspect this turn"),
-        "closing the inspector did not restore the normal-buffer transcript"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_detached_backlog_catches_up_once_after_resizes() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::DetachedBacklog)?;
-    code.wait_for_agent_ready()?;
-    code.pty.send(b"produce detached backlog\r")?;
-    let _ = code.pty.wait_for_text("FXBG")?;
-    code.pty.send(b"/open transcript\r")?;
-    let _ = code.pty.wait_for_text("Full transcript")?;
-
-    let narrow = code.pty.checkpoint();
-    code.pty.resize(40, 16)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&narrow, "Full transcript")?;
-    let wide = code.pty.checkpoint();
-    code.pty.resize(CODE_COLUMNS, CODE_ROWS)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&wide, "Full transcript")?;
-
-    code.mock.release_backlog()?;
-    let _ = code.pty.wait_for_text("BG010")?;
-    code.pty.send(b"\x1b[F")?;
-    let _ = code.pty.wait_for_text("BG089")?;
-    let close = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code.pty.wait_for_text_since(&close, "Turn completed")?;
-    let emitted = &code.pty.output[close.output_len..];
-    for number in 0..90 {
-        let marker = format!("BG{number:03}");
-        let count = emitted
-            .windows(marker.len())
-            .filter(|window| *window == marker.as_bytes())
-            .count();
-        ensure!(
-            count == 1,
-            "detached catch-up emitted {marker} {count} times instead of once"
-        );
-    }
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_agent_deck_expands_inline_and_preserves_multiline_foreground_draft() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
-    code.wait_for_agent_ready()?;
-    let draft = "foreground 草稿\nsecond line 🦀";
-    code.pty
-        .send(format!("\x1b[200~{draft}\x1b[201~").as_bytes())?;
-    let _ = code.pty.wait_for_text("second line")?;
-    let expansion = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/background run controls\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&expansion, "Foreground draft preserved")?;
-    assert!(
-        !code.pty.output[expansion.output_len..]
-            .windows(ENTER_ALTERNATE_SCREEN.len())
-            .any(|window| window == ENTER_ALTERNATE_SCREEN.as_bytes())
-    );
-    let collapsed = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code.pty.wait_for_text_since(&collapsed, "second line")?;
-    code.pty.send(b"\r")?;
-    let _ = code.pty.wait_for_text("Turn completed")?;
-    assert_eq!(code.mock.captured_prompts()?, vec![draft.to_string()]);
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn permission_arriving_in_inspector_needs_slash_and_fresh_selection() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::PermissionDuringInspector)?;
-    code.wait_for_agent_ready()?;
-    code.pty.send(b"permission while detached\r")?;
-    let _ = code.pty.wait_for_text("FXPD")?;
-    code.pty.send(b"/open transcript\r")?;
-    let _ = code.pty.wait_for_text("Full transcript")?;
-    code.mock.request_permissions()?;
-    let _ = code.pty.wait_for_text("Permission needed · / to review")?;
-
-    let ignored = code.pty.checkpoint();
-    code.pty.send(b"1\r\x0c")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&ignored, "Permission needed · / to review")?;
-    ensure!(
-        code.mock.captured_permission_outcomes()?.is_empty(),
-        "inspector keys answered a permission before explicit command focus"
-    );
-
-    code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_text("Permission needed · / to review oldest pending request (2)")?;
-    code.pty.send(b"/review permission\r")?;
-    let _ = code.pty.wait_for_text("Press a number to highlight")?;
-    let no_selection = code.pty.checkpoint();
-    code.pty.send(b"\r\x0c")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&no_selection, "Press a number to highlight")?;
-    ensure!(
-        code.mock.captured_permission_outcomes()?.is_empty(),
-        "permission focus reused buffered selection input"
-    );
-
-    let answered = code.pty.checkpoint();
-    code.pty.send(b"1\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&answered, "Permission (1) · / to review")?;
-    code.pty.send(b"/review permission\r")?;
-    let _ = code.pty.wait_for_text("Allow fixture 2")?;
-    code.pty.send(b"1\r")?;
-    let _ = code.pty.wait_for_text("Turn completed")?;
-    let outcomes = code.mock.wait_for_permission_outcomes(2)?;
-    ensure!(
-        outcomes.len() == 2,
-        "permissions were not resolved exactly once"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::OverlappingPermissions)?;
-    code.wait_for_agent_ready()?;
-    let resize_checkpoint = code.pty.checkpoint();
-    code.pty.resize(40, 16)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&resize_checkpoint, "Message")?;
-    let resized = code.pty.checkpoint();
-    code.pty.send("中文 👩‍💻 permission\r".as_bytes())?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&resized, "Permission (2) · / to review")?;
-
-    let small = code.pty.checkpoint();
-    code.pty.resize(30, 10)?;
-    code.pty.send(b"\x0c")?;
-    let raw_small = code
-        .pty
-        .wait_for_raw_text_since(&small, "Approval is disabled")?;
-    ensure!(
-        code.pty
-            .screen
-            .screen()
-            .contents()
-            .contains("Approval is disabled"),
-        "below-minimum safety copy was emitted but not visible; raw={raw_small:?}; screen={:?}",
-        code.pty.screen.screen().contents()
-    );
-    code.pty.send(b"/review permission\r1\r")?;
-    let guarded = code.pty.checkpoint();
-    code.pty.send(b"\x0c")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&guarded, "Approval is disabled")?;
-    ensure!(
-        code.mock.captured_permission_outcomes()?.is_empty(),
-        "below-minimum input approved a permission"
-    );
-    code.pty.send(b"\x1b")?;
-    let _ = code.pty.wait_for_text("fixture permission 2")?;
-    let focus_second = code.pty.checkpoint();
-    code.pty.send(b"/review permission\r\x0c")?;
-    let _ = code
-        .pty
-        .wait_for_raw_text_since(&focus_second, "\x1b[?2026h")?;
-    code.pty.send(b"\x1b")?;
-    let outcomes = code.mock.wait_for_permission_outcomes(2)?;
-    ensure!(
-        outcomes.len() == 2,
-        "safe denial did not resolve both requests"
-    );
-
-    code.pty.resize(40, 16)?;
-    let _ = code.pty.wait_for_text("Turn completed")?;
-    ensure!(
-        code.mock.captured_prompts()? == vec!["中文 👩‍💻 permission".to_string()],
-        "40×16 changed the submitted CJK/emoji prompt"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_external_editor_preserves_multiline_prompt_and_terminal() -> Result<()> {
-    let mock = MockAcp::new(MockScenario::Minimal)?;
-    let edited = "external-replacement 中文 👩‍💻\nsecond edited line  ";
-    let visual_editor = mock.visual_editor(edited)?;
-    let mut code = CodeFixture::agent_with_mock(mock, Some(&visual_editor))?;
-    code.wait_for_agent_ready()?;
-    code.pty.paste("draft that the editor replaces")?;
-    let editor_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&editor_checkpoint, "external-replacement")?;
-    let submission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "FXRP1")?;
-    let output = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "Turn completed")?;
-    ensure!(
-        output.contains("FXRP1"),
-        "external-editor prompt did not reach the minimal agent"
-    );
-    ensure!(
-        code.mock.captured_prompts()? == vec![edited.to_string()],
-        "external editor changed the submitted prompt bytes"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_failed_external_editor_retains_draft_and_recovers() -> Result<()> {
-    let mock = MockAcp::new(MockScenario::Minimal)?;
-    let visual_editor = mock.failing_visual_editor()?;
-    let draft = "recoverable draft 中文 👩‍💻\nsecond draft line  ";
-    let mut code = CodeFixture::agent_with_mock(mock, Some(&visual_editor))?;
-    code.wait_for_agent_ready()?;
-    code.pty.paste(draft)?;
-    let failure_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
-    let failure = code
-        .pty
-        .wait_for_text_since(&failure_checkpoint, "External editor failed")?;
-    ensure!(
-        failure.contains("External editor failed"),
-        "a nonzero external editor exit was not reported"
-    );
-
-    let submission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "FXRP1")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "Turn completed")?;
-    ensure!(
-        code.mock.captured_prompts()? == vec![draft.to_string()],
-        "a failed external editor did not retain the original draft for recovery"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-fn code_signal_exit_restores_terminal(signal: &str) -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
-    code.wait_for_agent_ready()?;
-    code.signal_child(signal)
-        .with_context(|| format!("delivering SIG{signal} during an interactive Code session"))?;
-    code.assert_terminal_restored()
-        .with_context(|| format!("restoring the terminal after SIG{signal}"))
-}
-
-#[test]
-fn code_sigterm_detaches_without_answering_pending_permissions() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::OverlappingPermissions)?;
-    code.wait_for_agent_ready()?;
-    code.pty.send(b"permission interrupted by SIGTERM\r")?;
-    let pending = code
-        .pty
-        .wait_for_text("Permission needed · / to review oldest pending request (2)")?;
-    ensure!(
-        pending.contains("Permission needed · / to review oldest pending request (2)"),
-        "both pending permissions were not visible before SIGTERM"
-    );
-
-    code.signal_child("TERM")?;
-    code.assert_terminal_restored()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let runs = runtime.block_on(code.mock.supervised_runs())?;
-    let run = runs
-        .first()
-        .context("foreground run disappeared after terminal loss")?;
-    assert_eq!(run.pending_permissions.len(), 2);
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
-    assert!(run.lease.is_none());
-    assert!(code.mock.captured_permission_outcomes()?.is_empty());
+fn mock_acp_refusal_settles_the_original_prompt_without_replay() -> Result<()> {
+    let mock = MockAcp::new(MockScenario::DelayedRefusal)?;
+    let mut process = mock.start()?;
+    process.request(
+        "initialize",
+        "initialize",
+        serde_json::json!({"protocolVersion":1}),
+    )?;
+    process.request(
+        "new",
+        "session/new",
+        serde_json::json!({"cwd":"/", "mcpServers":[]}),
+    )?;
+    process.send(serde_json::json!({"jsonrpc":"2.0","id":"refused-prompt","method":"session/prompt",
+        "params":{"sessionId":"pty-native","prompt":[{"type":"text","text":"refuse this exact prompt"}]}}))?;
+    process.wait_for("refusal fixture ready", |value| {
+        value["params"]["update"]["content"]["text"] == "FXRF"
+    })?;
+    mock.stop_with_refusal()?;
+    let refused = process.wait_for("original refused prompt", |value| {
+        value["id"] == "refused-prompt"
+    })?;
+    ensure!(refused["result"]["stopReason"] == "refusal");
+    ensure!(mock.captured_prompts()? == vec!["refuse this exact prompt".to_owned()]);
     Ok(())
 }
 
-#[test]
-fn code_sigint_restores_terminal_and_shell() -> Result<()> {
-    code_signal_exit_restores_terminal("INT")
-}
-
 #[tokio::test]
-async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::HangingSession)?;
-    let _ = code.mock.wait_for_request("session/new")?;
-    code.signal_child("TERM")?;
-    code.assert_terminal_restored()?;
-    let runs = code.mock.supervised_runs().await?;
-    let starting = runs
-        .iter()
-        .find(|run| run.process == bitrouter::supervisor::ProcessState::Starting)
-        .context("accepted startup was not retained by its daemon owner after client loss")?;
-    use bitrouter::supervisor::{ControlFence, LeaseMode, SessionCommand, SessionResponse};
-    let socket = code.mock.supervisor_socket().await?;
-    let grant = bitrouter::supervisor::authorize(
+async fn native_attached_backlog_preserves_all_events_across_resize_and_reconnect() -> Result<()> {
+    use bitrouter::supervisor::{SessionCommand, SessionResponse, SessionScope};
+    let mock = MockAcp::new(MockScenario::DetachedBacklog)?;
+    let launched = mock
+        .bro_command()?
+        .args([
+            "run",
+            "stub",
+            "produce detached backlog",
+            "--direct",
+            "--background",
+            "--json",
+        ])
+        .output()
+        .await?;
+    ensure!(
+        launched.status.success(),
+        "backlog launch failed: {}",
+        String::from_utf8_lossy(&launched.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&launched.stdout)?;
+    let run = report["agent_run_id"]
+        .as_str()
+        .context("backlog run ID missing")?
+        .to_owned();
+    let socket = mock.supervisor_socket().await?;
+    let reader = bitrouter::supervisor::authorize(
         &socket,
-        "recovery-fixture",
-        [bitrouter::supervisor::SessionScope::Stop]
+        "backlog-observer",
+        [SessionScope::Peek, SessionScope::Transcript]
             .into_iter()
             .collect(),
     )
     .await?;
-    let lease = match bitrouter::supervisor::request(
+    let mut command = shell_command(&mock)?;
+    command.arg("agents");
+    command.arg("attach");
+    command.arg(&run);
+    let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
+    let mut manager = CodeFixture {
+        child_pid_path: mock._directory.path().join("code-child.pid"),
+        mock,
+        pty,
+    };
+    manager.pty.wait_for_raw_text(ENTER_ALTERNATE_SCREEN)?;
+    manager.pty.wait_for_text("FXBG")?;
+    for (cols, rows) in [(40, 16), (CODE_COLUMNS, CODE_ROWS)] {
+        let changed = manager.pty.checkpoint();
+        manager.pty.resize(cols, rows)?;
+        manager.pty.send(b"\x0c")?;
+        manager.pty.wait_for_text_since(&changed, "FXBG")?;
+    }
+    manager.mock.release_backlog()?;
+    let deadline = Instant::now() + PTY_TIMEOUT;
+    let replay = loop {
+        let SessionResponse::Events { replay } = bitrouter::supervisor::request(
+            &socket,
+            &reader,
+            SessionCommand::Events {
+                run_id: run.clone(),
+                after_seq: 0,
+            },
+        )
+        .await?
+        else {
+            bail!("backlog replay missing");
+        };
+        let encoded = serde_json::to_string(&replay.events)?;
+        if encoded.contains("BG089") {
+            break replay;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "backlog never reached retained history"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    ensure!(
+        replay.history_complete
+            && replay
+                .events
+                .windows(2)
+                .all(|events| events[0].seq < events[1].seq)
+    );
+    let encoded = serde_json::to_string(&replay.events)?;
+    for number in 0..90 {
+        let marker = format!("BG{number:03}");
+        ensure!(
+            encoded.matches(&marker).count() == 1,
+            "retained backlog repeated or omitted {marker}"
+        );
+    }
+    manager.pty.send(b"\x1b[F")?;
+    manager.pty.wait_for_text("BG089")?;
+    manager.signal_child("TERM")?;
+    manager.assert_terminal_restored()?;
+    let mut command = shell_command(&manager.mock)?;
+    command.arg("agents");
+    command.arg("attach");
+    command.arg(&run);
+    manager.pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
+    manager.pty.wait_for_raw_text(ENTER_ALTERNATE_SCREEN)?;
+    manager.pty.send(b"\x1b[F")?;
+    manager.pty.wait_for_text("BG089")?;
+    manager.signal_child("TERM")?;
+    manager.assert_terminal_restored()?;
+    let SessionResponse::Events { replay: after } = bitrouter::supervisor::request(
         &socket,
-        &grant,
-        SessionCommand::AcquireLease {
-            run_id: starting.run_id.clone(),
-            client_id: "recovery-fixture".into(),
-            mode: LeaseMode::Transient,
-            action_request_id: "confirmed-startup-takeover".into(),
-            takeover: true,
+        &reader,
+        SessionCommand::Events {
+            run_id: run.clone(),
+            after_seq: 0,
         },
     )
     .await?
-    {
-        SessionResponse::Lease { lease } => lease,
-        _ => bail!("startup takeover omitted its lease"),
+    else {
+        bail!("reconnected replay missing");
     };
-    let _ = tokio::time::timeout(
-        PTY_TIMEOUT,
-        bitrouter::supervisor::request(
-            &socket,
-            &grant,
-            SessionCommand::Stop {
-                fence: ControlFence {
-                    run_id: starting.run_id.clone(),
-                    client_id: "recovery-fixture".into(),
-                    lease_generation: lease.generation,
-                    action_request_id: "confirmed-startup-stop".into(),
-                },
-                confirmed: true,
-            },
-        ),
-    )
-    .await??;
-    let stopped_runs = code.mock.supervised_runs().await?;
+    let encoded = serde_json::to_string(&after.events)?;
+    for number in 0..90 {
+        let marker = format!("BG{number:03}");
+        ensure!(
+            encoded.matches(&marker).count() == 1,
+            "reconnection repeated or omitted {marker}"
+        );
+    }
+    ensure!(manager.mock.captured_prompts()? == vec!["produce detached backlog".to_owned()]);
     ensure!(
-        stopped_runs.iter().any(|run| run.run_id == starting.run_id
-            && run.process == bitrouter::supervisor::ProcessState::Stopped),
-        "initializing run was not conclusively stopped"
+        manager
+            .mock
+            .supervised_runs()
+            .await?
+            .iter()
+            .any(|snapshot| snapshot.run_id == run
+                && snapshot.process == bitrouter::supervisor::ProcessState::Running
+                && snapshot.lease.is_none()),
+        "inspector exit stopped or retained control of backlog run"
     );
-    ensure!(
-        UnixStream::connect(&code.mock.control_path).is_err(),
-        "stop returned before the initializing adapter was reaped"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn code_explicit_detach_keeps_accepted_foreground_turn_running() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::DelayedNormal)?;
-    code.wait_for_agent_ready()?;
-    code.pty.send(b"continue after explicit detach\r")?;
-    code.mock.wait_for_request("session/prompt")?;
-    code.pty.send(b"/")?;
-    code.pty.send(b"Detach current session")?;
-    let _ = code.pty.wait_for_text("Detach current session and exit")?;
-    code.pty.send(b"\r")?;
-    code.assert_terminal_restored()?;
-    let runs = code.mock.supervised_runs().await?;
-    let run = runs
-        .first()
-        .context("detached foreground run disappeared")?;
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
-    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
-    assert!(run.lease.is_none());
-    code.mock.release()?;
-    tokio::time::timeout(PTY_TIMEOUT, async {
-        loop {
-            let runs = code.mock.supervised_runs().await?;
-            if runs.iter().any(|candidate| {
-                candidate.run_id == run.run_id
-                    && candidate.review == bitrouter::supervisor::ReviewState::Unread
-                    && candidate.turn == bitrouter::supervisor::TurnState::Idle
-            }) {
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
+    manager.mock.shutdown().await?;
     Ok(())
 }
 
@@ -2257,129 +1736,8 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
         String::from_utf8_lossy(&removed.stderr)
     );
     assert!(mock.supervised_runs().await?.is_empty());
+    mock.shutdown().await?;
     Ok(())
-}
-
-#[tokio::test]
-async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
-    code.wait_for_agent_ready()?;
-    let foreground_id = code
-        .mock
-        .supervised_runs()
-        .await?
-        .into_iter()
-        .next()
-        .context("foreground session was not supervisor-owned")?
-        .run_id;
-    code.pty.paste("foreground draft stays here")?;
-    let _ = code.pty.wait_for_text("foreground draft stays here")?;
-    let before_background = code.pty.checkpoint();
-    let worktree = tempfile::tempdir()?;
-    let launched = tokio::time::timeout(
-        PTY_TIMEOUT,
-        code.mock
-            .bro_command()?
-            .args([
-                "run",
-                "stub",
-                "background-isolation-fixture",
-                "--direct",
-                "--background",
-                "--json",
-                "--cwd",
-            ])
-            .arg(worktree.path())
-            .output(),
-    )
-    .await??;
-    ensure!(
-        launched.status.success(),
-        "background launch failed: {}",
-        String::from_utf8_lossy(&launched.stderr)
-    );
-    let report: serde_json::Value = serde_json::from_slice(&launched.stdout)?;
-    let background_id = report
-        .get("agent_run_id")
-        .and_then(serde_json::Value::as_str)
-        .context("background dispatch omitted run ID")?;
-    ensure!(
-        !String::from_utf8_lossy(&code.pty.output[before_background.output_len..])
-            .contains("BACKGROUND_PRIVATE_OUTPUT"),
-        "background output leaked into the foreground document"
-    );
-    let expanded = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/background run controls\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&expanded, "Foreground draft preserved")?;
-    // Wait for the asynchronously polled inventory, not just the opened controls.
-    let _ = code.pty.wait_for_text("1 ready")?;
-    let attached = code.pty.checkpoint();
-    code.pty.send(b"\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&attached, "BACKGROUND_PRIVATE_OUTPUT")?;
-    ensure!(
-        code.pty.output[attached.output_len..]
-            .windows(ENTER_ALTERNATE_SCREEN.len())
-            .any(|window| window == ENTER_ALTERNATE_SCREEN.as_bytes()),
-        "retained background history was not isolated in alternate screen"
-    );
-    let detached = code.pty.checkpoint();
-    code.pty.send(b"/detach from run\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&detached, "Foreground draft preserved")?;
-    let collapsed = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&collapsed, "foreground draft stays here")?;
-    ensure!(
-        !String::from_utf8_lossy(&code.pty.output[collapsed.output_len..])
-            .contains("BACKGROUND_PRIVATE_OUTPUT"),
-        "detach replayed background history into foreground scrollback"
-    );
-    code.pty.send(b"\x03")?;
-    let _ = code.pty.wait_for_text("Draft cleared")?;
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()?;
-    let runs = code.mock.supervised_runs().await?;
-    ensure!(
-        runs.iter().any(|run| run.run_id == foreground_id
-            && run.process == bitrouter::supervisor::ProcessState::Stopped),
-        "clean Code exit did not stop its foreground controller"
-    );
-    ensure!(
-        runs.iter().any(|run| run.run_id == background_id
-            && run.process == bitrouter::supervisor::ProcessState::Running
-            && run.lease.is_none()),
-        "clean foreground exit affected the detached background controller"
-    );
-    Ok(())
-}
-
-#[test]
-fn code_sigtstp_restores_then_sigcont_reacquires_terminal() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
-    code.wait_for_agent_ready()?;
-    let suspended = code.pty.checkpoint();
-    code.signal_child("TSTP")?;
-    let _ = code
-        .pty
-        .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
-
-    let resumed = code.pty.checkpoint();
-    code.signal_child("CONT")?;
-    let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
-    let screen = code.pty.wait_for_text_since(&resumed, "Message")?;
-    ensure!(
-        screen.contains("FXRD"),
-        "SIGCONT did not redraw the authoritative conversation"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
 }
 
 #[tokio::test]
@@ -2412,7 +1770,7 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
             .context("standalone fixture missing run ID")?
             .to_string();
         let child_pid_path = mock._directory.path().join("code-child.pid");
-        let mut command = shell_command(&mock, None)?;
+        let mut command = shell_command(&mock)?;
         command.arg("agents");
         if attach {
             command.arg("attach");
@@ -2447,686 +1805,162 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
                 && run.lease.is_none()),
             "manager exit stopped or retained control of the background run"
         );
+        manager.mock.shutdown().await?;
     }
     Ok(())
 }
 
-#[test]
-fn code_bare_entry_uses_bundled_native_model() -> Result<()> {
-    let mut bare = CodeFixture::bare()?;
-    let view = bare.pty.wait_for_text("bitrouter/auto")?;
-    ensure!(
-        view.contains("BRO"),
-        "bare Code did not open BRO native view"
-    );
-    ensure!(
-        !view.contains("Enter a routed model ID"),
-        "default startup asked for a model"
-    );
-    bare.pty.send(b"\x04")?;
-    bare.assert_terminal_restored()
-}
-
-#[test]
-fn code_without_defaults_keeps_native_model_editor() -> Result<()> {
-    let mut bare = CodeFixture::bare_with_defaults(false)?;
-    let _ = bare.pty.wait_for_text("Enter a routed model ID")?;
-    bare.pty.send(b"test-model\r")?;
-    let _ = bare.pty.wait_for_text("Model selected: test-model")?;
-    bare.pty.send(b"\x04")?;
-    bare.assert_terminal_restored()
-}
-
-#[test]
-fn code_agents_navigation_keeps_normal_buffer_and_defers_foreground_output() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::DelayedNormal)?;
-    code.pty.screen = vt100::Parser::new(CODE_ROWS, CODE_COLUMNS, 256);
-    code.wait_for_agent_ready()?;
-    for visit in 0..3 {
-        let opening = code.pty.checkpoint();
-        code.pty.send(b"\x1b[D")?;
-        let _ = code.pty.wait_for_text_since(&opening, "Esc conversation")?;
-        if visit == 2 {
-            let suspended = code.pty.checkpoint();
-            code.signal_child("TSTP")?;
-            let _ = code
-                .pty
-                .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
-            let resumed = code.pty.checkpoint();
-            code.signal_child("CONT")?;
-            let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
-            let _ = code.pty.wait_for_text_since(&resumed, "Esc conversation")?;
+#[tokio::test]
+async fn remote_cli_read_actions_preserve_authentication_and_never_start_local_work() -> Result<()>
+{
+    let remote = RemoteFixture::new(RemoteScenario::Healthy)?;
+    for (args, method, path, markers) in [
+        (
+            vec!["status"],
+            "GET",
+            "/control/v1/status",
+            vec!["REMOTE_A12_STATUS", "REMOTE_A12_PROVIDER"],
+        ),
+        (
+            vec!["models"],
+            "GET",
+            "/control/v1/models",
+            vec!["REMOTE_A12_MODEL", "REMOTE_A12_PROVIDER"],
+        ),
+        (
+            vec!["requests"],
+            "GET",
+            "/control/v1/requests",
+            vec!["REMOTE_A12_SCOPE", "REMOTE_A12_WINDOW"],
+        ),
+        (
+            vec!["route", "REMOTE_A12_MODEL"],
+            "POST",
+            "/control/v1/route/preview",
+            vec!["REMOTE_A12_ROUTE_RESULT", "remote-a12-service"],
+        ),
+    ] {
+        let output =
+            tokio::time::timeout(PTY_TIMEOUT, remote.bro_command()?.args(args).output()).await??;
+        ensure!(
+            output.status.success(),
+            "remote read failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        ensure!(
+            !output.stdout.contains(&0x1b) && !output.stderr.contains(&0x1b),
+            "remote CLI emitted terminal control bytes"
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let text = report.to_string();
+        ensure!(
+            markers.iter().all(|marker| text.contains(marker)),
+            "remote fixture data missing: {text}"
+        );
+        let capabilities = remote.wait_for_request("GET", "/control/v1/capabilities")?;
+        remote.assert_bearer(&capabilities)?;
+        let read = remote.wait_for_request(method, path)?;
+        remote.assert_bearer(&read)?;
+        if method == "POST" {
+            let input: serde_json::Value = serde_json::from_str(&read.body)?;
+            assert_eq!(input["model"], "REMOTE_A12_MODEL");
         }
-        let returning = code.pty.checkpoint();
-        code.pty.send(b"\x1b")?;
-        let _ = code.pty.wait_for_text_since(&returning, "← agents")?;
     }
-    code.pty.send(b"first\r")?;
-    let _ = code.pty.wait_for_text("FXW1")?;
-    let opened = code.pty.checkpoint();
-    code.pty.send(b"\x1b[D")?;
-    let _ = code.pty.wait_for_text_since(&opened, "Esc conversation")?;
-    code.mock.control("release")?;
-    // Permission requests follow the update on the same ACP stdout stream.
-    // Their visible attention proves the wire consumed that preceding update.
-    code.mock.control("permission")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&opened, "foreground permission(s) waiting")?;
-    let settled = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code.pty.wait_for_text_since(&settled, "type to search")?;
+    assert!(!remote.bitrouter_home_path.join("bitrouter.sock").exists());
+    assert!(!remote.bitrouter_home_path.join("bitrouter.pid").exists());
+    assert!(!remote.bitrouter_home_path.join("bitrouter.yaml").exists());
     ensure!(
-        !String::from_utf8_lossy(&code.pty.output[opened.output_len..]).contains("FXRL"),
-        "foreground output escaped into menu history"
+        matches!(remote.requests.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "read CLI issued extra remote operations"
     );
-    let leaving_search = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&leaving_search, "Esc conversation")?;
-    let resizing = code.pty.checkpoint();
-    let resized_rows = 30;
-    code.pty.resize(100, resized_rows)?;
-    // Wait for a complete frame at the new height before sending Escape.
-    // Otherwise the resize signal can race the standalone key's delivery.
-    let _ = code
-        .pty
-        .wait_for_screen_inner(Some(&resizing), "Esc conversation", |screen| {
-            screen
-                .lines()
-                .nth(usize::from(resized_rows - 1))
-                .is_some_and(|line| line.contains("Esc conversation"))
-        })?;
-    let returning = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let output = code.pty.wait_for_text_since(&returning, "FXRL")?;
-    ensure!(
-        output.matches("FXRL").count() == 1,
-        "foreground text replayed twice"
-    );
-    let raw = String::from_utf8_lossy(&code.pty.output);
-    ensure!(
-        !raw.contains(ENTER_ALTERNATE_SCREEN) && !raw.contains("\x1b[3J"),
-        "native navigation replaced or cleared scrollback"
-    );
-    code.pty.screen.set_scrollback(256);
-    let history = code.pty.screen.screen().contents();
-    ensure!(
-        !history.contains("Esc conversation") && !history.contains("Enter preview"),
-        "menu controls entered native transcript history"
-    );
-    code.pty.screen.set_scrollback(0);
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
+    Ok(())
 }
 
-#[test]
-fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Result<()> {
-    let mut code = CodeFixture::chat(MockScenario::OverlappingPermissions)?;
-    code.wait_for_agent_ready()?;
-    let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let palette = code
-        .pty
-        .wait_for_text_since(&palette_checkpoint, "Choose agent")?;
-    ensure!(
-        !palette.contains("Home")
-            && !palette.replace("/ Agents", "").contains("Agents")
-            && !palette.contains("Requests"),
-        "hidden chat entry restored permanent navigation"
+#[tokio::test]
+async fn remote_cli_failure_keeps_the_remote_error_without_local_model_fallback() -> Result<()> {
+    let remote = RemoteFixture::new(RemoteScenario::ModelsFailure)?;
+    let output = tokio::time::timeout(PTY_TIMEOUT, remote.bro_command()?.args(["models"]).output())
+        .await??;
+    assert!(!output.status.success());
+    let message = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-    code.close_to_composer()?;
-
-    code.pty.send(b"compatibility permission test\r")?;
-    let _ = code
-        .pty
-        .wait_for_text("Permission needed · / to review oldest pending request (2)")?;
-    let first_permission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/review permission\r")?;
-    let first_permission = code
-        .pty
-        .wait_for_text_since(&first_permission_checkpoint, "Allow fixture 1")?;
     ensure!(
-        first_permission.contains("Deny fixture 1"),
-        "hidden chat entry did not retain the first permission labels"
+        message.contains("REMOTE_A12_MODELS_FAILURE"),
+        "remote failure was lost: {message}"
     );
-    // The ACP requests arrive asynchronously. Observe both arrivals above and
-    // the first answer here before reviewing the remaining request.
-    let answered = code.pty.checkpoint();
-    code.pty.send(b"1\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&answered, "Permission (1) · / to review")?;
-    let second_permission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/review permission\r")?;
-    let second_permission = code
-        .pty
-        .wait_for_text_since(&second_permission_checkpoint, "Allow fixture 2")?;
     ensure!(
-        second_permission.contains("Deny fixture 2"),
-        "hidden chat entry did not retain the second permission labels"
+        !message.contains("Listed from config")
+            && !message.contains("no daemon answered")
+            && !message.contains("(no routable models)"),
+        "remote error fell back to local data: {message}"
     );
-    code.pty.send(b"1\r")?;
-    let _ = code.pty.wait_for_text("Turn completed")?;
-    ensure!(
-        code.mock.captured_prompts()? == vec!["compatibility permission test".to_string()],
-        "hidden chat entry changed the submitted prompt"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
+    let capabilities = remote.wait_for_request("GET", "/control/v1/capabilities")?;
+    remote.assert_bearer(&capabilities)?;
+    let models = remote.wait_for_request("GET", "/control/v1/models")?;
+    remote.assert_bearer(&models)?;
+    assert!(!remote.bitrouter_home_path.join("bitrouter.sock").exists());
+    assert!(!remote.bitrouter_home_path.join("bitrouter.pid").exists());
+    ensure!(matches!(
+        remote.requests.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    Ok(())
 }
 
-#[test]
-fn code_hidden_tui_bare_alias_uses_bundled_native_model() -> Result<()> {
-    let mut tui = CodeFixture::tui_bare()?;
-    let view = tui.pty.wait_for_text("bitrouter/auto")?;
+#[tokio::test]
+async fn explicit_socket_status_is_readonly_without_starting_an_agent() -> Result<()> {
+    let mock = MockAcp::new(MockScenario::Minimal)?;
+    let socket = mock.supervisor_socket().await?;
+    let mut server = mock
+        .bro_command()?
+        .args(["serve", "--config"])
+        .arg(&mock.config_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    tokio::time::timeout(PTY_TIMEOUT, async {
+        loop {
+            if bitrouter::daemon::probe_status(&socket).await?.is_some() {
+                break Ok::<_, anyhow::Error>(());
+            }
+            ensure!(
+                server.try_wait()?.is_none(),
+                "fixture daemon exited before readiness"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let output = tokio::time::timeout(
+        PTY_TIMEOUT,
+        mock.bro_command()?
+            .args(["status", "--socket"])
+            .arg(&socket)
+            .output(),
+    )
+    .await??;
     ensure!(
-        view.contains("BRO"),
-        "hidden tui alias did not open native view"
+        output.status.success(),
+        "explicit socket read failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    tui.pty.send(b"\x04")?;
-    tui.assert_terminal_restored()
-}
-
-#[test]
-fn code_queues_fifo_work_and_drains_after_each_normal_settlement() -> Result<()> {
-    let mut queued = CodeFixture::agent(MockScenario::DelayedNormal)?;
-    queued.wait_for_agent_ready()?;
-    queued.pty.send(b"first\r")?;
-    let _ = queued.pty.wait_for_text("FXW1")?;
-    queued.pty.paste("queued follow-up")?;
-    queued.pty.send(b"\r")?;
-    let _ = queued.pty.wait_for_text("Queued for the next turn (")?;
-
-    queued.mock.release()?;
-    let _ = queued.pty.wait_for_text("FXW2")?;
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(report["running"], true);
+    assert!(mock.supervised_runs().await?.is_empty());
+    assert!(mock.captured_request("initialize")?.is_none());
+    assert!(mock.captured_prompts()?.is_empty());
+    ensure!(!output.stdout.contains(&0x1b) && !output.stderr.contains(&0x1b));
+    match bitrouter::daemon::send_command(&socket, &bitrouter::daemon::DaemonCommand::Stop).await? {
+        bitrouter::daemon::DaemonResponse::Ok => {}
+        response => bail!("fixture daemon stop failed: {response:?}"),
+    }
     ensure!(
-        queued.mock.captured_prompts()?
-            == vec!["first".to_string(), "queued follow-up".to_string()],
-        "normal settlement did not dispatch exactly one queued prompt in FIFO order"
+        tokio::time::timeout(PTY_TIMEOUT, server.wait())
+            .await??
+            .success()
     );
-
-    let final_settlement = queued.pty.checkpoint();
-    queued.mock.release()?;
-    let _ = queued
-        .pty
-        .wait_for_text_since(&final_settlement, "Turn completed")?;
-    queued.pty.send(b"\x04")?;
-    queued.assert_terminal_restored()
-}
-
-#[test]
-fn code_cancellation_pauses_queue_without_replaying_uncertain_work() -> Result<()> {
-    let mut queued = CodeFixture::agent(MockScenario::DelayedCancel)?;
-    queued.wait_for_agent_ready()?;
-    queued.pty.send(b"first\r")?;
-    let _ = queued.pty.wait_for_text("FXCN")?;
-    queued.pty.paste("queued follow-up")?;
-    queued.pty.send(b"\r")?;
-    let _ = queued.pty.wait_for_text("Queued for the next turn (")?;
-    let cancellation_checkpoint = queued.pty.checkpoint();
-    queued.pty.send(b"\x03")?;
-    let _ = queued.pty.wait_for_text_since(
-        &cancellation_checkpoint,
-        "Cancelling · wait for the agent to settle",
-    )?;
-    let _ = queued
-        .pty
-        .wait_for_text_since(&cancellation_checkpoint, "Queue is paused.")?;
-    ensure!(
-        queued.mock.captured_prompts()? == vec!["first".to_string()],
-        "cancelled turn replayed or drained queued work"
-    );
-    queued.pty.send(b"\x04")?;
-    queued.assert_terminal_restored()
-}
-
-#[test]
-fn code_abnormal_stop_pauses_queue_without_draining_it() -> Result<()> {
-    let mut queued = CodeFixture::agent(MockScenario::DelayedRefusal)?;
-    queued.wait_for_agent_ready()?;
-    queued.pty.send(b"first\r")?;
-    let _ = queued.pty.wait_for_text("FXRF")?;
-    queued.pty.paste("queued after refusal")?;
-    queued.pty.send(b"\r")?;
-    let _ = queued.pty.wait_for_text("Queued for the next turn (")?;
-    let refusal_checkpoint = queued.pty.checkpoint();
-    queued.mock.stop_with_refusal()?;
-    let _ = queued
-        .pty
-        .wait_for_text_since(&refusal_checkpoint, "Queue is paused.")?;
-    ensure!(
-        queued.mock.captured_prompts()? == vec!["first".to_string()],
-        "abnormal stop drained queued work"
-    );
-    queued.pty.send(b"\x04")?;
-    queued.assert_terminal_restored()
-}
-
-#[test]
-fn code_overlapping_permissions_require_explicit_answers() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::OverlappingPermissions)?;
-    code.wait_for_agent_ready()?;
-    code.pty.send(b"permission test\r")?;
-    let _ = code
-        .pty
-        .wait_for_text("Permission needed · / to review oldest pending request (2)")?;
-    let first_panel_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/review permission\r")?;
-    let panel = code
-        .pty
-        .wait_for_text_since(&first_panel_checkpoint, "Allow fixture 1")?;
-    ensure!(
-        panel.contains("Allow fixture 1") && panel.contains("Deny fixture 1"),
-        "oldest permission labels were not preserved"
-    );
-    let _ = code.pty.wait_for_text("Press a number to highlight")?;
-    let _ = code.pty.wait_for_text("Enter confirms")?;
-    let answered = code.pty.checkpoint();
-    code.pty.send(b"1\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&answered, "Permission (1) · / to review")?;
-    let second_panel_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/review permission\r")?;
-    let second_panel = code
-        .pty
-        .wait_for_text_since(&second_panel_checkpoint, "Allow fixture 2")?;
-    ensure!(
-        second_panel.contains("Allow fixture 2") && second_panel.contains("Deny fixture 2"),
-        "second overlapping permission lost its identity or labels"
-    );
-    code.pty.send(b"1\r")?;
-    let _ = code.pty.wait_for_text("Turn completed")?;
-    ensure!(
-        code.mock.captured_prompts()? == vec!["permission test".to_string()],
-        "permission answers started an unexpected extra prompt"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> {
-    let mut code = RemoteCodeFixture::new(RemoteScenario::Healthy)?;
-    let root = code.pty.wait_for_text("REMOTE_A12_STATUS")?;
-    ensure!(
-        root.contains("Remote operations") && root.contains("read-only"),
-        "remote target and read-only scope were not visible: {root:?}"
-    );
-    ensure!(
-        !root.contains("Message"),
-        "remote root exposed an enabled coding composer: {root:?}"
-    );
-    let capabilities = code
-        .remote
-        .wait_for_request("GET", "/control/v1/capabilities")?;
-    code.remote.assert_bearer(&capabilities)?;
-    let status = code.remote.wait_for_request("GET", "/control/v1/status")?;
-    code.remote.assert_bearer(&status)?;
-
-    let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let palette = code
-        .pty
-        .wait_for_text_since(&palette_checkpoint, "Routable models")?;
-    ensure!(
-        palette.contains("Status")
-            && palette.contains("Host requests")
-            && palette.contains("Route preview")
-            && palette.contains("Providers"),
-        "remote palette omitted a supported read action: {palette:?}"
-    );
-    ensure!(
-        !palette.contains("Choose agent")
-            && !palette.contains("Agent settings")
-            && !palette.contains("Session route"),
-        "remote palette offered ACP execution or route mutation: {palette:?}"
-    );
-    code.pty.send(b"Telemetry")?;
-    let _ = code.pty.wait_for_text("Telemetry")?;
-    let palette_return = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code.pty.wait_for_screen_inner(
-        Some(&palette_return),
-        "remote operations root after closing commands",
-        |screen| screen.contains("REMOTE_A12_STATUS") && !screen.contains("Commands ─"),
-    )?;
-    let models_palette = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&models_palette, "Routable models")?;
-    code.pty.send(b"Routable models\r")?;
-    let models = code.pty.wait_for_text("REMOTE_A12_MODEL")?;
-    ensure!(
-        models.contains("REMOTE_A12_PROVIDER"),
-        "models inspector did not render remote fixture data: {models:?}"
-    );
-    let models_request = code.remote.wait_for_request("GET", "/control/v1/models")?;
-    code.remote.assert_bearer(&models_request)?;
-    let models_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&models_checkpoint, "REMOTE_A12_STATUS")?;
-
-    let requests_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&requests_checkpoint, "Host requests")?;
-    code.pty.send(b"Host requests\r")?;
-    let requests = code.pty.wait_for_text("REMOTE_A12_SCOPE")?;
-    ensure!(
-        requests.contains("REMOTE_A12_WINDOW"),
-        "requests inspector did not render remote fixture data: {requests:?}"
-    );
-    let requests_request = code
-        .remote
-        .wait_for_request("GET", "/control/v1/requests")?;
-    code.remote.assert_bearer(&requests_request)?;
-    let requests_return = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&requests_return, "REMOTE_A12_STATUS")?;
-
-    let preview_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&preview_checkpoint, "Route preview")?;
-    code.pty.send(b"Route preview\r")?;
-    let model_selector_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"REMOTE_A12_MODEL")?;
-    let model_selector = code
-        .pty
-        .wait_for_text_since(&model_selector_checkpoint, "Model to preview")?;
-    ensure!(
-        model_selector.contains("Route preview"),
-        "route preview did not request a model: {model_selector:?}"
-    );
-    code.pty.send(b"\r")?;
-    let route = code.pty.wait_for_text("REMOTE_A12_ROUTE_RESULT")?;
-    ensure!(
-        route.contains("remote-a12-service"),
-        "route preview did not render the remote fixture result: {route:?}"
-    );
-    let route_request = code
-        .remote
-        .wait_for_request("POST", "/control/v1/route/preview")?;
-    code.remote.assert_bearer(&route_request)?;
-    ensure!(
-        route_request.body.contains("REMOTE_A12_MODEL"),
-        "route preview request lost the selected model: {route_request:?}"
-    );
-
-    let route_return = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&route_return, "REMOTE_A12_STATUS")?;
-    code.pty.send(b"\x1b")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_remote_errors_do_not_fall_back_to_local_models() -> Result<()> {
-    let mut code = RemoteCodeFixture::new(RemoteScenario::ModelsFailure)?;
-    let _ = code.pty.wait_for_text("REMOTE_A12_STATUS")?;
-    let capabilities = code
-        .remote
-        .wait_for_request("GET", "/control/v1/capabilities")?;
-    code.remote.assert_bearer(&capabilities)?;
-    let status = code.remote.wait_for_request("GET", "/control/v1/status")?;
-    code.remote.assert_bearer(&status)?;
-
-    let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&palette_checkpoint, "Routable models")?;
-    code.pty.send(b"Routable models\r")?;
-    let failure = code.pty.wait_for_text("REMOTE_A12_MODELS_FAILURE")?;
-    ensure!(
-        !failure.contains("(no routable models)")
-            && !failure.contains("Listed from config")
-            && !failure.contains("no daemon answered"),
-        "remote models failure fell back to local catalog data: {failure:?}"
-    );
-    let models = code.remote.wait_for_request("GET", "/control/v1/models")?;
-    code.remote.assert_bearer(&models)?;
-    let failure_return_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x03")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&failure_return_checkpoint, "REMOTE_A12_STATUS")?;
-    code.pty.send(b"\x03")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_socket_operations_remain_read_only_without_starting_an_agent() -> Result<()> {
-    let mut code = CodeFixture::socket_only()?;
-    let root = code.pty.wait_for_text("a12.sock")?;
-    ensure!(
-        root.contains("Local operations")
-            && root.contains("read-only")
-            && !root.contains("Message"),
-        "socket-only entry did not show its read-only scope: {root:?}"
-    );
-    ensure!(
-        code.mock.captured_prompt()?.is_none(),
-        "socket-only operations unexpectedly started an ACP agent"
-    );
-    let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let palette = code
-        .pty
-        .wait_for_text_since(&palette_checkpoint, "Routable models")?;
-    ensure!(
-        !palette.contains("Choose agent")
-            && !palette.contains("Agent settings")
-            && !palette.contains("Session route"),
-        "socket-only operations offered ACP execution or route mutation: {palette:?}"
-    );
-    let palette_return_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x03")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&palette_return_checkpoint, "a12.sock")?;
-    code.pty.send(b"\x03")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_agent_settings_apply_only_a_confirmed_configuration() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::SettingsConfirmed)?;
-    code.wait_for_agent_ready()?;
-    let _ = code.pty.wait_for_text("FXSET")?;
-    let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&palette_checkpoint, "Agent settings")?;
-    code.pty.send(b"Agent settings\r")?;
-    let _ = code.pty.wait_for_text("A12 setting")?;
-    code.pty.send(b"A12 setting\r")?;
-    let _ = code.pty.wait_for_text("A12 confirmed")?;
-    let confirmation_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"A12 confirmed\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&confirmation_checkpoint, "Message")?;
-    let request = code.mock.wait_for_request("session/set_config_option")?;
-    ensure!(
-        request["params"]["sessionId"] == "pty-native"
-            && request["params"]["configId"] == "a12-setting"
-            && request["params"]["value"] == "a12-confirmed",
-        "setting request changed the native id or selected value: {request}"
-    );
-
-    let verify_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&verify_checkpoint, "Agent settings")?;
-    code.pty.send(b"Agent settings\r")?;
-    let retained = code.pty.wait_for_text("Current: a12-confirmed")?;
-    ensure!(
-        !retained.contains("Current: a12-old"),
-        "confirmed setting still displayed the old value: {retained:?}"
-    );
-    code.close_to_composer()?;
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_failed_agent_setting_keeps_the_last_confirmed_value() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::SettingsFailure)?;
-    code.wait_for_agent_ready()?;
-    let _ = code.pty.wait_for_text("FXSET")?;
-    let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&palette_checkpoint, "Agent settings")?;
-    code.pty.send(b"Agent settings\r")?;
-    let _ = code.pty.wait_for_text("A12 setting")?;
-    code.pty.send(b"A12 setting\r")?;
-    let _ = code.pty.wait_for_text("A12 confirmed")?;
-    let failure_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"A12 confirmed\r")?;
-    let failure = code.pty.wait_for_text_since(&failure_checkpoint, "FXSF")?;
-    ensure!(
-        !failure.contains("a12-confirmed"),
-        "failed setting was displayed as confirmed: {failure:?}"
-    );
-    let failure_return_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b")?;
-    let _ = code.pty.wait_for_screen_inner(
-        Some(&failure_return_checkpoint),
-        "originating setting picker with restored selection and dismissed error",
-        |screen| {
-            screen.contains("Agent setting · A12 setting")
-                && screen.contains("› A12 confirmed")
-                && !screen.contains("FXSF")
-        },
-    )?;
-    code.close_to_composer()?;
-    let request = code.mock.wait_for_request("session/set_config_option")?;
-    ensure!(
-        request["params"]["sessionId"] == "pty-native"
-            && request["params"]["configId"] == "a12-setting"
-            && request["params"]["value"] == "a12-confirmed",
-        "failed setting request changed the native id or selected value: {request}"
-    );
-
-    let verify_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"/")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&verify_checkpoint, "Agent settings")?;
-    code.pty.send(b"Agent settings\r")?;
-    let retained = code.pty.wait_for_text("Current: a12-old")?;
-    ensure!(
-        !retained.contains("Current: a12-confirmed"),
-        "failed setting replaced the last confirmed value: {retained:?}"
-    );
-    code.close_to_composer()?;
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
-}
-
-#[test]
-fn code_load_replays_history_while_resume_keeps_native_ids_distinct() -> Result<()> {
-    let mut loaded = CodeFixture::agent_with_selection(
-        MockScenario::SessionLifecycle,
-        "--load",
-        "native-a12-load",
-    )?;
-    let replay = loaded.pty.wait_for_text("FXLOAD")?;
-    ensure!(
-        replay.contains("FXLOAD"),
-        "load did not retain the fixture's replayed history: {replay:?}"
-    );
-    let details_checkpoint = loaded.pty.checkpoint();
-    loaded.pty.send(b"/")?;
-    let _ = loaded
-        .pty
-        .wait_for_text_since(&details_checkpoint, "Session details")?;
-    loaded.pty.send(b"Session details\r")?;
-    let details = loaded
-        .pty
-        .wait_for_text("Native session: native-a12-load")?;
-    ensure!(
-        details.contains("Provider session: agent-a12-load"),
-        "load details did not preserve the agent-owned id: {details:?}"
-    );
-    let load_request = loaded.mock.wait_for_request("session/load")?;
-    ensure!(
-        load_request["params"]["sessionId"] == "native-a12-load",
-        "load request changed its native id: {load_request}"
-    );
-    loaded.close_to_composer()?;
-    loaded.pty.send(b"\x04")?;
-    loaded.assert_terminal_restored()?;
-
-    let mut resumed = CodeFixture::agent_with_selection(
-        MockScenario::SessionLifecycle,
-        "--resume",
-        "native-a12-resume",
-    )?;
-    let resumed_notice = resumed
-        .pty
-        .wait_for_text("Earlier history was not replayed")?;
-    ensure!(
-        !resumed_notice.contains("FXLOAD"),
-        "resume incorrectly replayed load history: {resumed_notice:?}"
-    );
-    let resume_details_checkpoint = resumed.pty.checkpoint();
-    resumed.pty.send(b"/")?;
-    let _ = resumed
-        .pty
-        .wait_for_text_since(&resume_details_checkpoint, "Session details")?;
-    resumed.pty.send(b"Session details\r")?;
-    let resume_details = resumed
-        .pty
-        .wait_for_text("Native session: native-a12-resume")?;
-    ensure!(
-        resume_details.contains("Provider session: agent-a12-resume"),
-        "resume details did not preserve the agent-owned id: {resume_details:?}"
-    );
-    let resume_request = resumed.mock.wait_for_request("session/resume")?;
-    ensure!(
-        resume_request["params"]["sessionId"] == "native-a12-resume",
-        "resume request changed its native id: {resume_request}"
-    );
-    resumed.close_to_composer()?;
-    resumed.pty.send(b"\x04")?;
-    resumed.assert_terminal_restored()
-}
-
-#[test]
-fn code_late_adapter_disconnect_preserves_terminal_cleanup() -> Result<()> {
-    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
-    code.wait_for_agent_ready()?;
-    code.pty.send(b"completed before disconnect\r")?;
-    let _ = code.pty.wait_for_text("FXRP1")?;
-    let _ = code.pty.wait_for_text("Turn completed")?;
-    let disconnect_checkpoint = code.pty.checkpoint();
-    code.mock.disconnect()?;
-    let disconnected = code.pty.wait_for_text_since(
-        &disconnect_checkpoint,
-        "disconnected · inspect supervised run",
-    )?;
-    ensure!(
-        disconnected.contains("FXRP1"),
-        "late adapter disconnect discarded the completed transcript: {disconnected:?}"
-    );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
+    Ok(())
 }

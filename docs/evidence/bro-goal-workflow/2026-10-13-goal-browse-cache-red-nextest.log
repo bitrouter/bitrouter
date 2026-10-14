@@ -1,0 +1,30 @@
+    Blocking waiting for file lock on build directory
+   Compiling bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.31s
+────────────
+ Nextest run ID 2e622a40-1b95-4de4-807f-868a9f48dcee with nextest profile: default
+    Starting 1 test across 1 binary (287 tests skipped)
+        FAIL [   0.010s] (1/1) bitrouter-tui goals::view::tests::browsing_resize_defers_new_goal_content_until_return
+  stdout ───
+
+    running 1 test
+    test goals::view::tests::browsing_resize_defers_new_goal_content_until_return ... FAILED
+
+    failures:
+
+    failures:
+        goals::view::tests::browsing_resize_defers_new_goal_content_until_return
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 287 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'goals::view::tests::browsing_resize_defers_new_goal_content_until_return' (1210055) panicked at crates/bitrouter-tui/src/goals/view.rs:183:17:
+    assertion failed: !text.contains("DEFERRED_")
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure:
+────────────
+     Summary [   0.018s] 1 test run: 0 passed, 1 failed, 287 skipped
+        FAIL [   0.010s] (1/1) bitrouter-tui goals::view::tests::browsing_resize_defers_new_goal_content_until_return
+error: test run failed

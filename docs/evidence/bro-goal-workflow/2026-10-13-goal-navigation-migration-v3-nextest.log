@@ -1,0 +1,56 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 54s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 4cf550e2-8399-46a8-8404-7166796aa633 with nextest profile: default
+    Starting 5 tests across 2 binaries (38 tests and 35 binaries skipped)
+        PASS [  30.951s] (1/5) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty goal_directory_resize_defers_backlog_and_isolates_native_inspection
+        SLOW [> 60.000s] (───) bitrouter::code_tui_pty native_attached_backlog_preserves_all_events_across_resize_and_reconnect
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        SLOW [>120.000s] (───) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        SLOW [>120.000s] (───) bitrouter::goal_tui_pty goal_directory_resize_defers_backlog_and_isolates_native_inspection
+        SLOW [>120.000s] (───) bitrouter::code_tui_pty native_attached_backlog_preserves_all_events_across_resize_and_reconnect
+        SLOW [>120.000s] (───) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+        PASS [ 131.418s] (2/5) bitrouter::code_tui_pty native_attached_backlog_preserves_all_events_across_resize_and_reconnect
+        PASS [ 135.543s] (3/5) bitrouter::goal_tui_pty goal_directory_resize_defers_backlog_and_isolates_native_inspection
+        PASS [ 136.937s] (4/5) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+        PASS [ 145.490s] (5/5) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+────────────
+     Summary [ 145.495s] 5 tests run: 5 passed (4 slow), 38 skipped

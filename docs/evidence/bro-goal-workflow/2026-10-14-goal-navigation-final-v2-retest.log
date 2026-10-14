@@ -1,0 +1,86 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling tonic v0.14.6
+   Compiling sqlx-core v0.8.6
+   Compiling tonic-prost v0.14.6
+   Compiling opentelemetry-proto v0.32.0
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling tonic-types v0.14.6
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sqlx v0.8.6
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling sea-query-binder v0.7.0
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+   Compiling dist-helper v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/helpers/dist-helper)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 29s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 477c3d4c-116d-44da-bd72-08a774ab35f0 with nextest profile: default
+    Starting 38 tests across 70 binaries (4537 tests skipped)
+        PASS [   0.031s] ( 1/38) bitrouter onboarding::tests::is_configured_is_false_when_no_signal_present
+        PASS [   0.031s] ( 2/38) bitrouter onboarding::tests::probe_uses_gemini_not_google_key
+        PASS [   0.031s] ( 3/38) bitrouter onboarding::tests::is_configured_true_for_each_signal_independently
+        PASS [   0.032s] ( 4/38) bitrouter onboarding::tests::detected_env_keys_ignores_empty_values
+        PASS [   0.034s] ( 5/38) bitrouter onboarding::tests::detected_env_keys_reports_present_vars_only
+        PASS [   0.044s] ( 6/38) bitrouter onboarding::tests::inert_envelope_does_not_claim_a_saved_configuration
+        PASS [   0.044s] ( 7/38) bitrouter onboarding::tests::envelope_shape_includes_saved_only_activation_and_inspect_cue
+        PASS [   0.045s] ( 8/38) bitrouter onboarding::tests::already_configured_maps_env_cloud_and_store
+        PASS [   0.015s] ( 9/38) bitrouter-tui goals::budget::tests::amounts_are_exact_and_ambiguous_or_overflowing_numbers_are_rejected
+        PASS [   0.011s] (10/38) bitrouter-tui goals::tests::budget_form_pins_goal_and_limits_without_editing_the_goal_draft
+        PASS [   0.012s] (11/38) bitrouter-tui goals::tests::acceptance_requires_explicit_confirmation_of_the_pinned_artifact
+        PASS [   0.014s] (12/38) bitrouter-tui goals::tests::allow_requires_loaded_request_and_explicit_deny_remains_available
+        PASS [   0.010s] (13/38) bitrouter-tui goals::tests::busy_enter_targets_the_current_goal_and_preserves_the_draft_until_acceptance
+        PASS [   0.027s] (14/38) bitrouter onboarding::tests::status_report_lists_signals_and_hint
+        PASS [   0.007s] (15/38) bitrouter-tui goals::tests::decision_browsing_uses_pinned_identities_and_ignores_late_foreign_evidence
+        PASS [   0.007s] (16/38) bitrouter-tui goals::tests::decision_has_no_default_consent_and_preserves_the_offered_version
+        PASS [   0.065s] (17/38) bitrouter onboarding::tests::provider_menu_contains_every_public_active_entry_in_display_order
+        PASS [   0.034s] (18/38) bitrouter onboarding::tests::snippet_uses_placeholder_when_no_bitrouter_key
+        PASS [   0.036s] (19/38) bitrouter onboarding::tests::reset_is_a_noop_when_nothing_stored
+        PASS [   0.014s] (20/38) bitrouter-tui goals::tests::changed_permission_binding_disables_the_pinned_choice
+        PASS [   0.010s] (21/38) bitrouter-tui goals::tests::directory_filters_use_facts_and_never_start_or_retarget_work
+        PASS [   0.010s] (22/38) bitrouter-tui goals::tests::drafts_pending_scope_and_read_positions_are_independent_per_goal
+        PASS [   0.009s] (23/38) bitrouter-tui goals::tests::empty_arrows_navigate_but_nonempty_arrows_edit
+        PASS [   0.008s] (24/38) bitrouter-tui goals::tests::expanded_readonly_nodes_preserve_status_scope_draft_and_per_goal_state
+        PASS [   0.009s] (25/38) bitrouter-tui goals::tests::external_editor_targets_only_the_visible_goal_composer
+        PASS [   0.007s] (26/38) bitrouter-tui goals::tests::hidden_permission_choices_cannot_survive_a_below_minimum_viewport
+        PASS [   0.009s] (27/38) bitrouter-tui goals::tests::fullscreen_browsing_preserves_the_pinned_version_read_position_and_draft
+        PASS [   0.007s] (28/38) bitrouter-tui goals::tests::multiline_paste_shift_enter_and_key_release_do_not_submit
+        PASS [   0.007s] (29/38) bitrouter-tui goals::tests::initial_budget_is_part_of_create_and_invalid_forms_cannot_submit
+        PASS [   0.007s] (30/38) bitrouter-tui goals::tests::permission_options_stay_visible_when_requests_and_choices_are_long
+        PASS [   0.006s] (31/38) bitrouter-tui goals::tests::resolved_permission_stays_focused_but_cannot_answer_or_submit_the_draft
+        PASS [   0.006s] (32/38) bitrouter-tui goals::tests::rendering_names_readonly_scope_and_neutralizes_terminal_control_data
+        PASS [   0.006s] (33/38) bitrouter-tui goals::tests::right_view_keys_and_paste_cannot_mutate_or_retarget_the_middle
+        PASS [   0.006s] (34/38) bitrouter-tui goals::tests::snapshots_preserve_selection_and_pin_opened_evidence
+        PASS [   0.006s] (35/38) bitrouter-tui goals::view::tests::browsing_resize_defers_new_goal_content_until_return
+        PASS [   0.009s] (36/38) bitrouter-tui goals::tests::selected_directory_and_workflow_rows_remain_visible_in_short_viewports
+        PASS [   0.094s] (37/38) bitrouter onboarding::tests::reset_clears_cloud_session_and_optionally_providers
+        PASS [   0.130s] (38/38) bitrouter onboarding::tests::headless_init_writes_no_removed_optimization_artifacts
+────────────
+     Summary [   0.146s] 38 tests run: 38 passed, 4537 skipped
