@@ -22,3 +22,28 @@ copies, and are not claimed to be their original byte streams.
 The previous 4,564-pass result applies to the pre-rebase source. Integrated
 source verification and hosted CI are recorded separately. Real harness,
 provider, typed-backend/input-quality and remaining G/A/F gates are incomplete.
+
+Draft PR #981 targets main at feature head b53ae1c2. The first integrated
+workspace run exited 110: the Cargo-built test peer could not be built because
+the disk filled (os error 28), then nextest could not write its result report.
+This is not a completed test run. The original partial/failure log is retained.
+Owned test/Cargo/fixture processes had exited before cleanup. The explicitly
+checked worktree target was Git-ignored and had no symlinked deps directory.
+Package-only cleanup dry-run listed 3,127 files/20.0 GiB; actual cleanup removed
+3,096 regenerable bitrouter artifacts/19.0 GiB, leaving about 19 GiB free.
+Sources, evidence, dependency caches and other worktrees were preserved. All
+102 source hashes matched again. A second full run uses the same source,
+features, debug/incremental settings, test concurrency and normal deadlines.
+
+The second full run `6096b54b-1143-4db1-b281-263afe63e78b` passed all 4,580
+executed tests across 71 binaries, exit 0, 688.326 seconds, nine slow cases,
+22 existing opt-in skips and no LEAK or timeout. Combined session 93837 then
+passed strict workspace/all-target/all-feature Clippy (1 minute 11 seconds),
+separate doctests (six passed, one existing ignored example, seven suites),
+formatting, full-branch diff checks and all 102 source hashes. Final inventory
+found no owned test/Cargo/rustc or ACP/PTY fixture processes remaining.
+
+These checks identify code head b53ae1c2. The following documentation/evidence
+commit does not alter code. Hosted CI at that head had 25 successful checks
+and macOS/Windows test jobs still running; it was not reported as all green.
+The PR stays draft and unmerged because the broader MVP gates remain open.
