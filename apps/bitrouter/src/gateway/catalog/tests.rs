@@ -8,7 +8,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::fetch::{FetchError, NetworkPolicy};
 use super::store::{CatalogSnapshot, CatalogStore, Durability, MemoryCatalogStore, StoreError};
-use super::{Catalog, CatalogError, types};
+use super::{Catalog, CatalogError};
+use bitrouter_ai::catalog::types;
 
 fn providers() -> Value {
     json!({"data":[{
@@ -104,7 +105,7 @@ async fn refresh_publishes_the_complete_pair_and_reports_memory_durability()
     );
     assert_eq!(
         data.providers[0].models[0].capabilities,
-        [crate::types::Capability::Tools]
+        [bitrouter_ai::types::Capability::Tools]
     );
     assert!(catalog.is_fresh(Duration::from_secs(60)));
     let mut reader = Catalog::with_store(server.uri(), store);

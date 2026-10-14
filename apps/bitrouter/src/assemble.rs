@@ -1066,10 +1066,10 @@ pub async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
-    crate::bundled_registry::enable_logged_in(config);
+    crate::gateway::catalog::bundled::enable_logged_in(config);
     // Supplement the public registry with the model/provider baseline shipped in this
     // binary. Explicitly disabled/custom registries keep their own policy.
-    let Some(data) = crate::bundled_registry::load(&config.registry).await else {
+    let Some(data) = crate::gateway::catalog::bundled::load(&config.registry).await else {
         crate::providers::apply::apply_builtin_defaults(config);
         return;
     };

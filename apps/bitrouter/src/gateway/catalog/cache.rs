@@ -1,4 +1,4 @@
-//! Application policy and file persistence for the AI catalog runtime.
+//! Gateway catalog policy and file persistence.
 
 use std::fs;
 use std::io::{self, Write};
@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::RegistryConfig;
-use bitrouter_ai::catalog::Catalog;
-use bitrouter_ai::catalog::fetch::NetworkPolicy;
-use bitrouter_ai::catalog::store::{CatalogSnapshot, CatalogStore, Durability, StoreError};
+use crate::gateway::catalog::Catalog;
+use crate::gateway::catalog::fetch::NetworkPolicy;
+use crate::gateway::catalog::store::{CatalogSnapshot, CatalogStore, Durability, StoreError};
 use bitrouter_ai::catalog::types::RegistryData;
 use serde::{Deserialize, Serialize};
 
@@ -179,7 +179,7 @@ fn credential_variables(cache: Option<DiskCache>) -> Vec<(String, String)> {
         }
     });
     let mut variables = crate::providers::apply::zero_config_env_var_providers(cached.as_ref());
-    match crate::bundled_registry::supplement(&RegistryConfig::default(), None) {
+    match crate::gateway::catalog::bundled::supplement(&RegistryConfig::default(), None) {
         Ok(baseline) => {
             for entry in crate::providers::apply::zero_config_env_var_providers(baseline.as_ref()) {
                 if !variables.iter().any(|(_, variable)| variable == &entry.1) {

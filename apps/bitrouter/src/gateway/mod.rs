@@ -2,6 +2,7 @@
 
 pub mod assembly;
 pub mod caller;
+pub mod catalog;
 pub mod error;
 pub mod extensions;
 pub mod http;

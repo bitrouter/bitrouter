@@ -750,9 +750,9 @@ impl RoutingTable for ConfigRoutingTable {
             .model_config(&target.service_id)?
             .pricing_for(&target.api_protocol)
             .filter(|pricing| {
-                pricing
-                    .endpoint_profile
-                    .is_none_or(|profile| profile.matches_api_base(target.effective_api_base()))
+                pricing.endpoint_profile.is_none_or(|profile| {
+                    matches_pricing_endpoint(profile, target.effective_api_base())
+                })
             })
             .map(usage_pricing)
     }
@@ -846,6 +846,27 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
     if extra.inbound_protocol.is_some() {
         base.inbound_protocol = extra.inbound_protocol.clone();
     }
+}
+
+/// Whether a configured endpoint matches these published rates. This is
+/// applicability only: it never applies a regional price multiplier.
+fn matches_pricing_endpoint(
+    profile: bitrouter_ai::catalog::types::PricingEndpointProfile,
+    api_base: &str,
+) -> bool {
+    let Ok(url) = reqwest::Url::parse(api_base) else {
+        return false;
+    };
+    let host = match profile {
+        bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal => "api.openai.com",
+        bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiUs => "us.api.openai.com",
+        bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiEurope => "eu.api.openai.com",
+    };
+    url.scheme() == "https"
+        && url.host_str() == Some(host)
+        && url.port().is_none_or(|port| port == 443)
+        && url.path().trim_end_matches('/') == "/v1"
+        && url.query().is_none()
 }
 
 #[cfg(test)]

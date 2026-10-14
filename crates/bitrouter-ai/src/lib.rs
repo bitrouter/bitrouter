@@ -4,8 +4,8 @@
 //! Routing, account selection, application state and gateway policy live above
 //! this crate. Selected-model HTTP calls use explicit effective credentials;
 //! registered authentication and injected account transactions are explicit.
-//! Catalog schema, explicit loading/refresh and injected persistence also live
-//! here. The application supplies offline baselines, paths and activation policy.
+//! Published catalog schemas live here. Catalog fetching, persistence, retirement
+//! policy and bundled baselines are application gateway implementations.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

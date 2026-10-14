@@ -789,7 +789,7 @@ async fn interactive_credentials(
         crate::config::RegistryConfig::default()
     };
     note("loading providers from the registry…");
-    let data = crate::bundled_registry::load(&registry).await;
+    let data = crate::gateway::catalog::bundled::load(&registry).await;
     let providers = data.as_ref().map(provider_choices).unwrap_or_default();
     for provider in &providers {
         if provider

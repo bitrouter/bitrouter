@@ -1,6 +1,6 @@
 use crate::config::DEFAULT_REGISTRY_URL;
-use bitrouter_ai::catalog::Catalog;
-use bitrouter_ai::catalog::store::{CatalogSnapshot, CatalogStore, Durability, StoreError};
+use crate::gateway::catalog::Catalog;
+use crate::gateway::catalog::store::{CatalogSnapshot, CatalogStore, Durability, StoreError};
 use bitrouter_ai::catalog::types::{CanonicalModel, RegistryData};
 use std::sync::Arc;
 
@@ -94,9 +94,11 @@ fn corrupt_cache_is_an_explicit_error_and_failed_save_preserves_previous_file() 
 
 #[test]
 fn bundled_credential_variables_are_available_without_any_cache_or_network() -> anyhow::Result<()> {
-    let defaults =
-        crate::bundled_registry::supplement(&crate::config::RegistryConfig::default(), None)?
-            .ok_or_else(|| anyhow::anyhow!("missing baseline"))?;
+    let defaults = crate::gateway::catalog::bundled::supplement(
+        &crate::config::RegistryConfig::default(),
+        None,
+    )?
+    .ok_or_else(|| anyhow::anyhow!("missing baseline"))?;
     let variables = crate::providers::apply::zero_config_env_var_providers(Some(&defaults));
     for provider in defaults
         .providers

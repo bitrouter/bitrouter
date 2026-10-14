@@ -190,3 +190,20 @@ application-owned schema generator. It passed against the existing committed
 artifact, preserving its bytes. Registry bootstrap remains independent of the
 application's Cargo dependency graph. Clean-checkout and final feature matrix
 validation remain open P0 gates.
+
+The next P0 3 slice moves catalog fetching, snapshot storage, disk-cache policy
+and bundled provider baselines into application `gateway::catalog`. AI retains
+only the catalog artifact types. Runtime retirement filtering now occurs in the
+gateway's decoder for cached/bundled data and fetched provider artifacts, rather
+than inside the public DTO's deserializer. The old quarantine fixture moves with
+that policy; existing cache tests still require the original file bytes to remain
+unchanged. Endpoint applicability for published regional pricing moves to its
+gateway routing caller, leaving the profile value in AI.
+
+Catalog validation passed the workspace all-feature/all-target check and strict
+Rustdoc. The targeted catalog/configuration/Decisions run passed **277 tests**,
+including source binding, historical retirement quarantine, offline behavior,
+partial refresh/persistence failures, cancellation, bundled fallback and endpoint
+pricing applicability. Independent static review found no material issue. The
+remaining AI model/authentication/protocol runtime is still outside the target
+contract-only boundary and remains P0 3 work.

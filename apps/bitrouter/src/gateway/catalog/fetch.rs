@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use super::types::{CanonicalModel, Envelope, RegistryData, providers_from_values};
+use super::decode::providers_from_values;
+use bitrouter_ai::catalog::types::{CanonicalModel, Envelope, RegistryData};
 
 /// Network permission for a requested catalog refresh.
 #[derive(Debug, Clone, Copy)]

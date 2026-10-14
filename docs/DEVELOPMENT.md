@@ -14,7 +14,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-ai`            | crate   | Model semantics, three-protocol codecs, SSE framing, selected-model HTTP calls, injected auth transactions and explicit catalog runtime; no router/application dependency |
+| `crates/bitrouter-ai`            | crate   | Model semantics, three-protocol codecs, SSE framing, selected-model HTTP calls, injected auth transactions and public catalog artifact types; no router/application dependency |
 | `crates/bitrouter-sdk` | crate | Reserved service-client package after server removal; HTTP methods are the next migration stage |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, terminal UI, optional OTLP and management commands |
@@ -166,14 +166,19 @@ attempt. Empty assessments emit no conversion callback. Remaining ingress attrib
 media/options/boundary effects, schema/model validation, other admitted classifications,
 Core/durable recording, output effects and degradation authorization remain open.
 
-`bitrouter-ai::catalog` owns the consumed provider/model schema, explicit bounded
-refresh and source-keyed injected stores. A catalog starts empty with memory-only
+`bitrouter-ai::catalog` owns the published provider/model artifact types.
+Application `gateway::catalog` owns explicit bounded refresh, source-keyed stores
+and retirement filtering. A catalog starts empty with memory-only
 storage; loading and network permission are separate explicit operations. Failed
-parse, validation or persistence retains its prior snapshot. `apps/bitrouter/src/catalog.rs`
-selects the 24-hour file cache and startup/reload refresh policy; `bundled_registry.rs`
+parse, validation or persistence retains its prior snapshot. `gateway::catalog::cache`
+selects the 24-hour file cache and startup/reload refresh policy; `catalog::bundled`
 supplies the committed offline baseline for the default public source. Unbound
 legacy caches are preserved but not adopted as an assumed source. Activation,
 credential lookup and user-config merge remain in the application/provider bridge.
+The AI DTO decoder performs no runtime filtering or logging. The gateway decoder
+quarantines retired entries when loading bundled data, cached snapshots or fetched
+artifacts; existing cache bytes remain unchanged. Published pricing-profile values
+also stay in AI, while endpoint applicability is checked by gateway routing.
 
 `bitrouter_ai::providers::{anthropic,antigravity,claude_code,codex,copilot,hosted,supergrok}` implements
 request-time authentication and adaptations over caller-injected sessions/stores. Generic OAuth
@@ -266,7 +271,7 @@ The generation pipeline retains its hooks, request checks, execution, stream
 processing and settlement; MCP has its own routing contract. ACP belongs to
 harness execution, not a gateway protocol pipeline.
 
-`bitrouter-ai` currently still owns catalog metadata, model codecs, selected
+`bitrouter-ai` currently still owns catalog artifact types, model codecs, selected
 upstream calls and authentication. These runtime modules move into the gateway
 in the next P0 slice, leaving only public contracts in AI. The application owns
 provider activation, credential-source policy, account integration and host

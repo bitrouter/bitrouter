@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use super::types::RegistryData;
+use bitrouter_ai::catalog::types::RegistryData;
 
 /// One complete provider/model snapshot, with its fetch timestamp.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,6 +13,7 @@ pub struct CatalogSnapshot {
     /// Unix seconds when both artifacts were fetched.
     pub fetched_at: u64,
     /// The complete parsed pair of artifacts.
+    #[serde(deserialize_with = "super::decode::deserialize")]
     pub data: RegistryData,
 }
 

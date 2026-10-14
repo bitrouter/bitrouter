@@ -518,18 +518,19 @@ pub async fn login_provider_with_options(
     // defaults. Other providers resolve against the fetched/cached registry.
     let entry: crate::providers::entry::ProviderEntry = match builtin::find(provider_id)
         .cloned()
-        .or(crate::bundled_registry::provider(provider_id)?)
+        .or(crate::gateway::catalog::bundled::provider(provider_id)?)
     {
         Some(e) => e,
         None => {
-            let data = crate::bundled_registry::load(&crate::config::RegistryConfig::default())
-                .await
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "could not load the provider registry (offline, and nothing cached) \
+            let data =
+                crate::gateway::catalog::bundled::load(&crate::config::RegistryConfig::default())
+                    .await
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "could not load the provider registry (offline, and nothing cached) \
                      to resolve '{provider_id}'"
-                    )
-                })?;
+                        )
+                    })?;
             let provider = data
                 .providers
                 .iter()

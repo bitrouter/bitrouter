@@ -2,7 +2,6 @@
 
 #[cfg(feature = "file-store")]
 use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::catalog::types::RegistryData;
 use bitrouter_ai::client::{HttpTimeouts, ModelClient};
 use bitrouter_ai::protocol::{InboundAdapter, chat_completions::ChatCompletionsAdapter};
 use bitrouter_ai::target::ModelTarget;
@@ -10,31 +9,6 @@ use bitrouter_ai::types::ApiProtocol;
 use serde_json::json;
 
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-
-#[test]
-fn old_catalog_quarantines_native_entries_but_keeps_supported_models() -> TestResult {
-    let original = json!({"providers":[
-        {"name":"google-ai","status":"active","models":[{"api_protocol":"antigravity"}]},
-        {"name":"vertex","status":"active","models":[{"api_protocol":"google"}]},
-        {"name":"legacy-google","status":"active","api_protocol":[{"*":"google"}]},
-        {"name":"mixed","status":"active","models":[
-            {"id":"org/native","provider_model_id":"old","api_protocol":"google"},
-            {"id":"org/chat","provider_model_id":"chat","api_protocol":"openai"}
-        ]}
-    ],"canonical":[{"id":"google/historical"},{"id":"org/chat"}]});
-    let bytes = serde_json::to_vec(&original)?;
-    let parsed: RegistryData = serde_json::from_slice(&bytes)?;
-    assert_eq!(parsed.providers.len(), 1);
-    assert_eq!(parsed.providers[0].name, "mixed");
-    assert_eq!(parsed.providers[0].models.len(), 1);
-    assert_eq!(parsed.providers[0].models[0].provider_model_id, "chat");
-    assert_eq!(parsed.canonical.len(), 2);
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&bytes)?,
-        original
-    );
-    Ok(())
-}
 
 #[test]
 fn historical_protocol_and_credentials_remain_readable_but_uncallable() -> TestResult {

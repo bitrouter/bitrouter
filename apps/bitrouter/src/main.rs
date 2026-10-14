@@ -4045,15 +4045,16 @@ async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     // requiring a full stop+start. The daemon writes them into its
     // env-override map before re-parsing config / re-running
     // zero-config provider detection.
-    let env: Vec<(String, String)> = bitrouter::catalog::credential_env_var_providers()
-        .into_iter()
-        .filter_map(|(_, var)| {
-            std::env::var(&var)
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(|v| (var, v))
-        })
-        .collect();
+    let env: Vec<(String, String)> =
+        bitrouter::gateway::catalog::cache::credential_env_var_providers()
+            .into_iter()
+            .filter_map(|(_, var)| {
+                std::env::var(&var)
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| (var, v))
+            })
+            .collect();
     match daemon::send_command(socket, &DaemonCommand::Reload { env }).await? {
         DaemonResponse::Ok => Ok(DaemonActionReport::simple("reload", "reloaded")),
         DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),

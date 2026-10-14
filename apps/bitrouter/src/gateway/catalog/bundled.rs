@@ -32,7 +32,7 @@ fn enable_with_store(
 }
 
 fn bundled() -> Result<RegistryData> {
-    Ok(serde_json::from_str(include_str!(concat!(
+    Ok(super::decode::from_slice(include_bytes!(concat!(
         env!("OUT_DIR"),
         "/provider_registry.json"
     )))?)
@@ -52,7 +52,7 @@ pub(crate) fn provider(id: &str) -> Result<Option<crate::providers::entry::Provi
 }
 
 pub(crate) async fn load(registry: &RegistryConfig) -> Option<RegistryData> {
-    let remote = crate::catalog::load(registry).await;
+    let remote = crate::gateway::catalog::cache::load(registry).await;
     match supplement(registry, remote.clone()) {
         Ok(data) => data,
         Err(error) => {
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn offline_catalog_preserves_all_committed_providers() -> Result<()> {
         let committed: serde_json::Value =
-            serde_json::from_str(include_str!("../../../dist/registry/providers.json"))?;
+            serde_json::from_str(include_str!("../../../../../dist/registry/providers.json"))?;
         let data = supplement(&RegistryConfig::default(), None)?.context("no offline catalog")?;
         let actual: std::collections::BTreeSet<_> = data
             .providers

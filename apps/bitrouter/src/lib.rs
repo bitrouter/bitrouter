@@ -30,8 +30,6 @@ pub mod agent_store;
 pub mod agents;
 pub mod assemble;
 pub mod auth;
-mod bundled_registry;
-pub mod catalog;
 pub mod chat;
 pub mod claude_code;
 pub mod cloud;
