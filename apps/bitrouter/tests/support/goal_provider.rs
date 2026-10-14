@@ -95,6 +95,23 @@ pub fn model(request: &Request) -> ResponseTemplate {
             };
             result["task_updates"][0]["resources"] = json!({"model_route":"goal-model", "mcp_servers":["selected-resource-server"],
                 "skills":[{"material_id":skill["material"]["material_id"],"sha256":skill["material"]["sha256"]}],"context_files":["seed.txt"]});
+            let Some(context) = state["trusted_state"]["unresolved_inputs"]
+                .as_array()
+                .and_then(|inputs| {
+                    inputs
+                        .iter()
+                        .find(|input| input["unresolved"]["input_id"] == "invalid-resource-change")
+                })
+            else {
+                return ResponseTemplate::new(400);
+            };
+            if context["original_input"]["kind"]["text"]
+                .as_str()
+                .is_none_or(|text| !text.contains("BAD_RESOURCE_CHANGE_FIXTURE"))
+            {
+                return ResponseTemplate::new(400);
+            }
+            result["resolutions"] = json!([{"input_id":context["unresolved"]["input_id"], "source_requirements_revision":context["unresolved"]["source_requirements_revision"], "kind":"applied"}]);
         }
         result
     } else if state.get("trusted_state").is_some() {

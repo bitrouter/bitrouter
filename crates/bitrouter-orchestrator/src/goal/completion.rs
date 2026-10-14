@@ -201,6 +201,7 @@ pub fn sources(goal: &GoalSnapshot) -> Result<Vec<Source>, GoalError> {
     if !matches!(goal.workflow.planning, Planning::Planned { .. })
         || goal.workflow.tasks.is_empty()
         || goal.inputs.pending.is_some()
+        || goal.inputs.completion_waits_for_input()
         || !goal.accounting.in_flight.is_empty()
         || goal.workflow.decisions.iter().any(|decision| {
             matches!(

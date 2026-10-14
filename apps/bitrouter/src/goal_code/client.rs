@@ -80,6 +80,7 @@ impl Pending {
             | GoalCommand::RespondDecision { operation_id, .. }
             | GoalCommand::AcceptDelivery { operation_id, .. }
             | GoalCommand::SetBudget { operation_id, .. } => Ok(operation_id),
+            GoalCommand::WithdrawInput { operation_id, .. } => Ok(operation_id),
             _ => anyhow::bail!("pending request must be a mutation"),
         }
     }
@@ -151,16 +152,32 @@ pub(super) async fn prepare(client: &Client, workspace: &Path, effect: &Effect) 
                 "snapshot does not match the requested Goal"
             );
             let command = if let Effect::Submit { text, .. } = effect {
-                let task_reference = text
-                    .strip_prefix("/task ")
-                    .and_then(|rest| rest.split_whitespace().next())
-                    .map(str::to_owned);
-                GoalCommand::Input {
-                    operation_id,
-                    goal_id: goal_id.clone(),
-                    expected_revision: goal.revision,
-                    text: text.clone(),
-                    task_reference,
+                if let Some(id) = bitrouter_orchestrator::goal::input::withdrawal_reference(text)? {
+                    let source = goal
+                        .inputs
+                        .unresolved_inputs()
+                        .into_iter()
+                        .find(|input| input.input_id == id)
+                        .context("the referenced input is not unresolved in this Goal")?;
+                    GoalCommand::WithdrawInput {
+                        operation_id,
+                        goal_id: goal_id.clone(),
+                        expected_revision: goal.revision,
+                        input_id: id.into(),
+                        source_requirements_revision: source.source_requirements_revision,
+                    }
+                } else {
+                    let task_reference = text
+                        .strip_prefix("/task ")
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .map(str::to_owned);
+                    GoalCommand::Input {
+                        operation_id,
+                        goal_id: goal_id.clone(),
+                        expected_revision: goal.revision,
+                        text: text.clone(),
+                        task_reference,
+                    }
                 }
             } else if let Effect::Control { intent, .. } = effect {
                 GoalCommand::Control {

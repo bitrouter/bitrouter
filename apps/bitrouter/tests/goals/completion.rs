@@ -3,7 +3,9 @@ use super::*;
 use bitrouter_orchestrator::goal::completion::{
     self, ConditionResult, Event, Satisfaction, State, Verdict,
 };
-use bitrouter_orchestrator::goal::input::{Event as InputEvent, Interpretation, Stage};
+use bitrouter_orchestrator::goal::input::{
+    ClarificationKind, Event as InputEvent, Interpretation, Resolution, ResolutionKind, Stage,
+};
 use bitrouter_orchestrator::goal::verification::{CheckOutput, CheckRecipe, CheckSpec};
 
 async fn change(
@@ -397,6 +399,8 @@ async fn accepted_input_and_new_requirements_fence_old_completion() -> Result<()
                     task_updates: Vec::new(),
                     control: None,
                     permission_response: None,
+                    clarification_kind: None,
+                    resolutions: Vec::new(),
                     clarification: None,
                 },
                 reasoning_request_id: Some("fixture-understanding-request".into()),
@@ -419,6 +423,326 @@ async fn accepted_input_and_new_requirements_fence_old_completion() -> Result<()
             .completion
             .completed_for(2)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unresolved_change_survives_a_query_and_fences_ready_completion() -> Result<()> {
+    let db = database().await?;
+    let goals = service(db.clone());
+    let workspace = tempfile::tempdir()?;
+    let (id, artifact) = delivery(&goals, workspace.path(), false, false).await?;
+    assess(&goals, &id, &artifact, workspace.path(), verdict()).await?;
+    for (key, text, answer, clarification) in [
+        (
+            "ambiguous-change",
+            "Also add the other required regression",
+            None,
+            Some("Which required regression should be added?"),
+        ),
+        (
+            "unrelated-query",
+            "What has already been verified?",
+            Some("The original delivery was verified"),
+            None,
+        ),
+    ] {
+        let head = snapshot(&goals, &id).await?;
+        let operation = accepted(
+            goals
+                .execute(
+                    "local",
+                    GoalCommand::Input {
+                        operation_id: key.into(),
+                        goal_id: id.clone(),
+                        expected_revision: head.revision,
+                        text: text.into(),
+                        task_reference: None,
+                    },
+                    240,
+                )
+                .await?,
+        )?;
+        for (suffix, event) in [
+            (
+                "begin",
+                InputEvent::Begin {
+                    operation: Box::new(operation),
+                    attempt_id: key.into(),
+                    stage: Stage::Reasoning,
+                },
+            ),
+            (
+                "finish",
+                InputEvent::Finish {
+                    attempt_id: key.into(),
+                    interpretation: Interpretation {
+                        answer: answer.map(str::to_string),
+                        objective: None,
+                        task_updates: Vec::new(),
+                        control: None,
+                        permission_response: None,
+                        clarification_kind: None,
+                        resolutions: Vec::new(),
+                        clarification: clarification.map(str::to_string),
+                    },
+                    reasoning_request_id: Some(format!("{key}-request")),
+                },
+            ),
+        ] {
+            goals
+                .workflow_change(
+                    actor(),
+                    &id,
+                    &format!("{key}-{suffix}"),
+                    1,
+                    Change::Input { event },
+                    250,
+                )
+                .await?;
+        }
+    }
+    let restored = snapshot(&service(db), &id).await?;
+    assert_eq!(restored.requirements_revision, 1);
+    assert_eq!(restored.inputs.unresolved_inputs().len(), 1);
+    assert_eq!(
+        restored.inputs.unresolved_inputs()[0].input_id,
+        "ambiguous-change"
+    );
+    let context = goals
+        .clarification_context("local", &id, Some("ambiguous-change"))
+        .await?;
+    assert!(
+        matches!(&context[0].original_input.kind, OperationKind::Input { text, .. } if text == "Also add the other required regression")
+    );
+    assert!(matches!(
+        change(
+            &goals,
+            &id,
+            "clarification-cannot-complete",
+            1,
+            commit(&artifact)
+        )
+        .await,
+        Err(GoalError::Conflict)
+    ));
+    process_clarification_reply(
+        &goals,
+        &id,
+        "withdraw-change",
+        "/input ambiguous-change Withdraw that additional request",
+        Interpretation {
+            answer: Some(
+                "The additional request was withdrawn; original requirements remain".into(),
+            ),
+            resolutions: vec![Resolution {
+                input_id: "ambiguous-change".into(),
+                source_requirements_revision: 1,
+                kind: ResolutionKind::Withdrawn,
+            }],
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert!(
+        snapshot(&goals, &id)
+            .await?
+            .inputs
+            .unresolved_inputs()
+            .is_empty()
+    );
+    change(
+        &goals,
+        &id,
+        "complete-after-withdrawal",
+        1,
+        commit(&artifact),
+    )
+    .await?;
+    assert!(
+        snapshot(&goals, &id)
+            .await?
+            .workflow
+            .completion
+            .completed_for(1)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_withdrawal_allows_already_verified_completion_after_budget_exhaustion()
+-> Result<()> {
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let (id, artifact) = delivery(&goals, workspace.path(), false, false).await?;
+    assess(&goals, &id, &artifact, workspace.path(), verdict()).await?;
+    process_clarification_reply(
+        &goals,
+        &id,
+        "uncommitted-change",
+        "Add the other required regression",
+        Interpretation {
+            clarification: Some("Which other regression do you require?".into()),
+            clarification_kind: Some(ClarificationKind::Change),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let head = snapshot(&goals, &id).await?;
+    goals
+        .execute(
+            "local",
+            GoalCommand::SetBudget {
+                operation_id: "exhaust-after-verification".into(),
+                goal_id: id.clone(),
+                expected_revision: head.revision,
+                limits: bitrouter_orchestrator::goal::budget::Limits {
+                    elapsed_ms: Some(1),
+                    managed_token_estimates_micro_usd: None,
+                },
+            },
+            260,
+        )
+        .await?;
+    let before = snapshot(&goals, &id).await?;
+    assert!(before.budget.resume_required);
+    assert!(matches!(
+        change(
+            &goals,
+            &id,
+            "cannot-complete-unresolved",
+            1,
+            commit(&artifact)
+        )
+        .await,
+        Err(GoalError::Conflict)
+    ));
+    goals
+        .execute(
+            "local",
+            GoalCommand::WithdrawInput {
+                operation_id: "finite-withdrawal".into(),
+                goal_id: id.clone(),
+                expected_revision: before.revision,
+                input_id: "uncommitted-change".into(),
+                source_requirements_revision: 1,
+            },
+            270,
+        )
+        .await?;
+    let after = snapshot(&goals, &id).await?;
+    assert_eq!(after.budget, before.budget);
+    assert_eq!(after.accounting, before.accounting);
+    assert_eq!(after.requirements_revision, 1);
+    change(&goals, &id, "complete-existing-proof", 1, commit(&artifact)).await?;
+    assert!(
+        snapshot(&goals, &id)
+            .await?
+            .workflow
+            .completion
+            .completed_for(1)
+    );
+    Ok(())
+}
+
+async fn process_clarification_reply(
+    goals: &GoalService,
+    id: &str,
+    key: &str,
+    text: &str,
+    interpretation: Interpretation,
+) -> Result<()> {
+    let head = snapshot(goals, id).await?;
+    let operation = accepted(
+        goals
+            .execute(
+                "local",
+                GoalCommand::Input {
+                    operation_id: key.into(),
+                    goal_id: id.into(),
+                    expected_revision: head.revision,
+                    text: text.into(),
+                    task_reference: None,
+                },
+                240,
+            )
+            .await?,
+    )?;
+    for (suffix, event) in [
+        (
+            "begin",
+            InputEvent::Begin {
+                operation: Box::new(operation),
+                attempt_id: key.into(),
+                stage: Stage::Reasoning,
+            },
+        ),
+        (
+            "finish",
+            InputEvent::Finish {
+                attempt_id: key.into(),
+                interpretation,
+                reasoning_request_id: Some(format!("{key}-request")),
+            },
+        ),
+    ] {
+        goals
+            .workflow_change(
+                actor(),
+                id,
+                &format!("{key}-{suffix}"),
+                head.requirements_revision,
+                Change::Input { event },
+                250,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_only_clarification_is_retained_without_becoming_a_completion_condition() -> Result<()>
+{
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let (id, artifact) = delivery(&goals, workspace.path(), false, false).await?;
+    assess(&goals, &id, &artifact, workspace.path(), verdict()).await?;
+    process_clarification_reply(
+        &goals,
+        &id,
+        "query-detail",
+        "Which part did you mean?",
+        Interpretation {
+            clarification: Some("Which already verified component are you asking about?".into()),
+            clarification_kind: Some(ClarificationKind::Query),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let head = snapshot(&goals, &id).await?;
+    assert_eq!(head.requirements_revision, 1);
+    assert_eq!(head.inputs.unresolved_inputs().len(), 1);
+    assert!(!head.inputs.completion_waits_for_input());
+    change(&goals, &id, "complete-with-query", 1, commit(&artifact)).await?;
+    process_clarification_reply(
+        &goals,
+        &id,
+        "answer-query",
+        "/input query-detail I meant the integrated output",
+        Interpretation {
+            answer: Some("The actual integrated output passed its recorded checks".into()),
+            resolutions: vec![Resolution {
+                input_id: "query-detail".into(),
+                source_requirements_revision: 1,
+                kind: ResolutionKind::Answered,
+            }],
+            ..Default::default()
+        },
+    )
+    .await?;
+    let restored = snapshot(&goals, &id).await?;
+    assert!(restored.inputs.unresolved_inputs().is_empty());
+    assert!(restored.workflow.completion.completed_for(1));
     Ok(())
 }
 

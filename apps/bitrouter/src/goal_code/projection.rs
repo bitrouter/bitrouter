@@ -27,7 +27,8 @@ fn artifact(
 
 pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
     let progress = &snapshot.workflow.completion;
-    let complete = progress.completed_for(snapshot.requirements_revision);
+    let complete = progress.completed_for(snapshot.requirements_revision)
+        && !snapshot.inputs.completion_waits_for_input();
     let mut facts = Facts {
         completed: complete,
         paused: snapshot.run_intent == RunIntent::Pause,
@@ -472,6 +473,13 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
     {
         reason = "A stopped branch needs tool/workspace reconciliation; inspect its recorded recovery reason and evidence".into();
     }
+    if snapshot.inputs.completion_waits_for_input()
+        && snapshot.run_intent == RunIntent::Run
+        && snapshot.budget.halt.is_none()
+    {
+        reason = "Completion waits for unresolved input; independent authorized work can continue"
+            .into();
+    }
     Goal {
         id: snapshot.id.clone(),
         revision: snapshot.revision,
@@ -484,11 +492,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
         needs_you: !decisions.is_empty()
             || recovery_needs_you
             || acceptance.is_some()
-            || snapshot
-                .inputs
-                .latest
-                .as_ref()
-                .is_some_and(|input| input.clarification.is_some()),
+            || !snapshot.inputs.unresolved_inputs().is_empty(),
         delivery,
         freshness: format!(
             "Goal snapshot revision {} · last durable commit {} ms UTC; execution facts may be older",
@@ -578,6 +582,9 @@ pub(super) fn operation(operation: &GoalOperation) -> Option<String> {
         OperationKind::BudgetUpdated { limits } => {
             format!("Budget limits saved: {limits:?}; cumulative consumption retained")
         }
+        OperationKind::InputWithdrawn { input_id, source_requirements_revision } => format!(
+            "Your explicit withdrawal of input {input_id} / source requirements {source_requirements_revision} was saved without model use; existing requirements, controls, effects and budget remain"
+        ),
         OperationKind::Workflow { change } => match change.as_ref() {
             Change::Input {
                 event: bitrouter_orchestrator::goal::input::Event::Finish { .. },
@@ -596,13 +603,23 @@ pub(super) fn operation(operation: &GoalOperation) -> Option<String> {
 }
 
 pub(super) fn input_lines(goal: &GoalSnapshot) -> Vec<String> {
+    let mut lines = goal.inputs.unresolved_inputs().iter().map(|input| format!(
+        "Unresolved input {} · source requirements {} · {:?} · {} · /input {} references this question (/withdraw cancels the uncommitted request): {}",
+        input.input_id, input.source_requirements_revision, input.kind,
+        if input.kind == bitrouter_orchestrator::goal::input::ClarificationKind::Query { "does not block completion" } else { "completion waits; independent work continues" },
+        input.input_id, input.question.chars().take(2048).collect::<String>()
+    )).collect::<Vec<_>>();
     let Some(input) = &goal.inputs.latest else {
-        return Vec::new();
+        return lines;
     };
-    let mut lines = vec![format!(
+    lines.push(format!(
         "Runtime input result {} · source requirements {} · effective requirements {}",
         input.input_id, input.source_requirements_revision, input.effective_requirements_revision
-    )];
+    ));
+    for resolution in &input.resolutions {
+        lines.push(format!("Input {} disposition saved: {:?} · source requirements {} · execution evidence is separate",
+            resolution.input_id, resolution.kind, resolution.source_requirements_revision));
+    }
     if input.requirements_saved {
         lines.push(format!(
             "Requirements saved · affected tasks: {} · dispatch/adoption/verification are separate",
