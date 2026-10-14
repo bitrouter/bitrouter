@@ -48,5 +48,5 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # The opt-in terminal campaign retains the product's 10% initial allocation and
 # real worker tool execution. Its per-operation and total workload are bounded.
 [[profile.default.overrides]]
-filter = 'test(tui_coding_publication_and_rollback)'
+filter = 'test(session_coding_publication_and_rollback)'
 slow-timeout = { period = "60s", terminate-after = 41 }
