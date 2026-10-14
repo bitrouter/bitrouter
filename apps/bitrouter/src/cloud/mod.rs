@@ -28,13 +28,12 @@ use std::sync::Arc;
 
 use crate::cloud::account::credentials::default_credentials_path;
 use crate::cloud::account::manager::CredentialManager;
-use crate::config::Config;
-use crate::config::ProviderConfig;
+use crate::config::{Config, ProviderConfig};
+use crate::gateway::providers::auth::AuthAppliers;
+use crate::gateway::providers::hosted::PROVIDER_ID;
+use crate::gateway::providers::hosted::applier::BitrouterAuthApplier;
 use crate::telemetry::bearer::TelemetryBearer;
 use anyhow::{Context, Result};
-use bitrouter_ai::auth::AuthAppliers;
-use bitrouter_ai::providers::hosted::PROVIDER_ID;
-use bitrouter_ai::providers::hosted::applier::BitrouterAuthApplier;
 
 const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
@@ -259,8 +258,8 @@ mod tests {
     use super::*;
     use crate::cloud::account::manager::CredentialManager;
     use crate::gateway::pipeline::types::RoutingTarget;
-    use bitrouter_ai::auth::AuthApplier;
-    use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+    use crate::gateway::providers::auth::AuthApplier;
+    use crate::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
     use bitrouter_ai::types::ApiProtocol;
     use chrono::{Duration, Utc};
     use serde_json::json;
@@ -279,7 +278,7 @@ mod tests {
 
     fn target_for_origin(origin: &str) -> RoutingTarget {
         RoutingTarget {
-            provider_name: bitrouter_ai::providers::hosted::PROVIDER_ID.to_owned(),
+            provider_name: crate::gateway::providers::hosted::PROVIDER_ID.to_owned(),
             service_id: "gpt-4o".to_owned(),
             api_base: origin.to_owned(),
             api_key: String::new(),
@@ -388,8 +387,8 @@ mod tests {
         ));
         manager
             .save(
-                bitrouter_ai::providers::hosted::credentials::StoredCredential::from(
-                    bitrouter_ai::providers::hosted::credentials::Credentials {
+                crate::gateway::providers::hosted::credentials::StoredCredential::from(
+                    crate::gateway::providers::hosted::credentials::Credentials {
                         access_token: "stale-access".to_owned(),
                         refresh_token: Some("original-refresh".to_owned()),
                         expires_at: Utc::now() + Duration::seconds(10),

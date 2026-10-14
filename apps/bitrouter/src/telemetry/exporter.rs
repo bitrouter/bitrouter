@@ -56,17 +56,13 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::context::StreamContext;
-use crate::gateway::pipeline::hooks::HopOutcome;
-use crate::gateway::pipeline::hooks::ObserveHook;
-use crate::gateway::pipeline::hooks::Phase;
-use crate::gateway::pipeline::hooks::RequestOutcome;
-use crate::gateway::pipeline::hooks::StreamHopOutcome;
+use crate::gateway::model::protocol::responses::encode_gateway_continuation_id;
+use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
+use crate::gateway::pipeline::hooks::{
+    HopOutcome, ObserveHook, Phase, RequestOutcome, StreamHopOutcome,
+};
 use crate::gateway::pipeline::stream::StreamInterest;
-use crate::gateway::pipeline::types::ExecutionResult;
-use crate::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
+use crate::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
 use bitrouter_ai::types::{ApiProtocol, Content, Prompt, StreamPart};
 
 use crate::telemetry::cardinality::CardinalityLimiter;
@@ -1047,7 +1043,8 @@ impl ObserveHook for OtelExporter {
 
             // Optional prompt / response content capture (off by default).
             if self.config.content_capture == ContentCaptureMode::Full {
-                let mut redactor = bitrouter_ai::diagnostics::DiagnosticRedactor::default();
+                let mut redactor =
+                    crate::gateway::model::diagnostics::DiagnosticRedactor::default();
                 let input_json = ctx.generation_prompt().and_then(|prompt| {
                     redactor.capture_prompt_continuity(prompt);
                     captured_content_json(&prompt.messages, &redactor)
@@ -1351,7 +1348,7 @@ fn error_type(err: &crate::gateway::error::BitrouterError) -> String {
 
 fn captured_content_json<T: serde::Serialize + ?Sized>(
     content: &T,
-    redactor: &bitrouter_ai::diagnostics::DiagnosticRedactor,
+    redactor: &crate::gateway::model::diagnostics::DiagnosticRedactor,
 ) -> Option<String> {
     let mut value = serde_json::to_value(content).ok()?;
     redactor.scrub_value(&mut value);
@@ -1381,7 +1378,7 @@ fn captured_decision_content_json<T: serde::Serialize + ?Sized>(
 
     let mut value = serde_json::to_value(content).ok()?;
     omit_identifiers(&mut value);
-    let mut redactor = bitrouter_ai::diagnostics::DiagnosticRedactor::default();
+    let mut redactor = crate::gateway::model::diagnostics::DiagnosticRedactor::default();
     if let Some(identifier) = safety_identifier {
         redactor.add_replacement(identifier.to_owned(), "[redacted safety identifier]".into());
     }
@@ -1407,18 +1404,14 @@ mod hop_tests {
 
     use crate::gateway::caller::CallerContext;
     use crate::gateway::error::BitrouterError;
+    use crate::gateway::model::protocol::responses::ResponsesAdapter;
+    use crate::gateway::model::protocol::{OutboundAdapter, SseEvent};
     use crate::gateway::pipeline::builder::PipelineBuilder;
-    use crate::gateway::pipeline::executor::MockExecutor;
-    use crate::gateway::pipeline::executor::MockResponse;
-    use crate::gateway::pipeline::hooks::DenyReason;
-    use crate::gateway::pipeline::hooks::HookDecision;
-    use crate::gateway::pipeline::hooks::PreRequestHook;
+    use crate::gateway::pipeline::executor::{MockExecutor, MockResponse};
+    use crate::gateway::pipeline::hooks::{DenyReason, HookDecision, PreRequestHook};
     use crate::gateway::pipeline::routing::StaticRoutingTable;
-    use crate::gateway::pipeline::settlement::SettlementContext;
-    use crate::gateway::pipeline::settlement::SettlementRecorder;
+    use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
     use crate::gateway::pipeline::types::PipelineRequest;
-    use bitrouter_ai::protocol::responses::ResponsesAdapter;
-    use bitrouter_ai::protocol::{OutboundAdapter, SseEvent};
     use bitrouter_ai::types::{
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
         Role, Usage,
@@ -2298,7 +2291,7 @@ mod hop_tests {
     #[tokio::test]
     async fn native_decision_spans_conform_and_exclude_safety_identifier()
     -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use bitrouter_ai::protocol::decisions::DecisionsCodec;
+        use crate::gateway::model::protocol::decisions::DecisionsCodec;
         for mode in [ContentCaptureMode::Off, ContentCaptureMode::Full] {
             let (exporter, captured) = make_test_exporter_with(OtelConfig {
                 content_capture: mode,

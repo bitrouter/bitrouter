@@ -15,9 +15,7 @@ use async_trait::async_trait;
 
 use super::toolset::{RouterToolset, ToolContext};
 use crate::gateway::error::Result;
-use crate::gateway::mcp::Executor as McpExecutor;
-use crate::gateway::mcp::McpRequest;
-use crate::gateway::mcp::RoutingTable as McpRoutingTable;
+use crate::gateway::mcp::{Executor as McpExecutor, McpRequest, RoutingTable as McpRoutingTable};
 use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultContentPart, ToolResultOutput};
 
 /// Convert an MCP `tools/list` result into canonical IR function tools. Each
@@ -216,11 +214,8 @@ impl RouterToolset for McpRouterToolset {
 mod tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::mcp::McpResponse;
-    use crate::gateway::mcp::McpStreamPart;
-    use crate::gateway::mcp::McpTarget;
-    use crate::gateway::mcp::ServerSelector;
     use crate::gateway::mcp::transport::McpTransport;
+    use crate::gateway::mcp::{McpResponse, McpStreamPart, McpTarget, ServerSelector};
     use futures::stream::BoxStream;
 
     fn list_json() -> serde_json::Value {

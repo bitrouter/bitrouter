@@ -244,7 +244,7 @@ fn redacted_endpoint(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_ai::providers::hosted::credentials::StoredCredential;
+    use crate::gateway::providers::hosted::credentials::StoredCredential;
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -395,7 +395,7 @@ mod tests {
         ));
         manager
             .save(StoredCredential::from(
-                bitrouter_ai::providers::hosted::credentials::Credentials {
+                crate::gateway::providers::hosted::credentials::Credentials {
                     access_token: "near-expiry-access".to_owned(),
                     refresh_token: Some("refresh-token".to_owned()),
                     expires_at: chrono::Utc::now() + chrono::Duration::seconds(10),

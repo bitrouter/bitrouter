@@ -1,6 +1,6 @@
-use bitrouter_ai::auth::file::backend::FileCredentialStore;
-use bitrouter_ai::providers::copilot::exchange::TOKEN_EXCHANGE_URL;
-use bitrouter_ai::providers::copilot::{CopilotAuthApplier, PROVIDER_ID};
+use bitrouter::gateway::providers::auth::file::backend::FileCredentialStore;
+use bitrouter::gateway::providers::copilot::exchange::TOKEN_EXCHANGE_URL;
+use bitrouter::gateway::providers::copilot::{CopilotAuthApplier, PROVIDER_ID};
 use std::sync::Arc;
 fn copilot_with_url(
     client: reqwest::Client,
@@ -24,12 +24,12 @@ use bitrouter_ai::types::ApiProtocol;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use bitrouter_ai::auth::AuthApplier;
-use bitrouter_ai::auth::credentials::{Credential, OAuthToken};
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
-use bitrouter_ai::error::ModelError;
-use bitrouter_ai::target::ModelTarget;
+use bitrouter::gateway::model::error::ModelError;
+use bitrouter::gateway::model::target::ModelTarget;
+use bitrouter::gateway::providers::auth::AuthApplier;
+use bitrouter::gateway::providers::auth::credentials::{Credential, OAuthToken};
+use bitrouter::gateway::providers::auth::file::snapshot::CredentialStore;
+use bitrouter::gateway::providers::auth::store::DEFAULT_ACCOUNT;
 
 fn tmp_token_store_path() -> TestResult<PathBuf> {
     use std::sync::atomic::{AtomicU64, Ordering};

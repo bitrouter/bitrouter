@@ -16,7 +16,7 @@ pub(crate) fn enable_logged_in(config: &mut crate::config::Config) {
 
 fn enable_with_store(
     config: &mut crate::config::Config,
-    store: &bitrouter_ai::auth::file::snapshot::CredentialStore,
+    store: &crate::gateway::providers::auth::file::snapshot::CredentialStore,
 ) {
     if !config.inherit_defaults
         || !config.registry.enabled
@@ -149,8 +149,8 @@ mod tests {
 
     #[test]
     fn stored_login_activates_subscription_without_a_provider_config_entry() -> Result<()> {
-        use bitrouter_ai::auth::credentials::Credential;
-        use bitrouter_ai::auth::file::snapshot::CredentialStore;
+        use crate::gateway::providers::auth::credentials::Credential;
+        use crate::gateway::providers::auth::file::snapshot::CredentialStore;
         let dir = tempfile::tempdir()?;
         let mut store = CredentialStore::load(dir.path().join("credentials.json"))?;
         let mut config = crate::config::Config::default();

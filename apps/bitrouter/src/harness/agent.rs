@@ -4,8 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
-use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_ai::types::{Message, Role, ToolResultOutput, Usage};
+use bitrouter_ai::types::{Message, ReasoningEffort, Role, ToolResultOutput, Usage};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 

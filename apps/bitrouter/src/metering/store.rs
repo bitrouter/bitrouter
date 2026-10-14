@@ -23,8 +23,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use bitrouter_ai::types::{Usage, UsageOrigin};
 
 use crate::cloud::settlement::{SettlementReceipt, SettlementState};

@@ -5,8 +5,7 @@
 //! the rejected step's immutable snapshot.
 
 use crate::gateway::pipeline::native::NativePlan;
-use crate::gateway::pipeline::native_projection::ProjectionRecord;
-use crate::gateway::pipeline::native_projection::responses_reasoning;
+use crate::gateway::pipeline::native_projection::{ProjectionRecord, responses_reasoning};
 use bitrouter_ai::types::{Message, Prompt, Role};
 use serde::{Deserialize, Serialize};
 

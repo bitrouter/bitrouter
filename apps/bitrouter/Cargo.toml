@@ -56,6 +56,7 @@ otel-grpc = [
 [dependencies]
 async-stream.workspace = true
 eventsource-stream.workspace = true
+httpdate.workspace = true
 tower.workspace = true
 bytes = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
@@ -80,7 +81,7 @@ agent-client-protocol-schema.workspace = true
 agent-client-protocol-conductor.workspace = true
 tokio-stream = { workspace = true, features = ["sync"] }
 bitrouter-guardrails = { workspace = true, optional = true }
-bitrouter-ai = { workspace = true, features = ["pkce", "hosted-login", "file-store"] }
+bitrouter-ai = { workspace = true, features = ["schema"] }
 # Product-only OS keyring discovery for explicitly adopted external CLI sessions.
 keyring.workspace = true
 chrono.workspace = true

@@ -49,18 +49,15 @@ use futures_core::Stream;
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::Result;
-use bitrouter_ai::protocol::sanitize_model_name;
+use crate::gateway::model::protocol::sanitize_model_name;
 use bitrouter_ai::types::{Prompt, StreamPart};
 
-use crate::gateway::pipeline::types::PipelineRequest;
-use crate::gateway::pipeline::types::PipelineResponse;
+use crate::gateway::pipeline::types::{PipelineRequest, PipelineResponse};
 
-use crate::gateway::extensions::legacy::MigrationItem;
-use crate::gateway::extensions::legacy::PluginId;
-use crate::gateway::mcp;
+use crate::gateway::extensions::legacy::{MigrationItem, PluginId};
 use crate::gateway::observability::metrics::MetricsRenderer;
-use crate::gateway::pipeline as language_model;
 use crate::gateway::pipeline::builder::PipelineBuilder;
+use crate::gateway::{mcp, pipeline as language_model};
 
 /// Legacy custom-host assembly convenience for registering hooks and migrations.
 ///
@@ -222,9 +219,9 @@ impl App {
         let mut request = PipelineRequest::new(requested_model.clone(), caller, prompt);
         request.headers = headers.clone();
         for (index, transform) in self.prompt_transforms.iter().enumerate() {
-            use crate::gateway::pipeline::native_preparation::NativePreparationWork;
-            use crate::gateway::pipeline::native_preparation::NativePreparationWorkKind;
-            use crate::gateway::pipeline::native_preparation::observe;
+            use crate::gateway::pipeline::native_preparation::{
+                NativePreparationWork, NativePreparationWorkKind, observe,
+            };
             let work_index = u32::try_from(index).map_err(|_| {
                 crate::gateway::error::BitrouterError::internal("prompt transform index exhausted")
             })?;

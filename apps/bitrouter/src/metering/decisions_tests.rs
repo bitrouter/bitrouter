@@ -3,8 +3,7 @@
 use std::sync::Arc;
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::http::AppState;
-use crate::gateway::http::build_router;
+use crate::gateway::http::{AppState, build_router};
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::HttpExecutor;
@@ -14,8 +13,7 @@ use crate::gateway::pipeline::types::RoutingTarget;
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use bitrouter_ai::types::OperationScope;
-use bitrouter_ai::types::{ApiProtocol, Usage, UsageOrigin};
+use bitrouter_ai::types::{ApiProtocol, OperationScope, Usage, UsageOrigin};
 use serde_json::json;
 use tower::ServiceExt;
 use wiremock::matchers::{method, path};
@@ -468,9 +466,11 @@ async fn known_price_admission_rejects_native_cache_uncertainty_before_http() ->
         .served_operations(OperationScope::Both)
         .route_hook_for(recorder.tariff_capture(true), OperationScope::Both);
     let pipeline = Arc::new(builder.build()?);
-    let request = bitrouter_ai::protocol::decisions::DecisionsCodec::parse_request(json!({
-        "model":"test","input":"evidence","questions":[{"type":"predicate","name":"q","instructions":"check"}]
-    }))?;
+    let request = crate::gateway::model::protocol::decisions::DecisionsCodec::parse_request(
+        json!({
+            "model":"test","input":"evidence","questions":[{"type":"predicate","name":"q","instructions":"check"}]
+        }),
+    )?;
     let outcome = pipeline
         .execute(
             crate::gateway::pipeline::types::PipelineRequest::new_decisions(

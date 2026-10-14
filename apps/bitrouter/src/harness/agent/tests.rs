@@ -4,14 +4,14 @@ use std::time::{Duration, Instant};
 
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::pipeline::executor::MockExecutor;
-use crate::gateway::pipeline::executor::MockResponse;
+use crate::gateway::model::target::AuthScheme;
+use crate::gateway::pipeline::executor::{MockExecutor, MockResponse};
 use crate::gateway::pipeline::routing::StaticRoutingTable;
 use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{
-    ApiProtocol, Content, FinishReason, Message, StreamPart, ToolResultOutput, Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, Message, StreamPart, ToolResultOutput,
+    Usage,
 };
-use bitrouter_ai::types::{AuthScheme, GenerateResult};
 use tempfile::TempDir;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -201,9 +201,8 @@ fn agent(
 #[tokio::test]
 async fn chat_tool_calls_execute_separately_and_replay_provider_ids()
 -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_ai::protocol::{
-        OutboundAdapter, SseEvent, chat_completions::ChatCompletionsAdapter,
-    };
+    use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
+    use crate::gateway::model::protocol::{OutboundAdapter, SseEvent};
 
     let workspace = TempDir::new()?;
     for name in ["first.txt", "second.txt", "third.txt"] {

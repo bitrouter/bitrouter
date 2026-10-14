@@ -14,39 +14,26 @@ use bitrouter::config::Config;
 use bitrouter::config::routing_table::ConfigRoutingTable;
 use bitrouter::gateway::assembly::App;
 use bitrouter::gateway::caller::CallerContext;
-use bitrouter::gateway::error::BitrouterError;
-use bitrouter::gateway::error::Result;
-use bitrouter::gateway::http::AppState;
-use bitrouter::gateway::http::build_router;
+use bitrouter::gateway::error::{BitrouterError, Result};
+use bitrouter::gateway::http::{AppState, build_router};
+use bitrouter::gateway::model::protocol::decisions::DecisionsCodec;
 use bitrouter::gateway::pipeline::builder::PipelineBuilder;
 use bitrouter::gateway::pipeline::context::PipelineContext;
-use bitrouter::gateway::pipeline::executor::HttpExecutor;
-use bitrouter::gateway::pipeline::executor::MockExecutor;
-use bitrouter::gateway::pipeline::executor::MockResponse;
-use bitrouter::gateway::pipeline::hooks::FallbackDecision;
-use bitrouter::gateway::pipeline::hooks::HookDecision;
-use bitrouter::gateway::pipeline::hooks::PreRequestHook;
+use bitrouter::gateway::pipeline::executor::{HttpExecutor, MockExecutor, MockResponse};
+use bitrouter::gateway::pipeline::hooks::{FallbackDecision, HookDecision, PreRequestHook};
 use bitrouter::gateway::pipeline::operations::HookStage;
-use bitrouter::gateway::pipeline::request_checks::CheckerFailure;
-use bitrouter::gateway::pipeline::request_checks::CheckerResult;
-use bitrouter::gateway::pipeline::request_checks::RequestCheckBinding;
-use bitrouter::gateway::pipeline::request_checks::RequestCheckerRunner;
-use bitrouter::gateway::pipeline::routing::FallbackPolicy;
-use bitrouter::gateway::pipeline::routing::ModelInfo;
-use bitrouter::gateway::pipeline::routing::ModelResolution;
-use bitrouter::gateway::pipeline::routing::RouterRequestIdentity;
-use bitrouter::gateway::pipeline::routing::RoutingPrefs;
-use bitrouter::gateway::pipeline::routing::RoutingTable;
-use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-use bitrouter::gateway::pipeline::settlement::SettlementContext;
-use bitrouter::gateway::pipeline::settlement::SettlementRecorder;
-use bitrouter::gateway::pipeline::types::PipelineRequest;
-use bitrouter::gateway::pipeline::types::RoutingTarget;
+use bitrouter::gateway::pipeline::request_checks::{
+    CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
+};
+use bitrouter::gateway::pipeline::routing::{
+    FallbackPolicy, ModelInfo, ModelResolution, RouterRequestIdentity, RoutingPrefs, RoutingTable,
+    StaticRoutingTable,
+};
+use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+use bitrouter::gateway::pipeline::types::{PipelineRequest, RoutingTarget};
 use bitrouter_ai::decisions::DecisionRequest;
 use bitrouter_ai::extension::request_check::{ContentFragmentKind, Decision, Input};
-use bitrouter_ai::protocol::decisions::DecisionsCodec;
-use bitrouter_ai::types::OperationScope;
-use bitrouter_ai::types::{ApiProtocol, ModelOperation, UsageOrigin};
+use bitrouter_ai::types::{ApiProtocol, ModelOperation, OperationScope, UsageOrigin};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tower::ServiceExt;
@@ -625,8 +612,7 @@ impl bitrouter::gateway::pipeline::hooks::RouteHook for FrozenProjection {
 
 #[tokio::test]
 async fn stream_usage_uses_frozen_rates_and_unknown_disables_live_lookup() -> TestResult {
-    use bitrouter::gateway::pipeline::stream::UsagePricing;
-    use bitrouter::gateway::pipeline::stream::UsagePricingBracket;
+    use bitrouter::gateway::pipeline::stream::{UsagePricing, UsagePricingBracket};
     use bitrouter_ai::types::{FinishReason, Message, Prompt, Role, StreamPart, Usage};
     use futures::TryStreamExt;
     for pricing in [

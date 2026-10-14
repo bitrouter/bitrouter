@@ -4,16 +4,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::context::StreamContext;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::HopOutcome;
-use crate::gateway::pipeline::hooks::ObserveHook;
-use crate::gateway::pipeline::hooks::Phase;
-use crate::gateway::pipeline::hooks::PreRequestHook;
-use crate::gateway::pipeline::hooks::RequestOutcome;
-use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::settlement::SettlementRecorder;
+use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
+use crate::gateway::pipeline::hooks::{
+    HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook, RequestOutcome,
+};
+use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
@@ -279,6 +274,7 @@ impl PreRequestHook for JudgeCosts {
 mod native_admission_tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
+    use crate::gateway::model::protocol::decisions::DecisionsCodec;
     use crate::gateway::pipeline::builder::PipelineBuilder;
     use crate::gateway::pipeline::executor::MockExecutor;
     use crate::gateway::pipeline::operations::HookStage;
@@ -287,7 +283,6 @@ mod native_admission_tests {
     use crate::metering::pricing::PricingTable;
     use crate::metering::recorder::MeteringRecorder;
     use crate::metering::store::{MeteringStore, TimeWindow};
-    use bitrouter_ai::protocol::decisions::DecisionsCodec;
     use bitrouter_ai::types::OperationScope;
 
     #[tokio::test]

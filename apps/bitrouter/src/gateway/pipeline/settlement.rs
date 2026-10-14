@@ -11,14 +11,13 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::model::protocol::responses::CausalPrefixCommitment;
 use crate::gateway::observability::event::EventBus;
 use crate::gateway::pipeline::timing::FirstTokenKind;
 use crate::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::auth::ContinuationAuthority;
+use crate::gateway::providers::auth::ContinuationAuthority;
 use bitrouter_ai::event::PipelineEvent;
-use bitrouter_ai::protocol::responses::CausalPrefixCommitment;
 use bitrouter_ai::types::{
     ApiProtocol, FinishReason, ModelOperation, ReasoningEffort, UsageOrigin,
 };

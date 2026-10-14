@@ -5474,7 +5474,9 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
         } => {
             // `--key-stdin` reads the key from stdin (one line); it funnels into
             // the same non-interactive API-key path as `--api-key`.
-            if let Some(message) = bitrouter_ai::providers::retired::provider_message(&provider) {
+            if let Some(message) =
+                bitrouter::gateway::providers::retired::provider_message(&provider)
+            {
                 anyhow::bail!("{message}");
             }
             let api_key = if key_stdin {
@@ -7248,7 +7250,7 @@ mod tests {
 
     #[tokio::test]
     async fn settlement_credentials_file_rejects_oauth() -> anyhow::Result<()> {
-        use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+        use bitrouter::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
 
         use bitrouter::cloud::account::manager::CredentialManager;
 
@@ -7285,7 +7287,7 @@ mod tests {
     #[tokio::test]
     async fn settlement_credentials_file_rejects_wrong_origin() -> anyhow::Result<()> {
         use bitrouter::cloud::account::manager::CredentialManager;
-        use bitrouter_ai::providers::hosted::credentials::StoredCredential;
+        use bitrouter::gateway::providers::hosted::credentials::StoredCredential;
 
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("account-credentials.json");
@@ -7325,8 +7327,7 @@ mod tests {
     #[test]
     fn every_tui_command_has_an_actions_row() {
         use bitrouter::actions::ACTIONS;
-        use bitrouter::commands::chat::ALIASES;
-        use bitrouter::commands::chat::REDUCER_OWNED;
+        use bitrouter::commands::chat::{ALIASES, REDUCER_OWNED};
 
         let named: Vec<&str> = ACTIONS.iter().filter_map(|row| row.tui_command).collect();
 

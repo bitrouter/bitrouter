@@ -6,9 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::config::PolicyKeyStrategy;
-use crate::config::PolicyModelTarget;
-use crate::config::PolicyTableConfig;
+use crate::config::{PolicyKeyStrategy, PolicyModelTarget, PolicyTableConfig};
 use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role, Tool};
 use http::HeaderMap;
 
@@ -1220,8 +1218,7 @@ mod tests {
     };
     use crate::gateway::caller::CallerContext;
     use crate::gateway::observability::event::EventBus;
-    use crate::gateway::pipeline::settlement::SettlementContext;
-    use crate::gateway::pipeline::settlement::SettlementRecorder;
+    use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
     use crate::optimization::exploration::{OptimizationGate, RouteExploration};
     use crate::policy_compile::{CompileInput, compile_candidate};
     use crate::policy_lock::{PolicyLock, semantic_digest};
@@ -1229,20 +1226,16 @@ mod tests {
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
     use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
-    use bitrouter_ai::types::UsageOrigin;
     use bitrouter_ai::types::{
-        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
+        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput, UsageOrigin,
     };
     use http::HeaderMap;
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
-    use crate::gateway::routing::assessment::Assessment;
-    use crate::gateway::routing::assessment::Judgment;
-    use crate::gateway::routing::signals::NextStepRole;
-    use crate::gateway::routing::signals::ProgressState;
-    use crate::gateway::routing::signals::TaskFamily;
+    use crate::gateway::routing::assessment::{Assessment, Judgment};
+    use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 
     fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStepRole) -> Assessment {
         let labels = [
@@ -3545,7 +3538,7 @@ mod tests {
     // fingerprinting proxy would.
 
     fn fingerprint_of(body: serde_json::Value) -> String {
-        use bitrouter_ai::protocol::inbound_adapter_for;
+        use crate::gateway::model::protocol::inbound_adapter_for;
         use bitrouter_ai::types::ApiProtocol;
         let adapter =
             inbound_adapter_for(&ApiProtocol::ChatCompletions).expect("chat completions adapter");

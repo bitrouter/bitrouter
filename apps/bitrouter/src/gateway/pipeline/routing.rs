@@ -11,8 +11,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::FallbackDecision;
 use crate::gateway::pipeline::request_checks::RequestCheckBinding;

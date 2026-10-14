@@ -10,14 +10,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::commands::invocation;
-use crate::config::AdequacyConfig;
-use crate::config::Config;
-use crate::config::PolicyKeyStrategy;
-use crate::config::PolicyModelTarget;
-use crate::config::PolicyRuntimeMode;
-use crate::config::PolicyTableConfig;
-use crate::config::TrajectoryConfig;
-use crate::config::validate_policy_table_config;
+use crate::config::{
+    AdequacyConfig, Config, PolicyKeyStrategy, PolicyModelTarget, PolicyRuntimeMode,
+    PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
+};
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::routing::ModelSelector;

@@ -16,8 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::gateway::error::Result;
-use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::settlement::SettlementRecorder;
+use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{FinishReason, UsageOrigin};
 use serde::Serialize;

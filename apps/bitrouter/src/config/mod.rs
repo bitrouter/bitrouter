@@ -25,11 +25,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::model::client::HttpTimeouts;
 use crate::gateway::pipeline::routing::SortOrder;
 use crate::gateway::pipeline::types::OutboundHeaderRule;
-use bitrouter_ai::client::HttpTimeouts;
 use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
 pub mod agent;
@@ -197,7 +196,7 @@ impl Config {
             if !provider.active {
                 continue;
             }
-            if let Some(message) = bitrouter_ai::providers::retired::provider_message(name) {
+            if let Some(message) = crate::gateway::providers::retired::provider_message(name) {
                 return Err(BitrouterError::bad_request(format!(
                     "providers.{name}: {message}"
                 )));
@@ -207,7 +206,8 @@ impl Config {
                 .values()
                 .flat_map(|list| list.as_slice())
                 .find(|protocol| {
-                    bitrouter_ai::providers::retired::protocol_message(protocol.as_str()).is_some()
+                    crate::gateway::providers::retired::protocol_message(protocol.as_str())
+                        .is_some()
                 })
             {
                 return Err(BitrouterError::bad_request(format!(
@@ -217,7 +217,7 @@ impl Config {
             for (index, model) in provider.models.iter().enumerate() {
                 if let Some(protocol) = model.api_protocol.as_ref().and_then(|list| {
                     list.as_slice().iter().find(|protocol| {
-                        bitrouter_ai::providers::retired::protocol_message(protocol.as_str())
+                        crate::gateway::providers::retired::protocol_message(protocol.as_str())
                             .is_some()
                     })
                 }) {
@@ -232,7 +232,7 @@ impl Config {
                         .models
                         .iter()
                         .any(|model| model.api_protocol.is_none()))
-                && let Some(message) = bitrouter_ai::providers::retired::protocol_message(
+                && let Some(message) = crate::gateway::providers::retired::protocol_message(
                     infer_protocol(&provider.api_base).as_str(),
                 )
             {
@@ -249,7 +249,7 @@ impl Config {
     pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
         self.validate_router_config()?;
         if let Some((provider, _)) = raw_model.split_once(':')
-            && let Some(message) = bitrouter_ai::providers::retired::provider_message(provider)
+            && let Some(message) = crate::gateway::providers::retired::provider_message(provider)
         {
             return Err(BitrouterError::bad_request(message));
         }

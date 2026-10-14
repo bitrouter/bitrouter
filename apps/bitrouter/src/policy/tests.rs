@@ -5,8 +5,7 @@ use std::sync::Arc;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::extensions::legacy::PluginId;
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use crate::gateway::pipeline::types::PipelineRequest;
 use crate::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, MeteringStore, PricingSource,

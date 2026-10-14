@@ -8,29 +8,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result as PipelineResult;
-use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::context::ProviderContinuation;
-use crate::gateway::pipeline::context::RequireContinuationAuthority;
-use crate::gateway::pipeline::context::SuppressProviderContinuation;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::PreRequestHook;
-use crate::gateway::pipeline::hooks::RouteHook;
-use crate::gateway::pipeline::settlement::RequiredDeliveryHandshake;
-use crate::gateway::pipeline::settlement::RequiredFinalizationContext;
-use crate::gateway::pipeline::settlement::RequiredFinalizationReceipt;
-use crate::gateway::pipeline::settlement::RequiredFinalizer;
-use crate::gateway::pipeline::types::RoutingTarget;
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use base64::Engine;
-use bitrouter_ai::auth::AuthAppliers;
-use bitrouter_ai::auth::ContinuationAuthority;
-use bitrouter_ai::protocol::responses::{
+use crate::gateway::error::{BitrouterError, Result as PipelineResult};
+use crate::gateway::model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixCommitment, CausalPrefixPlan,
     decode_gateway_continuation_id, encode_gateway_continuation_id,
 };
+use crate::gateway::pipeline::context::{
+    PipelineContext, ProviderContinuation, RequireContinuationAuthority,
+    SuppressProviderContinuation,
+};
+use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook, RouteHook};
+use crate::gateway::pipeline::settlement::{
+    RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizationReceipt,
+    RequiredFinalizer,
+};
+use crate::gateway::pipeline::types::RoutingTarget;
+use crate::gateway::providers::auth::{AuthAppliers, ContinuationAuthority};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use base64::Engine;
 use bitrouter_ai::types::{ApiProtocol, Role};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
@@ -180,8 +176,8 @@ impl ContinuationKey {
         let account = target.account_label.as_deref().unwrap_or("");
         let protocol = target.api_protocol.to_string();
         let auth_scheme = match credential_authority.effective_scheme() {
-            bitrouter_ai::types::AuthScheme::XApiKey => "x-api-key",
-            bitrouter_ai::types::AuthScheme::Bearer => "bearer",
+            crate::gateway::model::target::AuthScheme::XApiKey => "x-api-key",
+            crate::gateway::model::target::AuthScheme::Bearer => "bearer",
         };
         let credential_authority = hex::encode(credential_authority.credential().proof_bytes());
         let digest = hmac_bytes(
@@ -2734,39 +2730,27 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::http::AppState;
-    use crate::gateway::http::build_router;
+    use crate::gateway::http::{AppState, build_router};
     use crate::gateway::pipeline::builder::PipelineBuilder;
-    use crate::gateway::pipeline::context::PipelineContext;
-    use crate::gateway::pipeline::context::ProviderContinuation;
-    use crate::gateway::pipeline::context::StreamContext;
-    use crate::gateway::pipeline::executor::Executor;
-    use crate::gateway::pipeline::executor::HttpExecutor;
-    use crate::gateway::pipeline::executor::MockExecutor;
-    use crate::gateway::pipeline::executor::MockResponse;
-    use crate::gateway::pipeline::executor::StreamPartStream;
-    use crate::gateway::pipeline::hooks::ObserveHook;
-    use crate::gateway::pipeline::hooks::RequestOutcome;
-    use crate::gateway::pipeline::hooks::RouteHook;
-    use crate::gateway::pipeline::hooks::StreamHook;
+    use crate::gateway::pipeline::context::{PipelineContext, ProviderContinuation, StreamContext};
+    use crate::gateway::pipeline::executor::{
+        Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
+    };
+    use crate::gateway::pipeline::hooks::{ObserveHook, RequestOutcome, RouteHook, StreamHook};
     use crate::gateway::pipeline::pipeline::Pipeline;
     use crate::gateway::pipeline::routing::StaticRoutingTable;
-    use crate::gateway::pipeline::settlement::DeliveryAcknowledgement;
-    use crate::gateway::pipeline::settlement::RequiredFinalizationContext;
-    use crate::gateway::pipeline::settlement::RequiredFinalizer;
-    use crate::gateway::pipeline::settlement::SettlementContext;
-    use crate::gateway::pipeline::settlement::SettlementRecorder;
-    use crate::gateway::pipeline::stream::StreamAction;
-    use crate::gateway::pipeline::stream::StreamInterest;
-    use crate::gateway::pipeline::stream::StreamOutcome;
-    use crate::gateway::pipeline::types::ExecutionResult;
-    use crate::gateway::pipeline::types::PipelineRequest;
-    use crate::gateway::pipeline::types::RoutingTarget;
+    use crate::gateway::pipeline::settlement::{
+        DeliveryAcknowledgement, RequiredFinalizationContext, RequiredFinalizer, SettlementContext,
+        SettlementRecorder,
+    };
+    use crate::gateway::pipeline::stream::{StreamAction, StreamInterest, StreamOutcome};
+    use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
+    use crate::gateway::providers::auth::{
+        AppliedAuth, AuthApplier, AuthAppliers, CredentialAuthority,
+    };
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
-    use bitrouter_ai::auth::AuthAppliers;
-    use bitrouter_ai::auth::{AppliedAuth, AuthApplier, CredentialAuthority};
     use bitrouter_ai::types::{
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
         Role, StreamPart, Tool, ToolResultOutput, Usage,
@@ -2834,7 +2818,7 @@ mod tests {
     fn static_authority(api_key: &str) -> ContinuationAuthority {
         ContinuationAuthority::new(
             CredentialAuthority::derive("static-transport-credential", api_key),
-            bitrouter_ai::types::AuthScheme::Bearer,
+            crate::gateway::model::target::AuthScheme::Bearer,
         )
     }
 
@@ -6557,12 +6541,12 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             let value =
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.credential))
                     .map_err(|error| {
-                        bitrouter_ai::error::ModelError::configuration(format!(
+                        crate::gateway::model::error::ModelError::configuration(format!(
                             "test bearer: {error}"
                         ))
                     })?;
@@ -6575,8 +6559,8 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("test/dynamic-principal", &self.credential),
@@ -6585,8 +6569,8 @@ mod tests {
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
             Ok(Some(CredentialAuthority::derive(
                 "test/dynamic-principal",
                 &self.credential,
@@ -6601,8 +6585,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 reqwest::header::AUTHORIZATION,
                 reqwest::header::HeaderValue::from_static("Bearer unsupported"),
@@ -6618,16 +6602,16 @@ mod tests {
         async fn apply(
             &self,
             request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             Ok(request)
         }
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
-            Err(bitrouter_ai::error::ModelError::configuration(
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
+            Err(crate::gateway::model::error::ModelError::configuration(
                 "broken non-Responses credential store",
             ))
         }
@@ -6640,16 +6624,16 @@ mod tests {
         async fn apply(
             &self,
             request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             Ok(request)
         }
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
-            Err(bitrouter_ai::error::ModelError::configuration(
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
+            Err(crate::gateway::model::error::ModelError::configuration(
                 "opaque authority plugin exposed opaque-authority-private-sentinel",
             ))
         }
@@ -6662,9 +6646,9 @@ mod tests {
         async fn apply(
             &self,
             _request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
-            Err(bitrouter_ai::error::ModelError::configuration(
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
+            Err(crate::gateway::model::error::ModelError::configuration(
                 "opaque apply plugin exposed opaque-public-auth-private-sentinel",
             ))
         }
@@ -6677,8 +6661,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 reqwest::header::AUTHORIZATION,
                 reqwest::header::HeaderValue::from_static("Bearer principal-b"),
@@ -6689,8 +6673,8 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("test/dynamic-principal", "principal-b"),
@@ -6699,8 +6683,8 @@ mod tests {
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
             Ok(Some(CredentialAuthority::derive(
                 "test/dynamic-principal",
                 "principal-a",
@@ -6708,15 +6692,15 @@ mod tests {
         }
     }
 
-    struct SchemeAuthApplier(bitrouter_ai::types::AuthScheme);
+    struct SchemeAuthApplier(crate::gateway::model::target::AuthScheme);
 
     #[async_trait]
     impl AuthApplier for SchemeAuthApplier {
         async fn apply(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             Ok(self
                 .apply_with_authority(request, target)
                 .await?
@@ -6726,16 +6710,16 @@ mod tests {
         async fn apply_with_authority(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             match self.0 {
-                bitrouter_ai::types::AuthScheme::Bearer => {
+                crate::gateway::model::target::AuthScheme::Bearer => {
                     request.headers_mut().insert(
                         reqwest::header::AUTHORIZATION,
                         reqwest::header::HeaderValue::from_static("Bearer same-principal"),
                     );
                 }
-                bitrouter_ai::types::AuthScheme::XApiKey => {
+                crate::gateway::model::target::AuthScheme::XApiKey => {
                     request.headers_mut().insert(
                         "x-api-key",
                         reqwest::header::HeaderValue::from_static("same-principal"),
@@ -6751,8 +6735,8 @@ mod tests {
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
             Ok(Some(CredentialAuthority::derive(
                 "test/same-principal",
                 "principal",
@@ -6761,8 +6745,8 @@ mod tests {
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
             Ok(Some(ContinuationAuthority::new(
                 CredentialAuthority::derive("test/same-principal", "principal"),
                 self.0,
@@ -6772,7 +6756,7 @@ mod tests {
 
     struct HeaderAuthApplier {
         headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
-        route_scheme: bitrouter_ai::types::AuthScheme,
+        route_scheme: crate::gateway::model::target::AuthScheme,
     }
 
     #[async_trait]
@@ -6780,8 +6764,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             for (name, value) in &self.headers {
                 request.headers_mut().append(name, value.clone());
             }
@@ -6791,8 +6775,8 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("test/header-principal", "principal"),
@@ -6801,8 +6785,8 @@ mod tests {
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
             Ok(Some(ContinuationAuthority::new(
                 CredentialAuthority::derive("test/header-principal", "principal"),
                 self.route_scheme,
@@ -7721,7 +7705,9 @@ mod tests {
             dynamic_auth_pipeline(
                 registry.clone(),
                 &upstream,
-                Arc::new(SchemeAuthApplier(bitrouter_ai::types::AuthScheme::Bearer)),
+                Arc::new(SchemeAuthApplier(
+                    crate::gateway::model::target::AuthScheme::Bearer,
+                )),
             )?,
             tool_request("scheme-root", None),
         )
@@ -7731,7 +7717,9 @@ mod tests {
         let error = dynamic_auth_pipeline(
             registry,
             &upstream,
-            Arc::new(SchemeAuthApplier(bitrouter_ai::types::AuthScheme::XApiKey)),
+            Arc::new(SchemeAuthApplier(
+                crate::gateway::model::target::AuthScheme::XApiKey,
+            )),
         )?
         .execute_stream(tool_request("scheme-resume", Some(&public_id)))
         .await
@@ -7753,7 +7741,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_or_ambiguous_wire_auth_fails_before_responses_dispatch() -> anyhow::Result<()>
     {
-        use bitrouter_ai::types::AuthScheme;
+        use crate::gateway::model::target::AuthScheme;
         use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
 
         let upstream = MockServer::start().await;
@@ -8481,7 +8469,7 @@ mod tests {
         fn authority() -> ContinuationAuthority {
             ContinuationAuthority::new(
                 CredentialAuthority::derive("test/refreshing-custom-auth", "stable-principal"),
-                bitrouter_ai::types::AuthScheme::Bearer,
+                crate::gateway::model::target::AuthScheme::Bearer,
             )
         }
     }
@@ -8491,8 +8479,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             let credential = reqwest::header::HeaderValue::from_static(self.credential());
             request.headers_mut().insert(
                 reqwest::header::AUTHORIZATION,
@@ -8509,27 +8497,27 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven_with_scheme(
                 self.apply(request, target).await?,
                 Self::authority().credential().clone(),
-                bitrouter_ai::types::AuthScheme::Bearer,
+                crate::gateway::model::target::AuthScheme::Bearer,
             ))
         }
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
             Ok(Some(Self::authority()))
         }
 
         async fn refresh_after_unauthorized(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
+            _target: &crate::gateway::model::target::ModelTarget,
             _rejected_authorization: Option<&reqwest::header::HeaderValue>,
-        ) -> bitrouter_ai::error::Result<bool> {
+        ) -> crate::gateway::model::error::Result<bool> {
             self.generation.store(1, Ordering::SeqCst);
             Ok(true)
         }

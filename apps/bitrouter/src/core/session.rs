@@ -7,13 +7,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::pipeline::native::NativeAttemptReport;
-use crate::gateway::pipeline::native::NativeContextValidationReport;
-use crate::gateway::pipeline::native::NativeExecutionControl;
-use crate::gateway::pipeline::native::NativeInputCountReport;
-use crate::gateway::pipeline::native::NativeModelSelection;
-use crate::gateway::pipeline::native::NativePlan;
-use crate::gateway::pipeline::native::NativePlanAdmission;
+use crate::gateway::pipeline::native::{
+    NativeAttemptReport, NativeContextValidationReport, NativeExecutionControl,
+    NativeInputCountReport, NativeModelSelection, NativePlan, NativePlanAdmission,
+};
 use async_trait::async_trait;
 use bitrouter_ai::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,

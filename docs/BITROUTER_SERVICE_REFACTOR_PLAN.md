@@ -82,6 +82,24 @@ authority consistent across instances. Keep the service seams concrete in P0;
 do not add unused distributed-store traits, leases or a plugin loader in
 anticipation of P1.
 
+### Milestone scope
+
+| Concern | P0 | P1 or later |
+| --- | --- | --- |
+| Delivery | Official full-product and gateway-only artifacts; gateway configured and called as an independent process | Multiple gateway processes serving one logical service |
+| Package ownership | Five packages; service implementation inside `bitrouter`; AI contracts and HTTP SDK separated | No additional framework package required by clustering |
+| Local operation | Preserve SQLite, existing durable facts, commands, configuration and session formats | Keep this local path available without a shared backend |
+| Tenancy and authorization | Preserve existing principal/scope enforcement and isolation; operator services use supported service credentials | Shared gateway authorization/configuration revisions and resource authority |
+| Admission and accounting | Preserve current single-instance limits and finalization | Atomic admission, idempotent finalization and uncertain-attempt reconciliation across instances |
+| Extensions | Preserve compiled capabilities and advanced host adapters with new ownership | No new ABI, loader or remote extension protocol in either milestone |
+| Core and harness | Move existing behavior; preserve scheduling versus execution/session authority | Distributed core and complete core HTTP coverage require separate future scope |
+
+An operator's business identity is not automatically a service principal. The
+HTTP boundary must retain the service's credential and authorized-resource
+checks; arbitrary tenant or caller headers from an SDK client do not establish
+authority. New account administration, billing and business RBAC APIs are not
+prerequisites for the P0 package migration.
+
 ### Scheduling and execution state
 
 Core schedules inference and agents: creation decisions, readiness, waiting,
@@ -254,6 +272,24 @@ helper methods as well as imports. A contract-shaped struct that exposes a live
 provider client, scheduler handle or storage transaction still violates this
 boundary. Keep intrinsic validation beside the contract; validation requiring
 credentials, policy evaluation or live ownership belongs to the service.
+
+Organize the final AI public surface by the contract a consumer imports:
+
+| AI namespace | Contents and boundary |
+| --- | --- |
+| `types`, `decisions` | Shared model semantics and typed decision inputs/results; no selected-provider invocation |
+| `protocol` | Public model wire requests, responses and events; serde representation only, with no protocol-to-protocol conversion |
+| `conversion` | Public compatibility reports and reason/location/effect definitions; no inspection or admission algorithm |
+| `error` | Public service error payloads and intrinsic validation errors; no HTTP-client, credential-store or database error types |
+| `catalog` | Published catalog artifact definitions used by real consumers; no fetch, refresh, persistence or activation policy |
+| `observe`, `event` | Shared observation schema, lifecycle identifiers and public event data; no exporter, event bus or subscriber runtime |
+| `extension` | Existing capability input/decision/callback contracts; no mutable pipeline context or host registration collection |
+| Gateway/control/core/harness API modules | DTOs extracted from existing public endpoints; select names during extraction to match those surfaces, without exposing internal scheduler or session-store structures |
+
+The last row is an extraction boundary, not a request to create empty modules.
+Add an API type only with its actual handler/client or extension consumer. A
+contract review must examine serialization in both needed directions and the
+public dependency surface, not just the absence of runtime calls in a type file.
 
 ### New bitrouter-sdk
 

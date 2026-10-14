@@ -23,7 +23,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::{Subcommand, ValueEnum};
 
-use bitrouter_ai::providers::hosted::credentials::{CredentialKind, StoredCredential};
+use crate::gateway::providers::hosted::credentials::{CredentialKind, StoredCredential};
 
 use crate::cloud::account::manager::CredentialManager;
 

@@ -4,24 +4,19 @@ mod continuation;
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::Result;
+use crate::gateway::model::target::AuthScheme;
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::PreRequestHook;
-use crate::gateway::pipeline::native_context::NativePrivateContextPolicy;
-use crate::gateway::pipeline::native_context::ORIGIN_FIELD;
-use crate::gateway::pipeline::native_context::ORIGIN_NAMESPACE;
-use crate::gateway::pipeline::native_context::PrivateContextFailure;
-use crate::gateway::pipeline::native_context::is_private;
-use crate::gateway::pipeline::native_context::message_commitment;
-use crate::gateway::pipeline::native_context::metadata;
-use crate::gateway::pipeline::native_context::metadata_mut;
-use crate::gateway::pipeline::native_context::requires_origin_validation;
-use crate::gateway::pipeline::native_context::validate_managed_history;
+use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
+use crate::gateway::pipeline::native_context::{
+    NativePrivateContextPolicy, ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextFailure, is_private,
+    message_commitment, metadata, metadata_mut, requires_origin_validation,
+    validate_managed_history,
+};
 use crate::gateway::pipeline::types::RoutingTarget;
+use crate::gateway::providers::auth::ContinuationAuthority;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use bitrouter_ai::auth::ContinuationAuthority;
-use bitrouter_ai::types::{AuthScheme, Content, Prompt, Role};
+use bitrouter_ai::types::{Content, Prompt, Role};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

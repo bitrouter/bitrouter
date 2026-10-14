@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
-use bitrouter_ai::auth::store::StoreError;
+use crate::gateway::providers::auth::store::StoreError;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -14,8 +14,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::CredentialManager;
 use crate::cloud::account::credentials::CredentialsStore;
 use crate::cloud::account::transaction::AccountTransaction;
-use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
-use bitrouter_ai::providers::hosted::session::{CredentialError, CredentialSource};
+use crate::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
+use crate::gateway::providers::hosted::session::{CredentialError, CredentialSource};
 
 struct RefreshServer {
     endpoint: String,

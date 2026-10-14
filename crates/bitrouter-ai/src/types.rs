@@ -155,9 +155,8 @@ impl<'de> Deserialize<'de> for ApiProtocol {
 }
 
 /// The two supported model-call operations, independent of caller wire format.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ModelOperation {
     /// Generative text/tool/media invocation.
@@ -168,9 +167,8 @@ pub enum ModelOperation {
 }
 
 /// Operations explicitly supported by a host, hook, or native checker.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum OperationScope {
     /// Generative calls only; the default for existing registrations.
@@ -198,6 +196,7 @@ impl OperationScope {
 /// values, or any other string for an externally-registered `Custom` protocol.
 /// Hand-written because the `Custom(String)` variant means the value is an
 /// open string set, not a closed enum.
+#[cfg(feature = "schema")]
 impl schemars::JsonSchema for ApiProtocol {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("ApiProtocol")
@@ -267,6 +266,7 @@ impl Serialize for ProtocolList {
 
 /// A `ProtocolList` deserializes from **either** a bare protocol string or an
 /// array of them (see the type docs), so its schema is the union of the two.
+#[cfg(feature = "schema")]
 impl schemars::JsonSchema for ProtocolList {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("ProtocolList")
@@ -340,7 +340,7 @@ pub enum NativeReasoning {
 impl NativeReasoning {
     /// All visible text in the retained item, excluding encrypted content.
     /// Used to prevent terminal snapshots from undoing stream/result hooks.
-    pub(crate) fn visible_text(&self) -> String {
+    pub fn visible_text(&self) -> String {
         let Self::Responses(item) = self;
         ["summary", "content"]
             .into_iter()
@@ -1156,7 +1156,8 @@ pub enum ToolChoice {
 /// A capability-aware `RoutingTable`
 /// can read the set a request requires ([`Prompt::required_capabilities`]) and
 /// restrict the chain to providers advertising all of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// JSON-Schema-constrained output — [`ResponseFormat::JsonSchema`].
@@ -1192,19 +1193,8 @@ pub enum Capability {
 /// every value. Exact provider/model routes advertise their supported subset
 /// separately and policy-owned effort targets are validated against it before
 /// dispatch.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Deserialize,
-    Serialize,
-    schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     /// Disable reasoning where the selected model supports doing so.
@@ -1283,7 +1273,8 @@ impl std::str::FromStr for ReasoningEffort {
 /// Absence means unknown rather than unsupported. Policy-owned effort targets
 /// require this positive declaration; ordinary caller-authored parameters keep
 /// their existing pass-through behavior when support is unknown.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ReasoningEffortConfig {
     /// Effort values accepted by this exact provider/model route.
@@ -1295,16 +1286,16 @@ pub struct ReasoningEffortConfig {
 
 impl ReasoningEffortConfig {
     /// Validate the internal capability declaration.
-    pub fn validate(&self) -> crate::error::Result<()> {
+    pub fn validate(&self) -> Result<(), crate::error::ValidationError> {
         if self.levels.is_empty() {
-            return Err(crate::error::ModelError::invalid_request(
+            return Err(crate::error::ValidationError::new(
                 "reasoning_effort.levels must not be empty",
             ));
         }
         let mut unique = std::collections::BTreeSet::new();
         for level in &self.levels {
             if !unique.insert(*level) {
-                return Err(crate::error::ModelError::invalid_request(format!(
+                return Err(crate::error::ValidationError::new(format!(
                     "reasoning_effort.levels contains duplicate '{level}'"
                 )));
             }
@@ -1312,7 +1303,7 @@ impl ReasoningEffortConfig {
         if let Some(default) = self.default
             && !self.levels.contains(&default)
         {
-            return Err(crate::error::ModelError::invalid_request(format!(
+            return Err(crate::error::ValidationError::new(format!(
                 "reasoning_effort.default '{default}' must be listed in levels"
             )));
         }
@@ -1381,7 +1372,8 @@ pub enum Modality {
 /// prompt keeps one semantic token budget; this enum only records which wire
 /// spelling should be used when the prompt is rendered back to Chat
 /// Completions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ChatTokenLimitField {
     /// Legacy Chat Completions field.
@@ -1391,7 +1383,8 @@ pub enum ChatTokenLimitField {
 }
 
 /// Provider/model request-shape compatibility settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct ModelCompatibility {
     /// Chat Completions-specific request settings.
@@ -1399,7 +1392,8 @@ pub struct ModelCompatibility {
 }
 
 /// Chat Completions request-shape compatibility settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct ChatCompletionsCompatibility {
     /// Enable the demonstrated Google Chat extensions for this selected model.
@@ -1423,7 +1417,8 @@ pub struct ChatCompletionsCompatibility {
 /// protocol-neutral streaming response. Keeping them typed prevents a Chat
 /// client's top-level object from leaking into Messages, Responses, or Gemini
 /// requests while preserving same-protocol extensions through [`Self::extra`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatStreamOptions {
     /// Ask the upstream to emit a final usage-only streaming chunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1433,7 +1428,7 @@ pub struct ChatStreamOptions {
     pub include_obfuscation: Option<bool>,
     /// Provider extensions preserved on native Chat Completions routes.
     #[serde(flatten)]
-    #[schemars(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -2261,28 +2256,6 @@ impl StreamPart {
             StreamPart::Finish { .. } | StreamPart::ResponseCompleted { .. }
         )
     }
-}
-
-/// How an upstream's credential is presented on the wire.
-///
-/// Consulted by transports that support more than one credential scheme.
-/// Today that is only the Messages transport, which sends the key as either
-/// `x-api-key` (Anthropic's native scheme) or `Authorization: Bearer`. The
-/// Chat Completions transport (always `Authorization: Bearer`) and Generate
-/// Content transport (always `x-goog-api-key`) have a single fixed scheme and
-/// ignore this.
-///
-/// Exactly one scheme is ever sent — never both: the Anthropic API rejects a
-/// request that carries `x-api-key` and `Authorization` together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub enum AuthScheme {
-    /// `x-api-key: <key>` — Anthropic's native scheme; the default.
-    #[default]
-    #[serde(rename = "x-api-key")]
-    XApiKey,
-    /// `Authorization: Bearer <key>`.
-    #[serde(rename = "bearer")]
-    Bearer,
 }
 
 fn fmt_model_value<T: Serialize>(value: &T, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

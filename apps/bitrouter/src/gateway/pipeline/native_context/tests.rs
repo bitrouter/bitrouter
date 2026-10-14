@@ -1,16 +1,16 @@
 use super::*;
+use crate::gateway::model::target::AuthScheme;
 use crate::gateway::pipeline::types::PipelineRequest;
-use bitrouter_ai::auth::CredentialAuthority;
-use bitrouter_ai::types::{ApiProtocol, AuthScheme, FinishReason, Message, Role, Usage};
+use crate::gateway::providers::auth::CredentialAuthority;
+use bitrouter_ai::types::{ApiProtocol, FinishReason, Message, Role, Usage};
 
 struct FailAfterWrite;
 
 #[tokio::test]
 async fn portable_rebuild_requires_capability_source_validation_and_nonpreserve_policy()
 -> Result<()> {
-    use crate::gateway::routing::ContextCapability;
-    use crate::gateway::routing::ContextStrategy;
     use crate::gateway::routing::preparation::Prepared;
+    use crate::gateway::routing::{ContextCapability, ContextStrategy};
     for (grant, preserve, valid_policy, rewrite_public, allowed) in [
         (true, false, true, false, true),
         (false, false, true, false, false),
@@ -265,8 +265,7 @@ fn private_message_commitment_ignores_all_markers_but_binds_all_other_content()
 #[tokio::test]
 async fn native_continuation_binds_the_actual_http_prompt_and_redacts_unverified_output()
 -> Result<()> {
-    use crate::gateway::pipeline::executor::Executor;
-    use crate::gateway::pipeline::executor::HttpExecutor;
+    use crate::gateway::pipeline::executor::{Executor, HttpExecutor};
     use crate::gateway::pipeline::native::NativeManagedRequest;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

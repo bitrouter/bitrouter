@@ -13,6 +13,7 @@
 //! protocol-specific projections; provider bad requests preserve the selected
 //! upstream `error` object or string.
 
+use crate::gateway::model::conversion::ReportAdmission;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -159,8 +160,8 @@ fn upstream_payload_text(error: &serde_json::Value) -> String {
 
 impl BitrouterError {
     /// Select the safe public presentation before a model codec encodes SSE.
-    pub fn stream_error(&self) -> bitrouter_ai::stream::StreamError {
-        bitrouter_ai::stream::StreamError {
+    pub fn stream_error(&self) -> crate::gateway::model::stream::StreamError {
+        crate::gateway::model::stream::StreamError {
             message: self.public_message(),
             error_type: self.error_type().to_owned(),
             code: self.error_code().to_owned(),
@@ -431,9 +432,9 @@ pub struct ErrorEnvelope {
     pub error: ErrorBody,
 }
 
-impl From<bitrouter_ai::error::ModelError> for BitrouterError {
-    fn from(error: bitrouter_ai::error::ModelError) -> Self {
-        use bitrouter_ai::error::ModelError;
+impl From<crate::gateway::model::error::ModelError> for BitrouterError {
+    fn from(error: crate::gateway::model::error::ModelError) -> Self {
+        use crate::gateway::model::error::ModelError;
         match error {
             ModelError::Incompatible { report } => Self::Incompatible { report },
             ModelError::InvalidRequest { message } => Self::bad_request(message),

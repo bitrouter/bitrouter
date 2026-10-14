@@ -12,8 +12,7 @@ use super::approval::ApprovalPolicy;
 use super::classify::{RouterCall, TurnDisposition, classify_turn};
 use super::config::ServerToolLoopConfig;
 use super::toolset::{ToolContext, ToolsetRegistry};
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::types::ExecutionResult;
 use bitrouter_ai::types::{
     Content, FinishReason, Message, Prompt, ProviderMetadata, Role, ServerToolCall, ServerToolKind,

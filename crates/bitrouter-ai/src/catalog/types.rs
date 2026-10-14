@@ -371,9 +371,8 @@ pub struct RegistryPricing {
 
 /// Published processing-profile provenance; application pricing validates the
 /// effective endpoint rather than inferring premiums from this declaration.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PricingEndpointProfile {
     /// OpenAI global processing.

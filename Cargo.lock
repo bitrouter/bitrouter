@@ -689,6 +689,7 @@ dependencies = [
  "hmac 0.13.0",
  "http",
  "http-body",
+ "httpdate",
  "ignore",
  "jsonschema",
  "keyring",
@@ -747,28 +748,10 @@ dependencies = [
 name = "bitrouter-ai"
 version = "1.0.0-alpha.33"
 dependencies = [
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "eventsource-stream",
- "futures",
- "futures-core",
- "httpdate",
- "rand 0.10.2",
- "reqwest",
  "schemars 1.2.1",
  "serde",
  "serde_json",
- "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
- "uuid",
- "wiremock",
 ]
 
 [[package]]

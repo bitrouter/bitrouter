@@ -9,8 +9,7 @@ use super::native::{
     NativeReportRejectionReason, NativeRoute,
 };
 use super::native_accounting::{NativeTokenCost, NativeTokenRateBits};
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 
 pub(super) fn rejection_byte_reserve(request_id: &str, route: &NativeRoute) -> Result<u64> {
     // Covers every fixed-schema field at maximum numeric width, two output
@@ -193,15 +192,14 @@ impl std::io::Write for HashCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::pipeline::native::NativeOutputRejection;
-    use crate::gateway::pipeline::native::NativeOutputUsage;
-    use crate::gateway::pipeline::native::NativeRouteConstraints;
+    use crate::gateway::pipeline::native::{
+        NativeOutputRejection, NativeOutputUsage, NativeRouteConstraints,
+    };
     use crate::gateway::pipeline::native_accounting::NativeTokenRates;
-    use crate::gateway::pipeline::native_context::PrivateContextEvidence;
-    use crate::gateway::pipeline::native_context::PrivateContextFailure;
-    use crate::gateway::pipeline::native_continuation::ContinuationFailure;
-    use crate::gateway::pipeline::native_continuation::NativeContinuationInput;
-    use crate::gateway::pipeline::native_continuation::NativeContinuationOutput;
+    use crate::gateway::pipeline::native_context::{PrivateContextEvidence, PrivateContextFailure};
+    use crate::gateway::pipeline::native_continuation::{
+        ContinuationFailure, NativeContinuationInput, NativeContinuationOutput,
+    };
     use bitrouter_ai::types::{NormalizedUsage, UsageOrigin};
     use serde_json::json;
 

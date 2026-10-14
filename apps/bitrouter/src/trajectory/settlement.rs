@@ -261,8 +261,7 @@ mod tests {
     use crate::config::EvalConfig;
     use crate::gateway::caller::CallerContext;
     use crate::gateway::observability::event::EventBus;
-    use crate::gateway::pipeline::settlement::SettlementContext;
-    use crate::gateway::pipeline::settlement::SettlementRecorder;
+    use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
     use bitrouter_ai::types::{
         ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role, UsageOrigin,
     };

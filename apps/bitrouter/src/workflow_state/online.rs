@@ -103,9 +103,7 @@ impl OnlineWorkflowState {
         prompt: &Prompt,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
-        use crate::gateway::routing::signals::NextStepRole;
-        use crate::gateway::routing::signals::ProgressState;
-        use crate::gateway::routing::signals::TaskFamily;
+        use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
         use crate::workflow_state::predictive::{
             NextActionClass, PredictiveHistoryCompleteness, TaskComplexity,
         };
@@ -165,9 +163,7 @@ impl OnlineWorkflowState {
         mut self,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
-        use crate::gateway::routing::signals::NextStepRole;
-        use crate::gateway::routing::signals::ProgressState;
-        use crate::gateway::routing::signals::TaskFamily;
+        use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
         self.predictive.task_family =
             assessment.map_or(TaskFamily::Unknown, |value| value.task_family);
         self.predictive.next_step_role =

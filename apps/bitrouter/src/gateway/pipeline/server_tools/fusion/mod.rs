@@ -19,8 +19,7 @@ use self::engine::run_fusion;
 use crate::gateway::error::Result;
 use crate::gateway::pipeline::server_tools::declarations::ServerToolDeclarations;
 use crate::gateway::pipeline::server_tools::nested::NestedRunner;
-use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-use crate::gateway::pipeline::server_tools::toolset::ToolContext;
+use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolContext};
 use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// The `bitrouter:fusion` server tool, generic over a [`NestedRunner`] so each
@@ -122,13 +121,13 @@ mod tests {
     use super::config::FusionConfig;
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::server_tools::declarations::ServerToolDeclarations;
-    use crate::gateway::pipeline::server_tools::declarations::declarations_plugin_id;
-    use crate::gateway::pipeline::server_tools::nested::NestedOutcome;
-    use crate::gateway::pipeline::server_tools::nested::NestedRequest;
-    use crate::gateway::pipeline::server_tools::nested::NestedRunner;
-    use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-    use crate::gateway::pipeline::server_tools::toolset::ToolContext;
+    use crate::gateway::pipeline::server_tools::declarations::{
+        ServerToolDeclarations, declarations_plugin_id,
+    };
+    use crate::gateway::pipeline::server_tools::nested::{
+        NestedOutcome, NestedRequest, NestedRunner,
+    };
+    use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolContext};
     use async_trait::async_trait;
     use bitrouter_ai::types::ToolResultOutput;
     use std::collections::HashMap;

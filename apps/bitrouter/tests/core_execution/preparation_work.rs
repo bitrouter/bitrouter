@@ -1,22 +1,15 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::core::protocol::ModelMode;
-use bitrouter::gateway::pipeline::hooks::HookDecision;
-use bitrouter::gateway::pipeline::hooks::PreRequestHook;
-use bitrouter::gateway::pipeline::hooks::RouteHook;
-use bitrouter::gateway::pipeline::native_accounting::NativeCostObservation;
-use bitrouter::gateway::pipeline::native_accounting::NativeCostSource;
+use bitrouter::gateway::pipeline::hooks::{HookDecision, PreRequestHook, RouteHook};
+use bitrouter::gateway::pipeline::native_accounting::{NativeCostObservation, NativeCostSource};
 use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind as Kind;
-use bitrouter::gateway::pipeline::request_checks::CheckerFailure;
-use bitrouter::gateway::pipeline::request_checks::CheckerResult;
-use bitrouter::gateway::pipeline::request_checks::RequestCheckBinding;
-use bitrouter::gateway::pipeline::request_checks::RequestCheckerRunner;
-use bitrouter::gateway::pipeline::routing::ModelInfo;
-use bitrouter::gateway::pipeline::routing::ModelResolution;
-use bitrouter::gateway::pipeline::routing::ModelSelector;
-use bitrouter::gateway::pipeline::routing::RouterRequestIdentity;
-use bitrouter::gateway::pipeline::routing::RoutingPrefs;
-use bitrouter::gateway::pipeline::routing::RoutingTable;
+use bitrouter::gateway::pipeline::request_checks::{
+    CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
+};
+use bitrouter::gateway::pipeline::routing::{
+    ModelInfo, ModelResolution, ModelSelector, RouterRequestIdentity, RoutingPrefs, RoutingTable,
+};
 use bitrouter_ai::extension::request_check::{Decision, Input};
 
 struct Probe {

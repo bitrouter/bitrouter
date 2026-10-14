@@ -17,10 +17,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::gateway::providers::hosted::credentials::StoredCredential;
 use anyhow::{Context, Result};
-use bitrouter_ai::providers::hosted::credentials::StoredCredential;
 
-use bitrouter_ai::auth::store::StoreError;
+use crate::gateway::providers::auth::store::StoreError;
 
 static WRITES: Mutex<()> = Mutex::new(());
 
@@ -217,7 +217,7 @@ fn default_data_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::providers::hosted::credentials::{
+    use crate::gateway::providers::hosted::credentials::{
         CredentialKind, Credentials, REFRESH_WINDOW,
     };
     use chrono::{Duration, Utc};

@@ -3,7 +3,7 @@
 //! This is the main BitRouter pipeline. Inbound requests on any of four wire
 //! protocols ([`ApiProtocol`](bitrouter_ai::types::ApiProtocol)) are parsed into
 //! a canonical [`Prompt`](bitrouter_ai::types::Prompt) by the adapters in
-//! [`bitrouter_ai::protocol`], run through the flight pipeline plus an
+//! [`crate::gateway::model::protocol`], run through the flight pipeline plus an
 //! interleaved stream stage, and rendered back in the inbound protocol.
 //!
 //! ## Pipeline stages

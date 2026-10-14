@@ -14,8 +14,7 @@ use tracing::Instrument;
 use super::config::FusionConfig;
 use super::judge::{JudgeAnalysis, analysis_schema, judge_system_prompt};
 use crate::gateway::pipeline::server_tools::declarations::forwarded_tools;
-use crate::gateway::pipeline::server_tools::nested::NestedRequest;
-use crate::gateway::pipeline::server_tools::nested::NestedRunner;
+use crate::gateway::pipeline::server_tools::nested::{NestedRequest, NestedRunner};
 use crate::gateway::pipeline::server_tools::toolset::ToolContext;
 use bitrouter_ai::types::{ResponseFormat, ToolResultOutput, Usage};
 
@@ -164,9 +163,9 @@ mod tests {
     use super::super::config::{FusionConfig, JudgeSpec, PanelMemberSpec};
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::server_tools::nested::NestedOutcome;
-    use crate::gateway::pipeline::server_tools::nested::NestedRequest;
-    use crate::gateway::pipeline::server_tools::nested::NestedRunner;
+    use crate::gateway::pipeline::server_tools::nested::{
+        NestedOutcome, NestedRequest, NestedRunner,
+    };
     use crate::gateway::pipeline::server_tools::toolset::ToolContext;
     use async_trait::async_trait;
     use bitrouter_ai::types::{ToolResultOutput, Usage};

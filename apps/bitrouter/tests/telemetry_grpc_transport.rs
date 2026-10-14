@@ -10,12 +10,10 @@ use std::time::Duration;
 
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::pipeline::context::PipelineContext;
-use bitrouter::gateway::pipeline::hooks::ObserveHook;
-use bitrouter::gateway::pipeline::hooks::RequestOutcome;
+use bitrouter::gateway::pipeline::hooks::{ObserveHook, RequestOutcome};
 use bitrouter::gateway::pipeline::types::PipelineRequest;
 use bitrouter::telemetry::config::OtelConfig;
-use bitrouter::telemetry::exporter::OtelExporter;
-use bitrouter::telemetry::exporter::OtelObserveHook;
+use bitrouter::telemetry::exporter::{OtelExporter, OtelObserveHook};
 use bitrouter_ai::types::{GenerationParams, Prompt};
 use opentelemetry_proto::tonic::collector::metrics::v1::{
     ExportMetricsServiceRequest, ExportMetricsServiceResponse,

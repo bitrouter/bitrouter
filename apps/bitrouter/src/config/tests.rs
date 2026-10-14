@@ -1716,7 +1716,7 @@ fn exploration_requires_adequacy_enabled() {
 
 #[test]
 fn timeout_config_empty_inherits_base() {
-    use bitrouter_ai::client::HttpTimeouts;
+    use crate::gateway::model::client::HttpTimeouts;
     let base = HttpTimeouts::default();
     let resolved = TimeoutConfig::default().apply_to(base.clone());
     assert_eq!(resolved, base, "an empty override must equal the base");
@@ -1724,7 +1724,7 @@ fn timeout_config_empty_inherits_base() {
 
 #[test]
 fn timeout_config_overrides_only_set_fields() {
-    use bitrouter_ai::client::HttpTimeouts;
+    use crate::gateway::model::client::HttpTimeouts;
     use std::time::Duration;
     let base = HttpTimeouts::default();
     let resolved = TimeoutConfig {
@@ -1741,7 +1741,7 @@ fn timeout_config_overrides_only_set_fields() {
 
 #[test]
 fn total_wall_clock_cap_is_off_by_default_and_opt_in() {
-    use bitrouter_ai::client::HttpTimeouts;
+    use crate::gateway::model::client::HttpTimeouts;
     use std::time::Duration;
     // No overall cap by default — correct for long agentic streams.
     assert_eq!(HttpTimeouts::default().total, None);
@@ -1756,7 +1756,7 @@ fn total_wall_clock_cap_is_off_by_default_and_opt_in() {
 
 #[test]
 fn per_provider_override_layers_over_resolved_global() {
-    use bitrouter_ai::client::HttpTimeouts;
+    use crate::gateway::model::client::HttpTimeouts;
     use std::time::Duration;
     // A provider inherits the global read but sets its own total cap.
     let global = TimeoutConfig {

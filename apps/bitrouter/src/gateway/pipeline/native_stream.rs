@@ -5,8 +5,7 @@ use std::collections::BTreeMap;
 
 use futures::StreamExt;
 
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 
 use super::executor::StreamPartStream;
 use super::native::NativeExecutionControl;
@@ -234,7 +233,7 @@ impl Collector {
                         return Err(invalid("native reasoning does not match a reasoning block"));
                     };
                     *retained = Some(native.clone());
-                    bitrouter_ai::protocol::responses::validate_reasoning_projection(part)
+                    crate::gateway::model::protocol::responses::validate_reasoning_projection(part)
                         .map_err(invalid)?;
                 }
                 if let Some(signature) = signature {

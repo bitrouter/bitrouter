@@ -2,6 +2,7 @@
 //! `Prompt` into an upstream call. Ships the trait, a `MockExecutor` for tests,
 //! and `HttpExecutor` — the real protocol-aware HTTP executor.
 
+use crate::gateway::model::conversion::ReportAdmission;
 use std::pin::Pin;
 use std::sync::{Mutex, RwLock};
 #[cfg(test)]
@@ -16,23 +17,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::native_auth::{is_continuation_scope_header, request_scope_headers};
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
-use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::context::ProviderContinuation;
-use crate::gateway::pipeline::context::RequireContinuationAuthority;
-use crate::gateway::pipeline::context::SuppressProviderContinuation;
-use crate::gateway::pipeline::types::ExecutionResult;
-use crate::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::auth::{
+use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::model::client::{HttpTimeouts, ModelClient, parse_retry_after};
+use crate::gateway::model::protocol::decisions::{DecisionsCodec, DecisionsTransport};
+use crate::gateway::model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
+use crate::gateway::pipeline::context::{
+    PipelineContext, ProviderContinuation, RequireContinuationAuthority,
+    SuppressProviderContinuation,
+};
+use crate::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
+use crate::gateway::providers::auth::{
     AppliedAuth, AuthAppliers, AuthOperation, ContinuationAuthority, CredentialAuthority,
     normalize_auth_extension_error,
 };
-use bitrouter_ai::client::{HttpTimeouts, ModelClient, parse_retry_after};
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
-use bitrouter_ai::protocol::SseEvent;
-use bitrouter_ai::protocol::decisions::{DecisionsCodec, DecisionsTransport};
-use bitrouter_ai::protocol::{OutboundAdapter, OutboundDispatch};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 use tokio_util::sync::CancellationToken;
 
@@ -159,7 +157,8 @@ pub trait Executor: Send + Sync {
         prompt: &Prompt,
         _stream: bool,
     ) -> Result<bitrouter_ai::conversion::ConversionReport> {
-        let report = bitrouter_ai::conversion::request_admission(prompt, &target.api_protocol);
+        let report =
+            crate::gateway::model::conversion::request_admission(prompt, &target.api_protocol);
         report.require_admitted()?;
         Ok(report)
     }
@@ -440,13 +439,13 @@ struct ProviderContinuationSubstitution {
 
 #[derive(Clone)]
 struct UpstreamErrorScrubber {
-    redactor: bitrouter_ai::diagnostics::DiagnosticRedactor,
+    redactor: crate::gateway::model::diagnostics::DiagnosticRedactor,
 }
 
 impl UpstreamErrorScrubber {
     fn new(continuation: Option<ProviderContinuationSubstitution>) -> Self {
         let mut scrubber = Self {
-            redactor: bitrouter_ai::diagnostics::DiagnosticRedactor::default(),
+            redactor: crate::gateway::model::diagnostics::DiagnosticRedactor::default(),
         };
         if let Some(continuation) = continuation {
             scrubber
@@ -733,7 +732,7 @@ struct RequestBuildInput<'a> {
     body: &'a serde_json::Value,
     managed_expected: Option<&'a serde_json::Value>,
     target: &'a RoutingTarget,
-    transport: &'a Arc<dyn bitrouter_ai::protocol::Transport>,
+    transport: &'a Arc<dyn crate::gateway::model::protocol::Transport>,
     ctx: &'a PipelineContext,
     trace_headers: Option<&'a http::HeaderMap>,
 }
@@ -821,7 +820,7 @@ impl HttpExecutor {
     }
 
     /// Build an executor with custom timeouts, dispatch, **and** a registry
-    /// of per-provider [`AuthApplier`](bitrouter_ai::auth::AuthApplier)s.
+    /// of per-provider [`AuthApplier`](crate::gateway::providers::auth::AuthApplier)s.
     /// When a target's `provider_name` matches a registered applier, that
     /// applier replaces `Transport::authorise` for the request (OAuth, SigV4,
     /// any custom credential flow).
@@ -921,14 +920,14 @@ impl HttpExecutor {
         Self::new(HttpTimeouts::default())
     }
 
-    /// Apply the per-provider [`AuthApplier`](bitrouter_ai::auth::AuthApplier)
+    /// Apply the per-provider [`AuthApplier`](crate::gateway::providers::auth::AuthApplier)
     /// if one is registered for `target.provider_name`, else fall through to
     /// `Transport::authorise`. Shared by both `execute` and `execute_stream`.
     async fn apply_auth(
         &self,
         request: reqwest::Request,
         target: &RoutingTarget,
-        transport: &Arc<dyn bitrouter_ai::protocol::Transport>,
+        transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
     ) -> Result<AppliedAuth> {
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
             applier
@@ -1099,7 +1098,7 @@ impl HttpExecutor {
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<bitrouter_ai::auth::AppliedAuth> {
+    ) -> Result<crate::gateway::providers::auth::AppliedAuth> {
         native_work::observe(
             input.ctx,
             NativeProviderWorkKind::Authentication,
@@ -1140,7 +1139,7 @@ impl HttpExecutor {
         let credential_authority =
             credential_authority.map(|authority| authority.with_request_scope(&scope));
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
-        bitrouter_ai::providers::google_chat::validate_authenticated_request(
+        crate::gateway::providers::google_chat::validate_authenticated_request(
             &request,
             &input.target.model_target(),
         )?;
@@ -1242,12 +1241,12 @@ impl HttpExecutor {
             .ctx
             .record_credential_authority(credential_authority.clone());
         Ok(match credential_authority {
-            Some(authority) => bitrouter_ai::auth::AppliedAuth::proven_with_scheme(
+            Some(authority) => crate::gateway::providers::auth::AppliedAuth::proven_with_scheme(
                 request,
                 authority.credential().clone(),
                 authority.effective_scheme(),
             ),
-            None => bitrouter_ai::auth::AppliedAuth::unproven(request),
+            None => crate::gateway::providers::auth::AppliedAuth::unproven(request),
         })
     }
 
@@ -1281,7 +1280,7 @@ impl HttpExecutor {
 
     fn check_response_format(
         prompt: &Prompt,
-        adapter: &Arc<dyn bitrouter_ai::protocol::OutboundAdapter>,
+        adapter: &Arc<dyn crate::gateway::model::protocol::OutboundAdapter>,
         _target: &RoutingTarget,
     ) -> Result<()> {
         if prompt.response_format.is_some() && !adapter.supports_response_format() {
@@ -1307,7 +1306,7 @@ impl HttpExecutor {
         &self,
         target: &RoutingTarget,
         request: &DecisionRequest,
-        transport: &Arc<dyn bitrouter_ai::protocol::Transport>,
+        transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
         ctx: &PipelineContext,
     ) -> Result<(String, UpstreamErrorScrubber, u64)> {
         let (client, _) = self.client_for(target, false);
@@ -1388,7 +1387,7 @@ impl HttpExecutor {
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let capture = Arc::new(BridgeCapture::default());
-        let collected = bitrouter_ai::stream::collect::collect_generate(
+        let collected = crate::gateway::model::stream::collect::collect_generate(
             self.execute_http_stream(target, prompt, ctx, Some(capture.clone()))
                 .await?,
         )
@@ -1660,7 +1659,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
-        if bitrouter_ai::providers::codex::requires_streaming(&target.model_target()) {
+        if crate::gateway::providers::codex::requires_streaming(&target.model_target()) {
             return self.execute_streaming_generation(target, prompt, ctx).await;
         }
         let (adapter, transport) = self
@@ -1802,11 +1801,11 @@ impl Executor for HttpExecutor {
         let stored_response = target.api_protocol == ApiProtocol::Responses
             && storage_allowed
             && json.get("store") == Some(&serde_json::Value::Bool(true));
-        let replayable = bitrouter_ai::protocol::responses::output_replayable(&json);
+        let replayable = crate::gateway::model::protocol::responses::output_replayable(&json);
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
             .map_err(|error| error_scrubber.scrub_error(error.into()))?;
         let mut result =
-            bitrouter_ai::providers::google_chat::bind_result(result, &target.model_target())
+            crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
@@ -1846,7 +1845,8 @@ impl Executor for HttpExecutor {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         self.preflight_decisions(target, request)?;
-        let transport: Arc<dyn bitrouter_ai::protocol::Transport> = Arc::new(DecisionsTransport);
+        let transport: Arc<dyn crate::gateway::model::protocol::Transport> =
+            Arc::new(DecisionsTransport);
         let (text, scrubber, elapsed) = self.execute_json(target, request, &transport, ctx).await?;
         let result = ModelClient::parse_decision_response(&text, request).map_err(|error| {
             let error = scrubber.redactor.scrub_error(error);
@@ -2064,11 +2064,11 @@ impl Executor for DispatchExecutor {
 #[cfg(test)]
 mod error_classification_tests {
     use super::*;
-    use bitrouter_ai::protocol::OutboundAdapter;
-    use bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter;
+    use crate::gateway::model::protocol::OutboundAdapter;
+    use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
 
-    use bitrouter_ai::protocol::messages::MessagesAdapter;
-    use bitrouter_ai::protocol::responses::ResponsesAdapter;
+    use crate::gateway::model::protocol::messages::MessagesAdapter;
+    use crate::gateway::model::protocol::responses::ResponsesAdapter;
 
     #[test]
     fn credit_exhaustion_401_maps_to_payment_required() {
@@ -2194,9 +2194,10 @@ mod error_classification_tests {
 
     #[test]
     fn stream_decoder_preserves_typed_upstream_policy_violation() {
-        let error = BitrouterError::from(bitrouter_ai::error::ModelError::PolicyViolation {
-            message: "provider detail must stay internal".to_string(),
-        });
+        let error =
+            BitrouterError::from(crate::gateway::model::error::ModelError::PolicyViolation {
+                message: "provider detail must stay internal".to_string(),
+            });
 
         assert!(matches!(
             error,
@@ -2209,7 +2210,7 @@ mod error_classification_tests {
 
     #[test]
     fn stream_decoder_preserves_explicit_upstream_status() {
-        let error = BitrouterError::from(bitrouter_ai::error::ModelError::Provider {
+        let error = BitrouterError::from(crate::gateway::model::error::ModelError::Provider {
             status: 401,
             message: "chat completions stream error".to_string(),
         });
@@ -2222,10 +2223,11 @@ mod error_classification_tests {
 
     #[test]
     fn stream_decoder_still_wraps_generic_parse_errors_as_upstream_502() {
-        let error = BitrouterError::from(bitrouter_ai::error::ModelError::InvalidResponse {
-            message: "malformed provider event".into(),
-            usage: None,
-        });
+        let error =
+            BitrouterError::from(crate::gateway::model::error::ModelError::InvalidResponse {
+                message: "malformed provider event".into(),
+                usage: None,
+            });
 
         assert!(matches!(
             error,
@@ -2253,7 +2255,7 @@ mod error_classification_tests {
         // a transport error inside the decode loop. It must be classified as
         // UpstreamTimeout (504), not a generic 502 — otherwise the coarse
         // stream-idle guard is mislabelled once streaming starts.
-        match BitrouterError::from(bitrouter_ai::error::ModelError::Timeout) {
+        match BitrouterError::from(crate::gateway::model::error::ModelError::Timeout) {
             BitrouterError::UpstreamTimeout => {}
             other => panic!("expected UpstreamTimeout, got {other:?}"),
         }
@@ -2263,7 +2265,7 @@ mod error_classification_tests {
     fn mid_stream_non_timeout_stays_a_502() {
         // A parse / non-timeout transport error keeps the existing 502 mapping
         // and preserves the underlying message.
-        match BitrouterError::from(bitrouter_ai::error::ModelError::Decode {
+        match BitrouterError::from(crate::gateway::model::error::ModelError::Decode {
             message: "upstream stream error: malformed SSE frame".into(),
         }) {
             BitrouterError::Upstream { status, message } => {
@@ -2279,10 +2281,8 @@ mod error_classification_tests {
 mod beta_forward_tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::types::OutboundHeaderRule;
-    use crate::gateway::pipeline::types::PipelineRequest;
-    use bitrouter_ai::types::Prompt;
-    use bitrouter_ai::types::{Message, Role};
+    use crate::gateway::pipeline::types::{OutboundHeaderRule, PipelineRequest};
+    use bitrouter_ai::types::{Message, Prompt, Role};
 
     fn ctx_with_headers(headers: http::HeaderMap) -> PipelineContext {
         let prompt = Prompt {
@@ -2516,9 +2516,9 @@ mod beta_forward_tests {
     #[tokio::test]
     async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
     -> crate::gateway::error::Result<()> {
-        use crate::gateway::pipeline::native::InputTokenCounting;
-        use crate::gateway::pipeline::native::NativeCountedRequests;
-        use crate::gateway::pipeline::native::NativeInputCount;
+        use crate::gateway::pipeline::native::{
+            InputTokenCounting, NativeCountedRequests, NativeInputCount,
+        };
         let mut ctx = ctx_with_headers(http::HeaderMap::new());
         let mut target = target(ApiProtocol::Responses);
         target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);
@@ -2609,26 +2609,28 @@ mod beta_forward_tests {
     struct RewriteOutputLimit;
 
     #[async_trait]
-    impl bitrouter_ai::auth::AuthApplier for RewriteOutputLimit {
+    impl crate::gateway::providers::auth::AuthApplier for RewriteOutputLimit {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             let bytes = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
                 .ok_or_else(|| {
-                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                    crate::gateway::model::error::ModelError::invalid_request(
+                        "fixture body missing",
+                    )
                 })?;
             let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
-                bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                crate::gateway::model::error::ModelError::invalid_request(error.to_string())
             })?;
             body["max_tokens"] = 4096.into();
             *request.body_mut() = Some(
                 serde_json::to_vec(&body)
                     .map_err(|error| {
-                        bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                        crate::gateway::model::error::ModelError::invalid_request(error.to_string())
                     })?
                     .into(),
             );
@@ -2686,10 +2688,10 @@ mod beta_forward_tests {
     struct RemoveOutputLimit(Option<bool>);
 
     #[async_trait]
-    impl bitrouter_ai::auth::AuthApplier for RemoveOutputLimit {
+    impl crate::gateway::providers::auth::AuthApplier for RemoveOutputLimit {
         fn output_token_limit_support(
             &self,
-            _: &bitrouter_ai::target::ModelTarget,
+            _: &crate::gateway::model::target::ModelTarget,
         ) -> Option<bool> {
             self.0
         }
@@ -2697,16 +2699,18 @@ mod beta_forward_tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             let bytes = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
                 .ok_or_else(|| {
-                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                    crate::gateway::model::error::ModelError::invalid_request(
+                        "fixture body missing",
+                    )
                 })?;
             let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
-                bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                crate::gateway::model::error::ModelError::invalid_request(error.to_string())
             })?;
             if let Some(object) = body.as_object_mut() {
                 object.remove("max_output_tokens");
@@ -2714,7 +2718,7 @@ mod beta_forward_tests {
             *request.body_mut() = Some(
                 serde_json::to_vec(&body)
                     .map_err(|error| {
-                        bitrouter_ai::error::ModelError::invalid_request(error.to_string())
+                        crate::gateway::model::error::ModelError::invalid_request(error.to_string())
                     })?
                     .into(),
             );
@@ -2809,14 +2813,16 @@ mod beta_forward_tests {
 
     struct RewriteEndpoint;
     #[async_trait]
-    impl bitrouter_ai::auth::AuthApplier for RewriteEndpoint {
+    impl crate::gateway::providers::auth::AuthApplier for RewriteEndpoint {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
-            *request.url_mut() = reqwest::Url::parse("https://other.invalid/messages")
-                .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?;
+            _: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
+            *request.url_mut() =
+                reqwest::Url::parse("https://other.invalid/messages").map_err(|e| {
+                    crate::gateway::model::error::ModelError::invalid_request(e.to_string())
+                })?;
             request
                 .headers_mut()
                 .insert("x-api-key", http::HeaderValue::from_static("fixture-key"));
@@ -2825,8 +2831,8 @@ mod beta_forward_tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("fixture", "principal"),
@@ -2878,24 +2884,29 @@ mod beta_forward_tests {
 
     struct RewriteManagedField(&'static str, serde_json::Value);
     #[async_trait]
-    impl bitrouter_ai::auth::AuthApplier for RewriteManagedField {
+    impl crate::gateway::providers::auth::AuthApplier for RewriteManagedField {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             let bytes = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
                 .ok_or_else(|| {
-                    bitrouter_ai::error::ModelError::invalid_request("fixture body missing")
+                    crate::gateway::model::error::ModelError::invalid_request(
+                        "fixture body missing",
+                    )
                 })?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes)
-                .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
+                crate::gateway::model::error::ModelError::invalid_request(e.to_string())
+            })?;
             body[self.0] = self.1.clone();
             *request.body_mut() = Some(
                 serde_json::to_vec(&body)
-                    .map_err(|e| bitrouter_ai::error::ModelError::invalid_request(e.to_string()))?
+                    .map_err(|e| {
+                        crate::gateway::model::error::ModelError::invalid_request(e.to_string())
+                    })?
                     .into(),
             );
             Ok(request)
@@ -2987,9 +2998,9 @@ mod beta_forward_tests {
 mod provider_continuation_tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::context::ProviderContinuation;
-    use crate::gateway::pipeline::context::RequireContinuationAuthority;
-    use crate::gateway::pipeline::context::SuppressProviderContinuation;
+    use crate::gateway::pipeline::context::{
+        ProviderContinuation, RequireContinuationAuthority, SuppressProviderContinuation,
+    };
     use crate::gateway::pipeline::types::PipelineRequest;
     use bitrouter_ai::types::{GenerationParams, Message, Role};
 
@@ -2998,12 +3009,12 @@ mod provider_continuation_tests {
     struct UnprovenScopeRewrite;
 
     #[async_trait]
-    impl bitrouter_ai::auth::AuthApplier for UnprovenScopeRewrite {
+    impl crate::gateway::providers::auth::AuthApplier for UnprovenScopeRewrite {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 "authorization",
                 reqwest::header::HeaderValue::from_static("Bearer fixture-key"),
@@ -3058,12 +3069,12 @@ mod provider_continuation_tests {
     }
 
     #[async_trait]
-    impl bitrouter_ai::auth::AuthApplier for RewriteAfterProof {
+    impl crate::gateway::providers::auth::AuthApplier for RewriteAfterProof {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 "authorization",
                 reqwest::header::HeaderValue::from_static("Bearer original-private-key"),
@@ -3074,8 +3085,8 @@ mod provider_continuation_tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             let request = self.apply(request, target).await?;
             let mut applied = AppliedAuth::proven(
                 request,
@@ -3105,7 +3116,7 @@ mod provider_continuation_tests {
         ctx.insert_extension(Arc::new(RequireContinuationAuthority));
         ctx.record_credential_authority(Some(ContinuationAuthority::new(
             CredentialAuthority::derive("test", "stale-count-principal"),
-            bitrouter_ai::types::AuthScheme::Bearer,
+            crate::gateway::model::target::AuthScheme::Bearer,
         )));
         let executor = HttpExecutor::with_dispatch_and_auth(
             Default::default(),
@@ -3175,7 +3186,7 @@ mod provider_continuation_tests {
             target,
             ContinuationAuthority::new(
                 CredentialAuthority::derive("test/static", "secret-key"),
-                bitrouter_ai::types::AuthScheme::Bearer,
+                crate::gateway::model::target::AuthScheme::Bearer,
             ),
         )));
         ctx
@@ -3363,8 +3374,7 @@ mod client_selection_tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
     use crate::gateway::pipeline::types::PipelineRequest;
-    use bitrouter_ai::types::ApiProtocol;
-    use bitrouter_ai::types::{GenerationParams, Message, Role};
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Role};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn target(provider: &str) -> RoutingTarget {
@@ -3547,8 +3557,9 @@ mod openai_codex_stream_bridge_tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
     use crate::gateway::pipeline::types::PipelineRequest;
-    use bitrouter_ai::types::{Content, FinishReason, UsageOrigin};
-    use bitrouter_ai::types::{GenerationParams, Message, Role};
+    use bitrouter_ai::types::{
+        Content, FinishReason, GenerationParams, Message, Role, UsageOrigin,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn read_request_body(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
@@ -3761,7 +3772,9 @@ fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> 
     }
 }
 
-fn classify_stream_decoder_error(error: bitrouter_ai::error::ModelError) -> BitrouterError {
+fn classify_stream_decoder_error(
+    error: crate::gateway::model::error::ModelError,
+) -> BitrouterError {
     match BitrouterError::from(error) {
         error @ (BitrouterError::UpstreamPolicyViolation { .. }
         | BitrouterError::Upstream { .. }

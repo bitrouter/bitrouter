@@ -5,11 +5,9 @@ use std::sync::Arc;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::stream::PricingTargetKey;
-use crate::gateway::pipeline::stream::UsagePricing;
-use crate::gateway::pipeline::stream::UsagePricingBracket;
-use crate::gateway::pipeline::stream::UsagePricingSnapshot;
-use crate::gateway::pipeline::stream::UsagePricingTier;
+use crate::gateway::pipeline::stream::{
+    PricingTargetKey, UsagePricing, UsagePricingBracket, UsagePricingSnapshot, UsagePricingTier,
+};
 use crate::gateway::pipeline::types::RoutingTarget;
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;

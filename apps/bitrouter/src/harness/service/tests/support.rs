@@ -7,15 +7,11 @@ use std::time::Duration;
 
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
+use crate::gateway::model::target::AuthScheme;
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::executor::Executor;
-use crate::gateway::pipeline::executor::MockExecutor;
-use crate::gateway::pipeline::executor::MockResponse;
-use crate::gateway::pipeline::executor::StreamPartStream;
+use crate::gateway::pipeline::executor::{Executor, MockExecutor, MockResponse, StreamPartStream};
 use crate::gateway::pipeline::routing::StaticRoutingTable;
-use crate::gateway::pipeline::types::ExecutionResult;
-use crate::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::types::AuthScheme;
+use crate::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, Prompt, StreamPart, Usage,
 };

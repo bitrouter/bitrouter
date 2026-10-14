@@ -1,5 +1,6 @@
 //! Test support for harness instruction and model-context assembly.
 
+use crate::gateway::model::conversion::ReportAdmission;
 use crate::gateway::model::history::{prepare_tool_results, validate_history};
 use bitrouter_ai::types::{
     Content, GenerationParams, Message, Prompt, ReasoningEffort, Tool, ToolChoice,
@@ -141,7 +142,7 @@ mod tests {
                 ApiProtocol::Responses,
                 ApiProtocol::Messages,
             ] {
-                bitrouter_ai::conversion::request_admission(&prompt, &protocol)
+                crate::gateway::model::conversion::request_admission(&prompt, &protocol)
                     .require_admitted()?;
             }
             assert!(build("model", None, "inspect", &messages, vec![], 32).is_err());

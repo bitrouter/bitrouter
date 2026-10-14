@@ -3,10 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::gateway::model::decision::policy::DecisionPolicy;
-use crate::gateway::model::decision::types::Answer;
-use crate::gateway::model::decision::types::DecisionRequest;
-use crate::gateway::model::decision::types::DecisionResponse;
-use crate::gateway::model::decision::types::Question;
+use crate::gateway::model::decision::types::{Answer, DecisionRequest, DecisionResponse, Question};
 use bitrouter_ai::types::{Message, Prompt, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

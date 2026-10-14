@@ -19,8 +19,7 @@ mod decision;
 use axum_test::TestServer;
 use bitrouter::config;
 use bitrouter::gateway::caller::CallerContext;
-use bitrouter::gateway::http::AppState;
-use bitrouter::gateway::http::build_router;
+use bitrouter::gateway::http::{AppState, build_router};
 use bitrouter::gateway::pipeline::types::PipelineRequest;
 use bitrouter::metering::entities::requests;
 use bitrouter_ai::types::{Content, GenerationParams, Message, Prompt, ProviderMetadata, Role};
@@ -422,8 +421,7 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
-    use bitrouter::gateway::mcp::transport::McpServerConfig;
-    use bitrouter::gateway::mcp::transport::McpTransport;
+    use bitrouter::gateway::mcp::transport::{McpServerConfig, McpTransport};
     use http::Request;
     use std::collections::HashMap;
     use tower::ServiceExt;
@@ -1145,15 +1143,11 @@ plugins:
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
     use bitrouter::gateway::assembly::App;
-    use bitrouter::gateway::mcp::Executor;
-    use bitrouter::gateway::mcp::McpContext;
-    use bitrouter::gateway::mcp::McpRequest;
-    use bitrouter::gateway::mcp::McpResponse;
-    use bitrouter::gateway::mcp::McpTarget;
-    use bitrouter::gateway::mcp::PreRequestHook;
-    use bitrouter::gateway::mcp::RoutingTable;
-    use bitrouter::gateway::mcp::ServerSelector;
     use bitrouter::gateway::mcp::transport::McpTransport;
+    use bitrouter::gateway::mcp::{
+        Executor, McpContext, McpRequest, McpResponse, McpTarget, PreRequestHook, RoutingTable,
+        ServerSelector,
+    };
     use bitrouter::gateway::pipeline::hooks::HookDecision;
     use http::Request;
     use std::sync::Arc;
@@ -1721,9 +1715,9 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
 async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     use async_trait::async_trait;
     use bitrouter::gateway::assembly::App;
-    use bitrouter::gateway::pipeline::types::ExecutionResult;
-    use bitrouter::gateway::pipeline::types::RoutingTarget;
-    use bitrouter_ai::types::{ApiProtocol, AuthScheme, FinishReason, GenerateResult, Usage};
+    use bitrouter::gateway::model::target::AuthScheme;
+    use bitrouter::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
+    use bitrouter_ai::types::{ApiProtocol, FinishReason, GenerateResult, Usage};
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -1845,7 +1839,10 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         json["id"],
-        bitrouter_ai::protocol::responses::encode_gateway_continuation_id("bench-req-001").unwrap()
+        bitrouter::gateway::model::protocol::responses::encode_gateway_continuation_id(
+            "bench-req-001"
+        )
+        .unwrap()
     );
 }
 
@@ -1853,16 +1850,11 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
 async fn e2e_mcp_aggregate_and_sse_endpoints() {
     use async_trait::async_trait;
     use bitrouter::gateway::assembly::App;
-    use bitrouter::gateway::http::RouterOptions;
-    use bitrouter::gateway::http::build_router_with_options;
-    use bitrouter::gateway::mcp::AggregateMember;
-    use bitrouter::gateway::mcp::Executor;
-    use bitrouter::gateway::mcp::McpRequest;
-    use bitrouter::gateway::mcp::McpResponse;
-    use bitrouter::gateway::mcp::McpTarget;
-    use bitrouter::gateway::mcp::RoutingTable;
-    use bitrouter::gateway::mcp::ServerSelector;
+    use bitrouter::gateway::http::{RouterOptions, build_router_with_options};
     use bitrouter::gateway::mcp::transport::McpTransport;
+    use bitrouter::gateway::mcp::{
+        AggregateMember, Executor, McpRequest, McpResponse, McpTarget, RoutingTable, ServerSelector,
+    };
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;

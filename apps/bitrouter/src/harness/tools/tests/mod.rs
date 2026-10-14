@@ -571,9 +571,9 @@ async fn dropped_shell_future_stops_unix_descendants() -> Result<(), Box<dyn std
 
 #[test]
 fn openai_requests_preserve_optional_tool_arguments() -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_ai::protocol::{
-        OutboundAdapter, chat_completions::ChatCompletionsAdapter, responses::ResponsesAdapter,
-    };
+    use crate::gateway::model::protocol::OutboundAdapter;
+    use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
+    use crate::gateway::model::protocol::responses::ResponsesAdapter;
 
     for mode in [ToolMode::Coding, ToolMode::ReadOnly] {
         let prompt = crate::harness::context::build(

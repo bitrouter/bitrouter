@@ -167,6 +167,26 @@ jobs:
               --test gateway_anthropic_authority --test gateway_decision_model
               --test gateway_decisions --test gateway_model_boundary
               --test gateway_routing_assessment --test gateway_routing_plan
+          - shard: models
+            retries: "0"
+            targets: >-
+              --test model_projection_attributes
+              --test model_ingress_admission
+              --test model_explicit_login
+              --test model_decisions
+              --test model_responses_reasoning
+              --test model_file_store
+              --test model_admitted_conversions
+              --test model_hosted
+              --test model_auth
+              --test model_retirement
+              --test model_content_boundaries
+              --test model_invocation
+              --test model_hosted_login
+              --test model_anthropic
+              --test model_providers
+              --test model_google_chat
+              --test model_projection_admission
           - shard: observability
             retries: "0"
             targets: >-

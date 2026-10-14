@@ -2,10 +2,10 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::gateway::model::client::HttpTimeouts;
 use bitrouter::gateway::pipeline::executor::HttpExecutor;
 use bitrouter::gateway::pipeline::native_work::NativeProviderWorkKind;
-use bitrouter_ai::auth::{AuthApplier, AuthAppliers};
-use bitrouter_ai::client::HttpTimeouts;
+use bitrouter::gateway::providers::auth::{AuthApplier, AuthAppliers};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -17,15 +17,18 @@ struct RetryAuth {
 
 #[async_trait]
 impl AuthApplier for RetryAuth {
-    fn output_token_limit_support(&self, _: &bitrouter_ai::target::ModelTarget) -> Option<bool> {
+    fn output_token_limit_support(
+        &self,
+        _: &bitrouter::gateway::model::target::ModelTarget,
+    ) -> Option<bool> {
         Some(true)
     }
 
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        _: &bitrouter::gateway::model::target::ModelTarget,
+    ) -> bitrouter::gateway::model::error::Result<reqwest::Request> {
         let token = if self.refreshes.load(Ordering::SeqCst) == 0 {
             "Bearer stale-private-token"
         } else {
@@ -40,14 +43,16 @@ impl AuthApplier for RetryAuth {
 
     async fn refresh_after_unauthorized(
         &self,
-        _: &bitrouter_ai::target::ModelTarget,
+        _: &bitrouter::gateway::model::target::ModelTarget,
         _: Option<&reqwest::header::HeaderValue>,
-    ) -> bitrouter_ai::error::Result<bool> {
+    ) -> bitrouter::gateway::model::error::Result<bool> {
         self.refreshes.fetch_add(1, Ordering::SeqCst);
         if self.fail_refresh.load(Ordering::SeqCst) {
-            Err(bitrouter_ai::error::ModelError::invalid_request(
-                "private-refresh-diagnostic",
-            ))
+            Err(
+                bitrouter::gateway::model::error::ModelError::invalid_request(
+                    "private-refresh-diagnostic",
+                ),
+            )
         } else {
             Ok(true)
         }

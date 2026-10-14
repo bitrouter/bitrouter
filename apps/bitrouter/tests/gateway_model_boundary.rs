@@ -1,15 +1,13 @@
 //! Regression coverage for SDK policy and resolved-target boundaries.
 
 use bitrouter::gateway::error::BitrouterError;
+use bitrouter::gateway::model::error::ModelError;
+use bitrouter::gateway::model::protocol::inbound_adapter_for;
+use bitrouter::gateway::model::stream::SseFrame;
+use bitrouter::gateway::model::target::CredentialPriority;
 use bitrouter::gateway::pipeline::hooks::FallbackDecision;
-use bitrouter::gateway::pipeline::routing::DefaultFallbackPolicy;
-use bitrouter::gateway::pipeline::routing::FallbackPolicy;
-use bitrouter::gateway::pipeline::types::OutboundHeaderRule;
-use bitrouter::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::error::ModelError;
-use bitrouter_ai::protocol::inbound_adapter_for;
-use bitrouter_ai::stream::SseFrame;
-use bitrouter_ai::target::CredentialPriority;
+use bitrouter::gateway::pipeline::routing::{DefaultFallbackPolicy, FallbackPolicy};
+use bitrouter::gateway::pipeline::types::{OutboundHeaderRule, RoutingTarget};
 use bitrouter_ai::types::{ApiProtocol, ChatTokenLimitField};
 
 fn all_protocols() -> [ApiProtocol; 3] {
@@ -226,14 +224,14 @@ fn invocation_failures_retain_sdk_policy_and_cancellation_does_not_fallback() {
         (ModelError::Cancelled, 499, false),
         (
             ModelError::CredentialStorage {
-                failure: bitrouter_ai::auth::store::StoreError::Unavailable,
+                failure: bitrouter::gateway::providers::auth::store::StoreError::Unavailable,
             },
             500,
             false,
         ),
         (
             ModelError::CredentialStorage {
-                failure: bitrouter_ai::auth::store::StoreError::Conflict,
+                failure: bitrouter::gateway::providers::auth::store::StoreError::Conflict,
             },
             500,
             false,
@@ -256,14 +254,12 @@ fn invocation_failures_retain_sdk_policy_and_cancellation_does_not_fallback() {
 #[test]
 fn conversion_errors_keep_reports_and_project_request_vs_output_status()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use bitrouter_ai::conversion::{
-        ConversionDisposition, ConversionLocation, ConversionStage, request_admission,
-    };
-    use bitrouter_ai::error::ModelError;
-    use bitrouter_ai::protocol::{
-        InboundAdapter, OutboundAdapter, chat_completions::ChatCompletionsAdapter,
-        responses::ResponsesAdapter,
-    };
+    use bitrouter::gateway::model::conversion::request_admission;
+    use bitrouter::gateway::model::error::ModelError;
+    use bitrouter::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
+    use bitrouter::gateway::model::protocol::responses::ResponsesAdapter;
+    use bitrouter::gateway::model::protocol::{InboundAdapter, OutboundAdapter};
+    use bitrouter_ai::conversion::{ConversionDisposition, ConversionLocation, ConversionStage};
     let native = serde_json::json!({"type":"reasoning","id":"rs-secret","summary":[],"encrypted_content":"opaque-secret"});
     let source = ResponsesAdapter
         .parse_request(serde_json::json!({"model":"fixture","input":[native.clone()]}))?;

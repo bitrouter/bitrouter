@@ -11,6 +11,7 @@ use bitrouter::adequacy::store::AdequacyStore;
 use bitrouter::config;
 use bitrouter::eval::store::EvalStore;
 use bitrouter::eval::types::AdmissionStatus;
+use bitrouter::gateway::model::protocol::inbound_adapter_for;
 use bitrouter::gateway::routing::signals::NextStepRole;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
@@ -35,9 +36,7 @@ use bitrouter::workflow_state::real_trace::{
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
-use bitrouter_ai::protocol::inbound_adapter_for;
-use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_ai::types::{ApiProtocol, NormalizedUsage, UsageOrigin};
+use bitrouter_ai::types::{ApiProtocol, NormalizedUsage, ReasoningEffort, UsageOrigin};
 use http::HeaderMap;
 use http::HeaderValue;
 use serde::Deserialize;

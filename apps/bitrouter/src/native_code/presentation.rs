@@ -1,7 +1,6 @@
 //! Human-readable projection of native tool facts; no execution authority.
 use crate::harness::storage::EffectStatus;
-use crate::presentation::native_agent::NativeEntryKind;
-use crate::presentation::native_agent::ToolStatus;
+use crate::presentation::native_agent::{NativeEntryKind, ToolStatus};
 use crate::tui::native_agent::NativeState;
 use bitrouter_ai::types::{Content, Message, ToolResultOutput};
 

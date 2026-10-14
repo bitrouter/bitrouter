@@ -11,17 +11,16 @@ use std::sync::Arc;
 use crate::cloud::account::credentials::default_credentials_path;
 use crate::cloud::account::manager::CredentialManager;
 use crate::commands::invocation;
+use crate::gateway::providers::auth::file::snapshot::CredentialStore;
+use crate::gateway::providers::hosted::PROVIDER_ID;
 use anyhow::{Context, Result};
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::providers::hosted::PROVIDER_ID;
 use clap::ValueEnum;
 use serde::Serialize;
 
 use crate::cloud::auth::{LoginInputs, login as cloud_login};
 use crate::commands::{ProviderLoginOptions, login_provider_with_options};
-use crate::output::CliReport;
-use crate::output::Output;
 use crate::output::human::Human;
+use crate::output::{CliReport, Output};
 use crate::spawn::SpawnAgent;
 
 // =====================================================================
@@ -626,7 +625,7 @@ async fn apply_flag_credentials(
             None if headless => skipped.push(provider.clone()),
             None => match login_provider_with_options(
                 provider,
-                bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
+                crate::gateway::providers::auth::store::DEFAULT_ACCOUNT,
                 ProviderLoginOptions::default(),
             )
             .await
@@ -670,7 +669,7 @@ async fn seed_cloud_api_key(key: &str, manager: Arc<CredentialManager>) -> Resul
 async fn seed_provider_api_key(provider: &str, key: &str) -> Result<()> {
     login_provider_with_options(
         provider,
-        bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
+        crate::gateway::providers::auth::store::DEFAULT_ACCOUNT,
         ProviderLoginOptions {
             import_existing: false,
             no_browser: true,
@@ -1400,14 +1399,14 @@ mod tests {
             .set(
                 "claude-code",
                 "default",
-                bitrouter_ai::auth::credentials::Credential::ClaudeCodeCli,
+                crate::gateway::providers::auth::credentials::Credential::ClaudeCodeCli,
             )
             .unwrap();
         store
             .set(
                 "openai",
                 "default",
-                bitrouter_ai::auth::credentials::Credential::api_key("sk-x"),
+                crate::gateway::providers::auth::credentials::Credential::api_key("sk-x"),
             )
             .unwrap();
 

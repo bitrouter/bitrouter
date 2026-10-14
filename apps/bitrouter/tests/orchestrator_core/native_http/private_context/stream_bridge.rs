@@ -11,11 +11,10 @@ use bitrouter::gateway::assembly::App;
 use bitrouter::gateway::pipeline::executor::HttpExecutor;
 use bitrouter::gateway::pipeline::native::InputTokenCounting;
 use bitrouter::gateway::pipeline::native_context::metadata;
-use bitrouter::gateway::pipeline::native_continuation::CONTINUATION_FIELD;
-use bitrouter::gateway::pipeline::native_continuation::ContinuationFailure;
-use bitrouter::gateway::pipeline::native_continuation::NativeContinuationInput;
-use bitrouter::gateway::pipeline::native_continuation::NativeContinuationOutput;
-use bitrouter::gateway::pipeline::native_continuation::REQUIRED_STATE_FIELD;
+use bitrouter::gateway::pipeline::native_continuation::{
+    CONTINUATION_FIELD, ContinuationFailure, NativeContinuationInput, NativeContinuationOutput,
+    REQUIRED_STATE_FIELD,
+};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
 use bitrouter::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{ApiProtocol, FinishReason};

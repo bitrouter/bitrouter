@@ -1,12 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::context::StreamContext;
-use crate::gateway::pipeline::hooks::HopOutcome;
-use crate::gateway::pipeline::hooks::ObserveHook;
-use crate::gateway::pipeline::hooks::Phase;
-use crate::gateway::pipeline::hooks::RequestOutcome;
+use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
+use crate::gateway::pipeline::hooks::{HopOutcome, ObserveHook, Phase, RequestOutcome};
 use crate::gateway::pipeline::stream::StreamInterest;
 use crate::gateway::pipeline::types::RoutingTarget;
 use async_trait::async_trait;
@@ -1064,16 +1060,11 @@ mod tests {
     use std::sync::{Arc, PoisonError};
 
     use crate::gateway::caller::CallerContext;
+    use crate::gateway::model::target::AuthScheme;
     use crate::gateway::pipeline::context::PipelineContext;
-    use crate::gateway::pipeline::hooks::HopOutcome;
-    use crate::gateway::pipeline::hooks::ObserveHook;
-    use crate::gateway::pipeline::hooks::Phase;
-    use crate::gateway::pipeline::hooks::RequestOutcome;
+    use crate::gateway::pipeline::hooks::{HopOutcome, ObserveHook, Phase, RequestOutcome};
     use crate::gateway::pipeline::stream::StreamProcessor;
-    use crate::gateway::pipeline::types::ExecutionResult;
-    use crate::gateway::pipeline::types::PipelineRequest;
-    use crate::gateway::pipeline::types::RoutingTarget;
-    use bitrouter_ai::types::AuthScheme;
+    use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
     use bitrouter_ai::types::{
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, StreamPart, Tool,
     };

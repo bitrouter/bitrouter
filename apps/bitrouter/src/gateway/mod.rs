@@ -10,4 +10,5 @@ pub mod mcp;
 pub mod model;
 pub mod observability;
 pub mod pipeline;
+pub mod providers;
 pub mod routing;

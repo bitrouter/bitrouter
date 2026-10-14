@@ -1,30 +1,29 @@
 use std::sync::{Arc, Mutex};
 
 use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::model::protocol::OutboundDispatch;
 use bitrouter::gateway::pipeline::builder::PipelineBuilder;
 use bitrouter::gateway::pipeline::executor::HttpExecutor;
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-use bitrouter::gateway::pipeline::settlement::RequiredFinalizationContext;
-use bitrouter::gateway::pipeline::settlement::RequiredFinalizer;
-use bitrouter::gateway::pipeline::types::OutboundHeaderRule;
-use bitrouter::gateway::pipeline::types::PipelineRequest;
-use bitrouter_ai::auth::AuthAppliers;
-use bitrouter_ai::protocol::OutboundDispatch;
+use bitrouter::gateway::pipeline::settlement::{RequiredFinalizationContext, RequiredFinalizer};
+use bitrouter::gateway::pipeline::types::{OutboundHeaderRule, PipelineRequest};
+use bitrouter::gateway::providers::auth::AuthAppliers;
 use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use async_trait::async_trait;
-use bitrouter::gateway::error::BitrouterError;
-use bitrouter::gateway::error::Result;
+use bitrouter::gateway::error::{BitrouterError, Result};
+use bitrouter::gateway::model::target::AuthScheme;
 use bitrouter::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::auth::credentials::Credential;
-use bitrouter_ai::auth::store::{
+use bitrouter::gateway::providers::anthropic::{AnthropicApiKeyApplier, PROVIDER_ID, headers};
+use bitrouter::gateway::providers::auth::credentials::Credential;
+use bitrouter::gateway::providers::auth::store::{
     CredentialKey, CredentialStore, DEFAULT_ACCOUNT, MemoryCredentialStore,
 };
-use bitrouter_ai::auth::{AuthApplier, ContinuationAuthority, CredentialAuthority};
-use bitrouter_ai::providers::anthropic::{AnthropicApiKeyApplier, PROVIDER_ID, headers};
-use bitrouter_ai::types::AuthScheme;
+use bitrouter::gateway::providers::auth::{
+    AuthApplier, ContinuationAuthority, CredentialAuthority,
+};
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

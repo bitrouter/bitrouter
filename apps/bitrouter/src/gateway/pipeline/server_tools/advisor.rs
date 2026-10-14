@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use super::declarations::{ADVISOR_TOOL, ServerToolDeclarations, forwarded_tools};
 use super::nested::{NestedRequest, NestedRunner};
 use crate::gateway::error::Result;
-use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-use crate::gateway::pipeline::server_tools::toolset::ToolContext;
+use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolContext};
 use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// A [`RouterToolset`] exposing the `advisor` server tool.
@@ -117,8 +116,9 @@ impl RouterToolset for AdvisorToolset {
 mod tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::server_tools::declarations::AdvisorConfig;
-    use crate::gateway::pipeline::server_tools::declarations::declarations_plugin_id;
+    use crate::gateway::pipeline::server_tools::declarations::{
+        AdvisorConfig, declarations_plugin_id,
+    };
     use crate::gateway::pipeline::server_tools::nested::NestedOutcome;
     use std::collections::HashMap;
     use std::sync::Mutex;

@@ -2,10 +2,9 @@
 //! They are audit evidence only and never write or reconcile a metering row.
 
 use crate::gateway::pipeline::native::NativeAttemptReport;
-use crate::gateway::pipeline::native_accounting::NativeCostEstimator;
-use crate::gateway::pipeline::native_accounting::NativeTokenCost;
-use crate::gateway::pipeline::native_accounting::NativeTokenRates;
-use crate::gateway::pipeline::native_accounting::validated_provider_usage;
+use crate::gateway::pipeline::native_accounting::{
+    NativeCostEstimator, NativeTokenCost, NativeTokenRates, validated_provider_usage,
+};
 
 use super::pricing::{MAX_TRUSTED_TOKENS, PricingSource, PricingTable};
 
@@ -142,7 +141,7 @@ mod tests {
             account_label: None,
             api_key_override: None,
             api_base_override: None,
-            auth_scheme: bitrouter_ai::types::AuthScheme::Bearer,
+            auth_scheme: crate::gateway::model::target::AuthScheme::Bearer,
             headers: Vec::new(),
         }
     }

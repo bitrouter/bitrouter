@@ -1,9 +1,7 @@
 //! Immutable context evidence and model-step routing records. Estimates are
 //! distinct from observed usage; unknown token capacity is never a verified fit.
 
-use crate::gateway::pipeline::native::NativeAttemptReport;
-use crate::gateway::pipeline::native::NativeInputCount;
-use crate::gateway::pipeline::native::NativePlan;
+use crate::gateway::pipeline::native::{NativeAttemptReport, NativeInputCount, NativePlan};
 use bitrouter_ai::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
 use serde::{Deserialize, Serialize};
 

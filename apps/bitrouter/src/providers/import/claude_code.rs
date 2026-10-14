@@ -17,8 +17,8 @@ static WRITES: Mutex<()> = Mutex::new(());
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::gateway::providers::auth::credentials::OAuthToken;
 use crate::providers::import::{ImportError, ImportSource, Imported, home_dir, keychain};
-use bitrouter_ai::auth::credentials::OAuthToken;
 
 /// macOS Keychain generic-password service Claude Code stores its token under.
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -210,8 +210,8 @@ impl ClaudeCodeStore {
         &self,
         token: &OAuthToken,
         original: &LiveCredential,
-    ) -> std::result::Result<(), bitrouter_ai::auth::store::StoreError> {
-        use bitrouter_ai::auth::store::StoreError;
+    ) -> std::result::Result<(), crate::gateway::providers::auth::store::StoreError> {
+        use crate::gateway::providers::auth::store::StoreError;
         let _guard = WRITES.lock().map_err(|_| StoreError::Unavailable)?;
         let current = self.read().map_err(|_| StoreError::Unavailable)?;
         let Some(current) = current else {

@@ -156,8 +156,8 @@ impl BridgeCapture {
                         {
                             return Err(BitrouterError::UpstreamInvalidResponse {
                                 message: "Codex Lite terminal has unfinished output items".into(),
-                                usage: bitrouter_ai::protocol::OutboundAdapter::parse_response(
-                                    &bitrouter_ai::protocol::responses::ResponsesAdapter,
+                                usage: crate::gateway::model::protocol::OutboundAdapter::parse_response(
+                                    &crate::gateway::model::protocol::responses::ResponsesAdapter,
                                     response.clone(),
                                 )
                                 .ok()
@@ -193,7 +193,7 @@ impl BridgeCapture {
             return Ok(folded);
         };
         validate_nonstream_responses_terminal(&terminal)?;
-        let replayable = bitrouter_ai::protocol::responses::output_replayable(&terminal);
+        let replayable = crate::gateway::model::protocol::responses::output_replayable(&terminal);
         let stored =
             source.storage_allowed && terminal.get("store") == Some(&serde_json::Value::Bool(true));
         // The terminal response carries the full output, including private reasoning
@@ -394,7 +394,7 @@ impl HttpExecutor {
                                 // even when the rest of a Chat event cannot be decoded.
                                 if protocol == ApiProtocol::ChatCompletions
                                     && let Ok(chunk) = serde_json::from_str::<serde_json::Value>(&sse.data)
-                                    && let Some(reported) = chunk.get("usage").and_then(bitrouter_ai::protocol::chat_completions::parse_usage)
+                                    && let Some(reported) = chunk.get("usage").and_then(crate::gateway::model::protocol::chat_completions::parse_usage)
                                 {
                                     yield Ok(StreamPart::Usage { usage: reported.clone() });
                                     if let BitrouterError::UpstreamInvalidResponse { usage, .. } = &mut error { *usage = Some(Box::new(reported)); }
@@ -434,18 +434,17 @@ impl HttpExecutor {
             }
         };
 
-        Ok(Box::pin(bitrouter_ai::providers::google_chat::bind_stream(
-            stream,
-            target.model_target(),
-        )))
+        Ok(Box::pin(
+            crate::gateway::providers::google_chat::bind_stream(stream, target.model_target()),
+        ))
     }
 }
 
 #[cfg(test)]
 mod lite_tests {
     use super::*;
-    use bitrouter_ai::protocol::OutboundAdapter;
-    use bitrouter_ai::protocol::responses::ResponsesAdapter;
+    use crate::gateway::model::protocol::OutboundAdapter;
+    use crate::gateway::model::protocol::responses::ResponsesAdapter;
     use bitrouter_ai::types::Content;
 
     fn event(value: serde_json::Value) -> SseEvent {

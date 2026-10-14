@@ -3,11 +3,9 @@
 use crate::config::Config;
 use crate::config::checker::CheckerConfig;
 use crate::config::router::MAX_CHECKER_TIMEOUT_MS;
-use crate::gateway::pipeline::request_checks::CheckerFailure;
-use crate::gateway::pipeline::request_checks::CheckerFailureKind;
-use crate::gateway::pipeline::request_checks::CheckerResult;
-use crate::gateway::pipeline::request_checks::RequestCheckBinding;
-use crate::gateway::pipeline::request_checks::RequestCheckerRunner;
+use crate::gateway::pipeline::request_checks::{
+    CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
+};
 use async_trait::async_trait;
 use bitrouter_ai::extension::request_check::{
     Decision, Input, Registration, RequestCheckCoverageStatus, validate_revision,
@@ -234,12 +232,10 @@ impl RequestCheckerRunner for RequestCheckRuntime {
 mod tests {
     use super::*;
     use crate::config::RoutingConfig;
-    use crate::config::router::DEFAULT_CHECKER_MAX_INPUT_BYTES;
-    use crate::config::router::RouterChecks;
-    use crate::config::router::RouterConfig;
-    use crate::config::router::RouterDefaults;
-    use crate::config::router::RouterRequestCheck;
-    use crate::config::router::RouterSelection;
+    use crate::config::router::{
+        DEFAULT_CHECKER_MAX_INPUT_BYTES, RouterChecks, RouterConfig, RouterDefaults,
+        RouterRequestCheck, RouterSelection,
+    };
     use bitrouter_ai::extension::request_check::{
         Callback as CheckCallback, ContentFragment, ContentFragmentKind, ContentRole, Decision,
         RequestCheckCoverage, RequestCheckCoverageScope,

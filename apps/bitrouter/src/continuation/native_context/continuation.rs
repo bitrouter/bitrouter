@@ -1,13 +1,9 @@
 //! Encrypted native handles ride in harness-owned history, not a second journal.
 
-use crate::gateway::pipeline::native_continuation::CONTINUATION_FIELD;
-use crate::gateway::pipeline::native_continuation::ContinuationFailure;
-use crate::gateway::pipeline::native_continuation::FullHistoryReason;
-use crate::gateway::pipeline::native_continuation::NativeContinuationBinding;
-use crate::gateway::pipeline::native_continuation::NativeContinuationPlan;
-use crate::gateway::pipeline::native_continuation::NativeContinuationSource;
-use crate::gateway::pipeline::native_continuation::has_continuation;
-use crate::gateway::pipeline::native_continuation::history_commitment;
+use crate::gateway::pipeline::native_continuation::{
+    CONTINUATION_FIELD, ContinuationFailure, FullHistoryReason, NativeContinuationBinding,
+    NativeContinuationPlan, NativeContinuationSource, has_continuation, history_commitment,
+};
 use bitrouter_ai::types::{Message, ReasoningEffort};
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 

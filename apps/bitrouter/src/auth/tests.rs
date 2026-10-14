@@ -6,11 +6,9 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use crate::auth::entities::api_keys;
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::mcp::McpContext;
-use crate::gateway::mcp::McpRequest;
+use crate::gateway::mcp::{McpContext, McpRequest};
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use crate::gateway::pipeline::types::PipelineRequest;
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 

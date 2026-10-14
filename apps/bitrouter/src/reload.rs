@@ -2236,12 +2236,10 @@ mod tests {
     use super::*;
     use crate::config;
     use crate::config::routing_table::ConfigRoutingTable;
+    use crate::gateway::model::client::HttpTimeouts;
     use crate::gateway::pipeline::context::PipelineContext;
-    use crate::gateway::pipeline::executor::Executor;
-    use crate::gateway::pipeline::executor::HttpExecutor;
-    use crate::gateway::pipeline::types::PipelineRequest;
-    use crate::gateway::pipeline::types::RoutingTarget;
-    use bitrouter_ai::client::HttpTimeouts;
+    use crate::gateway::pipeline::executor::{Executor, HttpExecutor};
+    use crate::gateway::pipeline::types::{PipelineRequest, RoutingTarget};
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

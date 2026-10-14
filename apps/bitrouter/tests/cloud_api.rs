@@ -9,7 +9,9 @@ use std::sync::Arc;
 use bitrouter::cloud::account::credentials::CredentialsStore;
 use bitrouter::cloud::account::manager::CredentialManager;
 use bitrouter::cloud::auth::login_api_key;
-use bitrouter_ai::providers::hosted::credentials::{CredentialKind, Credentials, StoredCredential};
+use bitrouter::gateway::providers::hosted::credentials::{
+    CredentialKind, Credentials, StoredCredential,
+};
 use chrono::{Duration, Utc};
 use tempfile::TempDir;
 use wiremock::matchers::{body_string, header, method, path};

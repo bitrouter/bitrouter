@@ -7,8 +7,7 @@ use sha2::{Digest, Sha256};
 
 use super::native_context::{ORIGIN_FIELD, ORIGIN_NAMESPACE, requires_origin_validation};
 use super::native_continuation::{CONTINUATION_FIELD, clear_continuations, requires_stored_state};
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 
 /// Coordinates in the original message sequence, before any removal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

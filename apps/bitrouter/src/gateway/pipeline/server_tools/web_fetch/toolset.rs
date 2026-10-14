@@ -10,10 +10,10 @@ use async_trait::async_trait;
 
 use super::backend::{FetchOptions, WebFetchBackend};
 use crate::gateway::error::Result;
-use crate::gateway::pipeline::server_tools::declarations::ServerToolDeclarations;
-use crate::gateway::pipeline::server_tools::declarations::WEB_FETCH_TOOL;
-use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-use crate::gateway::pipeline::server_tools::toolset::ToolContext;
+use crate::gateway::pipeline::server_tools::declarations::{
+    ServerToolDeclarations, WEB_FETCH_TOOL,
+};
+use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolContext};
 use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// A [`RouterToolset`] exposing the `web_fetch` server tool over one or more
@@ -149,8 +149,9 @@ mod tests {
     use super::super::backend::WebFetchResult;
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::server_tools::declarations::WebFetchDeclaration;
-    use crate::gateway::pipeline::server_tools::declarations::declarations_plugin_id;
+    use crate::gateway::pipeline::server_tools::declarations::{
+        WebFetchDeclaration, declarations_plugin_id,
+    };
     use std::collections::HashMap;
 
     /// A backend that returns labeled content, or always errors.

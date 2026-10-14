@@ -13,9 +13,8 @@ use super::native_continuation::{
 };
 use super::types::RoutingTarget;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
-use bitrouter_ai::auth::ContinuationAuthority;
+use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::providers::auth::ContinuationAuthority;
 use bitrouter_ai::types::{Content, GenerateResult, Prompt, ProviderMetadata};
 
 /// The only reserved SDK-owned field used for private-history provenance.

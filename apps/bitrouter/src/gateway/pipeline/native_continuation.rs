@@ -16,7 +16,7 @@ pub struct NativeContinuationSource<'a> {
     /// Actual successful serving target.
     pub target: &'a super::types::RoutingTarget,
     /// Principal bound to the final request's actual credentials and scopes.
-    pub authority: &'a bitrouter_ai::auth::ContinuationAuthority,
+    pub authority: &'a crate::gateway::providers::auth::ContinuationAuthority,
     /// Private provider response identifier.
     pub response_id: &'a str,
     /// Every retained provider item can be replayed from canonical history.

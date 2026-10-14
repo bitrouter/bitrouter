@@ -1,6 +1,4 @@
-use crate::gateway::routing::signals::NextStepRole;
-use crate::gateway::routing::signals::ProgressState;
-use crate::gateway::routing::signals::TaskFamily;
+use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -1751,12 +1749,15 @@ pub(crate) fn has_complete_visible_causal_history(prompt: &Prompt) -> bool {
 
 pub(crate) fn authenticated_visible_causal_prefix(
     prompt: &Prompt,
-    expected: &bitrouter_ai::protocol::responses::CausalPrefixCommitment,
+    expected: &crate::gateway::model::protocol::responses::CausalPrefixCommitment,
 ) -> Option<usize> {
     if !has_complete_visible_causal_history(prompt) {
         return None;
     }
-    bitrouter_ai::protocol::responses::find_unique_causal_prefix(&prompt.messages, expected)
+    crate::gateway::model::protocol::responses::find_unique_causal_prefix(
+        &prompt.messages,
+        expected,
+    )
 }
 
 fn bounded_signal_count(count: u8) -> u8 {
@@ -2466,7 +2467,9 @@ mod tests {
 
     #[test]
     fn authenticated_parent_requires_one_exact_last_assistant_turn() -> anyhow::Result<()> {
-        use bitrouter_ai::protocol::responses::{assistant_turn_commitment, extend_causal_prefix};
+        use crate::gateway::model::protocol::responses::{
+            assistant_turn_commitment, extend_causal_prefix,
+        };
 
         let opening = Message::text(Role::User, "opening");
         let parent = Message::text(Role::Assistant, "the exact parent response");

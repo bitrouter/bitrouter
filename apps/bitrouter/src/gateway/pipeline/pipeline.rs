@@ -1,5 +1,6 @@
 //! The `language_model` flight pipeline plus its interleaved StreamHook stage.
 
+use crate::gateway::model::conversion::ReportAdmission;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,63 +16,38 @@ use super::native_preparation::{
     NativePreparationRuntime, NativePreparationWorkKind, observe_pipeline,
     runtime as preparation_runtime,
 };
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::executor::Executor;
-use crate::gateway::pipeline::executor::StreamPartStream;
-use crate::gateway::pipeline::hooks::ExecutionHook;
-use crate::gateway::pipeline::hooks::FallbackDecision;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::HopOutcome;
-use crate::gateway::pipeline::hooks::ObserveHook;
-use crate::gateway::pipeline::hooks::Phase;
-use crate::gateway::pipeline::hooks::PreRequestHook;
-use crate::gateway::pipeline::hooks::RequestOutcome;
-use crate::gateway::pipeline::hooks::RouteHook;
-use crate::gateway::pipeline::hooks::StreamHook;
-use crate::gateway::pipeline::hooks::StreamHopOutcome;
-use crate::gateway::pipeline::native::NativeAttemptReport;
-use crate::gateway::pipeline::native::NativeExecutionControl;
-use crate::gateway::pipeline::native::NativeModelSelection;
-use crate::gateway::pipeline::native::NativePlan;
-use crate::gateway::pipeline::native::NativeRoute;
-use crate::gateway::pipeline::operations::HookRegistration;
-use crate::gateway::pipeline::operations::applicable;
-use crate::gateway::pipeline::request_checks::CheckerFailure;
-use crate::gateway::pipeline::request_checks::CheckerFailureKind;
-use crate::gateway::pipeline::request_checks::CheckerResult;
-use crate::gateway::pipeline::request_checks::MAX_REQUEST_CHECKS_PER_ROUTER;
-use crate::gateway::pipeline::request_checks::RequestCheckBinding;
-use crate::gateway::pipeline::request_checks::RequestCheckerRunner;
-use crate::gateway::pipeline::request_checks::content_fragments;
-use crate::gateway::pipeline::request_checks::decision_content_fragments;
-use crate::gateway::pipeline::routing::FallbackPolicy;
-use crate::gateway::pipeline::routing::ModelResolution;
-use crate::gateway::pipeline::routing::RoutingTable;
-use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
-use crate::gateway::pipeline::server_tools::loop_controller::UpstreamTurn;
+use crate::gateway::pipeline::executor::{Executor, StreamPartStream};
+use crate::gateway::pipeline::hooks::{
+    ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
+    RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
+};
+use crate::gateway::pipeline::native::{
+    NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan, NativeRoute,
+};
+use crate::gateway::pipeline::operations::{HookRegistration, applicable};
+use crate::gateway::pipeline::request_checks::{
+    CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
+    RequestCheckBinding, RequestCheckerRunner, content_fragments, decision_content_fragments,
+};
+use crate::gateway::pipeline::routing::{FallbackPolicy, ModelResolution, RoutingTable};
+use crate::gateway::pipeline::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
 use crate::gateway::pipeline::server_tools::stream::UpstreamStream;
 use crate::gateway::pipeline::server_tools::toolset::ToolContext;
-use crate::gateway::pipeline::settlement::DeliveryAcknowledgement;
-use crate::gateway::pipeline::settlement::RequiredDeliveryHandshake;
-use crate::gateway::pipeline::settlement::RequiredFinalizationContext;
-use crate::gateway::pipeline::settlement::RequiredFinalizationReceipt;
-use crate::gateway::pipeline::settlement::RequiredFinalizer;
-use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::settlement::SettlementRecorder;
+use crate::gateway::pipeline::settlement::{
+    DeliveryAcknowledgement, RequiredDeliveryHandshake, RequiredFinalizationContext,
+    RequiredFinalizationReceipt, RequiredFinalizer, SettlementContext, SettlementRecorder,
+};
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::OperationScope;
 
-use crate::gateway::pipeline::stream::StreamOutcome;
-use crate::gateway::pipeline::stream::StreamProcessor;
+use crate::gateway::pipeline::stream::{StreamOutcome, StreamProcessor};
 
-use crate::gateway::pipeline::types::ExecutionResult;
-use crate::gateway::pipeline::types::PipelineInput;
-use crate::gateway::pipeline::types::PipelineOutput;
-use crate::gateway::pipeline::types::PipelineRequest;
-use crate::gateway::pipeline::types::PipelineResponse;
-use crate::gateway::pipeline::types::RoutingTarget;
+use crate::gateway::pipeline::types::{
+    ExecutionResult, PipelineInput, PipelineOutput, PipelineRequest, PipelineResponse,
+    RoutingTarget,
+};
 use bitrouter_ai::types::{ModelOperation, Prompt, ReasoningEffortSource, StreamPart};
 
 /// The default SSE keepalive interval.
@@ -890,9 +866,9 @@ impl Pipeline {
         routes: &mut [NativeRoute],
         control: &dyn NativeExecutionControl,
     ) -> Result<crate::gateway::pipeline::native::NativePlanAdmission> {
-        use crate::gateway::pipeline::native::NativeCountedRequests;
-        use crate::gateway::pipeline::native::NativeInputCount;
-        use crate::gateway::pipeline::native::NativeInputCountReport;
+        use crate::gateway::pipeline::native::{
+            NativeCountedRequests, NativeInputCount, NativeInputCountReport,
+        };
         let prompt = ctx.require_generation_prompt()?;
         let can_rebuild = ctx
             .extension::<crate::gateway::pipeline::context::ProviderContinuation>()
@@ -1667,7 +1643,7 @@ impl Pipeline {
             .flat_map(|prompt| &prompt.messages)
             .flat_map(|message| &message.content)
         {
-            bitrouter_ai::protocol::responses::validate_reasoning_projection(content)
+            crate::gateway::model::protocol::responses::validate_reasoning_projection(content)
                 .map_err(BitrouterError::bad_request)?;
         }
         let runner = self.request_checker_runner.as_ref();
@@ -2273,7 +2249,7 @@ impl Pipeline {
                 {
                     // Custom executors must satisfy the same native contract as
                     // HTTP executors before any success hook or settlement runs.
-                    bitrouter_ai::protocol::decisions::DecisionsCodec::render_response(
+                    crate::gateway::model::protocol::decisions::DecisionsCodec::render_response(
                         native, request,
                     )
                     .map_err(|error| {

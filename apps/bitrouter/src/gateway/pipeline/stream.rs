@@ -2,7 +2,7 @@
 //! `StreamAction` / `StreamOutcome`, AI `SseFrame` framing, `SseKeepaliveStream`,
 //! and the `StreamProcessor` that drives the StreamHook stage.
 
-use bitrouter_ai::stream::SseFrame;
+use crate::gateway::model::stream::SseFrame;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -12,11 +12,9 @@ use futures_core::Stream;
 use pin_project_lite::pin_project;
 use tokio::time::{Instant, Sleep};
 
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::context::StreamContext;
-use crate::gateway::pipeline::hooks::ObserveHook;
-use crate::gateway::pipeline::hooks::StreamHook;
+use crate::gateway::pipeline::hooks::{ObserveHook, StreamHook};
 use bitrouter_ai::types::{ApiProtocol, StreamPart, Usage};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -682,8 +680,7 @@ mod tests {
     use crate::gateway::pipeline::context::PipelineContext;
     use crate::gateway::pipeline::timing::FirstTokenKind;
     use crate::gateway::pipeline::types::PipelineRequest;
-    use bitrouter_ai::types::FinishReason;
-    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
+    use bitrouter_ai::types::{ApiProtocol, FinishReason, GenerationParams, Message, Prompt, Role};
     use futures::StreamExt;
 
     fn timed_stream_context() -> StreamContext {

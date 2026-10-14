@@ -12,19 +12,15 @@ use bitrouter::eval::types::{
     EvaluatorIdentity, EvaluatorKind, evidence_digest,
 };
 use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::model::target::AuthScheme;
 use bitrouter::gateway::observability::event::EventBus;
 use bitrouter::gateway::pipeline::context::PipelineContext;
-use bitrouter::gateway::pipeline::hooks::HopOutcome;
-use bitrouter::gateway::pipeline::hooks::ObserveHook;
-use bitrouter::gateway::pipeline::settlement::SettlementContext;
-use bitrouter::gateway::pipeline::settlement::SettlementRecorder;
-use bitrouter::gateway::pipeline::types::ExecutionResult;
-use bitrouter::gateway::pipeline::types::PipelineRequest;
-use bitrouter::gateway::pipeline::types::RoutingTarget;
+use bitrouter::gateway::pipeline::hooks::{HopOutcome, ObserveHook};
+use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+use bitrouter::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
 use bitrouter::policy_compile::{CompileInput, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
-use bitrouter_ai::types::AuthScheme;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
 };

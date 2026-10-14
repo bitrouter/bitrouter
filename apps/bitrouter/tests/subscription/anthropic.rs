@@ -1,12 +1,12 @@
-use bitrouter_ai::auth::AuthApplier;
-use bitrouter_ai::auth::credentials::Credential;
-use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
-use bitrouter_ai::error::ModelError;
-use bitrouter_ai::target::ModelTarget;
+use bitrouter::gateway::model::error::ModelError;
+use bitrouter::gateway::model::target::ModelTarget;
+use bitrouter::gateway::providers::auth::AuthApplier;
+use bitrouter::gateway::providers::auth::credentials::Credential;
+use bitrouter::gateway::providers::auth::store::DEFAULT_ACCOUNT;
 use std::sync::Arc;
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-use bitrouter_ai::auth::file::backend::FileCredentialStore;
-use bitrouter_ai::providers::anthropic::{AnthropicApiKeyApplier, PROVIDER_ID, headers};
+use bitrouter::gateway::providers::anthropic::{AnthropicApiKeyApplier, PROVIDER_ID, headers};
+use bitrouter::gateway::providers::auth::file::backend::FileCredentialStore;
 fn anthropic_applier(path: impl Into<std::path::PathBuf>) -> TestResult<AnthropicApiKeyApplier> {
     Ok(AnthropicApiKeyApplier::new(Arc::new(
         FileCredentialStore::new(path.into())?,
@@ -17,8 +17,8 @@ use std::path::PathBuf;
 
 use bitrouter_ai::types::ApiProtocol;
 
-use bitrouter_ai::auth::credentials::OAuthToken;
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
+use bitrouter::gateway::providers::auth::credentials::OAuthToken;
+use bitrouter::gateway::providers::auth::file::snapshot::CredentialStore;
 
 fn tmp_store_path() -> TestResult<PathBuf> {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,7 +50,7 @@ fn anthropic_target(label: Option<&str>) -> ModelTarget {
 fn anthropic_target_with_env_key(key: &str) -> ModelTarget {
     let mut t = anthropic_target(None);
     t.api_key = key.to_string();
-    t.credential_priority = bitrouter_ai::target::CredentialPriority::Fallback;
+    t.credential_priority = bitrouter::gateway::model::target::CredentialPriority::Fallback;
     t
 }
 
@@ -185,7 +185,7 @@ async fn api_key_prepare_body_leaves_system_untouched() -> TestResult {
 #[tokio::test]
 async fn explicit_key_wins_and_wrong_stored_kind_never_uses_fallback()
 -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use bitrouter_ai::auth::store::{CredentialKey, MemoryCredentialStore};
+    use bitrouter::gateway::providers::auth::store::{CredentialKey, MemoryCredentialStore};
     let key = CredentialKey {
         provider: PROVIDER_ID.into(),
         account: DEFAULT_ACCOUNT.into(),
@@ -200,7 +200,7 @@ async fn explicit_key_wins_and_wrong_stored_kind_never_uses_fallback()
     )]);
     let applier = AnthropicApiKeyApplier::new(std::sync::Arc::new(store));
     let mut target = anthropic_target_with_env_key("explicit-key");
-    target.credential_priority = bitrouter_ai::target::CredentialPriority::Explicit;
+    target.credential_priority = bitrouter::gateway::model::target::CredentialPriority::Explicit;
     let request = || {
         reqwest::Client::new()
             .post("https://example.invalid")
@@ -215,7 +215,7 @@ async fn explicit_key_wins_and_wrong_stored_kind_never_uses_fallback()
             .and_then(|v| v.to_str().ok()),
         Some("explicit-key")
     );
-    target.credential_priority = bitrouter_ai::target::CredentialPriority::Fallback;
+    target.credential_priority = bitrouter::gateway::model::target::CredentialPriority::Fallback;
     assert!(matches!(
         applier.apply(request()?, &target).await,
         Err(ModelError::Provider { status: 401, .. })

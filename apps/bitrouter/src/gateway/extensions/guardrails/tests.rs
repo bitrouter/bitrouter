@@ -5,12 +5,10 @@ use std::sync::Arc;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::executor::MockExecutor;
-use crate::gateway::pipeline::executor::MockResponse;
+use crate::gateway::pipeline::executor::{MockExecutor, MockResponse};
 use crate::gateway::pipeline::hooks::PreRequestHook;
 use crate::gateway::pipeline::routing::StaticRoutingTable;
-use crate::gateway::pipeline::types::PipelineRequest;
-use crate::gateway::pipeline::types::RoutingTarget;
+use crate::gateway::pipeline::types::{PipelineRequest, RoutingTarget};
 use bitrouter_ai::types::{
     ApiProtocol, FinishReason, GenerationParams, Message, Prompt, Role, StreamPart, Usage,
 };

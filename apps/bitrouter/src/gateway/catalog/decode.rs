@@ -31,7 +31,7 @@ pub(super) fn from_slice(bytes: &[u8]) -> Result<RegistryData, serde_json::Error
 fn retired_protocol_value(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::String(name) => {
-            bitrouter_ai::providers::retired::protocol_message(name).is_some()
+            crate::gateway::providers::retired::protocol_message(name).is_some()
         }
         serde_json::Value::Array(values) => values.iter().any(retired_protocol_value),
         serde_json::Value::Object(fields) => fields.values().any(retired_protocol_value),
@@ -59,7 +59,9 @@ pub(crate) fn providers_from_values(
         let retired = value
             .get("name")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|name| bitrouter_ai::providers::retired::provider_message(name).is_some())
+            .is_some_and(|name| {
+                crate::gateway::providers::retired::provider_message(name).is_some()
+            })
             || value
                 .get("api_protocol")
                 .is_some_and(retired_protocol_value);

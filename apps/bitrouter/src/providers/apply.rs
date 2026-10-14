@@ -7,15 +7,13 @@
 //!
 //! Opt-out: set `inherit_defaults: false` at the top level of the config.
 
-use crate::config::Config;
-use crate::config::ProviderConfig;
-use crate::config::pattern::Pattern;
-use crate::config::pattern::PatternMap;
+use crate::config::pattern::{Pattern, PatternMap};
+use crate::config::{Config, ProviderConfig};
 use bitrouter_ai::types::ProtocolList;
 
+use crate::gateway::providers::auth::file::snapshot::CredentialStore;
 use crate::providers::builtin;
 use crate::providers::entry::ProtocolMapping;
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
 
 /// Build the in-memory **zero-config** [`Config`] used when the user
 /// runs `bro serve` with no `bitrouter.yaml` anywhere on the
@@ -110,7 +108,7 @@ pub fn apply_builtin_defaults(config: &mut Config) {
         return;
     }
     for (id, provider) in config.providers.iter_mut() {
-        if bitrouter_ai::providers::retired::provider_message(id).is_some() {
+        if crate::gateway::providers::retired::provider_message(id).is_some() {
             continue;
         }
         let Some(builtin) = builtin::find(id) else {
@@ -178,7 +176,7 @@ pub fn apply_builtin_defaults(config: &mut Config) {
 /// them.
 pub fn activate_stored_credential_providers(config: &mut Config, store: &CredentialStore) {
     for (id, provider) in config.providers.iter_mut() {
-        if bitrouter_ai::providers::retired::provider_message(id).is_some() {
+        if crate::gateway::providers::retired::provider_message(id).is_some() {
             continue;
         }
         if !provider.active && !store.labels(id).is_empty() {
@@ -210,8 +208,7 @@ mod tests {
     use crate::providers::test_env::with_env;
     use anyhow::Context;
 
-    use crate::config::Config;
-    use crate::config::ProviderConfig;
+    use crate::config::{Config, ProviderConfig};
     use bitrouter_ai::types::ApiProtocol;
 
     fn config_with(id: &str, mut p: ProviderConfig) -> Config {
@@ -340,9 +337,9 @@ mod tests {
 
     #[test]
     fn stored_credential_reactivates_keyless_provider() -> anyhow::Result<()> {
-        use bitrouter_ai::auth::credentials::Credential;
-        use bitrouter_ai::auth::file::snapshot::CredentialStore;
-        use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
+        use crate::gateway::providers::auth::credentials::Credential;
+        use crate::gateway::providers::auth::file::snapshot::CredentialStore;
+        use crate::gateway::providers::auth::store::DEFAULT_ACCOUNT;
         let dir = std::env::temp_dir().join(format!("br-activate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).context("required fixture value")?;
@@ -414,7 +411,7 @@ mod tests {
 
     #[test]
     fn stored_retired_credentials_do_not_reactivate_providers() -> anyhow::Result<()> {
-        use bitrouter_ai::auth::credentials::Credential;
+        use crate::gateway::providers::auth::credentials::Credential;
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("credentials.json");
         let mut store = CredentialStore::load(&path)?;

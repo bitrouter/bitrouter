@@ -4,8 +4,8 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+use crate::gateway::providers::auth::file::snapshot::CredentialStore;
 use anyhow::Result;
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
 
 const FILENAME: &str = "oauth-tokens.json";
 

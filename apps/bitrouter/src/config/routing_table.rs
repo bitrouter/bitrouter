@@ -18,15 +18,9 @@ use async_trait::async_trait;
 
 use crate::config::Config;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
-use crate::gateway::pipeline::routing::ModelInfo;
-use crate::gateway::pipeline::routing::RoutingPrefs;
-use crate::gateway::pipeline::routing::RoutingTable;
-use crate::gateway::pipeline::routing::SortOrder;
-use crate::gateway::pipeline::stream::UsagePricing;
-use crate::gateway::pipeline::stream::UsagePricingBracket;
-use crate::gateway::pipeline::stream::UsagePricingTier;
+use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::pipeline::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
+use crate::gateway::pipeline::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
 use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{ApiProtocol, ModelOperation};
 

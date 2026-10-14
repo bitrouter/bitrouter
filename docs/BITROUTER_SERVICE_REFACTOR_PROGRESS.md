@@ -61,7 +61,7 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check contracts and operation scopes moved to AI; matcher detached from old SDK; legacy adapters moved to application; Observation/capability slice verified; shared control/core DTO extraction remains before their final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service/configuration/runtime moved to application; schema generator delegates to its application owner; AI runtime extraction and dependency isolation remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation verified; serving-time workflow/policy separation and final public API guards remain |
 | P0 4 HTTP SDK | Pending | Typed gateway/control client and independent process consumer |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
@@ -207,3 +207,45 @@ partial refresh/persistence failures, cancellation, bundled fallback and endpoin
 pricing applicability. Independent static review found no material issue. The
 remaining AI model/authentication/protocol runtime is still outside the target
 contract-only boundary and remains P0 3 work.
+
+The following P0 3 slice moves that remaining runtime into application
+`gateway::model` and `gateway::providers`: upstream clients, protocol codecs,
+conversion admission, streams, credentials, authentication and provider sessions.
+AI keeps model semantics, 18 public request structures/unions, conversion report
+data and the existing lifecycle/observation/capability/catalog contracts.
+Credential-bearing targets and their header-selection `AuthScheme` are now
+application-owned. Catalog compatibility values remain public artifact data.
+
+AI's production dependencies are now serde, serde_json and thiserror, with
+schemars behind `schema`. The former authentication/runtime features are removed.
+Isolated default and all-public-features trees contain no network client,
+executor, database, terminal or OTel dependency. Independent contract tests
+passed **32 default** and **36 all-feature** cases; strict all-target/all-feature
+AI Clippy passed. These checks do not replace the final API guards after the
+remaining service DTOs are extracted for the SDK.
+The matcher also passed its isolated all-feature run (**15 tests**) without
+enabling the application or relying on workspace-wide AI schema activation.
+
+All **543** named AI tests at the stage base retain a destination. Seventeen
+runtime integration targets move into the application, with explicit Ubuntu CI
+coverage; schema snapshots and their tests stay beside AI's wire definitions.
+The first selected application/contract/matcher run passed **1,709 tests**,
+including model protocols, conversion, auth/login/files, provider integrations,
+continuations, configuration, hosted account behavior and telemetry.
+
+Independent review found that newly serializable request DTOs could erase
+message-level replay metadata before gateway admission. Nested request objects
+now retain unmodelled fields; message Debug hides those opaque fields. Two new
+regressions compare gateway semantics before/after typed serialization and prove
+that rejected replay evidence retains the same refusal. The follow-up protocol
+and contract run passed **334 tests**; focused independent re-review found no
+remaining material issue. Adding Serialize also exposed previously unpublished
+schema defaults; schema attributes preserve the prior structural snapshots.
+The only snapshot edits replace the obsolete consumer-specific description.
+
+Workspace all-feature/all-target checking passed. Strict workspace Rustdoc and
+doctests passed after repairing moved module links (**5 examples passed, one
+existing protocol sketch ignored**). The application-owned configuration schema
+generator passed its unchanged-artifact check. Full P0 feature isolation,
+independent service-client integration, packaging and final validation remain
+open; this stage does not claim live-provider or cross-platform verification.

@@ -14,10 +14,10 @@ use async_trait::async_trait;
 
 use super::backend::{SearchOptions, WebSearchBackend};
 use crate::gateway::error::Result;
-use crate::gateway::pipeline::server_tools::declarations::ServerToolDeclarations;
-use crate::gateway::pipeline::server_tools::declarations::WEB_SEARCH_TOOL;
-use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-use crate::gateway::pipeline::server_tools::toolset::ToolContext;
+use crate::gateway::pipeline::server_tools::declarations::{
+    ServerToolDeclarations, WEB_SEARCH_TOOL,
+};
+use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolContext};
 use bitrouter_ai::types::{ProviderMetadata, Tool, ToolResultOutput};
 
 /// A [`RouterToolset`] exposing the `web_search` server tool over one or more
@@ -154,8 +154,9 @@ impl RouterToolset for WebSearchToolset {
 mod tests {
     use super::*;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::server_tools::declarations::WebSearchDeclaration;
-    use crate::gateway::pipeline::server_tools::declarations::declarations_plugin_id;
+    use crate::gateway::pipeline::server_tools::declarations::{
+        WebSearchDeclaration, declarations_plugin_id,
+    };
     use crate::gateway::pipeline::server_tools::web_search::backend::WebSearchResults;
     use std::collections::HashMap;
 

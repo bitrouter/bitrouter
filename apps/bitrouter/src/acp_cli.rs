@@ -59,8 +59,7 @@ use std::time::Duration;
 
 use crate::commands::invocation;
 use crate::config::Config;
-use crate::config::agent::AcpAgentConfig;
-use crate::config::agent::AcpTransport;
+use crate::config::agent::{AcpAgentConfig, AcpTransport};
 use anyhow::{Context, Result};
 use futures::{FutureExt, StreamExt};
 use serde::Serialize;
@@ -129,8 +128,7 @@ pub fn resolve_agent_id(config: &Config, requested: &str) -> Result<String> {
 #[cfg(test)]
 mod agent_resolution_tests {
     use crate::config::Config;
-    use crate::config::agent::AcpAgentConfig;
-    use crate::config::agent::AcpTransport;
+    use crate::config::agent::{AcpAgentConfig, AcpTransport};
 
     use super::resolve_agent_id;
 
@@ -177,8 +175,7 @@ mod session_host_tests {
         launch_options,
     };
     use crate::config::Config;
-    use crate::config::agent::AcpAgentConfig;
-    use crate::config::agent::AcpTransport;
+    use crate::config::agent::{AcpAgentConfig, AcpTransport};
 
     const STUB: &str = r#"
 while read line; do
@@ -3601,7 +3598,7 @@ fn spawn_tool_spans(
 mod standalone_cloud_credentials_tests {
     use std::sync::Arc;
 
-    use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+    use crate::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
 
     use crate::cloud::account::manager::CredentialManager;
     use chrono::{Duration, Utc};

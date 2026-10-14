@@ -21,8 +21,7 @@ use super::toolset::ToolContext;
 use crate::gateway::error::Result;
 use crate::gateway::extensions::legacy::PluginId;
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::PreRequestHook;
+use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use bitrouter_ai::types::{Prompt, ProviderMetadata, Tool};
 
 /// Router-tool name the model calls to consult a stronger model.

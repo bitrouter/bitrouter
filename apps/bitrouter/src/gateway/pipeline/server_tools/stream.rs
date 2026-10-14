@@ -305,8 +305,7 @@ mod tests {
     use crate::gateway::caller::CallerContext;
     use crate::gateway::pipeline::server_tools::approval::AllowAll;
     use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
-    use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-    use crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry;
+    use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolsetRegistry};
     use bitrouter_ai::types::{ApiProtocol, Tool, ToolResultOutput};
     use std::collections::VecDeque;
     use std::sync::Mutex;

@@ -12,58 +12,49 @@ use sea_orm::DatabaseConnection;
 use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
-use crate::gateway::assembly::App;
-use crate::gateway::assembly::PromptTransform;
+use crate::gateway::assembly::{App, PromptTransform};
 use crate::gateway::mcp::aggregating_executor::AggregatingExecutor;
-use crate::gateway::mcp::caching_executor::CacheTtls;
-use crate::gateway::mcp::caching_executor::CachingExecutor;
-use crate::gateway::mcp::config_routing::ConfigMcpRoutingTable;
-use crate::gateway::mcp::config_routing::McpServerAggregateConfig;
+use crate::gateway::mcp::caching_executor::{CacheTtls, CachingExecutor};
+use crate::gateway::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
 use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
+use crate::gateway::model::client::HttpTimeouts;
+use crate::gateway::model::protocol::OutboundDispatch;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::executor::HttpExecutor;
 use crate::gateway::pipeline::operations::HookStage;
 use crate::gateway::pipeline::server_tools::advisor::AdvisorToolset;
 use crate::gateway::pipeline::server_tools::approval::AllowAll;
 use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
-use crate::gateway::pipeline::server_tools::declarations::ServerToolDeclarationsHook;
-use crate::gateway::pipeline::server_tools::declarations::forwarded_tools;
+use crate::gateway::pipeline::server_tools::declarations::{
+    ServerToolDeclarationsHook, forwarded_tools,
+};
 use crate::gateway::pipeline::server_tools::fusion::FusionToolset;
 use crate::gateway::pipeline::server_tools::fusion::alias::FusionAliasConfig;
 use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
 use crate::gateway::pipeline::server_tools::mcp_toolset::McpRouterToolset;
-use crate::gateway::pipeline::server_tools::nested::NestedRunner;
-use crate::gateway::pipeline::server_tools::nested::PipelineNestedRunner;
+use crate::gateway::pipeline::server_tools::nested::{NestedRunner, PipelineNestedRunner};
 use crate::gateway::pipeline::server_tools::sub_agent::SubAgentToolset;
-use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-use crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry;
+use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolsetRegistry};
 use crate::gateway::pipeline::server_tools::web_fetch::backend::WebFetchBackend;
-use crate::gateway::pipeline::server_tools::web_fetch::config::DEFAULT_MAX_CONTENT_TOKENS;
-use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchBackendConfig;
-use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchSettings;
-use crate::gateway::pipeline::server_tools::web_fetch::http::HttpFetchBackend;
-use crate::gateway::pipeline::server_tools::web_fetch::http::HttpFetchEngine;
+use crate::gateway::pipeline::server_tools::web_fetch::config::{
+    DEFAULT_MAX_CONTENT_TOKENS, WebFetchBackendConfig, WebFetchSettings,
+};
+use crate::gateway::pipeline::server_tools::web_fetch::http::{HttpFetchBackend, HttpFetchEngine};
 use crate::gateway::pipeline::server_tools::web_fetch::toolset::WebFetchToolset;
 use crate::gateway::pipeline::server_tools::web_search::backend::WebSearchBackend;
-use crate::gateway::pipeline::server_tools::web_search::config::DEFAULT_MAX_RESULTS;
-use crate::gateway::pipeline::server_tools::web_search::config::WebSearchBackendConfig;
-use crate::gateway::pipeline::server_tools::web_search::config::WebSearchSettings;
-use crate::gateway::pipeline::server_tools::web_search::http::HttpEngine;
-use crate::gateway::pipeline::server_tools::web_search::http::HttpSearchBackend;
+use crate::gateway::pipeline::server_tools::web_search::config::{
+    DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
+};
+use crate::gateway::pipeline::server_tools::web_search::http::{HttpEngine, HttpSearchBackend};
 use crate::gateway::pipeline::server_tools::web_search::nested::NestedSearchBackend;
 use crate::gateway::pipeline::server_tools::web_search::toolset::WebSearchToolset;
-use bitrouter_ai::auth::AuthAppliers;
-use bitrouter_ai::client::HttpTimeouts;
-use bitrouter_ai::protocol::OutboundDispatch;
+use crate::gateway::providers::auth::AuthAppliers;
 use bitrouter_ai::types::OperationScope;
 
 use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::telemetry::OTEL_ENABLED;
-use crate::telemetry::config::ContentCaptureMode;
-use crate::telemetry::config::MetricsConfig;
-use crate::telemetry::config::OtelConfig;
-use crate::telemetry::exporter::OtelExporter;
-use crate::telemetry::exporter::OtelObserveHook;
+use crate::telemetry::config::{ContentCaptureMode, MetricsConfig, OtelConfig};
+use crate::telemetry::exporter::{OtelExporter, OtelObserveHook};
 
 use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
@@ -1335,8 +1326,10 @@ fn build_auth_appliers(
         .map(|s| s.path().to_path_buf())
         .context("resolving credential store path")?;
     let account_store = Arc::new(
-        bitrouter_ai::auth::file::backend::FileCredentialStore::new(&store_path)
-            .map_err(|failure| bitrouter_ai::error::ModelError::CredentialStorage { failure })?,
+        crate::gateway::providers::auth::file::backend::FileCredentialStore::new(&store_path)
+            .map_err(
+                |failure| crate::gateway::model::error::ModelError::CredentialStorage { failure },
+            )?,
     );
     let refresh_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -1348,9 +1341,9 @@ fn build_auth_appliers(
     // Register the hosted applier through the application Cloud glue.
     crate::cloud::register_if_configured(config, &mut appliers, cloud_manager)?;
     if config.providers.contains_key("github-copilot") {
-        let applier = bitrouter_ai::providers::copilot::CopilotAuthApplier::new(
+        let applier = crate::gateway::providers::copilot::CopilotAuthApplier::new(
             refresh_client.clone(),
-            bitrouter_ai::providers::copilot::exchange::TOKEN_EXCHANGE_URL,
+            crate::gateway::providers::copilot::exchange::TOKEN_EXCHANGE_URL,
             account_store.clone(),
         );
         appliers.register("github-copilot", Arc::new(applier));
@@ -1361,8 +1354,9 @@ fn build_auth_appliers(
     // when no stored key is present. It is `x-api-key`-only; the Claude
     // Pro/Max subscription lives in the separate `claude-code` provider below.
     if config.providers.contains_key("anthropic") {
-        let applier =
-            bitrouter_ai::providers::anthropic::AnthropicApiKeyApplier::new(account_store.clone());
+        let applier = crate::gateway::providers::anthropic::AnthropicApiKeyApplier::new(
+            account_store.clone(),
+        );
         appliers.register("anthropic", Arc::new(applier));
     }
     // The Claude Pro/Max subscription applier (OAuth / live `~/.claude`
@@ -1373,56 +1367,58 @@ fn build_auth_appliers(
             store_path.clone(),
             crate::providers::import::claude_code::ClaudeCodeStore::system(),
         )
-        .map_err(|failure| bitrouter_ai::error::ModelError::CredentialStorage { failure })?;
-        let registration = bitrouter_ai::providers::login::find("anthropic")
+        .map_err(|failure| {
+            crate::gateway::model::error::ModelError::CredentialStorage { failure }
+        })?;
+        let registration = crate::gateway::providers::login::find("anthropic")
             .context("Claude OAuth registration is missing")?;
         let claude_refresh_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(concat!("bitrouter-providers/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("building Claude OAuth HTTP client")?;
-        let session = bitrouter_ai::auth::store::OAuthSession::new(
+        let session = crate::gateway::providers::auth::store::OAuthSession::new(
             Arc::new(backend),
-            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+            Arc::new(crate::gateway::providers::auth::oauth::RefreshGrant::new(
                 claude_refresh_client,
                 registration.auth.token_endpoint,
                 registration.auth.client_id,
             )),
-            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+            crate::gateway::providers::auth::oauth::REFRESH_WINDOW,
         );
-        let applier = bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier::new(session)
+        let applier = crate::gateway::providers::claude_code::ClaudeCodeAuthApplier::new(session)
             .with_fallback_token(crate::providers::claude_code::env_oauth_token());
         appliers.register("claude-code", Arc::new(applier));
     }
     if config.providers.contains_key("openai-codex") {
-        let registration = bitrouter_ai::providers::login::find("openai-codex")
+        let registration = crate::gateway::providers::login::find("openai-codex")
             .context("openai-codex OAuth registration is missing")?;
-        let session = bitrouter_ai::auth::store::OAuthSession::new(
+        let session = crate::gateway::providers::auth::store::OAuthSession::new(
             account_store.clone(),
-            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+            Arc::new(crate::gateway::providers::auth::oauth::RefreshGrant::new(
                 refresh_client.clone(),
                 registration.auth.token_endpoint,
                 registration.auth.client_id,
             )),
-            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+            crate::gateway::providers::auth::oauth::REFRESH_WINDOW,
         );
-        let applier = bitrouter_ai::providers::codex::OpenAiCodexAuthApplier::new(session);
+        let applier = crate::gateway::providers::codex::OpenAiCodexAuthApplier::new(session);
         appliers.register("openai-codex", Arc::new(applier));
     }
     // The SuperGrok subscription applier (OAuth imported from the Grok CLI
     // session). Registered under `supergrok`, distinct from the metered `xai`
     // API-key provider.
     if config.providers.contains_key("supergrok") {
-        let session = bitrouter_ai::auth::store::OAuthSession::new(
+        let session = crate::gateway::providers::auth::store::OAuthSession::new(
             account_store.clone(),
-            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+            Arc::new(crate::gateway::providers::auth::oauth::RefreshGrant::new(
                 refresh_client.clone(),
-                bitrouter_ai::providers::supergrok::TOKEN_ENDPOINT,
-                bitrouter_ai::providers::supergrok::CLIENT_ID,
+                crate::gateway::providers::supergrok::TOKEN_ENDPOINT,
+                crate::gateway::providers::supergrok::CLIENT_ID,
             )),
-            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+            crate::gateway::providers::auth::oauth::REFRESH_WINDOW,
         );
-        let applier = bitrouter_ai::providers::supergrok::SuperGrokAuthApplier::new(session);
+        let applier = crate::gateway::providers::supergrok::SuperGrokAuthApplier::new(session);
         appliers.register("supergrok", Arc::new(applier));
     }
 
@@ -2330,9 +2326,9 @@ mod otel_config_tests {
 mod server_tools_tests {
     use std::sync::Arc;
 
-    use crate::gateway::pipeline::server_tools::nested::NestedOutcome;
-    use crate::gateway::pipeline::server_tools::nested::NestedRequest;
-    use crate::gateway::pipeline::server_tools::nested::NestedRunner;
+    use crate::gateway::pipeline::server_tools::nested::{
+        NestedOutcome, NestedRequest, NestedRunner,
+    };
     use crate::gateway::pipeline::server_tools::toolset::ToolContext;
 
     use super::{Config, build_fusion_alias, build_server_tool_loop};
@@ -2412,8 +2408,9 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_nested_backend_builds_loop() {
-        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchBackendConfig;
-        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchSettings;
+        use crate::gateway::pipeline::server_tools::web_search::config::{
+            WebSearchBackendConfig, WebSearchSettings,
+        };
         // A native (nested) backend resolves over the runner and builds the loop.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2430,8 +2427,9 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchBackendConfig;
-        use crate::gateway::pipeline::server_tools::web_search::config::WebSearchSettings;
+        use crate::gateway::pipeline::server_tools::web_search::config::{
+            WebSearchBackendConfig, WebSearchSettings,
+        };
         // An HTTP backend with an explicit key resolves with no nested runner.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2446,8 +2444,9 @@ mod server_tools_tests {
 
     #[test]
     fn web_fetch_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchBackendConfig;
-        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchSettings;
+        use crate::gateway::pipeline::server_tools::web_fetch::config::{
+            WebFetchBackendConfig, WebFetchSettings,
+        };
         // A web_fetch-only config (no advisor/subagent/fusion/web_search) must
         // still build the server-tool loop, proving server_tools_enabled covers
         // web_fetch. An HTTP backend with an explicit key resolves without a
@@ -2465,8 +2464,9 @@ mod server_tools_tests {
 
     #[test]
     fn assembles_web_fetch_exa_backend_from_explicit_key() {
-        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchBackendConfig;
-        use crate::gateway::pipeline::server_tools::web_fetch::config::WebFetchSettings;
+        use crate::gateway::pipeline::server_tools::web_fetch::config::{
+            WebFetchBackendConfig, WebFetchSettings,
+        };
         // An HTTP backend with an explicit key resolves without needing an env
         // var, mirroring the sibling web_search assembly test's approach.
         let backends = super::build_web_fetch_backends(&WebFetchSettings {

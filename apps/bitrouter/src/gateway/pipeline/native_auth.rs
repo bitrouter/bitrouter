@@ -2,10 +2,10 @@
 
 use super::types::RoutingTarget;
 use crate::gateway::error::Result;
-use bitrouter_ai::auth::{AuthAppliers, ContinuationAuthority};
+use crate::gateway::providers::auth::{AuthAppliers, ContinuationAuthority};
 
 pub(crate) fn is_continuation_scope_header(name: &str) -> bool {
-    bitrouter_ai::auth::is_continuation_scope_header(name)
+    crate::gateway::providers::auth::is_continuation_scope_header(name)
 }
 
 /// Resolve configured account selectors using exactly the same precedence as

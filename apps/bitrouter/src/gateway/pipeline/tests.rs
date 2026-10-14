@@ -3,7 +3,7 @@
 use crate::gateway::pipeline::{
     context, executor, native, request_checks, server_tools, settlement, timing,
 };
-use bitrouter_ai::auth;
+use crate::gateway::providers::auth;
 #[path = "tests_reconstruction.rs"]
 mod reconstruction;
 
@@ -27,52 +27,31 @@ use futures::StreamExt;
 use serde::Serialize;
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::model::error::ModelError;
+use crate::gateway::model::target::AuthScheme;
 use crate::gateway::pipeline::builder::PipelineBuilder;
-use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::context::StreamContext;
-use crate::gateway::pipeline::executor::DispatchExecutor;
-use crate::gateway::pipeline::executor::Executor;
-use crate::gateway::pipeline::executor::HttpExecutor;
-use crate::gateway::pipeline::executor::MockExecutor;
-use crate::gateway::pipeline::executor::MockResponse;
-use crate::gateway::pipeline::executor::StreamPartStream;
-use crate::gateway::pipeline::hooks::DenyReason;
-use crate::gateway::pipeline::hooks::ExecutionHook;
-use crate::gateway::pipeline::hooks::FallbackDecision;
-use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::HopOutcome;
-use crate::gateway::pipeline::hooks::ObserveHook;
-use crate::gateway::pipeline::hooks::Phase;
-use crate::gateway::pipeline::hooks::PreRequestHook;
-use crate::gateway::pipeline::hooks::RequestOutcome;
-use crate::gateway::pipeline::hooks::RouteHook;
-use crate::gateway::pipeline::hooks::StreamHook;
+use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
+use crate::gateway::pipeline::executor::{
+    DispatchExecutor, Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
+};
+use crate::gateway::pipeline::hooks::{
+    DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
+    PreRequestHook, RequestOutcome, RouteHook, StreamHook,
+};
 use crate::gateway::pipeline::pipeline::Pipeline;
-use crate::gateway::pipeline::routing::FallbackPolicy;
-use crate::gateway::pipeline::routing::ModelInfo;
-use crate::gateway::pipeline::routing::ModelResolution;
-use crate::gateway::pipeline::routing::ModelSelector;
-use crate::gateway::pipeline::routing::PromptOverrides;
-use crate::gateway::pipeline::routing::RouterRequestIdentity;
-use crate::gateway::pipeline::routing::RoutingPrefs;
-use crate::gateway::pipeline::routing::RoutingTable;
-use crate::gateway::pipeline::routing::StaticRoutingTable;
-use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::settlement::SettlementRecorder;
-use crate::gateway::pipeline::stream::StreamAction;
-use crate::gateway::pipeline::stream::StreamInterest;
-use crate::gateway::pipeline::stream::StreamOutcome;
-use crate::gateway::pipeline::types::ExecutionResult;
-use crate::gateway::pipeline::types::PipelineRequest;
-use crate::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::auth::{AuthApplier, AuthAppliers};
-use bitrouter_ai::error::ModelError;
+use crate::gateway::pipeline::routing::{
+    FallbackPolicy, ModelInfo, ModelResolution, ModelSelector, PromptOverrides,
+    RouterRequestIdentity, RoutingPrefs, RoutingTable, StaticRoutingTable,
+};
+use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+use crate::gateway::pipeline::stream::{StreamAction, StreamInterest, StreamOutcome};
+use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
+use crate::gateway::providers::auth::{AuthApplier, AuthAppliers};
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::extension::request_check::{ContentRole, Decision, Input};
 use bitrouter_ai::types::*;
-use bitrouter_ai::types::{AuthScheme, ReasoningEffort, ReasoningEffortSource};
+use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortSource};
 
 #[path = "tests_unified_routing.rs"]
 mod unified_routing;
@@ -3971,10 +3950,12 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
     // A custom outbound adapter that doesn't override `supports_response_format`
     // (so it defaults to `false`) must cause the executor to return a 400
     // rather than silently dropping the structured-output schema upstream.
+    use crate::gateway::model::error::ModelError;
+    use crate::gateway::model::protocol::{
+        OutboundAdapter, OutboundDispatch, StreamDecoder, Transport,
+    };
+    use crate::gateway::model::target::ModelTarget;
     use crate::gateway::pipeline::executor::HttpExecutor;
-    use bitrouter_ai::error::ModelError;
-    use bitrouter_ai::protocol::{OutboundAdapter, OutboundDispatch, StreamDecoder, Transport};
-    use bitrouter_ai::target::ModelTarget;
     use bitrouter_ai::types::ResponseFormat;
 
     struct FakeAdapter;
@@ -3982,7 +3963,10 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
         fn protocol(&self) -> ApiProtocol {
             ApiProtocol::Custom("fake".into())
         }
-        fn render_request(&self, _: &Prompt) -> bitrouter_ai::error::Result<serde_json::Value> {
+        fn render_request(
+            &self,
+            _: &Prompt,
+        ) -> crate::gateway::model::error::Result<serde_json::Value> {
             Err(ModelError::invalid_request(
                 "gate must fire before render_request",
             ))
@@ -3990,11 +3974,12 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
         fn parse_response(
             &self,
             _: serde_json::Value,
-        ) -> bitrouter_ai::error::Result<GenerateResult> {
+        ) -> crate::gateway::model::error::Result<GenerateResult> {
             Err(ModelError::invalid_request("unexpected fake response"))
         }
         fn stream_decoder(&self) -> Box<dyn StreamDecoder> {
-            bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter.stream_decoder()
+            crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter
+                .stream_decoder()
         }
         // intentionally leaves `supports_response_format` at the default `false`
     }
@@ -4012,7 +3997,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
             &self,
             r: reqwest::Request,
             _: &ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             Ok(r)
         }
     }
@@ -4087,8 +4072,8 @@ impl AuthApplier for AuthRecoveryApplier {
     async fn prepare_body(
         &self,
         body: &mut serde_json::Value,
-        _: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<()> {
+        _: &crate::gateway::model::target::ModelTarget,
+    ) -> crate::gateway::model::error::Result<()> {
         body["session_revision"] = self.refreshes.load(Ordering::SeqCst).into();
         Ok(())
     }
@@ -4096,8 +4081,8 @@ impl AuthApplier for AuthRecoveryApplier {
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _target: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        _target: &crate::gateway::model::target::ModelTarget,
+    ) -> crate::gateway::model::error::Result<reqwest::Request> {
         let token = if self.refreshes.load(Ordering::SeqCst) == 0 {
             "stale"
         } else {
@@ -4112,9 +4097,9 @@ impl AuthApplier for AuthRecoveryApplier {
 
     async fn refresh_after_unauthorized(
         &self,
-        _target: &bitrouter_ai::target::ModelTarget,
+        _target: &crate::gateway::model::target::ModelTarget,
         rejected_authorization: Option<&reqwest::header::HeaderValue>,
-    ) -> bitrouter_ai::error::Result<bool> {
+    ) -> crate::gateway::model::error::Result<bool> {
         if let Some(value) = rejected_authorization.and_then(|v| v.to_str().ok()) {
             self.seen_rejected_auth
                 .lock()
@@ -4158,13 +4143,12 @@ impl AuthApplier for OpaqueFailingAuthApplier {
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _target: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        _target: &crate::gateway::model::target::ModelTarget,
+    ) -> crate::gateway::model::error::Result<reqwest::Request> {
         if matches!(self.0, OpaqueAuthFailurePoint::Apply) {
-            return Err(bitrouter_ai::error::ModelError::configuration(format!(
-                "opaque authentication plugin exposed {}",
-                self.0.sentinel()
-            )));
+            return Err(crate::gateway::model::error::ModelError::configuration(
+                format!("opaque authentication plugin exposed {}", self.0.sentinel()),
+            ));
         }
         request.headers_mut().insert(
             reqwest::header::AUTHORIZATION,
@@ -4176,27 +4160,25 @@ impl AuthApplier for OpaqueFailingAuthApplier {
     async fn prepare_body(
         &self,
         _body: &mut serde_json::Value,
-        _target: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<()> {
+        _target: &crate::gateway::model::target::ModelTarget,
+    ) -> crate::gateway::model::error::Result<()> {
         if matches!(self.0, OpaqueAuthFailurePoint::PrepareBody) {
-            return Err(bitrouter_ai::error::ModelError::configuration(format!(
-                "opaque authentication plugin exposed {}",
-                self.0.sentinel()
-            )));
+            return Err(crate::gateway::model::error::ModelError::configuration(
+                format!("opaque authentication plugin exposed {}", self.0.sentinel()),
+            ));
         }
         Ok(())
     }
 
     async fn refresh_after_unauthorized(
         &self,
-        _target: &bitrouter_ai::target::ModelTarget,
+        _target: &crate::gateway::model::target::ModelTarget,
         _rejected_authorization: Option<&reqwest::header::HeaderValue>,
-    ) -> bitrouter_ai::error::Result<bool> {
+    ) -> crate::gateway::model::error::Result<bool> {
         if matches!(self.0, OpaqueAuthFailurePoint::Refresh) {
-            return Err(bitrouter_ai::error::ModelError::configuration(format!(
-                "opaque authentication plugin exposed {}",
-                self.0.sentinel()
-            )));
+            return Err(crate::gateway::model::error::ModelError::configuration(
+                format!("opaque authentication plugin exposed {}", self.0.sentinel()),
+            ));
         }
         Ok(false)
     }
@@ -4219,8 +4201,8 @@ impl AuthApplier for SemanticFailingAuthApplier {
     async fn apply(
         &self,
         mut request: reqwest::Request,
-        _target: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        _target: &crate::gateway::model::target::ModelTarget,
+    ) -> crate::gateway::model::error::Result<reqwest::Request> {
         if matches!(self.point, SemanticAuthFailurePoint::Apply) {
             return Err(self.error.clone());
         }
@@ -4234,8 +4216,8 @@ impl AuthApplier for SemanticFailingAuthApplier {
     async fn prepare_body(
         &self,
         _body: &mut serde_json::Value,
-        _target: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<()> {
+        _target: &crate::gateway::model::target::ModelTarget,
+    ) -> crate::gateway::model::error::Result<()> {
         if matches!(self.point, SemanticAuthFailurePoint::PrepareBody) {
             return Err(self.error.clone());
         }
@@ -4244,9 +4226,9 @@ impl AuthApplier for SemanticFailingAuthApplier {
 
     async fn refresh_after_unauthorized(
         &self,
-        _target: &bitrouter_ai::target::ModelTarget,
+        _target: &crate::gateway::model::target::ModelTarget,
         _rejected_authorization: Option<&reqwest::header::HeaderValue>,
-    ) -> bitrouter_ai::error::Result<bool> {
+    ) -> crate::gateway::model::error::Result<bool> {
         if matches!(self.point, SemanticAuthFailurePoint::Refresh) {
             return Err(self.error.clone());
         }
@@ -4261,10 +4243,10 @@ impl AuthApplier for CountingFailingAuthApplier {
     async fn apply(
         &self,
         _request: reqwest::Request,
-        _target: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        _target: &crate::gateway::model::target::ModelTarget,
+    ) -> crate::gateway::model::error::Result<reqwest::Request> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(bitrouter_ai::error::ModelError::configuration(
+        Err(crate::gateway::model::error::ModelError::configuration(
             "unexpected fail-fast fallback target",
         ))
     }
@@ -5402,9 +5384,9 @@ async fn server_tool_loop_resolves_a_router_tool_call()
     use crate::gateway::pipeline::server_tools::approval::AllowAll;
     use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
     use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
-    use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-    use crate::gateway::pipeline::server_tools::toolset::ToolContext;
-    use crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry;
+    use crate::gateway::pipeline::server_tools::toolset::{
+        RouterToolset, ToolContext, ToolsetRegistry,
+    };
 
     struct OneTool;
     #[async_trait]
@@ -5497,11 +5479,10 @@ async fn fusion_declaration_is_advertised_and_executed_end_to_end()
     use crate::gateway::pipeline::server_tools::declarations::ServerToolDeclarationsHook;
     use crate::gateway::pipeline::server_tools::fusion::FusionToolset;
     use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
-    use crate::gateway::pipeline::server_tools::nested::NestedOutcome;
-    use crate::gateway::pipeline::server_tools::nested::NestedRequest;
-    use crate::gateway::pipeline::server_tools::nested::NestedRunner;
-    use crate::gateway::pipeline::server_tools::toolset::ToolContext;
-    use crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry;
+    use crate::gateway::pipeline::server_tools::nested::{
+        NestedOutcome, NestedRequest, NestedRunner,
+    };
+    use crate::gateway::pipeline::server_tools::toolset::{ToolContext, ToolsetRegistry};
 
     // Scripted nested runner: the judge (response_format set) returns analysis
     // JSON; a panel member returns a plain answer.
@@ -5627,9 +5608,9 @@ async fn server_tool_loop_streams_router_tool_activity() {
     use crate::gateway::pipeline::server_tools::approval::AllowAll;
     use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
     use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
-    use crate::gateway::pipeline::server_tools::toolset::RouterToolset;
-    use crate::gateway::pipeline::server_tools::toolset::ToolContext;
-    use crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry;
+    use crate::gateway::pipeline::server_tools::toolset::{
+        RouterToolset, ToolContext, ToolsetRegistry,
+    };
 
     struct OneTool;
     #[async_trait]
@@ -5850,30 +5831,36 @@ impl ObserveHook for Arc<AdmissionObserver> {
 }
 
 struct NoStructuredAdapter;
-impl bitrouter_ai::protocol::OutboundAdapter for NoStructuredAdapter {
+impl crate::gateway::model::protocol::OutboundAdapter for NoStructuredAdapter {
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::ChatCompletions
     }
-    fn render_request(&self, _: &Prompt) -> bitrouter_ai::error::Result<serde_json::Value> {
+    fn render_request(
+        &self,
+        _: &Prompt,
+    ) -> crate::gateway::model::error::Result<serde_json::Value> {
         Err(ModelError::invalid_request(
             "unsupported candidate reached rendering",
         ))
     }
-    fn parse_response(&self, _: serde_json::Value) -> bitrouter_ai::error::Result<GenerateResult> {
+    fn parse_response(
+        &self,
+        _: serde_json::Value,
+    ) -> crate::gateway::model::error::Result<GenerateResult> {
         Err(ModelError::invalid_request(
             "unsupported candidate reached decoding",
         ))
     }
-    fn stream_decoder(&self) -> Box<dyn bitrouter_ai::protocol::StreamDecoder> {
-        bitrouter_ai::protocol::chat_completions::ChatCompletionsAdapter.stream_decoder()
+    fn stream_decoder(&self) -> Box<dyn crate::gateway::model::protocol::StreamDecoder> {
+        crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter.stream_decoder()
     }
 }
 
 #[tokio::test]
 async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_failure_hops()
 -> Result<()> {
-    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
-    use bitrouter_ai::protocol::OutboundDispatch;
+    use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+    use crate::gateway::model::protocol::OutboundDispatch;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     for streamed in [false, true] {
@@ -6014,8 +6001,9 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
 #[tokio::test]
 async fn conversion_admission_all_excluded_returns_reports_without_attempting_or_resetting_history()
 -> Result<()> {
+    use crate::gateway::model::protocol::InboundAdapter;
+    use crate::gateway::model::protocol::responses::ResponsesAdapter;
     use bitrouter_ai::conversion::ConversionLocation;
-    use bitrouter_ai::protocol::{InboundAdapter, responses::ResponsesAdapter};
     for streamed in [false, true] {
         let mut req = request();
         *req.input.generation_prompt_mut().ok_or_else(|| crate::gateway::error::BitrouterError::internal("expected generation fixture"))? = ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[{"type":"reasoning","id":"rs-secret","summary":[],"encrypted_content":"opaque-secret"},{"role":"user","content":"keep original history"}]}))?;
@@ -6067,8 +6055,9 @@ async fn conversion_admission_all_excluded_returns_reports_without_attempting_or
 #[tokio::test]
 async fn projection_admission_routes_file_results_without_asset_loss_or_failure_hops() -> Result<()>
 {
-    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
-    use bitrouter_ai::protocol::{InboundAdapter, responses::ResponsesAdapter};
+    use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+    use crate::gateway::model::protocol::InboundAdapter;
+    use crate::gateway::model::protocol::responses::ResponsesAdapter;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     for streamed in [false, true] {
@@ -6270,7 +6259,7 @@ impl Executor for MisreportedAdmission {
         prompt: &Prompt,
         _: bool,
     ) -> Result<bitrouter_ai::conversion::ConversionReport> {
-        Ok(bitrouter_ai::conversion::request_admission(
+        Ok(crate::gateway::model::conversion::request_admission(
             prompt,
             &target.api_protocol,
         ))
@@ -6297,9 +6286,10 @@ impl Executor for MisreportedAdmission {
 
 #[tokio::test]
 async fn projection_admission_preserves_tool_constraints_during_http_fallback() -> Result<()> {
-    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
+    use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+    use crate::gateway::model::protocol::InboundAdapter;
+    use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
     use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation, ConversionReason};
-    use bitrouter_ai::protocol::{InboundAdapter, chat_completions::ChatCompletionsAdapter};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -6582,7 +6572,8 @@ async fn successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_obse
 
 #[tokio::test]
 async fn upstream_errors_redact_admitted_continuity() -> Result<()> {
-    use bitrouter_ai::protocol::{OutboundAdapter, chat_completions::ChatCompletionsAdapter};
+    use crate::gateway::model::protocol::OutboundAdapter;
+    use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -6627,7 +6618,7 @@ async fn upstream_errors_redact_admitted_continuity() -> Result<()> {
                     "extra_content": {"google": {"thought_signature": signature}}
                 }]}, "finish_reason": "tool_calls"}]
             }))?;
-            let bound = bitrouter_ai::providers::google_chat::bind_result(
+            let bound = crate::gateway::providers::google_chat::bind_result(
                 result,
                 &selected.model_target(),
             )?;
@@ -6754,8 +6745,9 @@ async fn google_continuity_failure_keeps_reported_usage_in_settlement() -> Resul
 
 #[tokio::test]
 async fn google_signed_parallel_and_sequential_tools_survive_sdk_gateway_cycles() -> Result<()> {
-    use bitrouter_ai::protocol::{InboundAdapter, chat_completions::ChatCompletionsAdapter};
-    use bitrouter_ai::stream::collect::collect_generate;
+    use crate::gateway::model::protocol::InboundAdapter;
+    use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
+    use crate::gateway::model::stream::collect::collect_generate;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     for streamed in [false, true] {

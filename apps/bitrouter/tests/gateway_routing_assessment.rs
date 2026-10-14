@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
-use bitrouter::gateway::model::decision::types::Answer;
-use bitrouter::gateway::model::decision::types::DecisionResponse;
-use bitrouter::gateway::model::decision::types::DecisionUsage;
-use bitrouter::gateway::model::decision::types::Question;
+use bitrouter::gateway::model::decision::types::{
+    Answer, DecisionResponse, DecisionUsage, Question,
+};
 use bitrouter::gateway::routing::assessment;
 use bitrouter::gateway::routing::input::Input;
 use bitrouter::gateway::routing::signals::NextStepRole;

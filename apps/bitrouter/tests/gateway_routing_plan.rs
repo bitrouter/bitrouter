@@ -1,12 +1,7 @@
 use std::collections::BTreeSet;
 
-use bitrouter::gateway::routing::ContextCapability;
-use bitrouter::gateway::routing::plan;
-use bitrouter::gateway::routing::plan::AdmittedModel;
-use bitrouter::gateway::routing::plan::CostPolicy;
-use bitrouter::gateway::routing::plan::Model;
-use bitrouter::gateway::routing::plan::Options;
-use bitrouter::gateway::routing::plan::View;
+use bitrouter::gateway::routing::plan::{AdmittedModel, CostPolicy, Model, Options, View};
+use bitrouter::gateway::routing::{ContextCapability, plan};
 use bitrouter_ai::types::{Message, Prompt, Role};
 
 fn models() -> Vec<AdmittedModel> {

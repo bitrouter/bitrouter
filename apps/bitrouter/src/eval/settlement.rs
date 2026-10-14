@@ -4,8 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::gateway::error::Result as BitrouterResult;
-use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::settlement::SettlementRecorder;
+use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::ReasoningEffort;
@@ -756,10 +755,8 @@ mod tests {
 
     use crate::gateway::caller::CallerContext;
     use crate::gateway::observability::event::EventBus;
-    use crate::gateway::pipeline::settlement::SettlementContext;
-    use crate::gateway::pipeline::settlement::SettlementRecorder;
-    use bitrouter_ai::types::ReasoningEffort;
-    use bitrouter_ai::types::UsageOrigin;
+    use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+    use bitrouter_ai::types::{ReasoningEffort, UsageOrigin};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{

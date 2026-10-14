@@ -2,8 +2,8 @@
 use bitrouter::gateway::assembly::App;
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::mcp::transport::{McpServerConfig, McpTransport};
-use bitrouter::gateway::pipeline::executor::MockExecutor;
-use bitrouter::gateway::pipeline::executor::MockResponse;
+use bitrouter::gateway::model::target::AuthScheme;
+use bitrouter::gateway::pipeline::executor::{MockExecutor, MockResponse};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
 use bitrouter::gateway::pipeline::types::RoutingTarget;
 use bitrouter::harness::agent::AgentConfig;
@@ -12,7 +12,6 @@ use bitrouter::harness::service::ThreadService;
 use bitrouter::harness::storage::{ExecutionRecord, ExecutionStore};
 use bitrouter::harness::thread::{PermissionProfile, ThreadRequest, ThreadTarget};
 use bitrouter::harness::turn::{ApprovalAnswer, TurnRequest, TurnSnapshot, TurnStatus};
-use bitrouter_ai::types::AuthScheme;
 use bitrouter_ai::types::{ApiProtocol, FinishReason, StreamPart, Usage};
 use rmcp::model::ProtocolVersion;
 use sea_orm::{ConnectionTrait, Statement};

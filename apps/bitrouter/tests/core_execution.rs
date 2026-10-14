@@ -65,23 +65,17 @@ use bitrouter::core::protocol::{
 use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
 use bitrouter::gateway::assembly::App;
 use bitrouter::gateway::caller::CallerContext;
-use bitrouter::gateway::pipeline::context::PipelineContext;
-use bitrouter::gateway::pipeline::context::StreamContext;
-use bitrouter::gateway::pipeline::executor::Executor;
-use bitrouter::gateway::pipeline::executor::MockExecutor;
-use bitrouter::gateway::pipeline::executor::MockResponse;
-use bitrouter::gateway::pipeline::executor::StreamPartStream;
-use bitrouter::gateway::pipeline::hooks::ObserveHook;
-use bitrouter::gateway::pipeline::hooks::Phase;
-use bitrouter::gateway::pipeline::hooks::RequestOutcome;
+use bitrouter::gateway::model::target::AuthScheme;
+use bitrouter::gateway::pipeline::context::{PipelineContext, StreamContext};
+use bitrouter::gateway::pipeline::executor::{
+    Executor, MockExecutor, MockResponse, StreamPartStream,
+};
+use bitrouter::gateway::pipeline::hooks::{ObserveHook, Phase, RequestOutcome};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-use bitrouter::gateway::pipeline::settlement::SettlementContext;
-use bitrouter::gateway::pipeline::settlement::SettlementRecorder;
-use bitrouter::gateway::pipeline::types::ExecutionResult;
-use bitrouter::gateway::pipeline::types::RoutingTarget;
+use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+use bitrouter::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
 use bitrouter_ai::types::{
-    ApiProtocol, AuthScheme, Content, FinishReason, GenerateResult, Prompt, StreamPart, ToolChoice,
-    Usage,
+    ApiProtocol, Content, FinishReason, GenerateResult, Prompt, StreamPart, ToolChoice, Usage,
 };
 use serde_json::json;
 use support::DurableHarness;
@@ -707,27 +701,32 @@ impl bitrouter::gateway::assembly::PromptTransform for ChangeOutputReservation {
 struct NoOutputLimitAuth(Arc<AtomicUsize>);
 
 #[async_trait]
-impl bitrouter_ai::auth::AuthApplier for NoOutputLimitAuth {
-    fn output_token_limit_support(&self, _: &bitrouter_ai::target::ModelTarget) -> Option<bool> {
+impl bitrouter::gateway::providers::auth::AuthApplier for NoOutputLimitAuth {
+    fn output_token_limit_support(
+        &self,
+        _: &bitrouter::gateway::model::target::ModelTarget,
+    ) -> Option<bool> {
         Some(false)
     }
     async fn apply(
         &self,
         _: reqwest::Request,
-        _: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        _: &bitrouter::gateway::model::target::ModelTarget,
+    ) -> bitrouter::gateway::model::error::Result<reqwest::Request> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(bitrouter_ai::error::ModelError::invalid_request(
-            "infeasible route must not authenticate",
-        ))
+        Err(
+            bitrouter::gateway::model::error::ModelError::invalid_request(
+                "infeasible route must not authenticate",
+            ),
+        )
     }
 }
 
 #[tokio::test]
 async fn unsupported_output_reservation_rejects_before_authentication_or_attempt() -> TestResult {
+    use bitrouter::gateway::model::protocol::OutboundDispatch;
     use bitrouter::gateway::pipeline::executor::HttpExecutor;
-    use bitrouter_ai::auth::AuthAppliers;
-    use bitrouter_ai::protocol::OutboundDispatch;
+    use bitrouter::gateway::providers::auth::AuthAppliers;
     let calls = Arc::new(AtomicUsize::new(0));
     let executor = HttpExecutor::with_dispatch_and_auth(
         Default::default(),
@@ -764,9 +763,9 @@ async fn unsupported_output_reservation_rejects_before_authentication_or_attempt
 
 #[tokio::test]
 async fn model_ceiling_reserves_uncapped_output_before_authentication() -> TestResult {
+    use bitrouter::gateway::model::protocol::OutboundDispatch;
     use bitrouter::gateway::pipeline::executor::HttpExecutor;
-    use bitrouter_ai::auth::AuthAppliers;
-    use bitrouter_ai::protocol::OutboundDispatch;
+    use bitrouter::gateway::providers::auth::AuthAppliers;
     for ceiling in [None, Some(0), Some(127), Some(128), Some(129)] {
         let calls = Arc::new(AtomicUsize::new(0));
         let executor = HttpExecutor::with_dispatch_and_auth(

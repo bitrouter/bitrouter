@@ -17,17 +17,16 @@
 //! headers), which only exists above the SDK ingress seam, and because the
 //! enable step mutates the assembled [`Config`].
 
-use crate::config::Config;
-use crate::config::ProviderConfig;
+use crate::config::{Config, ProviderConfig};
 use crate::gateway::assembly::PromptTransform;
-use bitrouter_ai::auth::credentials::Credential;
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
+use crate::gateway::providers::auth::credentials::Credential;
+use crate::gateway::providers::auth::file::snapshot::CredentialStore;
+use crate::gateway::providers::auth::store::DEFAULT_ACCOUNT;
 use bitrouter_ai::types::Prompt;
 use http::HeaderMap;
 
 /// Provider id of the Claude Pro/Max subscription provider. Must match the id
-/// the [`bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier`] is registered
+/// the [`crate::gateway::providers::claude_code::ClaudeCodeAuthApplier`] is registered
 /// under and the id used in the explicit-provider route prefix below.
 const PROVIDER_ID: &str = "claude-code";
 
@@ -106,7 +105,7 @@ fn headers_indicate_claude_code(headers: &HeaderMap) -> bool {
 /// The inserted entry is an empty [`ProviderConfig::default()`]; the registry
 /// merge fills its `api_base` / `api_protocol` / auth from the fetched
 /// `claude-code` registry entry, the
-/// [`bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier`] authenticates it,
+/// [`crate::gateway::providers::claude_code::ClaudeCodeAuthApplier`] authenticates it,
 /// and `claude-code`'s `access: local_oauth` keeps it active even though it
 /// declares no canonical models.
 ///
@@ -227,7 +226,7 @@ fn enable_if_logged_in_with_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::auth::credentials::Credential;
+    use crate::gateway::providers::auth::credentials::Credential;
     use bitrouter_ai::types::{GenerationParams, ProviderMetadata};
 
     /// A representative `anthropic-beta` value as genuine Claude Code sends it:

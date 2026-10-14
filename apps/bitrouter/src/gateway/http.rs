@@ -24,22 +24,19 @@ use axum::routing::{get, post};
 use axum::{Json, serve};
 use futures::StreamExt;
 
-use crate::gateway::assembly::App;
-use crate::gateway::assembly::prepare_model_prompt;
+use crate::gateway::assembly::{App, prepare_model_prompt};
 use crate::gateway::caller::CallerContext;
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::pipeline::Pipeline;
 use crate::gateway::pipeline::stream::SseKeepaliveStream;
 
 use crate::gateway::mcp;
+use crate::gateway::model::protocol::decisions::DecisionsCodec;
+use crate::gateway::model::protocol::responses::encode_gateway_continuation_id;
+use crate::gateway::model::protocol::{inbound_adapter_for, sanitize_model_name};
+use crate::gateway::model::stream::SseFrame;
 use crate::gateway::observability::metrics::MetricsRenderer;
-use crate::gateway::pipeline::types::PipelineInput;
-use crate::gateway::pipeline::types::PipelineRequest;
-use bitrouter_ai::protocol::decisions::DecisionsCodec;
-use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
-use bitrouter_ai::protocol::{inbound_adapter_for, sanitize_model_name};
-use bitrouter_ai::stream::SseFrame;
+use crate::gateway::pipeline::types::{PipelineInput, PipelineRequest};
 use bitrouter_ai::types::ApiProtocol;
 
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
@@ -1791,27 +1788,23 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
 mod tests {
     use super::*;
     use crate::gateway::assembly::PromptTransform;
-    use crate::gateway::pipeline::executor::Executor;
-    use crate::gateway::pipeline::executor::MockExecutor;
-    use crate::gateway::pipeline::executor::MockResponse;
+    use crate::gateway::pipeline::executor::{Executor, MockExecutor, MockResponse};
     use crate::gateway::pipeline::routing::StaticRoutingTable;
-    use crate::gateway::pipeline::settlement::RequiredFinalizationContext;
-    use crate::gateway::pipeline::settlement::RequiredFinalizer;
-    use crate::gateway::pipeline::settlement::SettlementContext;
-    use crate::gateway::pipeline::settlement::SettlementRecorder;
+    use crate::gateway::pipeline::settlement::{
+        RequiredFinalizationContext, RequiredFinalizer, SettlementContext, SettlementRecorder,
+    };
 
-    use crate::gateway::pipeline::types::ExecutionResult;
-    use crate::gateway::pipeline::types::RoutingTarget;
+    use crate::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
 
+    use crate::gateway::model::target::AuthScheme;
     use crate::gateway::pipeline::builder::PipelineBuilder;
     use crate::gateway::pipeline::context::PipelineContext;
     use crate::gateway::pipeline::executor::StreamPartStream;
-    use crate::gateway::pipeline::hooks::HookDecision;
-    use crate::gateway::pipeline::hooks::PreRequestHook;
+    use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
     use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::{Request, header};
-    use bitrouter_ai::types::{ApiProtocol, AuthScheme, Prompt};
+    use bitrouter_ai::types::{ApiProtocol, Prompt};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tower::ServiceExt;
 

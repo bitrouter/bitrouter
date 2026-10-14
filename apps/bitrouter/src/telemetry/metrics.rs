@@ -232,8 +232,7 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
 #[cfg(test)]
 mod tests {
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::pipeline::types::ExecutionResult;
-    use crate::gateway::pipeline::types::PipelineRequest;
+    use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest};
     use bitrouter_ai::types::{GenerateResult, GenerationParams, Prompt};
 
     use super::*;

@@ -10,29 +10,24 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::error::BitrouterError;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::extensions::legacy::PluginId;
-use crate::gateway::observability::event::EventBus;
-use crate::gateway::pipeline::routing::RouterRequestIdentity;
-use crate::gateway::pipeline::settlement::RequiredFinalizationContext;
-use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::stream::UsageAccumulator;
-use crate::gateway::pipeline::timing::FirstTokenKind;
-use crate::gateway::pipeline::timing::FirstTokenTiming;
-use crate::gateway::pipeline::timing::duration_millis;
-use crate::gateway::pipeline::timing::elapsed_millis;
-use crate::gateway::pipeline::types::ExecutionResult;
-use crate::gateway::pipeline::types::PipelineInput;
-use crate::gateway::pipeline::types::PipelineRequest;
-use crate::gateway::pipeline::types::PipelineResponse;
-use crate::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::auth::ContinuationAuthority;
-use bitrouter_ai::event::PipelineEvent;
-use bitrouter_ai::protocol::responses::{
+use crate::gateway::model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
     assistant_turn_commitment, extend_causal_prefix,
 };
+use crate::gateway::observability::event::EventBus;
+use crate::gateway::pipeline::routing::RouterRequestIdentity;
+use crate::gateway::pipeline::settlement::{RequiredFinalizationContext, SettlementContext};
+use crate::gateway::pipeline::stream::UsageAccumulator;
+use crate::gateway::pipeline::timing::{
+    FirstTokenKind, FirstTokenTiming, duration_millis, elapsed_millis,
+};
+use crate::gateway::pipeline::types::{
+    ExecutionResult, PipelineInput, PipelineRequest, PipelineResponse, RoutingTarget,
+};
+use crate::gateway::providers::auth::ContinuationAuthority;
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{
     ApiProtocol, ChatStreamOptions, Content, FinishReason, Message, ModelOperation, Prompt,
     StreamPart, Usage,
@@ -1226,11 +1221,9 @@ mod tests {
     // `config_file`-gated, and importing through it made the whole lib-test
     // target fail to build under the crate's default features.
     use crate::gateway::pipeline::routing::PromptOverrides;
-    use crate::gateway::pipeline::stream::StreamOutcome;
-    use crate::gateway::pipeline::stream::StreamProcessor;
+    use crate::gateway::pipeline::stream::{StreamOutcome, StreamProcessor};
     use crate::gateway::pipeline::types::PipelineRequest;
-    use bitrouter_ai::types::{Message, Role};
-    use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortSource, StreamPart};
+    use bitrouter_ai::types::{Message, ReasoningEffort, ReasoningEffortSource, Role, StreamPart};
 
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
         let req = PipelineRequest {

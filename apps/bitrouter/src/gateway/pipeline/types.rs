@@ -3,10 +3,10 @@
 //! Model content, prompts, results and events are owned by `bitrouter_ai::types`.
 
 use crate::gateway::caller::CallerContext;
+use crate::gateway::model::target::{AuthScheme, ModelTarget};
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
-use bitrouter_ai::target::ModelTarget;
 use bitrouter_ai::types::{
-    ApiProtocol, AuthScheme, ChatCompletionsCompatibility, ChatTokenLimitField, GenerateResult,
+    ApiProtocol, ChatCompletionsCompatibility, ChatTokenLimitField, GenerateResult,
     ModelCompatibility, ModelOperation, Prompt, ReasoningEffortConfig, ServerToolCall, Usage,
 };
 
@@ -334,9 +334,9 @@ impl RoutingTarget {
             credential_priority: if self.api_key_override.is_some()
                 || (self.provider_name == "bitrouter" && !self.api_key.is_empty())
             {
-                bitrouter_ai::target::CredentialPriority::Explicit
+                crate::gateway::model::target::CredentialPriority::Explicit
             } else {
-                bitrouter_ai::target::CredentialPriority::Fallback
+                crate::gateway::model::target::CredentialPriority::Fallback
             },
             account_label: self.account_label.clone(),
             auth_scheme: self.auth_scheme,
