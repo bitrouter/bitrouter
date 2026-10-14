@@ -552,8 +552,8 @@ crate-root module declarations at the inventory baseline.
 | `tools` | `commands::tools` existing gateway/MCP diagnostics; do not confuse this module with orchestrator workspace tools |
 | `tracing_filter` | `host::logging` basic logs independent of optional OTLP |
 | `trajectory` | Gateway request evidence/correlation/settlement, operational evaluation-envelope construction, durable outbox persistence, request-time progress guards and required health/state validation; core owns evaluation admission/outbox consumption, offline analysis/replay and policy publishing; preserve pending outbox rows without core |
-| `update` | `host::update` updater implementation and thin CLI entry |
-| `upgrade` | `host::upgrade` upgrade coordination and thin CLI entry |
+| `update` | `host::update` updater implementation and thin CLI entry; preserve the installed artifact profile in update selection and delegation |
+| `upgrade` | `host::upgrade` upgrade coordination and thin CLI entry; compatibility includes compiled capabilities and explicit profile-transition preflight |
 | `upgrade_preflight` | `storage` schema compatibility checks plus host upgrade coordination |
 | `workflow_state` | Serving-time `OnlineWorkflowState` projection, routing-key derivation and published-policy validation support to `gateway::routing`; learning, measurement, classifier training, reward, replay and policy analysis to core; gateway response observer is a narrow optional adapter |
 
@@ -796,7 +796,7 @@ terminal-independent data and dependencies.
 | --- | --- |
 | Package `lib.rs` files | Update module declarations/docs and intentional visibility; delete removed package roots; no public forwarding facades |
 | Application `main.rs` | Keep `bro`; thin feature-aware command dispatch; TUI and CLI share commands |
-| Application `build.rs` | Gate agent/runtime catalog generation by harness; preserve handoff/migration fingerprint inputs needed by gateway |
+| Application `build.rs` | Gate agent/runtime catalog generation by harness; preserve handoff/migration fingerprint inputs needed by gateway and include compiled capability identity so same-revision profiles are distinguishable |
 | `apps/bitrouter/tests` | Keep real-process/HTTP/PTY integration role; gate suites by the features they exercise, not wholesale; update explicit CI test shards when a suite changes packages so its supported platform coverage is retained |
 | AI and old SDK `tests` | Move provider/auth/codec/runtime suites to application; keep independent contract/serde tests with AI and client tests with SDK |
 | Orchestrator tests/examples | Move scheduling tests to core, runtime/tools/store tests to harness, public contract tests to AI or application integration as appropriate |
@@ -867,6 +867,11 @@ harness = ["mcp"]
 server-tools = ["mcp"]
 otel = ["otel-http"]
 ```
+
+Features are additive. Reduced artifacts must use `--no-default-features`
+before selecting their capabilities: `--features harness` alone retains the
+full default product. Every application profile keeps its normal dependency on
+`bitrouter-ai`; gateway support and its public contracts are always present.
 
 The default database drivers reflect today's full application, which enables
 SQLite, PostgreSQL and MySQL. SQLite remains available without a flag. Retaining
@@ -951,6 +956,41 @@ publish every feature combination. Test the packaged gateway executable in the
 independent-process acceptance scenario, so development-tree builds alone do not
 stand in for the service an operator will install.
 
+### Artifact identity, updates and daemon compatibility
+
+Include the normalized compiled capability set in build identity and daemon
+compatibility evidence. At the baseline,
+[`build.rs`](../apps/bitrouter/build.rs) hashes selected source and migration
+files, and [`upgrade.rs`](../apps/bitrouter/src/upgrade.rs) accepts a matching
+version/build ID without a handoff. Full and minimum artifacts built from the
+same source must become distinguishable. File relocation alone does not provide
+that distinction.
+
+Compatibility checks must cover the requested operation, protocol/schema
+compatibility and resident capabilities. Common control reads can remain usable
+across profiles; a mismatch must not claim unavailable capabilities or silently
+replace a full daemon with a minimum one. An explicit profile transition checks
+configuration and stored-state compatibility before stopping the resident and
+retains existing active-work, ownership, rollback and `--no-start` restrictions.
+Treat legacy daemons without capability evidence conservatively; preserve the
+existing explicit-restart diagnostic when safe handoff cannot be established.
+
+P0 update policy preserves the installed distribution profile. Full installations
+keep their existing update path; gateway installations select a matching gateway
+artifact for the target release/platform. Update receipts, installer delegation
+and capability reports must agree on that profile. The baseline
+[`update.rs`](../apps/bitrouter/src/update.rs) delegates to default Cargo/full
+installers and uses one updater application identity, so these paths require
+explicit adaptation.
+
+When the distribution channel cannot select a matching gateway artifact, leave
+the installation unchanged and provide a profile-specific manual update path.
+For custom feature builds, preserve the declared build selection in any source
+update instructions; do not substitute an official full artifact. Changing
+profiles is an explicit operator action. P0 need not add every profile to every
+package manager, but each shipped artifact must have a documented update path
+that preserves its profile and a truthful diagnostic when it is unavailable.
+
 ### Configuration and runtime isolation
 
 Configuration schema can describe disabled features without compiling their
@@ -1015,7 +1055,8 @@ reported outcomes.
 
 - Record the actual package/module inventory, feature graphs, command and API
   surfaces, schema artifacts, database migration ledger, session formats and
-  representative serialized fixtures.
+  representative serialized fixtures. Include daemon build/compatibility
+  identity and installer/update selection paths in the delivery baseline.
 - Record full-product behavior and minimum relevant request/stream/daemon paths,
   including Decisions, native continuations, auth refresh and optional tools.
 - Retain baseline-written database/checkpoint bytes as compatibility fixtures;
@@ -1142,6 +1183,9 @@ supported remote control without custom server code or access to server files.
 - Use one host lifecycle for official and advanced custom-host entry points:
   readiness follows required listener/service startup; failure and shutdown clean
   up owned resources; reload reports applied versus restart-required state.
+- Include compiled capabilities in daemon compatibility and handoff preflight.
+  Exercise same-revision full/minimum candidates, unsupported operations and
+  explicit profile transitions without weakening active-work or rollback checks.
 - Preserve session/credential/config locations and serialized formats.
   Unsupported-feature activation fails clearly before readiness.
 - Execute core-only and harness-only behavioral suites, not just compilation.
@@ -1168,6 +1212,9 @@ TUI dependency, and a gateway starts with agent/UI resources unavailable.
   packaged gateway executable; verify installation, configuration discovery and
   capability reporting for that artifact. Preserve the normal publication
   process rather than treating an implementation test as a public release.
+- Verify update selection, receipts and delegated/manual instructions preserve
+  each shipped profile. A missing matching artifact leaves the installation
+  unchanged; an update must not silently switch gateway to the full product.
 - Prepare release order so the AI contract package precedes dependent packages,
   and the repurposed SDK carries explicit breaking migration notes. Remove
   retired packages from future release automation without yanking previous
@@ -1197,13 +1244,13 @@ refactor has already been implemented or tested.
 | A05 Feature closure | Minimum/core/harness/tui/core+harness/core+tui/optional-gateway/default/all-features builds succeed in isolation; `tui` contains harness/CLI, harness does not implicitly enable core |
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state |
 | A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; typed client serialization preserves admission and replay semantics, and response/event contracts preserve gateway output including presence/null semantics; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
-| A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees |
+| A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees; daemon compatibility distinguishes same-revision feature profiles, with no silent capability removal and safe preflight for explicit transitions |
 | A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; reserved request-ID rejection preserves earlier accounting; trajectory terminal facts/outbox survive feature changes without duplicate settlement/publication; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
 | A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui |
 | A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
 | A13 Extensions | Matcher needs only contracts; real plugin installation preserves legacy global/output behavior and rule isolation; native checker fail-closed, revision/binding and permit lifetime tests pass; default activation is unchanged |
-| A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct; full-product and minimum-gateway candidate artifacts identify their features/revision, and the packaged gateway passes the independent SDK consumer scenario |
+| A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct; full-product and minimum-gateway candidate artifacts identify their features/revision, and the packaged gateway passes the independent SDK consumer scenario; updates preserve the installed profile or leave it unchanged with a profile-specific manual path |
 | A15 External migration | Every consumer migration path above has an explicit replacement example or documented local-only boundary; old SDK builder, AI ModelClient, telemetry imports and guardrails SDK adapter are covered; no claim that HTTP transparently replaces arbitrary custom hooks |
 | A16 Performance | Compare size, normal dependency graph, idle memory and bounded throughput/stream behavior against P0 0; explain and resolve regressions outside the agreed budget |
 
@@ -1239,6 +1286,8 @@ coverage that justifies a profile.
 | Harness only | ThreadService ownership/queue/approval/recovery, historical native snapshot decoding and corruption rejection, and supported headless execution tests, without production core or terminal drawing |
 | Core and harness | Existing managed execution, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
 | TUI | Existing PTY actions and terminal restoration; shared command results agree with the corresponding headless paths |
+| Daemon profile compatibility | Same-revision full and minimum artifacts report distinct capabilities; common reads remain usable, unsupported operations are explicit, and neither profile silently replaces the other; explicit transitions validate configuration/state before shutdown and retain active-work, ownership, rollback and no-start protections |
+| Packaged updates | Full and minimum installations select their corresponding release artifacts or provide accurate profile-specific manual/delegated instructions; missing artifacts and custom feature selections do not fall back to the full product; verify the resulting binary's capability identity |
 | Guardrails | Real `GuardrailsPlugin::install` path plus native checker host tests; denied input makes zero upstream calls, output block/redact works, dynamic rules do not leak between requests |
 | HTTP-only telemetry | Trace/metric delivery to a test collector, configured headers, current bearer-refresh behavior and shutdown flushing |
 | gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |

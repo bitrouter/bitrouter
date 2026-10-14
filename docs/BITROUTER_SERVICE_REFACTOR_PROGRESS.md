@@ -597,3 +597,18 @@ implementations. Core protocol/checkpoint extraction and the SDK's existing
 core streaming transport still remain. Feature isolation, historical persisted
 fixtures, packaged independent-process delivery, full P0 validation and the PR
 remain open; this stage does not complete any broader gate by itself.
+
+## Distribution-profile review additions
+
+The accepted plan now requires compiled capability identity in daemon
+compatibility evidence and explicit preflight for full/minimum profile
+transitions. Same-revision builds must not claim equivalent capabilities or
+silently replace each other. Existing active-work, ownership, rollback and
+no-start restrictions remain applicable.
+
+Updates must preserve the installed distribution profile, or leave it unchanged
+with profile-specific manual instructions when a matching artifact is
+unavailable. Custom feature builds must not silently receive the full artifact.
+These requirements were checked against baseline build, handoff and updater
+paths and independently reviewed. They remain open P0 5/P0 6, A08 and A14 work;
+no implementation or packaged-update validation is claimed here.
