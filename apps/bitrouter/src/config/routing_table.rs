@@ -19,10 +19,14 @@ use async_trait::async_trait;
 use crate::config::Config;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
-use crate::gateway::pipeline::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
 use crate::gateway::pipeline::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
 use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{ApiProtocol, ModelOperation};
+use {
+    crate::gateway::pipeline::routing::RoutingPrefs,
+    crate::gateway::pipeline::routing::RoutingTable, bitrouter_ai::routing::ModelInfo,
+    bitrouter_ai::routing::SortOrder,
+};
 
 fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
     let base = UsagePricingBracket {
@@ -1458,7 +1462,7 @@ routers:
             crate::config::router::RouterConfig {
                 selection: crate::config::router::RouterSelection::Model {
                     model: "vendor:base".into(),
-                    routing: crate::config::RoutingConfig::default(),
+                    routing: bitrouter_ai::routing::RoutingConfig::default(),
                 },
                 defaults: crate::config::router::RouterDefaults::default(),
                 checks: crate::config::router::RouterChecks::default(),

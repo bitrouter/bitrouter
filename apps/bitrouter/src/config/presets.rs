@@ -34,7 +34,6 @@
 use std::collections::HashMap;
 
 use crate::config::PresetConfig;
-use crate::config::RoutingConfig;
 use crate::config::VariantConfig;
 use crate::config::checker::CheckerConfig;
 use crate::config::router::EffectiveRouterDefinition;
@@ -42,8 +41,9 @@ use crate::config::router::RouterConfig;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::pipeline::request_checks::RequestCheckBinding;
-use crate::gateway::pipeline::routing::RouterRequestIdentity;
 use crate::gateway::pipeline::routing::RoutingPrefs;
+use bitrouter_ai::routing::RouterRequestIdentity;
+use bitrouter_ai::routing::RoutingConfig;
 
 // `PromptOverrides` is defined in `language_model::routing` because it is the
 // return type of [`crate::gateway::pipeline::routing::RoutingTable::preset_overrides`],
@@ -333,10 +333,10 @@ pub(super) fn resolve_routers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::RoutingConfig;
     use crate::config::router::RouterDefaults;
     use crate::config::router::RouterSelection;
-    use crate::gateway::pipeline::routing::SortOrder;
+    use bitrouter_ai::routing::RoutingConfig;
+    use bitrouter_ai::routing::SortOrder;
 
     fn presets() -> HashMap<String, PresetConfig> {
         let mut m = HashMap::new();

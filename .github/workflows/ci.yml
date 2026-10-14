@@ -416,6 +416,8 @@ jobs:
                 'pub struct bitrouter_ai::gateway::ModelsResponse'
                 'pub mod bitrouter_ai::extension'
                 'pub struct bitrouter_ai::control::reload::ReloadInput'
+                'pub struct bitrouter_ai::control::requests::RequestFilters'
+                'pub struct bitrouter_ai::control::status::StatusReport'
               )
               forbidden='bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else

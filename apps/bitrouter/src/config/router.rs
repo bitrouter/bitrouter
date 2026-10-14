@@ -11,14 +11,14 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 use crate::config::PresetConfig;
-use crate::config::RoutingConfig;
 use crate::config::checker::CheckerConfig;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::pipeline::request_checks::MAX_REQUEST_CHECKS_PER_ROUTER;
 use crate::gateway::pipeline::request_checks::RequestCheckBinding;
 use crate::gateway::pipeline::routing::PromptOverrides;
-use crate::gateway::pipeline::routing::SortOrder;
+use bitrouter_ai::routing::RoutingConfig;
+use bitrouter_ai::routing::SortOrder;
 
 /// One named router definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

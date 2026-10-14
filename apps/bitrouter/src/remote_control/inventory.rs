@@ -4,8 +4,6 @@ use bitrouter_ai::control::ControlScope;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::actions::administration;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Status,
@@ -109,7 +107,7 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "overview",
         false,
         EmptyInput,
-        crate::actions::status::StatusReport
+        bitrouter_ai::control::status::StatusReport
     ),
     action!(
         Models,
@@ -122,7 +120,7 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "models",
         false,
         ModelsInput,
-        crate::actions::models::ModelsReport
+        bitrouter_ai::control::models::ModelsReport
     ),
     action!(
         Route,
@@ -134,8 +132,8 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "route",
         "preview",
         false,
-        crate::actions::route::RouteInput,
-        crate::actions::route::RouteReport
+        bitrouter_ai::control::route::RouteInput,
+        bitrouter_ai::control::route::RouteReport
     ),
     action!(
         Requests,
@@ -147,8 +145,8 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "requests",
         "requests",
         false,
-        crate::actions::requests::RequestFilters,
-        crate::output::reports::requests::RequestsReport
+        bitrouter_ai::control::requests::RequestFilters,
+        bitrouter_ai::control::requests::RequestsReport
     ),
     action!(
         Providers,
@@ -161,7 +159,7 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "providers",
         true,
         EmptyInput,
-        administration::ProvidersReport
+        bitrouter_ai::control::administration::ProvidersReport
     ),
     action!(
         Observe,
@@ -174,7 +172,7 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "telemetry",
         true,
         EmptyInput,
-        administration::ObserveReport
+        bitrouter_ai::control::administration::ObserveReport
     ),
     action!(
         PolicyStatus,
@@ -186,8 +184,8 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "policy status",
         "policy",
         true,
-        administration::PolicyInput,
-        administration::PolicyReport
+        bitrouter_ai::control::administration::PolicyInput,
+        bitrouter_ai::control::administration::PolicyReport
     ),
     action!(
         PolicyShow,
@@ -199,8 +197,8 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "policy show",
         "policy",
         true,
-        administration::PolicyInput,
-        administration::PolicyReport
+        bitrouter_ai::control::administration::PolicyInput,
+        bitrouter_ai::control::administration::PolicyReport
     ),
     action!(
         Agents,
@@ -213,7 +211,7 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "agents",
         true,
         EmptyInput,
-        administration::AgentsReport
+        bitrouter_ai::control::administration::AgentsReport
     ),
 ];
 

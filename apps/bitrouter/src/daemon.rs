@@ -12,6 +12,7 @@
 //! rest of this file — and every caller — is platform-agnostic.
 
 use crate::reload::ReloadReportRuntime;
+use bitrouter_ai::control::status::HandoffActivity;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -26,12 +27,17 @@ use crate::gateway::pipeline::routing::RoutingPrefs;
 use chrono::{DateTime, Utc};
 
 use crate::acp_runtime::AcpRuntime;
-use crate::actions::administration::{
-    Administration, AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
-};
 use crate::metering::{MeteringStore, TimeWindow};
 use crate::reload::{ReloadAdmissionError, ReloadReservation};
 use bitrouter_ai::control::reload::{ReloadReport, ReloadState};
+use {
+    crate::actions::administration::Administration,
+    bitrouter_ai::control::administration::AgentsReport,
+    bitrouter_ai::control::administration::ObserveReport,
+    bitrouter_ai::control::administration::PolicyInput,
+    bitrouter_ai::control::administration::PolicyReport,
+    bitrouter_ai::control::administration::ProvidersReport,
+};
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
@@ -252,17 +258,6 @@ pub struct RouteHop {
     pub api_protocol: String,
 }
 
-/// Point-in-time activity observed by the local daemon. Missing counts mean
-/// that subsystem could not prove idleness.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct HandoffActivity {
-    pub operations: usize,
-    pub supervised_runs: Option<usize>,
-    pub route_leases: usize,
-    pub acp_recordings: Option<u64>,
-    pub drain_in_progress: bool,
-}
-
 /// The daemon's reply to a [`DaemonCommand`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
@@ -315,11 +310,11 @@ pub enum DaemonResponse {
         /// Router inventory from the configuration source owned by this
         /// daemon. A caller-local `--config` is never mixed into a live reply.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        saved_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        saved_routers: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
         /// Router inventory from the same running config. `None` means the
         /// daemon predates this field or has no inspectable app routing config.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        running_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        running_routers: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
         /// Whether the saved canonical router map differs from the full map
         /// held by this daemon. Computed host-side so secret default values do
         /// not cross the control boundary.
@@ -332,10 +327,10 @@ pub enum DaemonResponse {
     /// The live routing table's catalog.
     Models {
         /// Every routable model, each with all the providers declaring it.
-        models: Vec<crate::gateway::pipeline::routing::ModelInfo>,
+        models: Vec<bitrouter_ai::routing::ModelInfo>,
         /// Routers from the same live routing snapshot.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        routers: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
     },
     /// A resolved route chain.
     Route {
@@ -346,10 +341,10 @@ pub enum DaemonResponse {
         resolved_model: Option<String>,
         /// Stable named-router identity, when the selector resolved one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        router: Option<crate::gateway::pipeline::routing::RouterRequestIdentity>,
+        router: Option<bitrouter_ai::routing::RouterRequestIdentity>,
         /// Canonical or legacy source of the named-router definition.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        router_source: Option<crate::actions::models::RouterSource>,
+        router_source: Option<bitrouter_ai::control::models::RouterSource>,
         /// Dynamic policy bound to the router. The control verb does not run
         /// that policy and therefore never reports a selected candidate.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1370,8 +1365,8 @@ async fn dispatch(
 }
 
 struct RouterState {
-    saved: Option<Vec<crate::actions::models::RouterStatus>>,
-    running: Option<Vec<crate::actions::models::RouterStatus>>,
+    saved: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
+    running: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
     restart_required: Option<bool>,
 }
 

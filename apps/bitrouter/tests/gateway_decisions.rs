@@ -25,10 +25,6 @@ use bitrouter::gateway::pipeline::operations::HookStage;
 use bitrouter::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
-use bitrouter::gateway::pipeline::routing::{
-    FallbackPolicy, ModelInfo, ModelResolution, RouterRequestIdentity, RoutingPrefs, RoutingTable,
-    StaticRoutingTable,
-};
 use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use bitrouter::gateway::pipeline::types::{PipelineRequest, RoutingTarget};
 use bitrouter_ai::decisions::DecisionRequest;
@@ -37,6 +33,14 @@ use bitrouter_ai::types::{ApiProtocol, ModelOperation, OperationScope, UsageOrig
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tower::ServiceExt;
+use {
+    bitrouter::gateway::pipeline::routing::FallbackPolicy,
+    bitrouter::gateway::pipeline::routing::ModelResolution,
+    bitrouter::gateway::pipeline::routing::RoutingPrefs,
+    bitrouter::gateway::pipeline::routing::RoutingTable,
+    bitrouter::gateway::pipeline::routing::StaticRoutingTable, bitrouter_ai::routing::ModelInfo,
+    bitrouter_ai::routing::RouterRequestIdentity,
+};
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

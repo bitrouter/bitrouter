@@ -10,6 +10,7 @@ pub mod inventory;
 pub mod operations;
 mod reads;
 
+use crate::output::reports::requests::RequestsReportRuntime;
 #[cfg(test)]
 use crate::reload::ReloadReportRuntime;
 use bitrouter_ai::control::{
@@ -20,9 +21,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::actions::models::ModelsReport;
-use crate::actions::route::{RouteInput, RouteReport};
-use crate::actions::status::StatusReport;
 use crate::config::ControlConfig;
 use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
@@ -36,18 +34,24 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bitrouter_ai::control::ControlScope;
+use bitrouter_ai::control::models::ModelsReport;
+use bitrouter_ai::control::status::StatusReport;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
+use {bitrouter_ai::control::route::RouteInput, bitrouter_ai::control::route::RouteReport};
 
 use self::auth::{ControlAuth, ControlCaller};
 use self::operations::{OperationError, OperationService};
-use crate::actions::administration::{Administration, PolicyInput};
 use crate::actions::requests::RequestsAction;
-use crate::output::reports::requests::RequestsReport;
 use crate::paths::ConfigSource;
 use bitrouter_ai::control::reload::{OperationReport, ReloadInput};
+use bitrouter_ai::control::requests::RequestsReport;
+use {
+    crate::actions::administration::Administration,
+    bitrouter_ai::control::administration::PolicyInput,
+};
 
 /// Environment variable containing the remote-control bearer token.
 pub const CONTROL_TOKEN_ENV: &str = "BITROUTER_CONTROL_TOKEN";
@@ -94,7 +98,7 @@ fn current_capabilities(state: &ControlState, caller: &ControlCaller) -> Capabil
             ("max_reload_body_bytes".into(), 16 * 1024),
             (
                 "max_request_rows".into(),
-                crate::actions::requests::MAX_REQUEST_ROWS,
+                bitrouter_ai::control::requests::MAX_REQUEST_ROWS,
             ),
             (
                 "max_request_window_days".into(),
@@ -466,7 +470,7 @@ async fn control_state(
     let live_policy_digest = if let Some(administration) = &state.administration {
         administration
             .policy(PolicyInput {
-                view: crate::actions::administration::PolicyView::Active,
+                view: bitrouter_ai::control::administration::PolicyView::Active,
                 name: None,
             })
             .await
@@ -568,7 +572,7 @@ async fn models(
 ) -> Result<Json<ModelsReport>, ControlError> {
     let Query(params) = query.map_err(|_| ControlError::bad_request("invalid model filters"))?;
     if let Some(provider) = &params.provider {
-        crate::actions::administration::validate_identifier(provider)
+        bitrouter_ai::control::administration::validate_identifier(provider)
             .map_err(ControlError::bad_request)?;
     }
     state
@@ -594,7 +598,7 @@ async fn route_preview(
 
 async fn requests(
     State(state): State<ControlState>,
-    query: Result<Query<crate::actions::requests::RequestFilters>, QueryRejection>,
+    query: Result<Query<bitrouter_ai::control::requests::RequestFilters>, QueryRejection>,
 ) -> Result<Json<RequestsReport>, ControlError> {
     let Query(params) = query.map_err(|_| ControlError::bad_request("invalid request filters"))?;
     let mut report = RequestsAction::new(state.source, state.socket)
@@ -607,26 +611,26 @@ async fn requests(
 
 async fn providers(
     State(state): State<ControlState>,
-) -> Result<Json<crate::actions::administration::ProvidersReport>, ControlError> {
+) -> Result<Json<bitrouter_ai::control::administration::ProvidersReport>, ControlError> {
     Ok(Json(state.administration()?.providers()))
 }
 
 async fn observe(
     State(state): State<ControlState>,
-) -> Result<Json<crate::actions::administration::ObserveReport>, ControlError> {
+) -> Result<Json<bitrouter_ai::control::administration::ObserveReport>, ControlError> {
     Ok(Json(state.administration()?.observe()))
 }
 
 async fn agents(
     State(state): State<ControlState>,
-) -> Result<Json<crate::actions::administration::AgentsReport>, ControlError> {
+) -> Result<Json<bitrouter_ai::control::administration::AgentsReport>, ControlError> {
     Ok(Json(state.administration()?.agents()))
 }
 
 async fn policy_status(
     State(state): State<ControlState>,
     query: Result<Query<PolicyInput>, QueryRejection>,
-) -> Result<Json<crate::actions::administration::PolicyReport>, ControlError> {
+) -> Result<Json<bitrouter_ai::control::administration::PolicyReport>, ControlError> {
     let Query(input) = query.map_err(|_| ControlError::bad_request("invalid policy input"))?;
     if input.name.is_some() {
         return Err(ControlError::bad_request(
@@ -644,7 +648,7 @@ async fn policy_status(
 async fn policy_show(
     State(state): State<ControlState>,
     query: Result<Query<PolicyInput>, QueryRejection>,
-) -> Result<Json<crate::actions::administration::PolicyReport>, ControlError> {
+) -> Result<Json<bitrouter_ai::control::administration::PolicyReport>, ControlError> {
     let Query(input) = query.map_err(|_| ControlError::bad_request("invalid policy input"))?;
     if input.name.is_none() {
         return Err(ControlError::bad_request("policy show requires a name"));
@@ -883,17 +887,19 @@ impl HttpControlClient {
         Ok(report)
     }
 
-    pub async fn providers(&self) -> Result<crate::actions::administration::ProvidersReport> {
+    pub async fn providers(
+        &self,
+    ) -> Result<bitrouter_ai::control::administration::ProvidersReport> {
         self.require_action("providers_list").await?;
         self.get("providers", None).await
     }
 
-    pub async fn agents(&self) -> Result<crate::actions::administration::AgentsReport> {
+    pub async fn agents(&self) -> Result<bitrouter_ai::control::administration::AgentsReport> {
         self.require_action("agents_list").await?;
         self.get("agents", None).await
     }
 
-    pub async fn observe(&self) -> Result<crate::actions::administration::ObserveReport> {
+    pub async fn observe(&self) -> Result<bitrouter_ai::control::administration::ObserveReport> {
         self.require_action("observe_status").await?;
         self.get("observe/status", None).await
     }
@@ -901,7 +907,7 @@ impl HttpControlClient {
     pub async fn policy(
         &self,
         input: &PolicyInput,
-    ) -> Result<crate::actions::administration::PolicyReport> {
+    ) -> Result<bitrouter_ai::control::administration::PolicyReport> {
         input.validate()?;
         let (action, path) = if input.name.is_some() {
             ("policy_show", "policy/show")
@@ -912,8 +918,8 @@ impl HttpControlClient {
         let mut query = vec![(
             "view",
             match input.view {
-                crate::actions::administration::PolicyView::Active => "active",
-                crate::actions::administration::PolicyView::Disk => "disk",
+                bitrouter_ai::control::administration::PolicyView::Active => "active",
+                bitrouter_ai::control::administration::PolicyView::Disk => "disk",
             },
         )];
         if let Some(name) = &input.name {
@@ -941,15 +947,17 @@ impl HttpControlClient {
     }
 
     pub async fn requests(&self, limit: Option<u64>) -> Result<RequestsReport> {
-        self.requests_filtered(&crate::actions::requests::RequestFilters::with_limit(
-            limit.unwrap_or(crate::actions::requests::MAX_REQUEST_ROWS),
-        ))
+        self.requests_filtered(
+            &bitrouter_ai::control::requests::RequestFilters::with_limit(
+                limit.unwrap_or(bitrouter_ai::control::requests::MAX_REQUEST_ROWS),
+            ),
+        )
         .await
     }
 
     pub async fn requests_filtered(
         &self,
-        filters: &crate::actions::requests::RequestFilters,
+        filters: &bitrouter_ai::control::requests::RequestFilters,
     ) -> Result<RequestsReport> {
         self.require_action("requests").await?;
         let has_filters = filters.since.is_some()

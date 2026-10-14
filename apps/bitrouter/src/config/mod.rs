@@ -20,15 +20,17 @@
 //! ```
 
 use bitrouter_ai::control::ControlScope;
+#[cfg(doc)]
+use bitrouter_ai::routing::SortOrder;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
+use {bitrouter_ai::routing::PolicyModelTarget, bitrouter_ai::routing::RoutingConfig};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::client::HttpTimeouts;
-use crate::gateway::pipeline::routing::SortOrder;
 use crate::gateway::pipeline::types::OutboundHeaderRule;
 use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
@@ -531,58 +533,6 @@ impl Default for RegistryConfig {
             url: DEFAULT_REGISTRY_URL.to_string(),
             provider_priority: ProviderClass::default_priority(),
         }
-    }
-}
-
-/// One policy action: generation model, optional effort and context treatment.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct PolicyModelTarget {
-    /// Normal generation route selector.
-    pub model: String,
-    /// Explicit policy effort; absence preserves a caller constraint.
-    pub effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    /// Context strategy is part of the action identity, including Learn evidence.
-    pub context: crate::gateway::routing::ContextStrategy,
-}
-
-impl PolicyModelTarget {
-    /// Construct a model action with evidence routing and inherited effort.
-    pub fn model_only(model: String) -> Self {
-        Self {
-            model,
-            effort: None,
-            context: Default::default(),
-        }
-    }
-    /// Model selected by this action.
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-    /// Optional policy effort.
-    pub fn effort(&self) -> Option<bitrouter_ai::types::ReasoningEffort> {
-        self.effort
-    }
-}
-impl From<String> for PolicyModelTarget {
-    fn from(model: String) -> Self {
-        Self::model_only(model)
-    }
-}
-impl From<&str> for PolicyModelTarget {
-    fn from(model: &str) -> Self {
-        Self::model_only(model.into())
-    }
-}
-impl std::fmt::Display for PolicyModelTarget {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", self.model)?;
-        if let Some(effort) = self.effort {
-            write!(formatter, "@{effort}")?;
-        }
-        write!(formatter, ":{:?}", self.context)
     }
 }
 
@@ -1623,20 +1573,6 @@ pub struct VirtualEndpoint {
     pub provider: String,
     /// The service / model id at that provider.
     pub service_id: String,
-}
-
-/// Routing knobs shared by presets and variants.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct RoutingConfig {
-    /// Cascade-chain ordering.
-    pub sort: Option<SortOrder>,
-    /// Require providers carrying all these tags.
-    pub require_tags: Vec<String>,
-    /// Restrict the chain to exactly these providers.
-    pub only: Vec<String>,
-    /// Drop these providers from the chain.
-    pub ignore: Vec<String>,
 }
 
 /// An `@preset` definition.

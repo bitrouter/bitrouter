@@ -1086,8 +1086,8 @@ pub async fn read_status(config_path: &Path, policy_name: &str) -> Result<Optimi
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use crate::config::PolicyModelTarget;
     use anyhow::{Context, Result};
+    use bitrouter_ai::routing::PolicyModelTarget;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::types::{
@@ -2398,9 +2398,9 @@ mod file_tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
 
-    use crate::config::PolicyModelTarget;
     use crate::config::PolicyRuntimeMode;
     use anyhow::{Context, Result};
+    use bitrouter_ai::routing::PolicyModelTarget;
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use crate::eval::EvalService;

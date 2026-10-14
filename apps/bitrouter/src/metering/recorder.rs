@@ -217,7 +217,7 @@ impl SettlementRecorder for MeteringRecorder {
             })
             .transpose()?;
         let router = ctx
-            .get_event::<crate::gateway::pipeline::routing::RouterRequestIdentity>()
+            .get_event::<bitrouter_ai::routing::RouterRequestIdentity>()
             .cloned();
         if let Some(event) = &session_event {
             ctx.emit(bitrouter_ai::observe::span_attributes::SpanAttributes(

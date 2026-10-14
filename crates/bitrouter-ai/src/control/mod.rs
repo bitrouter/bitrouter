@@ -2,7 +2,12 @@
 //!
 //! These credentials and scopes are independent of inference authorization.
 
+pub mod administration;
+pub mod models;
 pub mod reload;
+pub mod requests;
+pub mod route;
+pub mod status;
 
 use serde::{Deserialize, Serialize};
 

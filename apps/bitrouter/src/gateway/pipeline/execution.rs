@@ -1952,7 +1952,7 @@ impl Pipeline {
                 &views,
                 crate::gateway::routing::plan::Options {
                     strategy: ctx
-                        .extension::<crate::gateway::routing::ContextStrategy>()
+                        .extension::<bitrouter_ai::routing::ContextStrategy>()
                         .as_deref()
                         .copied()
                         .unwrap_or_default(),

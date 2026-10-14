@@ -7,10 +7,14 @@ use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind 
 use bitrouter::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
-use bitrouter::gateway::pipeline::routing::{
-    ModelInfo, ModelResolution, ModelSelector, RouterRequestIdentity, RoutingPrefs, RoutingTable,
-};
 use bitrouter_ai::extension::request_check::{Decision, Input};
+use {
+    bitrouter::gateway::pipeline::routing::ModelResolution,
+    bitrouter::gateway::pipeline::routing::ModelSelector,
+    bitrouter::gateway::pipeline::routing::RoutingPrefs,
+    bitrouter::gateway::pipeline::routing::RoutingTable, bitrouter_ai::routing::ModelInfo,
+    bitrouter_ai::routing::RouterRequestIdentity,
+};
 
 struct Probe {
     calls: Mutex<Vec<Kind>>,

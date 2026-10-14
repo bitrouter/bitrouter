@@ -59,7 +59,7 @@ the contract move must preserve its bytes.
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
-| P0 1 Public contracts | In progress | Observation/event/request-check contracts, operation scopes and control capability/reload contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; control inspection/core DTO extraction remains before their final service/client split |
+| P0 1 Public contracts | In progress | Observation/event/request-check contracts, operation scopes and control lifecycle/inspection contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; eval/core DTO extraction remains before their final service/client split |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE client and public wire response contracts verified; control/eval/core client extraction and independent official-service process consumer remain |
@@ -345,3 +345,49 @@ consumer migration table and request/response/event fidelity gates. Control
 inspection DTOs and the portable HTTP client remain in the application pending
 the next P0 4 extraction; eval/core clients, final feature isolation and the
 complete P0 acceptance/PR remain open.
+
+P0 4 now also moves **42 inspection and shared routing types** into AI:
+model/router inventory, route previews and pricing evidence, provider/agent/
+policy/observation reports, status/spend/handoff activity, request filters and
+request-history views. Published routing preferences and policy model targets
+are shared data contracts, not a routing implementation. Their field names,
+serde rules and schema definitions remain intact. Intrinsic identifier grammar
+returns a small typed error; policy selection against loaded configuration,
+request-window resolution against the clock, storage reads, local-version
+compatibility and CLI presentation remain application-owned.
+
+Private extension traits keep those application operations on shared reports
+without exposing service types through AI or introducing forwarding exports.
+The legacy request-report constructor has only repository test callers; it and
+its window helpers are now test-only and continue delegating to the production
+`new_filtered` constructor. No existing test bodies or expected outputs were
+removed to make the extraction pass.
+
+Validation for this extraction passed **953 tests** (914 application and 39 AI),
+with 2,500 other tests outside the selected stage filter. This covers control,
+reload, configuration, actions/report formatting, routing/policy, model pipeline
+and the selected real-process daemon/configuration suites. Isolated AI default
+tests passed **35 cases**. Strict workspace all-feature/all-target Clippy and
+strict workspace Rustdoc passed. The pinned AI/SDK public API scan passed with
+unchanged dependency manifests; the normal/build AI closure still contains only
+serialization, optional schema and error-support dependencies. The new request
+filter and status contracts are also positive CI API sentinels.
+
+The standard configuration schema check passed with unchanged SHA-256
+`d4aaacc1d5e9b162cd168c08cc4de2b495ba9fbec3b1c582999684b2a1883135`;
+the observation schema also retains its baseline bytes. Formatting and patch
+whitespace checks passed. macOS development linking again reported the known
+oversized unwind table; no source-lint or behavioral failure was suppressed.
+
+Independent review compared all 42 declarations and their runtime method
+separation against `ca98b68` and found no actionable issue. The implementation
+plan now explicitly retains trajectory progress-guard evaluation, its health
+reducer and required persisted-state validation in the gateway; isolating core
+must not disable published policies. The HTTP control client still remains in
+the application for the next extraction. Eval/core client work, the complete
+feature matrix, compatibility fixtures, final P0 validation and PR remain open.
+
+A read-only history fetch found upstream `main` at `2fd95b1`, one catalog/test
+refresh commit beyond the frozen baseline. It has not yet been merged into this
+implementation branch; its relocated native-agent test changes require explicit
+integration. Baseline compatibility evidence remains tied to `9956a42`.

@@ -4,16 +4,13 @@
 //! ledger can compile a candidate, but only explicit publication replaces this
 //! file. Serving never reads learned database rows for semantic selection.
 
+use crate::actions::administration::PolicyReportRuntime;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::commands::invocation;
-use crate::config::{
-    AdequacyConfig, Config, PolicyKeyStrategy, PolicyModelTarget, PolicyRuntimeMode,
-    PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
-};
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::routing::ModelSelector;
@@ -23,6 +20,12 @@ use anyhow::{Context, Result};
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use {
+    crate::config::AdequacyConfig, crate::config::Config, crate::config::PolicyKeyStrategy,
+    crate::config::PolicyRuntimeMode, crate::config::PolicyTableConfig,
+    crate::config::TrajectoryConfig, crate::config::validate_policy_table_config,
+    bitrouter_ai::routing::PolicyModelTarget,
+};
 
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
@@ -2965,7 +2968,7 @@ struct PolicySnapshot {
     path: Option<PathBuf>,
     digest: Option<String>,
     routers: BTreeMap<String, Arc<PolicyTableRouter>>,
-    administration: Option<crate::actions::administration::PolicyReport>,
+    administration: Option<bitrouter_ai::control::administration::PolicyReport>,
     document: Option<PolicyLock>,
 }
 
@@ -3149,11 +3152,13 @@ impl PolicyRuntime {
             digest: loaded.as_ref().map(|lock| lock.digest.clone()),
             document: loaded.as_ref().map(|lock| lock.document.clone()),
             routers,
-            administration: Some(crate::actions::administration::PolicyReport::from_loaded(
-                config,
-                loaded.as_ref(),
-                crate::actions::administration::PolicyView::Active,
-            )),
+            administration: Some(
+                bitrouter_ai::control::administration::PolicyReport::from_loaded(
+                    config,
+                    loaded.as_ref(),
+                    bitrouter_ai::control::administration::PolicyView::Active,
+                ),
+            ),
         })))
     }
 
@@ -3178,16 +3183,16 @@ impl PolicyRuntime {
     }
 
     /// Inspection data captured with the same policy version used for routing.
-    pub fn administration_snapshot(&self) -> crate::actions::administration::PolicyReport {
+    pub fn administration_snapshot(&self) -> bitrouter_ai::control::administration::PolicyReport {
         let snapshot = match self.snapshot.read() {
             Ok(snapshot) => snapshot.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         snapshot.administration.clone().unwrap_or_else(|| {
-            crate::actions::administration::PolicyReport::from_loaded(
+            bitrouter_ai::control::administration::PolicyReport::from_loaded(
                 &Config::default(),
                 None,
-                crate::actions::administration::PolicyView::Active,
+                bitrouter_ai::control::administration::PolicyView::Active,
             )
         })
     }
@@ -5029,7 +5034,7 @@ policies:
             policy
                 .tiers
                 .values()
-                .all(|target| target.context == crate::gateway::routing::ContextStrategy::Evidence)
+                .all(|target| target.context == bitrouter_ai::routing::ContextStrategy::Evidence)
         );
         let rendered = deterministic_yaml(&lock)?;
         assert_eq!(

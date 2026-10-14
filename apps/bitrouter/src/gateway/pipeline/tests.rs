@@ -40,10 +40,6 @@ use crate::gateway::pipeline::hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
     PreRequestHook, RequestOutcome, RouteHook, StreamHook,
 };
-use crate::gateway::pipeline::routing::{
-    FallbackPolicy, ModelInfo, ModelResolution, ModelSelector, PromptOverrides,
-    RouterRequestIdentity, RoutingPrefs, RoutingTable, StaticRoutingTable,
-};
 use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use crate::gateway::pipeline::stream::{StreamAction, StreamInterest, StreamOutcome};
 use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
@@ -52,6 +48,16 @@ use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::extension::request_check::{ContentRole, Decision, Input};
 use bitrouter_ai::types::*;
 use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortSource};
+use {
+    crate::gateway::pipeline::routing::FallbackPolicy,
+    crate::gateway::pipeline::routing::ModelResolution,
+    crate::gateway::pipeline::routing::ModelSelector,
+    crate::gateway::pipeline::routing::PromptOverrides,
+    crate::gateway::pipeline::routing::RoutingPrefs,
+    crate::gateway::pipeline::routing::RoutingTable,
+    crate::gateway::pipeline::routing::StaticRoutingTable, bitrouter_ai::routing::ModelInfo,
+    bitrouter_ai::routing::RouterRequestIdentity,
+};
 
 #[path = "tests_unified_routing.rs"]
 mod unified_routing;

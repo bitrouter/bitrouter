@@ -28,4 +28,5 @@ pub mod extension;
 pub mod gateway;
 pub mod observe;
 pub mod protocol;
+pub mod routing;
 pub mod types;

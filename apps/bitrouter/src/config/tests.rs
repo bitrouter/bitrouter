@@ -1,6 +1,7 @@
 //! Config parsing + `${VAR}` substitution tests.
 
 use super::*;
+use bitrouter_ai::routing::SortOrder;
 
 #[test]
 fn decision_model_config_validates_bounds_without_loading_credentials()
@@ -1058,10 +1059,7 @@ routers:
     match &project.selection {
         router::RouterSelection::Model { model, routing } => {
             assert_eq!(model, "vendor:base");
-            assert_eq!(
-                routing.sort,
-                Some(crate::gateway::pipeline::routing::SortOrder::Cost)
-            );
+            assert_eq!(routing.sort, Some(bitrouter_ai::routing::SortOrder::Cost));
             assert_eq!(routing.only, vec!["vendor"]);
         }
         router::RouterSelection::Policy { .. } => {

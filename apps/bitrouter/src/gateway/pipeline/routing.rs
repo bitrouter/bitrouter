@@ -6,9 +6,12 @@
 
 use std::collections::HashMap;
 use std::sync::RwLock;
+use {
+    bitrouter_ai::routing::ModelInfo, bitrouter_ai::routing::RouterRequestIdentity,
+    bitrouter_ai::routing::SortOrder,
+};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
@@ -17,24 +20,7 @@ use crate::gateway::pipeline::hooks::FallbackDecision;
 use crate::gateway::pipeline::request_checks::RequestCheckBinding;
 use crate::gateway::pipeline::stream::UsagePricing;
 use crate::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{ApiProtocol, Capability, ModelOperation};
-
-/// How a cascade chain should be ordered.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum SortOrder {
-    /// Sort by provider name, ascending. The Phase-1 default; later replaced by
-    /// a recommender (cost / latency / throughput scoring).
-    #[default]
-    Alphabetical,
-    /// Sort by lowest latency first.
-    Latency,
-    /// Sort by lowest cost first.
-    Cost,
-}
 
 /// Routing preferences distilled from `@preset` / `:variant`.
 /// Feeds both explicit-virtual-model endpoint selection and auto-cascade
@@ -65,45 +51,6 @@ pub struct RoutingPrefs {
     /// `None` imposes no native preference. Set by the pipeline from
     /// [`PipelineContext::inbound_protocol`](crate::gateway::pipeline::context::PipelineContext::inbound_protocol).
     pub inbound_protocol: Option<ApiProtocol>,
-}
-
-/// Summary of a routable model, for `GET /v1/models`.
-///
-/// Also the element type of the app-owned `list_models` action report. It
-/// derives `JsonSchema` because typed control clients consume that report. It
-/// lives here rather than beside the action because it already rides a wire —
-/// `GET /v1/models` and the daemon control socket both carry it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ModelInfo {
-    /// A routable model selector. Subscription-backed providers use an
-    /// explicit `provider:canonical-model` selector here because a bare
-    /// canonical request must not opt into a personal subscription.
-    pub id: String,
-    /// Providers that declare this model.
-    pub providers: Vec<String>,
-}
-
-/// Stable identity of the named router selected for one request.
-///
-/// This value is frozen when Stage 0 resolves the raw selector, emitted as a
-/// typed pipeline event, and preserved through policy selection and provider
-/// fallback. `binding_digest` identifies the redaction-safe router binding;
-/// any policy artifact digest remains a separate app-owned identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RouterRequestIdentity {
-    /// Canonical router id, including the name normalized from a legacy preset.
-    pub router_id: String,
-    /// Exact inbound model selector before ingress transforms, such as
-    /// `bitrouter/coding` or `@coding`.
-    pub original_selector: String,
-    /// Versioned, redaction-safe effective binding digest.
-    pub binding_digest: String,
-}
-
-impl PipelineEvent for RouterRequestIdentity {
-    fn event_name(&self) -> &'static str {
-        "router.resolved"
-    }
 }
 
 /// One-time resolution of the request's raw model selector. Config-backed

@@ -3,167 +3,35 @@
 //! One report type is shared by `bro models`, Code sessions, and typed remote
 //! control so all retained surfaces preserve the same JSON shape.
 //!
-//! The element type is [`ModelInfo`] itself — `bitrouter-sdk`'s, not a copy.
+//! The element type is the shared [`ModelInfo`](bitrouter_ai::routing::ModelInfo)
+//! contract used by service clients.
 //! The copy this crate used to keep held a single `provider: String` and was
 //! filled with `providers.first()`, so every model served by more than one
 //! provider lost its fallback chain on the way to an agent: it asked what could
 //! serve a model and was told one answer where there were three. The wire has
 //! always carried the whole list.
 
+use crate::actions::administration::PolicyReportRuntime;
 use std::collections::BTreeSet;
+use {
+    bitrouter_ai::control::models::ModelsReport, bitrouter_ai::control::models::RouterReadiness,
+    bitrouter_ai::control::models::RouterSelectionStatus,
+    bitrouter_ai::control::models::RouterSource, bitrouter_ai::control::models::RouterStatus,
+};
 
 use crate::config::Config;
-use crate::config::RoutingConfig;
 use crate::config::router::RouterConfigSource;
 use crate::config::router::RouterInventorySelection;
 use crate::config::routing_table::ConfigRoutingTable;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::pipeline::routing::ModelInfo;
 use crate::gateway::pipeline::routing::RoutingTable;
 
 use super::ToolError;
 
-/// Which view of the catalog answered.
-///
-/// The two are not interchangeable, and an agent deciding whether it may route
-/// a model needs to know which it is holding: [`Self::Live`] is what a running
-/// router *will* accept right now, [`Self::Config`] is what a configuration
-/// *would* accept if one were started.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelsSource {
-    /// A running router answered: the local daemon's live routing table, or a
-    /// metered account's catalog. Reflects `reload`s and the state the router
-    /// actually resolved at start-up.
-    Live,
-    /// No router was reachable, so the catalog was projected from static
-    /// configuration, resolved the way a daemon would resolve it at start-up
-    /// (built-in defaults, stored credentials). Honest but weaker: it is what
-    /// the config says *now*, so a file edited since a daemon started would be
-    /// listed even though that daemon would refuse it, and nothing a running
-    /// daemon learned after start-up is reflected.
-    Config,
-}
-
-/// Where one effective router definition came from.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum RouterSource {
-    /// A definition under the public `routers:` config section.
-    User,
-    /// A compatibility definition normalized from `presets:`.
-    Legacy,
-    /// The product's built-in coding initialization slot has no saved binding.
-    Default,
-}
-
-/// Whether a router can be resolved against the inspected runtime/config.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum RouterReadiness {
-    Ready,
-    NotReady,
-    Uninitialized,
-    Unknown,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum PolicyReadiness<'a> {
-    Known(&'a crate::actions::administration::PolicyReport),
+    Known(&'a bitrouter_ai::control::administration::PolicyReport),
     Invalid,
-}
-
-/// Public, non-secret selection portion of a normalized router definition.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RouterSelectionStatus {
-    Model {
-        model: Option<String>,
-        routing: RoutingConfig,
-    },
-    Policy {
-        policy: String,
-        base_model: Option<String>,
-        routing: RoutingConfig,
-    },
-}
-
-/// One router as the inspected config/runtime understands it. Defaults expose
-/// only field presence and parameter names; prompt and parameter values never
-/// cross the diagnostics boundary.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct RouterStatus {
-    pub id: String,
-    pub address: String,
-    pub source: RouterSource,
-    pub readiness: RouterReadiness,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection: Option<RouterSelectionStatus>,
-    pub system_prompt_default: bool,
-    #[serde(default)]
-    pub parameter_defaults: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binding_digest: Option<String>,
-}
-
-/// Every model BitRouter can route, each with the providers that can serve it.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct ModelsReport {
-    /// The routable models. Each carries **every** provider that declares it,
-    /// in fallback order — not just the first.
-    pub models: Vec<ModelInfo>,
-    /// Which view produced [`Self::models`].
-    pub resolved_via: ModelsSource,
-    /// Router definitions from the same live/config source. `None` means the
-    /// answering daemon predates router inventory support; it is not an empty
-    /// successful inventory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub routers: Option<Vec<RouterStatus>>,
-}
-
-impl ModelsReport {
-    /// A running router's own catalog.
-    pub fn live(models: Vec<ModelInfo>) -> Self {
-        Self {
-            models,
-            resolved_via: ModelsSource::Live,
-            routers: None,
-        }
-    }
-
-    /// A static configuration's projection, used when no router answered.
-    pub fn from_config(models: Vec<ModelInfo>) -> Self {
-        Self {
-            models,
-            resolved_via: ModelsSource::Config,
-            routers: None,
-        }
-    }
-
-    pub fn with_routers(mut self, routers: Option<Vec<RouterStatus>>) -> Self {
-        self.routers = routers;
-        self
-    }
-
-    /// Keep only the models `provider` can serve; `None` keeps everything.
-    ///
-    /// The filter lives on the report rather than in the port so every adapter
-    /// narrows the same list with the same rule.
-    pub fn filtered(mut self, provider: Option<&str>) -> Self {
-        if let Some(provider) = provider {
-            self.models
-                .retain(|m| m.providers.iter().any(|p| p == provider));
-        }
-        self
-    }
 }
 
 /// The `list_models` port shared by local consumers.
@@ -412,17 +280,19 @@ pub(crate) async fn disk_router_statuses_for_config(
 async fn disk_policy_report(
     config: &Config,
     source: &ConfigSource,
-) -> anyhow::Result<crate::actions::administration::PolicyReport> {
+) -> anyhow::Result<bitrouter_ai::control::administration::PolicyReport> {
     let path = match source {
         ConfigSource::File(path) => Some(path.as_path()),
         _ => None,
     };
     let loaded = crate::policy_lock::load_for_config(config, path).await?;
-    Ok(crate::actions::administration::PolicyReport::from_loaded(
-        config,
-        loaded.as_ref(),
-        crate::actions::administration::PolicyView::Disk,
-    ))
+    Ok(
+        bitrouter_ai::control::administration::PolicyReport::from_loaded(
+            config,
+            loaded.as_ref(),
+            bitrouter_ai::control::administration::PolicyView::Disk,
+        ),
+    )
 }
 
 /// Whether the control endpoint is currently bound, so an abandoned socket
@@ -530,7 +400,7 @@ providers:
         .expect("a stopped daemon must not fail list_models");
         assert_eq!(
             report.resolved_via,
-            crate::actions::models::ModelsSource::Config
+            bitrouter_ai::control::models::ModelsSource::Config
         );
         assert!(!report.models.is_empty());
     }
@@ -597,10 +467,10 @@ presets:
     model: demo-model
 "#,
         )?;
-        let policies = crate::actions::administration::PolicyReport::from_loaded(
+        let policies = bitrouter_ai::control::administration::PolicyReport::from_loaded(
             &config,
             None,
-            crate::actions::administration::PolicyView::Disk,
+            bitrouter_ai::control::administration::PolicyView::Disk,
         );
         let routers = router_statuses(&config, PolicyReadiness::Known(&policies)).await?;
 
@@ -781,7 +651,7 @@ providers:
         assert_eq!(selector.id, "openai-codex:openai/gpt-5.6-sol");
 
         let route = crate::actions::route::RouteAction::new(source, None)
-            .report(crate::actions::route::RouteInput {
+            .report(bitrouter_ai::control::route::RouteInput {
                 model: selector.id.clone(),
                 prompt: None,
             })

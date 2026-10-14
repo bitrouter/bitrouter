@@ -13,6 +13,7 @@
 //! provider with an empty `api_base`, and an `auto_discover` provider
 //! would then silently drop every model.
 
+use crate::actions::administration::PolicyReportRuntime;
 use bitrouter_ai::control::reload::{
     AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, ReloadConsistency, ReloadFailure,
     ReloadOutcome, ReloadParticipant, ReloadParticipantOutcome, ReloadParticipantReport,
@@ -1846,10 +1847,10 @@ impl AppReloader {
             }
         };
         let active = runtime.administration_snapshot();
-        let disk = crate::actions::administration::PolicyReport::from_loaded(
+        let disk = bitrouter_ai::control::administration::PolicyReport::from_loaded(
             &baseline.config,
             loaded.as_ref(),
-            crate::actions::administration::PolicyView::Disk,
+            bitrouter_ai::control::administration::PolicyView::Disk,
         );
         if active.availability == "not_configured" && disk.availability == "not_configured" {
             AuxiliaryConfigState::NotConfigured

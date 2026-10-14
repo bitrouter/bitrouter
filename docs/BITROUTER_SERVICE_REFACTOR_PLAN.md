@@ -539,7 +539,7 @@ crate-root module declarations at the inventory baseline.
 | `supervisor` | `harness::supervisor` agent process/session lifecycle |
 | `tools` | `commands::tools` existing gateway/MCP diagnostics; do not confuse this module with orchestrator workspace tools |
 | `tracing_filter` | `host::logging` basic logs independent of optional OTLP |
-| `trajectory` | Gateway request evidence/correlation/finalization adapter; core canonical analysis/evaluation/replay/health/publishing; keep current durable record semantics |
+| `trajectory` | Gateway request evidence/correlation/finalization, request-time progress-guard evaluation and its required health reduction/state validation; core offline analysis/evaluation/replay and policy publishing; keep current durable record semantics |
 | `update` | `host::update` updater implementation and thin CLI entry |
 | `upgrade` | `host::upgrade` upgrade coordination and thin CLI entry |
 | `upgrade_preflight` | `storage` schema compatibility checks plus host upgrade coordination |
@@ -570,6 +570,16 @@ compiler digests when admitting a published artifact. Keep those policy data,
 assignment and verification helpers available to gateway builds. Core owns
 creating, evaluating and promoting experiments; disabling core must neither
 disable an already published experiment nor skip its certificate checks.
+
+Published policies may also carry `progress_guard`. Ordinary routing calls
+`trajectory::store::begin_guarded_request`, whose evaluation and event append
+depend on `trajectory::health::reduce`. Keep this request-time guard path, its
+required persisted history and integrity checks available without core. The
+gateway must preserve protected-tier escalation and tool safety floors when
+applying an existing policy. Core owns offline analysis and policy production;
+the shared reducer's use by those consumers does not make request-time policy
+enforcement core-only. These are gateway request facts, not harness session
+authority or a reason to start a learning worker.
 
 ### Current bitrouter-ai
 
@@ -924,6 +934,23 @@ three packages does not complete P0 while gateway/SDK separation or feature
 isolation is unfinished. Validate the complete candidate against every gate
 after the final ownership and feature graph are in place.
 
+### Evidence required from each stage
+
+Keep a migration ledger alongside the implementation. For each completed stage,
+record the source revision, moved modules and destination owners, affected
+features, consumer changes, and the test/fixture families that moved with them.
+Record validation commands with their exact feature selection and results;
+distinguish a successful build from an exercised runtime path. Link unresolved
+items to the acceptance IDs below rather than declaring the stage complete by
+file movement alone.
+
+Treat baseline test removal as a separate review decision: identify the behavior
+it covered and its replacement evidence, or establish that the code has no
+supported caller. Do not silently turn a behavior change into a relocation by
+changing expected output. The final P0 record must reconcile every inventory row
+and A01–A16; publication, external consumer migration and P1 remain separately
+reported outcomes.
+
 ### P0 0 Record compatibility and delivery baselines
 
 - Record the actual package/module inventory, feature graphs, command and API
@@ -996,7 +1023,9 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
   catalog runtime into the application.
 - Keep serving-time workflow projection and published-policy validation in the
   gateway, including deterministic assignment for published experiments and
-  their identity/certificate checks; only learning and scheduling depend on core.
+  their identity/certificate checks, plus progress-guard evaluation and its
+  required trajectory health/state checks; only learning and scheduling depend
+  on core.
 - Split DTOs from implementation within mixed files; keep public API errors and
   observation views free of credentials and internal runtime objects.
 - Move runtime tests and fixtures with their implementations. Preserve protocol
@@ -1129,7 +1158,7 @@ coverage that justifies a profile.
 
 | Profile or boundary | Required behavior evidence |
 | --- | --- |
-| Minimum gateway | Real-process inference/control, configured authentication, published-policy load/validation and equivalent routing including published experiment assignment and certificate rejection, usage finalization and shutdown without agent resources or a terminal |
+| Minimum gateway | Real-process inference/control, configured authentication, published-policy load/validation and equivalent routing including published experiment assignment, certificate rejection and progress-guard escalation/tool safety floors with persisted-history validation, usage finalization and shutdown without agent resources or a terminal |
 | Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness; existing eval HTTP subject/result/snapshot/status behavior and tenant isolation |
 | Harness only | ThreadService ownership/queue/approval/recovery, historical native snapshot decoding and corruption rejection, and supported headless execution tests, without production core or terminal drawing |
 | Core and harness | Existing managed execution, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |

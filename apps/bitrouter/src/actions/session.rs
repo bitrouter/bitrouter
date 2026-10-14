@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use crate::actions::ToolError;
 use crate::actions::models::ModelsQuery;
-use crate::actions::route::{RouteInput, RouteQuery};
 use crate::actions::status::StatusQuery;
 use crate::actions::{ACTIONS, Requires};
 use crate::commands::chat::Command;
 use crate::harness::acp::client::{AcpClient, RouteMethod};
+use {crate::actions::route::RouteQuery, bitrouter_ai::control::route::RouteInput};
 
 use crate::output::CliReport;
 use crate::paths::ConfigSource;

@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter::actions::administration::Administration;
-use bitrouter::actions::status::{DaemonStatus, StatusReport};
 use bitrouter::daemon::{self, DaemonCommand, DaemonReloader, DaemonResponse};
 use bitrouter::paths::ConfigSource;
 use bitrouter::reload::{AppReloader, ReloadSource};
 use serde_json::Value;
+use {bitrouter::actions::status::DaemonStatus, bitrouter_ai::control::status::StatusReport};
 
 struct RunningFixture {
     directory: tempfile::TempDir,

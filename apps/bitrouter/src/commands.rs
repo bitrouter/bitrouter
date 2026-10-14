@@ -7,7 +7,10 @@ use anyhow::{Context, Result};
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::pipeline::routing::{ModelInfo, RoutingPrefs, RoutingTable};
+use {
+    crate::gateway::pipeline::routing::RoutingPrefs,
+    crate::gateway::pipeline::routing::RoutingTable, bitrouter_ai::routing::ModelInfo,
+};
 
 use crate::actions::skills::SkillsReport;
 use crate::auth::{NewApiKey, db as auth_db, generate};

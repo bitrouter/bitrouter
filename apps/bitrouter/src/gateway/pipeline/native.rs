@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::gateway::error::Result;
-use crate::gateway::pipeline::routing::RouterRequestIdentity;
 use crate::gateway::pipeline::types::RoutingTarget;
+use bitrouter_ai::routing::RouterRequestIdentity;
 use bitrouter_ai::types::{
     ApiProtocol, Capability, GenerateResult, Message, Prompt, ReasoningEffortSource,
 };

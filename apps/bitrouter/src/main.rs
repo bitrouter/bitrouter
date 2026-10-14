@@ -24,9 +24,6 @@ use tracing_filter::resolve_env_filter;
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
-use bitrouter::actions::administration::{PolicyInput, PolicyView};
-use bitrouter::actions::requests::RequestFilters;
-use bitrouter::actions::route::RouteInput;
 use bitrouter::administration_target::{InspectionTarget, ReloadSubmission};
 use bitrouter::commands;
 use bitrouter::config;
@@ -61,6 +58,12 @@ use bitrouter::output::reports::trajectory::{
 };
 use bitrouter::output::{CliReport, Output};
 use bitrouter_ai::control::reload::{OperationReport, OperationStatus};
+use bitrouter_ai::control::requests::RequestFilters;
+use bitrouter_ai::control::route::RouteInput;
+use {
+    bitrouter_ai::control::administration::PolicyInput,
+    bitrouter_ai::control::administration::PolicyView,
+};
 
 /// BitRouter — an LLM API router.
 #[derive(Parser)]
@@ -313,7 +316,7 @@ enum Command {
     /// Show recent settled requests and aggregate spend.
     Requests {
         /// Maximum number of recent requests to return.
-        #[arg(long, default_value_t = bitrouter::actions::requests::MAX_REQUEST_ROWS)]
+        #[arg(long, default_value_t = bitrouter_ai::control::requests::MAX_REQUEST_ROWS)]
         limit: u64,
         /// Inclusive RFC3339 lower bound. Requires `--until`.
         #[arg(long)]

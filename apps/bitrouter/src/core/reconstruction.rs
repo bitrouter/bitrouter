@@ -89,7 +89,7 @@ pub(crate) fn candidate(
             .get(&step.step_id)
             .and_then(|execution| execution.routing.as_ref())
             .is_some_and(|routing| {
-                routing.strategy == crate::gateway::routing::ContextStrategy::Preserve
+                routing.strategy == bitrouter_ai::routing::ContextStrategy::Preserve
             })
         && step.decision.as_ref().is_some_and(|decision| {
             decision.routes.iter().any(|route| {

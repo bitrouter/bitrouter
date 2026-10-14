@@ -10,7 +10,7 @@ struct FailAfterWrite;
 async fn portable_rebuild_requires_capability_source_validation_and_nonpreserve_policy()
 -> Result<()> {
     use crate::gateway::routing::preparation::Prepared;
-    use crate::gateway::routing::{ContextCapability, ContextStrategy};
+    use {crate::gateway::routing::ContextCapability, bitrouter_ai::routing::ContextStrategy};
     for (grant, preserve, valid_policy, rewrite_public, allowed) in [
         (true, false, true, false, true),
         (false, false, true, false, false),

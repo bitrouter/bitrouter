@@ -1,71 +1,39 @@
 //! Recent-request inspection shared by local CLI and remote control HTTP.
 
+use crate::output::reports::requests::RequestsReportRuntime;
 use std::path::PathBuf;
 use std::time::Duration;
+use {
+    bitrouter_ai::control::requests::MAX_REQUEST_ROWS,
+    bitrouter_ai::control::requests::RequestFilters,
+};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::daemon::{self, DaemonCommand, DaemonResponse};
 use crate::metering::store::TimeWindow;
-use crate::output::reports::requests::{
-    DaemonView, MeteringAvailability, MeteringComponentAvailability, RequestFilterView,
-    RequestReportData, RequestsReport,
-};
 use crate::paths::ConfigSource;
-
-/// Maximum number of rows any interactive/read API returns.
-pub const MAX_REQUEST_ROWS: u64 = 500;
+use {
+    crate::output::reports::requests::RequestReportData,
+    bitrouter_ai::control::requests::DaemonView,
+    bitrouter_ai::control::requests::MeteringAvailability,
+    bitrouter_ai::control::requests::MeteringComponentAvailability,
+    bitrouter_ai::control::requests::RequestFilterView,
+    bitrouter_ai::control::requests::RequestsReport,
+};
 
 /// Maximum duration of a caller-supplied request interval.
 pub const MAX_REQUEST_WINDOW_DAYS: i64 = 7;
 
 const DAEMON_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
-/// Input accepted by local and remote request-inspection surfaces.
-///
-/// Leaving both time fields unset selects today from the server's UTC clock.
-/// Supplying either one requires the other, so the database always receives an
-/// explicit half-open interval rather than a client-local relative time.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RequestFilters {
-    /// Maximum rows to return. The action validates `1..=500`.
-    #[serde(default = "default_request_limit")]
-    pub limit: u64,
-    /// Inclusive RFC3339 time bound, paired with `until`.
-    pub since: Option<String>,
-    /// Exclusive RFC3339 time bound, paired with `since`.
-    pub until: Option<String>,
-    /// Resolved model identifier to inspect.
-    pub model: Option<String>,
-    /// Serving provider identifier to inspect.
-    pub provider: Option<String>,
+trait RequestFiltersRuntime {
+    fn resolve(&self) -> Result<ResolvedRequestFilters>;
+    fn resolve_at(&self, now: DateTime<Utc>) -> Result<ResolvedRequestFilters>;
 }
 
-impl Default for RequestFilters {
-    fn default() -> Self {
-        Self {
-            limit: default_request_limit(),
-            since: None,
-            until: None,
-            model: None,
-            provider: None,
-        }
-    }
-}
-
-impl RequestFilters {
-    /// Start from the default server-relative filter with an explicit page size.
-    pub fn with_limit(limit: u64) -> Self {
-        Self {
-            limit,
-            ..Self::default()
-        }
-    }
-
+impl RequestFiltersRuntime for RequestFilters {
     fn resolve(&self) -> Result<ResolvedRequestFilters> {
         self.resolve_at(Utc::now())
     }
@@ -108,10 +76,6 @@ impl RequestFilters {
             limit: self.limit,
         })
     }
-}
-
-fn default_request_limit() -> u64 {
-    MAX_REQUEST_ROWS
 }
 
 fn utc_midnight(now: DateTime<Utc>) -> DateTime<Utc> {

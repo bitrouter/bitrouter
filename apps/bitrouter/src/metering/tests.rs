@@ -245,7 +245,7 @@ async fn recorder_persists_router_identity_and_leaves_direct_requests_unknown() 
     let recorder = MeteringRecorder::new(store, pricing());
     let mut routed = ctx("router", 3, 2);
     routed.request_id = "routed-request".to_string();
-    routed.emit(crate::gateway::pipeline::routing::RouterRequestIdentity {
+    routed.emit(bitrouter_ai::routing::RouterRequestIdentity {
         router_id: "coding".to_string(),
         original_selector: "bitrouter/coding".to_string(),
         binding_digest: "router-v1:sha256:abc".to_string(),

@@ -128,7 +128,7 @@ fn preserve_strategy_does_not_spend_granted_context_authority()
 -> Result<(), Box<dyn std::error::Error>> {
     let capabilities = BTreeSet::from([ContextCapability::OmitEvidence]);
     let mut policy = options(&capabilities);
-    policy.strategy = bitrouter::gateway::routing::ContextStrategy::Preserve;
+    policy.strategy = bitrouter_ai::routing::ContextStrategy::Preserve;
     let selection = plan::select(&models(), "baseline", &views(), policy)?;
     assert_eq!(selection.selection.selected_context, "full");
     Ok(())

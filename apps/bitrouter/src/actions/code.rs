@@ -6,18 +6,21 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::actions::route::RouteInput;
 use crate::commands::chat::PromptCommand;
 use anyhow::{Context, Result, bail, ensure};
+use bitrouter_ai::control::route::RouteInput;
 use tokio_util::sync::CancellationToken;
 
 use crate::acp_cli::{SessionSelection, SpawnContext, lifecycle_cancelled};
-use crate::actions::administration::{PolicyInput, PolicyView};
 use crate::actions::supervised::SupervisedHandle;
 use crate::administration_target::{InspectionTarget, ReloadSubmission};
 use crate::contexts::RemoteContext;
 use crate::dashboard::SessionRequest;
 use crate::output::{CliReport, Format, Output};
+use {
+    bitrouter_ai::control::administration::PolicyInput,
+    bitrouter_ai::control::administration::PolicyView,
+};
 
 pub(crate) mod evolution;
 
@@ -321,7 +324,7 @@ impl CodeServices {
                 ensure!(args.is_empty(), "Host requests takes no arguments in Code");
                 Box::new(
                     self.target
-                        .requests(crate::actions::requests::RequestFilters {
+                        .requests(bitrouter_ai::control::requests::RequestFilters {
                             limit: 100,
                             ..Default::default()
                         })

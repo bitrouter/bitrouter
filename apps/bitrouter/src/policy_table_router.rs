@@ -6,9 +6,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::config::{PolicyKeyStrategy, PolicyModelTarget, PolicyTableConfig};
 use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role, Tool};
 use http::HeaderMap;
+use {
+    crate::config::PolicyKeyStrategy, crate::config::PolicyTableConfig,
+    bitrouter_ai::routing::PolicyModelTarget,
+};
 
 use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{
@@ -275,7 +278,7 @@ impl PolicyTable {
         &self,
         model: &str,
         effort: Option<ReasoningEffort>,
-        context: crate::gateway::routing::ContextStrategy,
+        context: bitrouter_ai::routing::ContextStrategy,
     ) -> Option<&str> {
         self.tiers
             .iter()

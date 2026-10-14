@@ -378,7 +378,7 @@ pub(crate) fn validate_eval_action_treatments(
             if let Some(expected) = policy
                 .tiers
                 .get(&decision.selected_tier)
-                .and_then(crate::config::PolicyModelTarget::effort)
+                .and_then(bitrouter_ai::routing::PolicyModelTarget::effort)
                 && decision.selected_effort != Some(expected)
             {
                 anyhow::bail!(
@@ -394,7 +394,7 @@ pub(crate) fn validate_eval_action_treatments(
                 && let Some(expected) = policy
                     .tiers
                     .get(baseline_tier)
-                    .and_then(crate::config::PolicyModelTarget::effort)
+                    .and_then(bitrouter_ai::routing::PolicyModelTarget::effort)
                 && decision.baseline_effort != Some(expected)
             {
                 anyhow::bail!(
@@ -570,7 +570,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use crate::config::AdequacyConfig;
-    use crate::config::PolicyModelTarget;
+    use bitrouter_ai::routing::PolicyModelTarget;
     use bitrouter_ai::types::ReasoningEffort;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
@@ -813,7 +813,7 @@ mod tests {
             .get_mut("auto")
             .and_then(|policy| policy.tiers.get_mut("economy"))
             .ok_or_else(|| anyhow::anyhow!("missing tier"))?
-            .context = crate::gateway::routing::ContextStrategy::Preserve;
+            .context = bitrouter_ai::routing::ContextStrategy::Preserve;
         assert!(
             super::validate_eval_action_treatments(&current, &eval).is_err(),
             "evidence context cannot be reattributed to preserve"

@@ -1,10 +1,10 @@
 //! Reports for the daemon-lifecycle (`start` / `stop` / `restart` / `reload` /
 //! `status`) and `route` commands.
 
-use crate::actions::route::{ResolvedVia, RouteReport};
-use crate::actions::status::StatusReport;
 use crate::commands::invocation;
+use bitrouter_ai::control::status::StatusReport;
 use serde::Serialize;
+use {bitrouter_ai::control::route::ResolvedVia, bitrouter_ai::control::route::RouteReport};
 
 use crate::output::CliReport;
 use crate::output::human::{Health, Human};
@@ -105,7 +105,7 @@ impl CliReport for DaemonActionReport {
 /// stopped — "stopped" is an answer, not a failure.
 ///
 /// The report type itself is
-/// [`crate::actions::status::StatusReport`]: the `status`
+/// [`bitrouter_ai::control::status::StatusReport`]: the `status`
 /// tool returns the same type, so `bro status --json` and the tool's
 /// structured content are the same bytes. Rendering stays here — a local trait
 /// on a foreign type is legal, and it keeps [`Human`] out of the crate.
@@ -311,7 +311,7 @@ fn render_router_state(report: &StatusReport, h: &mut Human<'_>) -> std::io::Res
 /// count is shown, because the one place being wrong about this costs the
 /// reader money is exactly here.
 fn render_spend(
-    spend: Option<&crate::actions::status::Spend>,
+    spend: Option<&bitrouter_ai::control::status::Spend>,
     h: &mut Human<'_>,
 ) -> std::io::Result<()> {
     let Some(spend) = spend else {
@@ -363,9 +363,9 @@ impl CliReport for RouteReport {
         ))?;
         if let Some(router) = &self.router {
             let source = match self.router_source {
-                Some(crate::actions::models::RouterSource::User) => "user",
-                Some(crate::actions::models::RouterSource::Legacy) => "legacy",
-                Some(crate::actions::models::RouterSource::Default) => "default",
+                Some(bitrouter_ai::control::models::RouterSource::User) => "user",
+                Some(bitrouter_ai::control::models::RouterSource::Legacy) => "legacy",
+                Some(bitrouter_ai::control::models::RouterSource::Default) => "default",
                 None => "unknown",
             };
             h.line(&format!(
@@ -441,7 +441,10 @@ mod tests {
         serde_json::from_slice(&Output::new(Format::Json).render_to_vec(r)).unwrap()
     }
 
-    use crate::actions::status::{Spend, SpendLimit, Spent};
+    use {
+        bitrouter_ai::control::status::Spend, bitrouter_ai::control::status::SpendLimit,
+        bitrouter_ai::control::status::Spent,
+    };
 
     /// What the local path builds: the `spent` half only.
     fn local_spend(estimated_micro_usd: u64, requests: u64, unpriced: u64) -> Spend {
@@ -620,7 +623,11 @@ mod tests {
 
     #[test]
     fn status_distinguishes_saved_and_running_router_state() -> anyhow::Result<()> {
-        use crate::actions::models::{RouterReadiness, RouterSource, RouterStatus};
+        use {
+            bitrouter_ai::control::models::RouterReadiness,
+            bitrouter_ai::control::models::RouterSource,
+            bitrouter_ai::control::models::RouterStatus,
+        };
 
         let router = |id: &str| RouterStatus {
             id: id.to_string(),
@@ -772,7 +779,7 @@ mod tests {
     /// a model the daemon would never pick.
     #[test]
     fn route_human_names_the_effective_model_when_policy_moved_it() {
-        use crate::actions::route::ProviderHop;
+        use bitrouter_ai::control::route::ProviderHop;
         let r = RouteReport {
             requested_model: "small".into(),
             effective_model: "big".into(),
@@ -806,8 +813,11 @@ mod tests {
     /// and `live daemon` from the other.
     #[test]
     fn route_json_round_trips_through_the_shared_type() {
-        use crate::actions::route::{ContextTierRates, EstimatedCost, ProviderHop};
         use bitrouter_ai::types::ReasoningEffort;
+        use {
+            bitrouter_ai::control::route::ContextTierRates,
+            bitrouter_ai::control::route::EstimatedCost, bitrouter_ai::control::route::ProviderHop,
+        };
         for (via, wire) in [
             (ResolvedVia::Live, "live"),
             (ResolvedVia::Config, "config"),
