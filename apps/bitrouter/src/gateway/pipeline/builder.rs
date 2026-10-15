@@ -23,6 +23,7 @@ use crate::gateway::pipeline::routing::DefaultFallbackPolicy;
 use crate::gateway::pipeline::routing::FallbackPolicy;
 use crate::gateway::pipeline::routing::ModelSelector;
 use crate::gateway::pipeline::routing::RoutingTable;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
 use crate::gateway::pipeline::settlement::RequiredFinalizer;
 use crate::gateway::pipeline::settlement::SettlementRecorder;
@@ -47,6 +48,7 @@ pub struct PipelineBuilder {
     routing_table: Option<Arc<dyn RoutingTable>>,
     fallback_policy: Option<Arc<dyn FallbackPolicy>>,
     executor: Option<Arc<dyn Executor>>,
+    #[cfg(feature = "server-tools")]
     server_tool_loop: Option<Arc<ServerToolLoop>>,
     keepalive_interval: Duration,
     fallback_backoff: Vec<Duration>,
@@ -83,6 +85,7 @@ impl PipelineBuilder {
             routing_table: None,
             fallback_policy: None,
             executor: None,
+            #[cfg(feature = "server-tools")]
             server_tool_loop: None,
             keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: Vec::new(),
@@ -162,6 +165,7 @@ impl PipelineBuilder {
     /// Attach a server-side tool loop (`server_tools`). When set, non-streaming
     /// execution injects the loop's router tools, executes the model's calls to
     /// them, and re-calls the upstream until the model stops calling them.
+    #[cfg(feature = "server-tools")]
     pub fn server_tool_loop(&mut self, server_loop: Arc<ServerToolLoop>) -> &mut Self {
         self.server_tool_loop = Some(server_loop);
         self
@@ -488,6 +492,7 @@ impl PipelineBuilder {
             routing_table,
             fallback_policy,
             executor,
+            #[cfg(feature = "server-tools")]
             server_tool_loop: self.server_tool_loop,
             keepalive_interval: self.keepalive_interval,
             fallback_backoff: self.fallback_backoff,

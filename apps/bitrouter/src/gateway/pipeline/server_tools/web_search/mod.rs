@@ -16,7 +16,6 @@
 //! downstream reaches types directly (e.g. `web_search::toolset::WebSearchToolset`).
 
 pub mod backend;
-pub mod config;
 pub mod http;
 pub mod nested;
 pub mod toolset;

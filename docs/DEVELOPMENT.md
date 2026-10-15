@@ -74,6 +74,14 @@ Reduced builds preserve configuration parsing and reject an unavailable selected
 backend before connecting, including reload and profile preflight. Driver
 selection does not provide multi-instance coordination.
 
+Server-tool deployment configuration lives under `config::server_tools` and is
+always readable. The tool loop, nested inference runner, Fusion alias and search/
+fetch backends require `server-tools`, which enables `mcp` and is part of the
+default product. Selecting any server tool without that feature fails before
+service activation, consistently on startup, reload and profile preflight.
+Loop tuning alone is dormant. This request-local loop is independent of the
+durable harness and core scheduler.
+
 The native BRO runtime has one `ThreadService` per harness-enabled serving instance. App-owned
 SQLite stores Thread/Turn facts, acceptance keys, public events and owner/version
 fences. Clients only project state; detaching does not cancel, approve or resume.

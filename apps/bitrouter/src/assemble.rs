@@ -13,6 +13,14 @@ use sea_orm::DatabaseConnection;
 use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
+#[cfg(feature = "server-tools")]
+use crate::config::server_tools::web_fetch::{
+    DEFAULT_MAX_CONTENT_TOKENS, WebFetchBackendConfig, WebFetchSettings,
+};
+#[cfg(feature = "server-tools")]
+use crate::config::server_tools::web_search::{
+    DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
+};
 use crate::gateway::assembly::{App, PromptTransform};
 #[cfg(feature = "mcp")]
 use crate::gateway::mcp::aggregating_executor::AggregatingExecutor;
@@ -24,34 +32,47 @@ use crate::gateway::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggreg
 use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
 use crate::gateway::model::client::HttpTimeouts;
 use crate::gateway::model::protocol::OutboundDispatch;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::executor::HttpExecutor;
 use crate::gateway::pipeline::operations::HookStage;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::advisor::AdvisorToolset;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::approval::AllowAll;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::declarations::{
     ServerToolDeclarationsHook, forwarded_tools,
 };
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::fusion::FusionToolset;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::fusion::alias::FusionAliasConfig;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::mcp_toolset::McpRouterToolset;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::nested::{NestedRunner, PipelineNestedRunner};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::sub_agent::SubAgentToolset;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolsetRegistry};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::web_fetch::backend::WebFetchBackend;
-use crate::gateway::pipeline::server_tools::web_fetch::config::{
-    DEFAULT_MAX_CONTENT_TOKENS, WebFetchBackendConfig, WebFetchSettings,
-};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::web_fetch::http::{HttpFetchBackend, HttpFetchEngine};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::web_fetch::toolset::WebFetchToolset;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::web_search::backend::WebSearchBackend;
-use crate::gateway::pipeline::server_tools::web_search::config::{
-    DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
-};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::web_search::http::{HttpEngine, HttpSearchBackend};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::web_search::nested::NestedSearchBackend;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::web_search::toolset::WebSearchToolset;
 use crate::gateway::providers::auth::AuthAppliers;
 use bitrouter_ai::types::OperationScope;
@@ -257,6 +278,17 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
     crate::db::validate_backend_availability(&config.database.url)?;
+    let tools = &config.server_tools;
+    anyhow::ensure!(
+        cfg!(feature = "server-tools")
+            || (tools.mcp_servers.is_empty()
+                && !tools.advisor
+                && !tools.subagent
+                && tools.fusion.is_none()
+                && tools.web_search.is_none()
+                && tools.web_fetch.is_none()),
+        "selected server_tools require the server-tools feature"
+    );
     anyhow::ensure!(
         cfg!(feature = "mcp") || config.mcp_servers.is_empty(),
         "configured MCP servers require the mcp feature"
@@ -498,6 +530,7 @@ async fn assemble_app(
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead
     // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
+    #[cfg(feature = "server-tools")]
     let fusion_alias = build_fusion_alias(config)?;
 
     // ---- database + migrations ----
@@ -779,11 +812,13 @@ async fn assemble_app(
     // nested completion is billed to the same caller as the parent request (no
     // auth or policy hooks — a nested call is a sub-operation of an
     // already-authorised request, and the parent principal rides the caller).
+    #[cfg(feature = "server-tools")]
     let server_tools_enabled = config.server_tools.fusion.is_some()
         || config.server_tools.advisor
         || config.server_tools.subagent
         || config.server_tools.web_search.is_some()
         || config.server_tools.web_fetch.is_some();
+    #[cfg(feature = "server-tools")]
     let nested_runner: Option<Arc<dyn NestedRunner>> = if server_tools_enabled {
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
@@ -810,6 +845,7 @@ async fn assemble_app(
     // fusion) is enabled. Reuses the MCP executor/routing built above; here
     // BitRouter is an MCP *client* that executes the model's tool calls inside
     // the LLM loop (distinct from the `/mcp` gateway above).
+    #[cfg(feature = "server-tools")]
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
@@ -995,6 +1031,7 @@ async fn assemble_app(
             // declaration (or the one the fusion alias injected) off the prompt
             // and stashes it, before auth, so the toolsets can read it
             // regardless of credential state.
+            #[cfg(feature = "server-tools")]
             if server_tools_enabled {
                 lm.pre_resolution_hook(ServerToolDeclarationsHook);
             }
@@ -1046,6 +1083,7 @@ async fn assemble_app(
                 OperationScope::Both,
             );
             // Server-side tool loop (router-executed MCP tools), when configured.
+            #[cfg(feature = "server-tools")]
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);
             }
@@ -1053,6 +1091,7 @@ async fn assemble_app(
     // The bitrouter/fusion model alias: an ingress prompt transform that
     // rewrites the alias onto a real outer model and attaches the Fusion
     // declaration. Wired only when `server_tools.fusion` resolves an alias.
+    #[cfg(feature = "server-tools")]
     let app = match fusion_alias {
         Some(transform) => app.prompt_transform(transform),
         None => app,
@@ -1125,6 +1164,7 @@ async fn assemble_app(
     })
 }
 
+#[cfg(feature = "server-tools")]
 fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>>> {
     let Some(settings) = config.server_tools.fusion.as_ref() else {
         return Ok(None);
@@ -1174,6 +1214,7 @@ pub async fn merge_registry_into(config: &mut Config) {
 /// tool names cannot collide with the caller's own tools. When `nested_runner`
 /// is provided, the enabled advisor / sub-agent / fusion toolsets are added over
 /// it (each advertised only when the request declares it).
+#[cfg(feature = "server-tools")]
 fn build_server_tool_loop(
     config: &Config,
     mcp_routing: &Option<Arc<dyn crate::gateway::mcp::RoutingTable>>,
@@ -1279,6 +1320,7 @@ fn build_server_tool_loop(
 /// engine's conventional environment variable; one whose key cannot be resolved
 /// is skipped with a warning. The native backend reuses the shared nested runner
 /// (so it is skipped when none was built).
+#[cfg(feature = "server-tools")]
 fn build_web_search_backends(
     settings: &WebSearchSettings,
     nested_runner: &Option<Arc<dyn NestedRunner>>,
@@ -1352,6 +1394,7 @@ fn build_web_search_backends(
 /// explicit `api_key` (with `${VAR}` already substituted) or the engine's
 /// conventional environment variable; one whose key cannot be resolved is
 /// skipped with a warning.
+#[cfg(feature = "server-tools")]
 fn build_web_fetch_backends(settings: &WebFetchSettings) -> Vec<Arc<dyn WebFetchBackend>> {
     if settings.backends.is_empty() {
         return Vec::new();
@@ -1390,6 +1433,7 @@ fn build_web_fetch_backends(settings: &WebFetchSettings) -> Vec<Arc<dyn WebFetch
 
 /// Resolve a BYOK backend's API key: the explicit value if non-empty, else
 /// the conventional environment variable. Logs and returns `None` when unset.
+#[cfg(feature = "server-tools")]
 fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> Option<String> {
     if let Some(key) = explicit.as_ref().filter(|k| !k.is_empty()) {
         return Some(key.clone());
@@ -2475,7 +2519,7 @@ mod otel_config_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server-tools"))]
 mod server_tools_tests {
     use std::sync::Arc;
 
@@ -2534,13 +2578,11 @@ mod server_tools_tests {
     #[test]
     fn assembly_rejects_a_fusion_alias_that_hijacks_reserved_routing() {
         let mut config = Config::default();
-        config.server_tools.fusion = Some(
-            crate::gateway::pipeline::server_tools::fusion::config::FusionSettings {
-                alias: Some("bitrouter/auto".to_string()),
-                outer_model: Some("anthropic/claude-opus-4.8".to_string()),
-                ..Default::default()
-            },
-        );
+        config.server_tools.fusion = Some(crate::config::server_tools::fusion::FusionSettings {
+            alias: Some("bitrouter/auto".to_string()),
+            outer_model: Some("anthropic/claude-opus-4.8".to_string()),
+            ..Default::default()
+        });
 
         let result = build_fusion_alias(&config);
         let error = match result {
@@ -2561,9 +2603,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_nested_backend_builds_loop() {
-        use crate::gateway::pipeline::server_tools::web_search::config::{
-            WebSearchBackendConfig, WebSearchSettings,
-        };
+        use crate::config::server_tools::web_search::{WebSearchBackendConfig, WebSearchSettings};
         // A native (nested) backend resolves over the runner and builds the loop.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2580,9 +2620,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use crate::gateway::pipeline::server_tools::web_search::config::{
-            WebSearchBackendConfig, WebSearchSettings,
-        };
+        use crate::config::server_tools::web_search::{WebSearchBackendConfig, WebSearchSettings};
         // An HTTP backend with an explicit key resolves with no nested runner.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2597,9 +2635,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_fetch_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use crate::gateway::pipeline::server_tools::web_fetch::config::{
-            WebFetchBackendConfig, WebFetchSettings,
-        };
+        use crate::config::server_tools::web_fetch::{WebFetchBackendConfig, WebFetchSettings};
         // A web_fetch-only config (no advisor/subagent/fusion/web_search) must
         // still build the server-tool loop, proving server_tools_enabled covers
         // web_fetch. An HTTP backend with an explicit key resolves without a
@@ -2617,9 +2653,7 @@ mod server_tools_tests {
 
     #[test]
     fn assembles_web_fetch_exa_backend_from_explicit_key() {
-        use crate::gateway::pipeline::server_tools::web_fetch::config::{
-            WebFetchBackendConfig, WebFetchSettings,
-        };
+        use crate::config::server_tools::web_fetch::{WebFetchBackendConfig, WebFetchSettings};
         // An HTTP backend with an explicit key resolves without needing an env
         // var, mirroring the sibling web_search assembly test's approach.
         let backends = super::build_web_fetch_backends(&WebFetchSettings {

@@ -44,6 +44,7 @@ pub mod pattern;
 pub mod presets;
 pub mod router;
 pub mod routing_table;
+pub mod server_tools;
 
 #[cfg(test)]
 mod tests;
@@ -138,7 +139,7 @@ pub struct Config {
     /// Server-side tool loop: MCP server ids whose tools BitRouter injects into
     /// LLM requests and executes itself. Empty by default — the pipeline stays
     /// single-shot.
-    pub server_tools: crate::gateway::pipeline::server_tools::config::ServerToolsConfig,
+    pub server_tools: crate::config::server_tools::ServerToolsConfig,
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bro agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, agent::AcpAgentConfig>,

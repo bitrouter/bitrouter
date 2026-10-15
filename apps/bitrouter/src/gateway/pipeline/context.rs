@@ -280,6 +280,7 @@ impl PipelineContext {
     /// server-tool model turn. The fork keeps the original request identity,
     /// headers, protocol, metadata, extensions, events, and resolved route;
     /// only the evolving prompt and per-turn execution/trace state are fresh.
+    #[cfg(feature = "server-tools")]
     pub(crate) fn fork_for_prompt(&self, prompt: Prompt) -> Self {
         Self {
             request_id: self.request_id.clone(),
@@ -741,7 +742,7 @@ impl PipelineContext {
 
     /// The full per-request metadata map. Used to snapshot a request's
     /// plugin-scoped state into an owned
-    /// [`ToolContext`](crate::gateway::pipeline::server_tools::toolset::ToolContext)
+    /// `ToolContext` (when the `server-tools` feature is enabled)
     /// for a server-tool execution, which may outlive this borrow (e.g. on the
     /// streaming path).
     pub fn metadata(&self) -> &HashMap<PluginId, serde_json::Value> {

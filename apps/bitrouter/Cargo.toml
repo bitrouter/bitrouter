@@ -20,10 +20,11 @@ name = "bro"
 path = "src/main.rs"
 
 [features]
-default = ["core", "harness", "tui", "mcp", "otel-http", "db-postgres", "db-mysql"]
+default = ["core", "harness", "tui", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql"]
 core = ["dep:rand_distr"]
 harness = ["mcp"]
 mcp = []
+server-tools = ["mcp"]
 tui = ["harness"]
 guardrails = ["dep:bitrouter-guardrails"]
 db-postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]

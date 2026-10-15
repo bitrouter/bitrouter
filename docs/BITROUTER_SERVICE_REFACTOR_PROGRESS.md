@@ -1824,3 +1824,61 @@ for individual remote-driver profiles. Live backend migration/read/write evidenc
 remains open under A09. All final A01–A16 gates remain open, including remaining
 harness/TUI/MCP dependency isolation, server-tools gating, artifact capability
 identity, harness SDK delivery and whole-candidate acceptance. P1 is excluded.
+
+## P0 5 optional gateway server tools (2026-10-16)
+
+This stage follows `c7b0c50`. Application `server-tools` enables MCP and remains
+in the default distribution; it does not enable core or harness. The pipeline
+module, builder field/method, upstream adapters, loop execution branches and
+application construction of nested runners, Fusion aliases and BYOK backends
+now follow that feature. Ordinary generation, Decisions, controlled native
+calls, streams and settlement retain their original execution bodies. Native
+bypass entry points remain available without the server-tool runtime.
+
+Deployment configuration moved to `config::server_tools`: the root settings,
+Fusion defaults and web search/fetch settings. Runtime `ServerToolLoopConfig`
+and request-declaration parsing remain with the gated implementation. The moved
+configuration fields/defaults/tests are unchanged except owning paths; both web
+configuration files moved byte-for-byte. No AI or SDK runtime was introduced.
+Six explicit tool selections fail before service activation without the feature,
+consistently through assembly, reload and profile preflight. Loop tuning alone
+is dormant; the existing real gateway process fixture now serves inference with
+`server_tools.max_iterations` present and no selected tool.
+
+Test gates retain generic coverage: eight mixed pipeline tests keep their
+assertions and gate only tool-loop setup. Four true pipeline-loop tests, six
+continuation-loop tests and one HTTP loop test follow the feature, along with
+exclusive helpers. Shared continuation state/request/terminal-validation helpers
+remain available. Assembly loop tests and runtime module unit tests follow their
+implementation; configuration parsing tests remain unconditional.
+
+Validation uses stable runtime builds and Rust 1.97.0 strict Clippy/Rustdoc,
+non-incremental builds with debug symbols disabled and two build/test workers:
+
+- Initial minimum all-target check passed with an unused server-tool timing
+  field warning; the field and its ordinary initializer now follow the feature.
+  Initial minimum runtime selection passed **580/580** in 7.873s. Strict Clippy
+  caught that same warning before the correction; no lint suppression was added.
+- Final affected nextest selection passed minimum **580/580** in 8.877s,
+  server-tools-only **708/708** in 9.147s and all features **707/707** in 9.786s.
+  Targets were `--lib --test feature_ingress`; the expression selected
+  `gateway::pipeline::`, `gateway::http::`, `continuation::`, `config::`,
+  `assemble::server_tools_tests::` and the process fixture binary. Filtered-out
+  counts were 2,133, 2,224 and 2,699 respectively. Profiles contain different
+  feature-specific tests, so their counts are not interchangeable coverage.
+- Final strict Clippy passed for minimum application/all-targets (43.95s) and
+  full workspace/all-targets (1m12s). Strict Rustdoc passed full workspace
+  (43.43s) and minimum application (30.09s).
+- Independently generated full/minimum configuration schemas are byte-identical
+  to each other and the committed schema artifact. Formatting and patch checks
+  passed. Logs use `/tmp/bitrouter-p0-server-tools-*`.
+- Independent review found no additional issue beyond the timing-field gate;
+  follow-up inspection confirmed that correction and no remaining finding.
+  Source/manifests stayed frozen through runtime sequences. Existing linker and
+  third-party future-compatibility warnings remain.
+
+CI exercises optional server tools and ingress availability under both MCP-only
+and server-tools profiles. All final A01–A16 remain open: remaining harness/TUI/
+MCP dependency isolation, artifact capability identity, harness SDK delivery,
+historical/live-backend/packaged-process/performance evidence and whole-candidate
+validation/review still precede the requested PR. P1 remains excluded.

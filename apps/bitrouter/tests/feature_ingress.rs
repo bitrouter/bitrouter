@@ -111,15 +111,33 @@ async fn unavailable_database_backend_rejects_before_service_activation() -> Res
 
 #[tokio::test]
 async fn unavailable_ingress_rejects_before_assembly_reload_or_preflight_effects() -> Result<()> {
-    let mut cases = Vec::new();
+    let mut cases: Vec<(String, &str)> = Vec::new();
+    if !cfg!(feature = "server-tools") {
+        for selection in [
+            "  mcp_servers: [fixture]\n",
+            "  advisor: true\n",
+            "  subagent: true\n",
+            "  fusion: {}\n",
+            "  web_search: {}\n",
+            "  web_fetch: {}\n",
+        ] {
+            cases.push((
+                format!("server_tools:\n{selection}"),
+                "server-tools feature",
+            ));
+        }
+    }
     if !cfg!(feature = "mcp") {
         cases.push((
-            "mcp_servers:\n  fixture:\n    name: fixture\n    transport:\n      type: http\n      url: 'http://127.0.0.1:1/mcp'\n",
+            "mcp_servers:\n  fixture:\n    name: fixture\n    transport:\n      type: http\n      url: 'http://127.0.0.1:1/mcp'\n".to_owned(),
             "mcp feature",
         ));
     }
     if !cfg!(feature = "harness") {
-        cases.push(("agent_api:\n  enabled: true\n", "harness feature"));
+        cases.push((
+            "agent_api:\n  enabled: true\n".to_owned(),
+            "harness feature",
+        ));
     }
     for (activation, expected) in cases {
         let directory = tempfile::tempdir()?;
@@ -236,6 +254,8 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
         "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: '{listen}'\n  skip_auth: true\ndatabase:\n  url: 'sqlite://gateway.db?mode=rwc'\nproviders:\n  fixture:\n    api_base: '{}'\n    api_key: fixture-secret\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n        pricing:\n          input_micro_usd_per_token: 2.0\n          output_micro_usd_per_token: 10.0\n",
         upstream.uri()
     );
+    // Tuning without any selected server tool is dormant in every profile.
+    raw.push_str("server_tools:\n  max_iterations: 7\n");
     if !cfg!(feature = "harness") {
         // An enabled harness rejects this nonexistent workspace. A gateway
         // must neither discover nor reserve it while retaining saved settings.

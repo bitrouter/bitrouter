@@ -11,6 +11,10 @@ and existing session-attributed spend remain available.
 SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
 `db-mysql`; both are included in the default distribution. Reduced builds report
 an unavailable selected backend before connecting.
+Gateway server-side tools require `server-tools` (included by default and enabling
+`mcp`). Selecting MCP tools, advisor, subagent, Fusion, web search or web fetch
+without that feature fails at startup, reload and profile preflight. Saved loop
+tuning with no selected tool remains readable and does not activate execution.
 
 Evidence and learning commands require the application's `core` feature:
 `eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`

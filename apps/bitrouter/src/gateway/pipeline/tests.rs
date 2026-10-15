@@ -1,8 +1,8 @@
 //! Pipeline integration tests for the `language_model` pipeline.
 
-use crate::gateway::pipeline::{
-    context, executor, native, request_checks, server_tools, settlement, timing,
-};
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools;
+use crate::gateway::pipeline::{context, executor, native, request_checks, settlement, timing};
 use crate::gateway::providers::auth;
 #[path = "tests_reconstruction.rs"]
 mod reconstruction;
@@ -5027,6 +5027,7 @@ async fn nonstream_disconnect_still_runs_to_completion_and_bills_full() {
 
 // ===== server-side tool loop wiring =====
 
+#[cfg(feature = "server-tools")]
 fn empty_server_tool_loop() -> Arc<server_tools::loop_controller::ServerToolLoop> {
     Arc::new(server_tools::loop_controller::ServerToolLoop::new(
         server_tools::toolset::ToolsetRegistry::new(Vec::new()),
@@ -5035,8 +5036,10 @@ fn empty_server_tool_loop() -> Arc<server_tools::loop_controller::ServerToolLoop
     ))
 }
 
+#[cfg(feature = "server-tools")]
 struct SearchTool;
 
+#[cfg(feature = "server-tools")]
 #[async_trait]
 impl server_tools::toolset::RouterToolset for SearchTool {
     async fn list_tools(&self, _ctx: &server_tools::toolset::ToolContext) -> Result<Vec<Tool>> {
@@ -5065,6 +5068,7 @@ impl server_tools::toolset::RouterToolset for SearchTool {
     }
 }
 
+#[cfg(feature = "server-tools")]
 fn search_server_tool_loop() -> Arc<server_tools::loop_controller::ServerToolLoop> {
     Arc::new(server_tools::loop_controller::ServerToolLoop::new(
         server_tools::toolset::ToolsetRegistry::new(vec![Arc::new(SearchTool)]),
@@ -5080,8 +5084,9 @@ async fn native_turn_leaves_client_tool_calls_for_the_agent() -> Result<()> {
         Arc::new(MockExecutor::new(vec![MockResponse::Generate(gen_result(
             vec![router_tool_call()],
         ))])),
-        |builder| {
-            builder.server_tool_loop(search_server_tool_loop());
+        |_builder| {
+            #[cfg(feature = "server-tools")]
+            _builder.server_tool_loop(search_server_tool_loop());
         },
     );
     let mut req = request();
@@ -5123,8 +5128,9 @@ async fn native_stream_leaves_client_tool_calls_for_the_agent() -> Result<()> {
                 reason: FinishReason::ToolCalls,
             },
         ])])),
-        |builder| {
-            builder.server_tool_loop(search_server_tool_loop());
+        |_builder| {
+            #[cfg(feature = "server-tools")]
+            _builder.server_tool_loop(search_server_tool_loop());
         },
     );
     let mut req = request();
@@ -5169,8 +5175,9 @@ async fn server_tool_streaming_preflight_respects_fail_decision() {
                 reason: FinishReason::Stop,
             }]),
         ])),
-        |builder| {
-            builder.server_tool_loop(empty_server_tool_loop());
+        |_builder| {
+            #[cfg(feature = "server-tools")]
+            _builder.server_tool_loop(empty_server_tool_loop());
         },
     );
 
@@ -5192,8 +5199,9 @@ async fn server_tool_streaming_preflight_aggregates_rate_limits() {
                 detail: None,
             }),
         ])),
-        |builder| {
-            builder.server_tool_loop(empty_server_tool_loop());
+        |_builder| {
+            #[cfg(feature = "server-tools")]
+            _builder.server_tool_loop(empty_server_tool_loop());
         },
     );
 
@@ -5221,8 +5229,9 @@ async fn server_tool_streaming_preflight_aggregates_mixed_availability_failures(
                 message: "maintenance".into(),
             }),
         ])),
-        |builder| {
-            builder.server_tool_loop(empty_server_tool_loop());
+        |_builder| {
+            #[cfg(feature = "server-tools")]
+            _builder.server_tool_loop(empty_server_tool_loop());
         },
     );
 
@@ -5246,9 +5255,9 @@ async fn server_tool_streaming_fallback_settles_the_winning_target()
             }]),
         ])),
         |builder| {
-            builder
-                .server_tool_loop(empty_server_tool_loop())
-                .settlement_recorder(ProviderCapturingRecorder(captured.clone()));
+            #[cfg(feature = "server-tools")]
+            builder.server_tool_loop(empty_server_tool_loop());
+            builder.settlement_recorder(ProviderCapturingRecorder(captured.clone()));
         },
     );
 
@@ -5289,8 +5298,9 @@ async fn server_tool_streaming_fallback_preserves_request_context()
                 .execution_hook(ContextCheckingExecutionHook {
                     expected_request_id: request_id.clone(),
                     seen: seen.clone(),
-                })
-                .server_tool_loop(empty_server_tool_loop());
+                });
+            #[cfg(feature = "server-tools")]
+            builder.server_tool_loop(empty_server_tool_loop());
         },
     );
     let mut request = stream_request();
@@ -5311,6 +5321,7 @@ async fn server_tool_streaming_fallback_preserves_request_context()
     Ok(())
 }
 
+#[cfg(feature = "server-tools")]
 #[tokio::test]
 async fn server_tool_streaming_settles_the_final_turn_winner()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -5385,6 +5396,7 @@ fn gen_result(content: Vec<Content>) -> GenerateResult {
     }
 }
 
+#[cfg(feature = "server-tools")]
 #[tokio::test]
 async fn server_tool_loop_resolves_a_router_tool_call()
 -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -5474,6 +5486,7 @@ async fn server_tool_loop_resolves_a_router_tool_call()
     Ok(())
 }
 
+#[cfg(feature = "server-tools")]
 #[tokio::test]
 async fn fusion_declaration_is_advertised_and_executed_end_to_end()
 -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -5610,6 +5623,7 @@ async fn without_loop_a_tool_call_turn_is_returned_unchanged()
     Ok(())
 }
 
+#[cfg(feature = "server-tools")]
 #[tokio::test]
 async fn server_tool_loop_streams_router_tool_activity() {
     use crate::gateway::pipeline::server_tools::approval::AllowAll;
@@ -5758,11 +5772,16 @@ async fn server_tool_loop_streams_router_tool_activity() {
 
 #[tokio::test]
 async fn server_tool_stream_handshake_failure_still_settles_and_observes_end() {
+    #[cfg(feature = "server-tools")]
     use crate::gateway::pipeline::server_tools::approval::AllowAll;
+    #[cfg(feature = "server-tools")]
     use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
+    #[cfg(feature = "server-tools")]
     use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
+    #[cfg(feature = "server-tools")]
     use crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry;
 
+    #[cfg(feature = "server-tools")]
     let server_loop = Arc::new(ServerToolLoop::new(
         ToolsetRegistry::new(Vec::new()),
         ServerToolLoopConfig::default(),
@@ -5777,8 +5796,9 @@ async fn server_tool_stream_handshake_failure_still_settles_and_observes_end() {
             MockResponse::Error(BitrouterError::UpstreamUnavailable),
         ])),
         |builder| {
+            #[cfg(feature = "server-tools")]
+            builder.server_tool_loop(server_loop);
             builder
-                .server_tool_loop(server_loop)
                 .settlement_recorder(TimingSnapshotRecorder(timings.clone()))
                 .observe_hook(HopEventRecorder(hops.clone()));
         },

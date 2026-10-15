@@ -14,7 +14,8 @@
 //!
 //! Reference: <https://openrouter.ai/docs/guides/features/server-tools/fusion>
 
-use super::config::{FUSION_TOOL, FusionSettings};
+use super::config::FUSION_TOOL;
+use crate::config::server_tools::fusion::FusionSettings;
 use crate::gateway::error::BitrouterError;
 use bitrouter_ai::types::{Prompt, ProviderMetadata, Tool};
 
@@ -161,7 +162,7 @@ impl crate::gateway::assembly::PromptTransform for FusionAliasConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::super::config::{FusionConfig, FusionSettings};
+    use super::super::config::FusionConfig;
     use super::*;
     use bitrouter_ai::types::{GenerationParams, ProviderMetadata};
 

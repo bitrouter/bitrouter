@@ -85,6 +85,7 @@ pub mod native_work;
 pub mod operations;
 pub mod request_checks;
 pub mod routing;
+#[cfg(feature = "server-tools")]
 pub mod server_tools;
 pub mod settlement;
 pub mod stream;

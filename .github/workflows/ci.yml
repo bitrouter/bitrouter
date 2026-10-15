@@ -382,6 +382,14 @@ jobs:
           PROFILE_FEATURES: ${{ matrix.features }}
         run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
 
+      - name: verify optional server tools
+        if: matrix.features == 'server-tools' || matrix.features == 'mcp'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: |
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib server_tool
+
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})
     runs-on: ubuntu-latest

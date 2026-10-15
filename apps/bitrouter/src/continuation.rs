@@ -2753,8 +2753,10 @@ mod tests {
     use axum::http::Request as HttpRequest;
     use bitrouter_ai::types::{
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-        Role, StreamPart, Tool, ToolResultOutput, Usage,
+        Role, StreamPart, Usage,
     };
+    #[cfg(feature = "server-tools")]
+    use bitrouter_ai::types::{Tool, ToolResultOutput};
     use chrono::{TimeDelta, TimeZone, Utc};
     use futures::StreamExt;
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -6249,8 +6251,10 @@ mod tests {
         forwarded_parents: Vec<Option<String>>,
     }
 
+    #[cfg(feature = "server-tools")]
     struct ToolRoundResponder(Arc<std::sync::Mutex<ToolRoundState>>);
 
+    #[cfg(feature = "server-tools")]
     impl Respond for ToolRoundResponder {
         fn respond(&self, request: &Request) -> ResponseTemplate {
             let body: serde_json::Value = serde_json::from_slice(&request.body)
@@ -6346,8 +6350,10 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server-tools")]
     struct NonstreamToolRoundResponder(Arc<std::sync::Mutex<ToolRoundState>>);
 
+    #[cfg(feature = "server-tools")]
     impl Respond for NonstreamToolRoundResponder {
         fn respond(&self, request: &Request) -> ResponseTemplate {
             let body: serde_json::Value = serde_json::from_slice(&request.body)
@@ -7043,8 +7049,10 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     struct SearchTool;
 
+    #[cfg(feature = "server-tools")]
     #[async_trait]
     impl crate::gateway::pipeline::server_tools::toolset::RouterToolset for SearchTool {
         async fn list_tools(
@@ -7076,8 +7084,10 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server-tools")]
     struct FailingSearchTool;
 
+    #[cfg(feature = "server-tools")]
     #[async_trait]
     impl crate::gateway::pipeline::server_tools::toolset::RouterToolset for FailingSearchTool {
         async fn list_tools(
@@ -7151,6 +7161,7 @@ mod tests {
         tool_request_with_stream(request_id, previous_response_id, false)
     }
 
+    #[cfg(feature = "server-tools")]
     fn nonstream_server_tool_pipeline(
         registry: ContinuationRegistry,
         upstream: &MockServer,
@@ -7300,6 +7311,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn server_tool_continuation_binds_only_final_provider_round() -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
@@ -7373,6 +7385,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn nonstream_server_tool_continuation_binds_only_final_provider_round()
     -> anyhow::Result<()> {
@@ -7434,6 +7447,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     async fn assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
         request_id: &str,
         expected_reason: &str,
@@ -7504,6 +7518,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn nonstream_max_tool_iterations_does_not_publish_intermediate_continuation()
     -> anyhow::Result<()> {
@@ -7519,6 +7534,7 @@ mod tests {
         .await
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn nonstream_tool_errors_do_not_publish_intermediate_continuation() -> anyhow::Result<()>
     {
@@ -7534,6 +7550,7 @@ mod tests {
         .await
     }
 
+    #[cfg(feature = "server-tools")]
     async fn assert_synthetic_server_tool_terminal_is_not_resumable(
         request_id: &str,
         expected_reason: &str,
@@ -7609,6 +7626,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn max_tool_iterations_does_not_publish_intermediate_continuation() -> anyhow::Result<()>
     {
@@ -7625,6 +7643,7 @@ mod tests {
         .await
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn tool_errors_do_not_publish_intermediate_continuation() -> anyhow::Result<()> {
         let config = crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig {

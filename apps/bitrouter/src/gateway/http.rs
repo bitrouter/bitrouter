@@ -2128,12 +2128,16 @@ mod tests {
     }
 
     fn test_state_with_executor(executor: Arc<dyn Executor>) -> AppState {
-        test_state_with_executor_and_server_tools(executor, false)
+        test_state_with_executor_and_server_tools(
+            executor,
+            #[cfg(feature = "server-tools")]
+            false,
+        )
     }
 
     fn test_state_with_executor_and_server_tools(
         executor: Arc<dyn Executor>,
-        enable_server_tools: bool,
+        #[cfg(feature = "server-tools")] enable_server_tools: bool,
     ) -> AppState {
         let table = StaticRoutingTable::new();
         table.insert(
@@ -2159,6 +2163,7 @@ mod tests {
         );
         let mut builder = PipelineBuilder::new();
         builder.routing_table(Arc::new(table)).executor(executor);
+        #[cfg(feature = "server-tools")]
         if enable_server_tools {
             builder.server_tool_loop(Arc::new(
                 crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop::new(
@@ -2903,6 +2908,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn streaming_preflight_rate_limit_with_server_tools_keeps_http_429()
     -> std::result::Result<(), Box<dyn std::error::Error>> {

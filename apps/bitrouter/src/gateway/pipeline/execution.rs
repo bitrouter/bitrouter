@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use std::{future::Future, mem};
 
+#[cfg(feature = "server-tools")]
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
@@ -30,8 +31,11 @@ use crate::gateway::pipeline::request_checks::{
     RequestCheckBinding, RequestCheckerRunner, content_fragments, decision_content_fragments,
 };
 use crate::gateway::pipeline::routing::{FallbackPolicy, ModelResolution, RoutingTable};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::stream::UpstreamStream;
+#[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools::toolset::ToolContext;
 use crate::gateway::pipeline::settlement::{
     DeliveryAcknowledgement, RequiredDeliveryHandshake, RequiredFinalizationContext,
@@ -53,6 +57,7 @@ use bitrouter_ai::types::{ModelOperation, Prompt, ReasoningEffortSource, StreamP
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(30);
 
 enum ExecutionInput<'a> {
+    #[cfg(feature = "server-tools")]
     Generation(&'a Prompt),
     Decisions(&'a bitrouter_ai::decisions::DecisionRequest),
 }
@@ -298,6 +303,7 @@ impl Drop for ObservedUpstreamStream {
 #[derive(Clone)]
 struct StreamAttempt {
     target: RoutingTarget,
+    #[cfg(feature = "server-tools")]
     provider_started_at: Instant,
 }
 
@@ -325,6 +331,7 @@ pub struct Pipeline {
     /// are executed by BitRouter, and the upstream is re-called until the model
     /// stops calling them — all behind one caller response. `None` keeps the
     /// pipeline strictly single-shot.
+    #[cfg(feature = "server-tools")]
     pub(crate) server_tool_loop: Option<Arc<ServerToolLoop>>,
     pub(crate) keepalive_interval: Duration,
     /// Opt-in bounded delay schedule between retryable fallback candidates.
@@ -354,12 +361,14 @@ pub struct Pipeline {
 
 /// Adapts the pipeline's fallback execution into an [`UpstreamTurn`] so the
 /// server-side tool loop can re-call the upstream for each iteration.
+#[cfg(feature = "server-tools")]
 struct PipelineUpstream<'a> {
     pipeline: &'a Pipeline,
     chain: &'a [RoutingTarget],
     ctx: &'a PipelineContext,
 }
 
+#[cfg(feature = "server-tools")]
 #[async_trait]
 impl UpstreamTurn for PipelineUpstream<'_> {
     async fn run(&self, prompt: &Prompt) -> Result<ExecutionResult> {
@@ -374,6 +383,7 @@ impl UpstreamTurn for PipelineUpstream<'_> {
 /// `chain` until one stream starts. A fresh throwaway [`PipelineContext`] keeps
 /// per-turn fallback/observation state separate while the real request context
 /// stays owned by the settlement guard.
+#[cfg(feature = "server-tools")]
 struct PipelineStreamUpstream {
     pipeline: Arc<Pipeline>,
     chain: Vec<RoutingTarget>,
@@ -381,6 +391,7 @@ struct PipelineStreamUpstream {
     latest_attempt: SharedStreamAttempt,
 }
 
+#[cfg(feature = "server-tools")]
 #[async_trait]
 impl UpstreamStream for PipelineStreamUpstream {
     async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
@@ -553,14 +564,19 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<PreparedPipelineResponse> {
-        self.execute_detached_prepared_with_mode(req, true, None)
-            .await
+        self.execute_detached_prepared_with_mode(
+            req,
+            #[cfg(feature = "server-tools")]
+            true,
+            None,
+        )
+        .await
     }
 
     async fn execute_detached_prepared_with_mode(
         self: Arc<Self>,
         req: PipelineRequest,
-        run_server_tools: bool,
+        #[cfg(feature = "server-tools")] run_server_tools: bool,
         control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
         let pipeline = Arc::clone(&self);
@@ -572,7 +588,12 @@ impl Pipeline {
         self.detached_executions.spawn(
             async move {
                 let result = pipeline
-                    .execute_prepared(req, run_server_tools, control)
+                    .execute_prepared(
+                        req,
+                        #[cfg(feature = "server-tools")]
+                        run_server_tools,
+                        control,
+                    )
                     .await;
                 // A dropped handler drops the prepared delivery permit here;
                 // upstream execution and settlement have nevertheless run on
@@ -590,7 +611,14 @@ impl Pipeline {
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
-        let prepared = self.execute_prepared(req, true, None).await?;
+        let prepared = self
+            .execute_prepared(
+                req,
+                #[cfg(feature = "server-tools")]
+                true,
+                None,
+            )
+            .await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
     }
@@ -604,7 +632,12 @@ impl Pipeline {
         // A cancelled agent may stop waiting for a model turn. The accepted
         // upstream request still needs to settle before its result is dropped.
         let prepared = Arc::clone(&self)
-            .execute_detached_prepared_with_mode(req, false, None)
+            .execute_detached_prepared_with_mode(
+                req,
+                #[cfg(feature = "server-tools")]
+                false,
+                None,
+            )
             .await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
@@ -616,7 +649,12 @@ impl Pipeline {
         control: Arc<dyn NativeExecutionControl>,
     ) -> Result<PipelineResponse> {
         let prepared = Arc::clone(&self)
-            .execute_detached_prepared_with_mode(req, false, Some(control))
+            .execute_detached_prepared_with_mode(
+                req,
+                #[cfg(feature = "server-tools")]
+                false,
+                Some(control),
+            )
             .await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
@@ -625,7 +663,7 @@ impl Pipeline {
     async fn execute_prepared(
         &self,
         req: PipelineRequest,
-        run_server_tools: bool,
+        #[cfg(feature = "server-tools")] run_server_tools: bool,
         control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
         let PreparedEntry { mut ctx, chain } =
@@ -670,9 +708,17 @@ impl Pipeline {
         };
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
-        let exec_outcome = match (admission, ctx.input(), &self.server_tool_loop) {
+        let exec_outcome = match (admission, ctx.input(), self) {
             (Err(error), _, _) => Err(error),
-            (Ok(_), PipelineInput::Generation(prompt), Some(server_loop)) if run_server_tools => {
+            #[cfg(feature = "server-tools")]
+            (
+                Ok(_),
+                PipelineInput::Generation(prompt),
+                Self {
+                    server_tool_loop: Some(server_loop),
+                    ..
+                },
+            ) if run_server_tools => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream = PipelineUpstream {
                     pipeline: self,
@@ -1090,7 +1136,13 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
-        let prepared = self.execute_stream_prepared_with_mode(req, false).await?;
+        let prepared = self
+            .execute_stream_prepared_with_mode(
+                req,
+                #[cfg(feature = "server-tools")]
+                false,
+            )
+            .await?;
         Ok(Self::deliver_stream(prepared))
     }
 
@@ -1110,13 +1162,18 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<PreparedPipelineStream> {
-        self.execute_stream_prepared_with_mode(req, true).await
+        self.execute_stream_prepared_with_mode(
+            req,
+            #[cfg(feature = "server-tools")]
+            true,
+        )
+        .await
     }
 
     async fn execute_stream_prepared_with_mode(
         self: Arc<Self>,
         req: PipelineRequest,
-        run_server_tools: bool,
+        #[cfg(feature = "server-tools")] run_server_tools: bool,
     ) -> Result<PreparedPipelineStream> {
         let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true, None).await?;
         let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
@@ -1124,8 +1181,12 @@ impl Pipeline {
         // Route Stage 3 through the server-side tool loop when configured: the
         // merged stream becomes the "upstream" the settlement guard drains, so
         // settlement is unchanged. Otherwise the pipeline stays single-shot.
-        let upstream_result = match &self.server_tool_loop {
-            Some(server_loop) if run_server_tools => {
+        let upstream_result = match self.as_ref() {
+            #[cfg(feature = "server-tools")]
+            Self {
+                server_tool_loop: Some(server_loop),
+                ..
+            } if run_server_tools => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
                     pipeline: self.clone(),
@@ -1158,6 +1219,7 @@ impl Pipeline {
                         &latest_attempt,
                         StreamAttempt {
                             target: execution.target.clone(),
+                            #[cfg(feature = "server-tools")]
                             provider_started_at: execution.provider_started_at,
                         },
                     );
@@ -2198,12 +2260,14 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
+        #[cfg(feature = "server-tools")]
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for target in chain {
             if target.api_protocol.operation() != ctx.operation() {
                 continue;
             }
             match input {
+                #[cfg(feature = "server-tools")]
                 ExecutionInput::Generation(prompt) => {
                     if !self
                         .admit_candidate(target, prompt, false, ctx, &mut excluded)
@@ -2219,6 +2283,7 @@ impl Pipeline {
             self.wait_before_fallback(errors.len()).await;
             self.observe_hop_start(ctx, target).await;
             let outcome = match input {
+                #[cfg(feature = "server-tools")]
                 ExecutionInput::Generation(prompt) => {
                     self.executor.execute(target, prompt, ctx).await
                 }
@@ -2228,6 +2293,7 @@ impl Pipeline {
             }
             .and_then(|result| {
                 let matches = match input {
+                    #[cfg(feature = "server-tools")]
                     ExecutionInput::Generation(_) => result.result.generation().is_some(),
                     ExecutionInput::Decisions(_) => result.result.decisions().is_some(),
                 };
@@ -2294,6 +2360,7 @@ impl Pipeline {
                 },
             }
         }
+        #[cfg(feature = "server-tools")]
         if errors.is_empty() && !excluded.issues.is_empty() {
             return Err(BitrouterError::Incompatible { report: excluded });
         }
