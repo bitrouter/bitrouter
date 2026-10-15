@@ -284,6 +284,7 @@ pub struct OnboardingStatusReport {
 }
 
 impl OnboardingStatusReport {
+    #[cfg(any(feature = "tui", test))]
     fn from_signals(signals: &ProbeSignals) -> Self {
         let mut parts = Vec::new();
         if signals.cloud_session {
@@ -344,21 +345,24 @@ pub async fn entry(output: &Output) -> Result<()> {
         }
     }
     if std::io::stdin().is_terminal() {
-        let manager = crate::cloud::default_manager()?;
-        run_interactive(
-            OnboardingFlags {
-                config: Some(path),
-                ..Default::default()
-            },
-            &probe(),
-            output,
-            manager,
-        )
-        .await
-    } else {
-        print_hint();
-        emit(output, &empty_report())
+        validate_tui_availability(false, None)?;
+        #[cfg(feature = "tui")]
+        {
+            let manager = crate::cloud::default_manager()?;
+            return run_interactive(
+                OnboardingFlags {
+                    config: Some(path),
+                    ..Default::default()
+                },
+                &probe(),
+                output,
+                manager,
+            )
+            .await;
+        }
     }
+    print_hint();
+    emit(output, &empty_report())
 }
 
 /// Find the onboarding destination without requiring a config to exist yet.
@@ -399,22 +403,27 @@ async fn start_default_chat(
         })
         .await;
     }
-    let config_path = match source {
-        crate::paths::ConfigSource::File(path) => Some(path.as_path()),
-        crate::paths::ConfigSource::Default { .. } => None,
-    };
-    crate::dashboard::run(
-        None,
-        config_path,
-        None,
-        Some(crate::dashboard::SessionRequest {
-            agent,
-            selection: crate::acp_cli::SessionSelection::New,
-            turn_timeout: None,
-            routing,
-        }),
-    )
-    .await
+    #[cfg(feature = "tui")]
+    {
+        let config_path = match source {
+            crate::paths::ConfigSource::File(path) => Some(path.as_path()),
+            crate::paths::ConfigSource::Default { .. } => None,
+        };
+        crate::dashboard::run(
+            None,
+            config_path,
+            None,
+            Some(crate::dashboard::SessionRequest {
+                agent,
+                selection: crate::acp_cli::SessionSelection::New,
+                turn_timeout: None,
+                routing,
+            }),
+        )
+        .await
+    }
+    #[cfg(not(feature = "tui"))]
+    anyhow::bail!("interactive default chat requires the tui feature")
 }
 
 /// Persist onboarding atomically; an interrupted wizard never marks itself complete.
@@ -487,22 +496,36 @@ fn acp_id(agent: SpawnAgent) -> &'static str {
     }
 }
 
+/// Reject unavailable onboarding UI before logging, credentials or config writes.
+/// Explicit launch requires TUI even when the setup itself is noninteractive.
+pub fn validate_tui_availability(yes: bool, after: Option<AfterAction>) -> Result<()> {
+    if !cfg!(feature = "tui") {
+        if after == Some(AfterAction::Launch) {
+            anyhow::bail!("onboarding --after launch requires the tui feature");
+        }
+        if !yes && std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "interactive onboarding requires the tui feature; use init --yes for noninteractive setup"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// `bro init [flags]`. Runs the wizard interactively, or headlessly when
-/// `--yes` is set (or no TTY is attached). `--reset` clears credentials first.
+/// `--yes` is set (or no TTY is attached). Capability checks precede `--reset`.
 pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
+    validate_tui_availability(flags.yes, flags.after)?;
     let manager = crate::cloud::default_manager()?;
     if flags.reset {
         reset_credentials(flags.yes, std::io::stdin().is_terminal()).await?;
     }
-    if flags.yes {
-        return run_headless(flags, output, manager).await;
-    }
-    if std::io::stdin().is_terminal() {
+    #[cfg(feature = "tui")]
+    if !flags.yes && std::io::stdin().is_terminal() {
         let signals = probe();
-        run_interactive(flags, &signals, output, manager).await
-    } else {
-        run_headless(flags, output, manager).await
+        return run_interactive(flags, &signals, output, manager).await;
     }
+    run_headless(flags, output, manager).await
 }
 
 fn empty_report() -> OnboardingReport {
@@ -684,6 +707,7 @@ async fn seed_provider_api_key(provider: &str, key: &str) -> Result<()> {
 // Interactive wizard
 // =====================================================================
 
+#[cfg(feature = "tui")]
 async fn run_interactive(
     flags: OnboardingFlags,
     signals: &ProbeSignals,
@@ -752,6 +776,7 @@ async fn run_interactive(
 }
 
 /// Providers offered by the OSS registry, with no special placement for Cloud.
+#[cfg(feature = "tui")]
 fn provider_choices(
     data: &bitrouter_ai::catalog::types::RegistryData,
 ) -> Vec<&bitrouter_ai::catalog::types::RegistryProvider> {
@@ -773,13 +798,14 @@ fn provider_choices(
     providers
 }
 
+#[cfg(feature = "tui")]
 async fn interactive_credentials(
     flags: &OnboardingFlags,
     configured: &mut BTreeSet<String>,
     skipped: &mut Vec<String>,
     manager: Arc<CredentialManager>,
 ) -> Result<()> {
-    use crate::tui::select::Item;
+    use crate::presentation::selection::Item;
 
     let path = config_path(flags.config.as_deref())?;
     let registry = if path.is_file() && !flags.force {
@@ -905,6 +931,7 @@ async fn seed_cloud_interactive(manager: Arc<CredentialManager>) -> Result<()> {
     .context("BitRouter Cloud sign-in")
 }
 
+#[cfg(feature = "tui")]
 async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     eprintln!();
     eprintln!("Step 2/3 — Default ACP harness");
@@ -924,7 +951,9 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
         "BitRouter provides the TUI. Choose the agent it runs.",
         harnesses
             .iter()
-            .map(|harness| crate::tui::select::Item::new(harness.id, harness.description))
+            .map(|harness| {
+                crate::presentation::selection::Item::new(harness.id, harness.description)
+            })
             .collect(),
         harnesses
             .iter()
@@ -941,8 +970,9 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     ])
 }
 
+#[cfg(feature = "tui")]
 async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
-    use crate::tui::select::Item;
+    use crate::presentation::selection::Item;
     if let Some(after) = flags.after {
         return Ok(after);
     }
@@ -1136,8 +1166,8 @@ async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
         prompt,
         "Choose whether to continue",
         vec![
-            crate::tui::select::Item::new("Yes", ""),
-            crate::tui::select::Item::new("No", ""),
+            crate::presentation::selection::Item::new("Yes", ""),
+            crate::presentation::selection::Item::new("No", ""),
         ],
         usize::from(!default_yes),
     )
@@ -1149,6 +1179,7 @@ async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
 /// chain of the former `print_onboarding_hint`.
 fn print_hint() {
     let p = crate::style::Palette::for_stderr();
+    #[cfg(feature = "tui")]
     eprintln!(
         "{cyan}{bold}info:{reset} setup is not complete. Run `{cli}` in a terminal or `{cli} init --yes`:",
         cyan = p.cyan,
@@ -1156,7 +1187,16 @@ fn print_hint() {
         reset = p.reset,
         cli = invocation::name(),
     );
+    #[cfg(not(feature = "tui"))]
+    eprintln!(
+        "{cyan}{bold}info:{reset} setup is not complete. Run `{cli} init --yes`:",
+        cyan = p.cyan,
+        bold = p.bold,
+        reset = p.reset,
+        cli = invocation::name(),
+    );
     eprintln!();
+    #[cfg(feature = "tui")]
     eprintln!(
         "  {cli} init                 # guided setup wizard (interactive)",
         cli = invocation::name()
@@ -1177,6 +1217,31 @@ fn print_hint() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn noninteractive_exit_and_serve_do_not_require_tui() -> Result<()> {
+        for after in [None, Some(AfterAction::Exit), Some(AfterAction::Serve)] {
+            validate_tui_availability(true, after)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "tui"))]
+    #[test]
+    fn explicit_launch_requires_tui_even_with_yes() -> Result<()> {
+        for yes in [false, true] {
+            let error = validate_tui_availability(yes, Some(AfterAction::Launch))
+                .err()
+                .context("explicit launch must require tui")?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("--after launch requires the tui feature")
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "tui")]
     #[test]
     fn provider_menu_contains_every_public_active_entry_in_display_order() -> Result<()> {
         let data: bitrouter_ai::catalog::types::RegistryData =

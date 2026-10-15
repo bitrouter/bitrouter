@@ -8,18 +8,23 @@ use std::time::Duration;
 
 use anyhow::{Result, bail, ensure};
 
+#[cfg(feature = "tui")]
 use crate::acp_cli::{CapabilitySnapshot, LaunchOptions, RoutingOptions, SessionSelection};
 use crate::daemon::{self, DaemonStartOutcome};
+#[cfg(feature = "tui")]
 use crate::harness::acp::client::SessionInitialSettings;
 use crate::paths::ConfigSource;
+#[cfg(feature = "tui")]
 use crate::supervisor::{
     ActionAcknowledgement, ActionValue, ControlFence, PermissionPolicy, Presentation, ReplayBatch,
     RunSnapshot, SessionAction, SessionCommand, SessionGrant, SessionMutation, SessionResponse,
     SessionScope, StartRunRequest,
 };
+#[cfg(feature = "tui")]
 use agent_client_protocol::schema::v1::{
     ListSessionsResponse, SessionConfigOptionValue, SetSessionConfigOptionResponse,
 };
+#[cfg(feature = "tui")]
 use tokio_util::sync::CancellationToken;
 
 /// Resolve the selected configuration's live endpoint, starting its daemon
@@ -60,6 +65,7 @@ pub(crate) async fn ensure_daemon(
 /// A session client has no process handle. Clones retain the same fenced
 /// authority, so a delayed operation cannot acquire a newer lease implicitly.
 #[derive(Clone)]
+#[cfg(feature = "tui")]
 pub(crate) struct SupervisedClient {
     pub socket: PathBuf,
     pub grant: SessionGrant,
@@ -68,6 +74,7 @@ pub(crate) struct SupervisedClient {
     pub generation: u64,
 }
 
+#[cfg(feature = "tui")]
 impl SupervisedClient {
     pub fn fence(&self) -> ControlFence {
         ControlFence {
@@ -237,6 +244,7 @@ impl SupervisedClient {
     }
 }
 
+#[cfg(feature = "tui")]
 pub(crate) struct SupervisedHandle {
     pub client: SupervisedClient,
     pub session_id: String,
@@ -248,6 +256,7 @@ pub(crate) struct SupervisedHandle {
     pub last_seq: u64,
 }
 
+#[cfg(feature = "tui")]
 pub(crate) struct ForegroundLaunch {
     pub agent_id: String,
     pub cwd: PathBuf,
@@ -256,6 +265,7 @@ pub(crate) struct ForegroundLaunch {
     pub selection: SessionSelection,
 }
 
+#[cfg(feature = "tui")]
 impl SupervisedHandle {
     pub async fn start(socket: PathBuf, launch: ForegroundLaunch) -> Result<(Self, Vec<String>)> {
         let client_id = uuid::Uuid::new_v4().to_string();

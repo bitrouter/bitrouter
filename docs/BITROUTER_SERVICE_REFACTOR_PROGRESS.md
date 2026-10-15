@@ -2096,8 +2096,83 @@ Validation on the final extraction sources:
 
 The latest documentation-only ownership corrections are integrated here without
 replacing this worktree's more detailed transcript requirements. Independent
-stage review is being finalized before the extraction commit.
+stage review of `a0c2d3a..6d8f557` found no issues. The reviewer verified
+formatter/style/cache fidelity and independently checked all 24 fixture hashes,
+36 capture ranges, 29 baseline source records, 152 dependency pins and upstream
+Markdown license/source provenance against the checksum-verified archive.
+This was static review, not a second execution of the reported tests.
 
 This extraction is a prerequisite for the remaining TUI feature gate, not proof
 that all headless application dependencies are already isolated. A05/A11 and the
 other final P0 gates remain open until the complete profiles and candidate pass.
+
+## P0 2/P0 5 TUI feature isolation (2026-10-16)
+
+The `tui` feature now activates optional Ratatui and Crossterm dependencies and
+continues to imply harness. Terminal modules and interactive chat, dashboard,
+native-code and agent-deck paths are conditionally compiled. Shared agent
+operation acknowledgements and selector items no longer expose terminal action
+or picker types. Code evolution remains the intersection of core and TUI.
+The existing CLI parser and noninteractive management commands remain available.
+
+Unavailable terminal actions fail before configuration/service acquisition,
+logging, onboarding reset or credential writes. The non-TUI initialization path
+preserves explicit setup and piped chat. Provider login retains explicit method,
+no-browser and single-method paths; only an interactive multiple-choice picker
+requires TUI. Clipboard support remains separate from the terminal editor.
+Headless ACP text output still uses the shared transcript formatter.
+
+Regression tests cover actual PTY onboarding/bare-entry rejection, untouched
+existing configuration and credentials, provider-method selection and plain
+piped chat. The latter now requires the Cargo-built binary and successful exit
+instead of silently passing when a binary is absent. TUI integration targets
+carry required-feature metadata. CI now selects the terminal integration shard,
+noninteractive setup/source boundaries and headless ACP/presentation/provider
+regressions in their supported profiles. The CLI skill reference documents the
+feature distinction; command names and plugin-distribution manifests are unchanged.
+
+Validation on the stage sources:
+
+- Harness-only targeted runtime: **191/191 passed** in 7.191s; 2,542 unrelated
+  cases skipped. Minimum setup, ingress and source-boundary runtime:
+  **20/20 passed** in 2.086s, none skipped.
+- All-feature targeted runtime: **385/385 passed** in 170.434s; 3,165 unrelated
+  cases skipped. Covers shared presentation/plain output, ACP/headless behavior,
+  session clients, provider selection, onboarding, Code/native-agent PTYs,
+  ingress and structural boundaries. This is not the final workspace suite.
+- Strict Rust 1.97 full-workspace/all-targets Clippy passed in 1m07s; minimum
+  application Clippy passed in 44.98s. Strict full-workspace/all-feature Rustdoc
+  passed in 46.96s and minimum Rustdoc in 36.94s.
+- Isolated all-targets checks passed for minimum, TUI without core (34.43s),
+  core+harness without TUI (56.07s) and core without harness/TUI (46.41s).
+  The first minimum check reported two newly unused terminal-only cost helpers;
+  they are now gated for TUI/tests, and subsequent strict minimum checks pass.
+- Normal/build dependency trees for minimum, core, harness and core+harness
+  exclude Ratatui and Crossterm. ACP/MCP dependency isolation is still open;
+  these results do not establish the complete A05 closure or green remote CI.
+- Logs use `/tmp/bitrouter-p0-tui-*`. Runtime uses stable Rust with two build
+  workers and two test threads; debug symbols and incremental compilation are
+  disabled. Existing linker and dependency future-compatibility warnings remain.
+
+Independent stage review found one missing CI selector for the no-TUI provider
+regression. The selector was corrected to include both command and onboarding
+unit regressions in headless profiles; follow-up review found no remaining
+issues in this stage. That was source/configuration review, not a second runtime
+execution. The latest documentation-only local-contract, MCP and historical-data
+ownership clarifications are integrated without replacing the detailed transcript
+requirements or implementation status.
+
+A01–A16 remain open for final candidate acceptance. Remaining feature work splits
+provider installation support, local session wire/client data, supervisor and
+ACP execution, historical decoding and shared MCP/offline skill helpers before
+removing unconditional harness dependencies. Full SDK delivery, artifact profile
+identity/update behavior, historical transition fixtures, packaged-process
+acceptance, performance evidence and final whole-workspace review also remain.
+
+Additional isolated runtime evidence: `--no-default-features --features tui`
+passed **44/44 Code PTY tests** in 119.148s, none skipped, including background
+sessions, approval, resize, suspend/resume, terminal restoration and detached
+process survival. This directly exercises TUI/harness without core rather than
+inferring that profile from full-product tests. The log is
+`/tmp/bitrouter-p0-tui-tests-tui-only.log`. Formatting, whitespace and CI YAML
+checks also pass on the final stage tree.

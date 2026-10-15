@@ -459,7 +459,7 @@ async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<
         "Choose an authentication method",
         options
             .iter()
-            .map(|method| crate::tui::select::Item::new(method.label(), ""))
+            .map(|method| crate::presentation::selection::Item::new(method.label(), ""))
             .collect(),
         0,
     )
@@ -551,6 +551,7 @@ pub async fn login_provider_with_options(
 }
 
 /// Onboarding uses the exact registry entry shown in its provider list.
+#[cfg(feature = "tui")]
 pub(crate) async fn login_registry_provider(
     provider: &bitrouter_ai::catalog::types::RegistryProvider,
 ) -> Result<LoginOutcome> {
@@ -1351,6 +1352,42 @@ mod tests {
         )
         .await?;
         assert_eq!(chosen, AuthMethod::ImportFromCli);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "tui"))]
+    #[tokio::test]
+    async fn missing_tui_rejects_method_choice_but_preserves_explicit_and_single_methods()
+    -> Result<()> {
+        let entry = crate::gateway::catalog::bundled::provider("openai-codex")?
+            .context("bundled Codex provider")?;
+        let methods = available_methods(&entry);
+        let error = choose_auth_method(&entry, &methods, &ProviderLoginOptions::default())
+            .await
+            .err()
+            .context("multiple methods must require an explicit choice")?;
+        assert!(error.to_string().contains("requires the tui feature"));
+
+        let chosen = choose_auth_method(
+            &entry,
+            &methods,
+            &ProviderLoginOptions {
+                no_browser: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert_eq!(chosen, AuthMethod::ImportFromCli);
+
+        let entry = crate::gateway::catalog::bundled::provider("claude-code")?
+            .context("bundled Claude Code provider")?;
+        let chosen = choose_auth_method(
+            &entry,
+            &available_methods(&entry),
+            &ProviderLoginOptions::default(),
+        )
+        .await?;
+        assert_eq!(chosen, AuthMethod::ClaudeCodeSession);
         Ok(())
     }
 

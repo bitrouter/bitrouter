@@ -1923,6 +1923,30 @@ async fn async_main() {
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
+    #[cfg(not(feature = "tui"))]
+    {
+        use std::io::IsTerminal as _;
+
+        let interactive = matches!(
+            &cli.command,
+            Some(
+                Command::Code { .. }
+                    | Command::Tui { .. }
+                    | Command::Agents {
+                        action: None | Some(AgentsAction::Attach { .. })
+                    }
+            )
+        ) || (matches!(&cli.command, Some(Command::Chat { .. }))
+            && std::io::stdin().is_terminal()
+            && std::io::stdout().is_terminal());
+        anyhow::ensure!(
+            !interactive,
+            "interactive commands require the tui feature; use run for headless work"
+        );
+    }
+    if let Some(Command::Init { yes, after, .. }) = &cli.command {
+        bitrouter::onboarding::validate_tui_availability(*yes, *after)?;
+    }
     #[cfg(not(all(feature = "core", feature = "harness")))]
     if matches!(&cli.command, Some(Command::Task { .. })) {
         anyhow::bail!("native task execution requires the core feature and harness feature");
@@ -6094,6 +6118,16 @@ async fn run_native_launch(
     run_launch(config.as_deref(), opts, output).await
 }
 
+#[cfg(not(feature = "tui"))]
+async fn run_code(
+    _options: CodeArgs,
+    _remote_context: Option<bitrouter::contexts::RemoteContext>,
+    _context_name: Option<&str>,
+) -> Result<()> {
+    anyhow::bail!("interactive Code requires the tui feature; use run for headless work")
+}
+
+#[cfg(feature = "tui")]
 async fn run_code(
     options: CodeArgs,
     remote_context: Option<bitrouter::contexts::RemoteContext>,

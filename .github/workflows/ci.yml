@@ -196,6 +196,9 @@ jobs:
           - shard: core-scheduling
             retries: "0"
             targets: --test core_contract --test core_execution
+          - shard: terminal
+            retries: "0"
+            targets: --test code_tui_pty --test native_agent_tui
           - shard: optimization
             retries: "0"
             targets: >-
@@ -375,6 +378,26 @@ jobs:
         run: >-
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --test core_disabled --test trajectory_progress_control --test gateway_workflow --test feature_ingress
+
+      - name: verify noninteractive setup and source boundaries
+        if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'core,harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test onboarding --test source_boundaries
+
+      - uses: taiki-e/install-action@nextest
+        if: matrix.features == 'harness' || matrix.features == 'core,harness'
+
+      - name: verify headless ACP and shared transcript behavior
+        if: matrix.features == 'harness' || matrix.features == 'core,harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib --test acp --build-jobs 2 --test-threads 2
+          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(commands::tests::) | test(onboarding::tests::) | binary(acp)'
 
       - name: verify database feature availability
         if: matrix.features == 'db-postgres' || matrix.features == 'db-mysql'

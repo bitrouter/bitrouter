@@ -5,8 +5,11 @@
 //! the plain compatibility renderer and session-log helpers for redirected
 //! legacy invocations. Headless permissions use the harness ACP policy adapter.
 
+#[cfg(feature = "tui")]
 pub(crate) mod code;
+#[cfg(feature = "tui")]
 pub(crate) mod code_controls;
+#[cfg(feature = "tui")]
 pub(crate) mod code_wire;
 pub(crate) mod editor;
 pub mod session;

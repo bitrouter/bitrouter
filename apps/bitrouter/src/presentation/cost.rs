@@ -68,6 +68,7 @@ impl Cost {
     }
 
     /// A display label that retains the figure's provenance.
+    #[cfg(any(feature = "tui", test))]
     pub(crate) fn label(&self) -> String {
         let figure = format!("{} {:.4}", self.currency, self.amount);
         match self.provenance {
@@ -99,6 +100,7 @@ pub fn from_usage(usage: &UsageUpdate) -> Option<Cost> {
 }
 
 /// Absence is not evidence that the turn was free.
+#[cfg(any(feature = "tui", test))]
 pub(crate) const UNREPORTED: &str = "cost unreported";
 
 #[cfg(test)]

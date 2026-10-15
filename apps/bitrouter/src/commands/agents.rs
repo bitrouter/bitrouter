@@ -1,4 +1,4 @@
-//! Typed agent actions dispatched by shared application operations.
+//! Typed agent actions and acknowledgements for shared application operations.
 
 use crate::presentation::agents::NewAgentRunTarget;
 
@@ -11,6 +11,25 @@ pub enum AgentLeaseIntent {
     MarkReviewed,
     Stop,
     Attach,
+}
+
+/// Operation results correlated with the original request, independent of
+/// terminal input and reducer state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentAcknowledgement {
+    LeaseAcquired {
+        run_id: String,
+        intent: AgentLeaseIntent,
+        generation: u64,
+        action_request_id: String,
+    },
+    MutationAccepted {
+        action_request_id: String,
+    },
+    EffectFailed {
+        action_request_id: String,
+        message: String,
+    },
 }
 
 /// Code launcher actions for the currently selected supervised run.

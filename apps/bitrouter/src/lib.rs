@@ -58,6 +58,7 @@ pub mod mcp_registry;
 pub mod metering;
 #[cfg(feature = "harness")]
 pub mod native_acp;
+#[cfg(feature = "tui")]
 pub mod native_code;
 pub mod onboarding;
 #[cfg(feature = "core")]
@@ -102,4 +103,5 @@ pub mod telemetry;
 /// Terminal-independent presentation values.
 pub mod presentation;
 /// Terminal views and interaction reducers.
+#[cfg(feature = "tui")]
 pub(crate) mod tui;

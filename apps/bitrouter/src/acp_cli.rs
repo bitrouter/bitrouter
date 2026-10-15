@@ -2327,8 +2327,13 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
 
     crate::assemble::validate_telemetry_availability(&ctx.config)?;
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        let (services, request) = crate::actions::code::CodeServices::from_spawn_context(ctx)?;
-        return crate::chat::code::run(services, Some(request)).await;
+        #[cfg(feature = "tui")]
+        {
+            let (services, request) = crate::actions::code::CodeServices::from_spawn_context(ctx)?;
+            return crate::chat::code::run(services, Some(request)).await;
+        }
+        #[cfg(not(feature = "tui"))]
+        anyhow::bail!("interactive chat requires the tui feature; use run for headless work");
     }
 
     let SpawnContext {

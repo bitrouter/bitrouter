@@ -11,22 +11,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
 
+use crate::presentation::selection::Item;
+
 const ROWS: usize = 8;
-
-/// A selectable label and its searchable context (for example a provider id).
-pub struct Item {
-    pub label: String,
-    pub detail: String,
-}
-
-impl Item {
-    pub fn new(label: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            detail: detail.into(),
-        }
-    }
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {

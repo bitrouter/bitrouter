@@ -1474,74 +1474,50 @@ async fn conformance_forwarded_update_variants_survive_round_trip() {
 /// stdout: in-process, the test harness's own capture decides what
 /// `is_terminal()` reports.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_on_a_pipe_is_plain_text() {
+async fn chat_on_a_pipe_is_plain_text() -> anyhow::Result<()> {
+    use anyhow::{Context, ensure};
     use std::time::Duration;
-
     use tokio::io::AsyncWriteExt as _;
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = tempfile::tempdir()?;
     let config_path = dir.path().join("bitrouter.yaml");
-    std::fs::write(&config_path, SERVE_CONFIG_YAML).expect("write config");
-
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let binary = workspace_root.join("target").join(profile).join("bro");
-    if !binary.exists() {
-        eprintln!(
-            "chat_on_a_pipe_is_plain_text: binary not found at {}; skipping",
-            binary.display()
-        );
-        return;
-    }
-
+    std::fs::write(&config_path, SERVE_CONFIG_YAML)?;
     let stderr_path = dir.path().join("chat.stderr");
-    let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
-    let mut child = tokio::process::Command::new(&binary)
-        .args([
-            "chat",
-            "stub",
-            "--direct",
-            "--config",
-            config_path.to_str().expect("config path utf8"),
-        ])
+    let stderr_file = std::fs::File::create(&stderr_path)?;
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+        .args(["chat", "stub", "--direct", "--config"])
+        .arg(&config_path)
         .current_dir(dir.path())
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("BITROUTER_HOME", dir.path().join("runtime"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(stderr_file)
         .kill_on_drop(true)
-        .spawn()
-        .expect("spawn bro chat");
+        .spawn()?;
 
-    let mut child_stdin = child.stdin.take().expect("child stdin");
-    child_stdin
-        .write_all(b"hello\n")
-        .await
-        .expect("write the prompt");
-    // Closing stdin is this path's Ctrl-D: the session ends and the process
-    // exits, which is also what makes the test terminate.
+    let mut child_stdin = child.stdin.take().context("chat stdin")?;
+    child_stdin.write_all(b"hello\n").await?;
+    // EOF ends the piped session and its owned child; no terminal is involved.
     drop(child_stdin);
-
     let finished = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
         .await
-        .expect("chat must exit once stdin closes")
-        .expect("chat output");
-    let stdout = String::from_utf8_lossy(&finished.stdout).to_string();
-    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
-
-    assert!(
+        .context("chat must exit once stdin closes")??;
+    let stdout = String::from_utf8_lossy(&finished.stdout);
+    let stderr = std::fs::read_to_string(&stderr_path)?;
+    ensure!(finished.status.success(), "chat failed: {stderr}");
+    ensure!(
         !finished.stdout.contains(&0x1b),
-        "a redirected stdout must carry no escape sequences; got {:?}\nstderr:\n{stderr}",
-        stdout
+        "a redirected stdout must carry no escape sequences; got {stdout:?}\nstderr:\n{stderr}"
     );
-    assert!(
+    ensure!(
         stdout.contains("hi"),
         "the agent's reply must still reach a pipe; got {stdout:?}\nstderr:\n{stderr}"
     );
+    Ok(())
 }
 
 // ── `acp serve` emits the ignored-config warnings ─────────────────────────────

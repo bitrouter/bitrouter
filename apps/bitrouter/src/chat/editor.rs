@@ -1,12 +1,16 @@
 //! Process effects for the composer's external editor and clipboard.
 
+#[cfg(feature = "tui")]
 use std::io::Write;
 
-use anyhow::{Context, Result, bail, ensure};
+#[cfg(feature = "tui")]
+use anyhow::Context;
+use anyhow::{Result, bail, ensure};
 use tokio::io::AsyncWriteExt;
 
 /// The terminal must be suspended and its input reader stopped by the caller.
 /// A failed editor leaves its file available and reports the recovery path.
+#[cfg(feature = "tui")]
 pub(crate) async fn edit(draft: String) -> Result<String> {
     let editor = std::env::var("VISUAL")
         .ok()
@@ -51,6 +55,7 @@ pub(crate) async fn edit(draft: String) -> Result<String> {
     }
 }
 
+#[cfg(feature = "tui")]
 fn editor_command(editor: &str, path: &std::path::Path) -> tokio::process::Command {
     #[cfg(unix)]
     {
@@ -103,7 +108,7 @@ pub(crate) async fn copy(text: &str) -> Result<()> {
     bail!("Clipboard unavailable; use the output inspector to select and copy the text")
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "tui"))]
 mod tests {
     #[tokio::test]
     async fn editor_path_is_an_argument_and_prompt_bytes_remain_intact() -> anyhow::Result<()> {

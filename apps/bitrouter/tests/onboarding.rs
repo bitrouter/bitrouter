@@ -2,9 +2,9 @@
 //! invocation (wizard-vs-status decision), the `init --yes` headless contract,
 //! and the network-free / `BITROUTER_HOME`-tolerant probe. Every case here is
 //! hermetic: an isolated `HOME` + `XDG_DATA_HOME`, all BYOK env vars removed,
-//! stdin nulled (non-TTY), and no network.
+//! stdin nulled (non-TTY) except explicit PTY cases, and no network.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
@@ -46,6 +46,270 @@ fn run_cli(home: &Path, data_home: &Path, args: &[&str], extra_env: &[(&str, &st
 fn stdout_json(output: &Output) -> Value {
     let text = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("stdout was not JSON ({e}): {text}"))
+}
+
+fn seed_onboarding_state(home: &Path, data_home: &Path) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
+    use bitrouter::gateway::providers::auth::credentials::Credential;
+    use bitrouter::gateway::providers::auth::file::snapshot::CredentialStore;
+
+    let config = home.join("bitrouter.yaml");
+    let cloud = data_home.join("bitrouter/account-credentials.json");
+    let providers = data_home.join("bitrouter/oauth-tokens.json");
+    std::fs::write(
+        &config,
+        "server: { listen: '127.0.0.1:9012', skip_auth: false }\n",
+    )?;
+    std::fs::create_dir_all(data_home.join("bitrouter"))?;
+    std::fs::write(
+        &cloud,
+        r#"{"kind":"api_key","api_key":"brk_existing.fixture","base_url":"https://api.bitrouter.ai"}"#,
+    )?;
+    CredentialStore::load(&providers)?.set(
+        "openai",
+        "default",
+        Credential::api_key("sk-existing"),
+    )?;
+    [config, cloud, providers]
+        .into_iter()
+        .map(|path| Ok((path.clone(), std::fs::read(path)?)))
+        .collect()
+}
+
+#[cfg(not(feature = "tui"))]
+#[test]
+fn unavailable_launch_rejects_before_reset_credentials_config_or_logs() -> anyhow::Result<()> {
+    for yes in [false, true] {
+        for existing in [false, true] {
+            let home = TempDir::new()?;
+            let data = TempDir::new()?;
+            let saved = if existing {
+                seed_onboarding_state(home.path(), data.path())?
+            } else {
+                Vec::new()
+            };
+            let config = home.path().join("bitrouter.yaml");
+            let mut args = vec![
+                "init",
+                "--reset",
+                "--force",
+                "--after",
+                "launch",
+                "--api-key",
+                "brk_replacement.fixture",
+                "--provider",
+                "openai",
+                "--provider-api-key",
+                "sk-replacement",
+                "-c",
+                config
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("non-UTF-8 test path"))?,
+            ];
+            if yes {
+                args.push("--yes");
+            }
+            let out = run_cli(home.path(), data.path(), &args, &[]);
+            let diagnostic = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(!out.status.success(), "{diagnostic}");
+            assert!(
+                diagnostic.contains("--after launch requires the tui feature"),
+                "{diagnostic}"
+            );
+            for (path, bytes) in saved {
+                assert_eq!(
+                    std::fs::read(&path)?,
+                    bytes,
+                    "{} was changed",
+                    path.display()
+                );
+            }
+            if !existing {
+                assert!(!config.exists());
+                assert!(!data.path().join("bitrouter").exists());
+            }
+            assert!(
+                !home.path().join(".bitrouter").exists(),
+                "preflight created runtime state"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn non_tty_reset_without_yes_preserves_provider_credentials() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let saved = seed_onboarding_state(home.path(), data.path())?;
+    let provider_path = data.path().join("bitrouter/oauth-tokens.json");
+    let out = run_cli(
+        home.path(),
+        data.path(),
+        &["init", "--reset", "--after", "exit"],
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout_json(&out)["after"], "exit");
+    assert!(
+        !data
+            .path()
+            .join("bitrouter/account-credentials.json")
+            .exists()
+    );
+    for (path, bytes) in saved {
+        if path == provider_path {
+            assert_eq!(
+                std::fs::read(path)?,
+                bytes,
+                "non-TTY reset granted provider removal consent"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(feature = "tui")))]
+fn run_cli_pty(
+    home: &Path,
+    data_home: &Path,
+    args: &[&str],
+) -> anyhow::Result<(portable_pty::ExitStatus, String)> {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    let pty = native_pty_system().openpty(PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    let reader = pty.master.try_clone_reader()?;
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_bro"));
+    command.args(args);
+    command.env_clear();
+    command.env("HOME", home);
+    command.env("XDG_DATA_HOME", data_home);
+    command.env("TERM", "xterm-256color");
+    command.cwd(home);
+    let mut child = pty.slave.spawn_command(command)?;
+    drop(pty.slave);
+    let result = (|| -> anyhow::Result<_> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("onboarding-pty".into())
+            .spawn(move || {
+                let mut output = Vec::new();
+                let read = reader.take(64 * 1024).read_to_end(&mut output);
+                let _ = sender.send((read, output));
+            })?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            anyhow::ensure!(Instant::now() < deadline, "unavailable UI did not exit");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let (read, output) = receiver.recv_timeout(Duration::from_secs(5))?;
+        read?;
+        Ok((status, String::from_utf8(output)?))
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+#[cfg(all(unix, not(feature = "tui")))]
+#[test]
+fn unavailable_wizard_rejects_before_reset_or_flag_writes() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let saved = seed_onboarding_state(home.path(), data.path())?;
+    let (status, output) = run_cli_pty(
+        home.path(),
+        data.path(),
+        &[
+            "init",
+            "--reset",
+            "--force",
+            "--after",
+            "exit",
+            "--api-key",
+            "brk_replacement.fixture",
+            "--provider",
+            "openai",
+            "--provider-api-key",
+            "sk-replacement",
+        ],
+    )?;
+    assert!(!status.success(), "{output}");
+    assert!(
+        output.contains("interactive onboarding requires the tui feature"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("\u{1b}[?1049h"),
+        "terminal drawing started"
+    );
+    for (path, bytes) in saved {
+        assert_eq!(
+            std::fs::read(&path)?,
+            bytes,
+            "{} was changed",
+            path.display()
+        );
+    }
+    assert!(
+        !home.path().join(".bitrouter").exists(),
+        "preflight created runtime state"
+    );
+    Ok(())
+}
+
+#[cfg(all(unix, not(feature = "tui")))]
+#[test]
+fn bare_interactive_entry_requires_tui_without_saving_or_launching() -> anyhow::Result<()> {
+    for configured in [false, true] {
+        let home = TempDir::new()?;
+        let data = TempDir::new()?;
+        let config = home.path().join("bitrouter.yaml");
+        let original = "inherit_defaults: false\nchat: { agent: codex-acp }\n";
+        if configured {
+            std::fs::write(&config, original)?;
+        }
+        let (status, output) = run_cli_pty(home.path(), data.path(), &[])?;
+        assert!(!status.success(), "{output}");
+        let expected = if configured {
+            "interactive default chat requires the tui feature"
+        } else {
+            "interactive onboarding requires the tui feature"
+        };
+        assert!(output.contains(expected), "{output}");
+        assert!(
+            !output.contains("\u{1b}[?1049h"),
+            "terminal drawing started"
+        );
+        if configured {
+            assert_eq!(std::fs::read_to_string(config)?, original);
+        } else {
+            assert!(!config.exists());
+        }
+        assert!(!home.path().join(".bitrouter/bitrouter.yaml").exists());
+        assert!(!home.path().join("bitrouter.db").exists());
+        assert!(!data.path().join("bitrouter").exists());
+    }
+    Ok(())
 }
 
 #[test]
@@ -337,9 +601,20 @@ fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "tui"))]
 #[tokio::test]
 async fn onboarding_launch_and_next_bare_invocation_both_speak_acp() -> anyhow::Result<()> {
+    onboarding_then_bare_invocation("launch").await
+}
+
+#[cfg(all(unix, feature = "harness"))]
+#[tokio::test]
+async fn onboarding_exit_and_next_bare_invocation_preserve_piped_chat() -> anyhow::Result<()> {
+    onboarding_then_bare_invocation("exit").await
+}
+
+#[cfg(all(unix, feature = "harness"))]
+async fn onboarding_then_bare_invocation(after: &str) -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let data = TempDir::new()?;
     let config_path = home.path().join("bitrouter.yaml");
@@ -365,7 +640,7 @@ done
         }))?,
     )?;
     for args in [
-        vec!["init", "--yes", "--harness", "codex", "--after", "launch"],
+        vec!["init", "--yes", "--harness", "codex", "--after", after],
         vec![],
     ] {
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
@@ -387,6 +662,10 @@ done
             "args={args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+        if !args.is_empty() && after == "exit" {
+            assert!(!marker.exists(), "setup with --after exit launched ACP");
+            continue;
+        }
         let wire = std::fs::read_to_string(&marker)?;
         assert!(wire.contains("initialize"), "{wire}");
         assert!(wire.contains("session/new"), "{wire}");

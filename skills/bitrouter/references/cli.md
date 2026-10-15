@@ -1,5 +1,14 @@
 # CLI reference
 
+BitRouter's terminal views require `tui`, which includes `harness` but does not
+enable `core`. Without TUI, `code`, the `tui` alias, interactive `chat`, the
+agent deck/attach view and the onboarding wizard report the missing feature.
+Explicit `init --after launch` is rejected before resetting credentials or
+saving configuration. Use `init --yes --after exit` or `--after serve` for
+noninteractive setup. Headless `run`, redirected `chat`, session commands and
+their existing permission policies remain available with harness. Provider
+login and the vendor CLI's own authentication do not require BitRouter's TUI.
+
 MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
 Without `harness`, the daemon opens no local task or native ACP listener, and
 `agent_api.enabled` and `acp serve` report the missing capability before startup.

@@ -25,7 +25,7 @@ core = ["dep:rand_distr"]
 harness = ["mcp"]
 mcp = []
 server-tools = ["mcp"]
-tui = ["harness"]
+tui = ["harness", "dep:ratatui", "dep:crossterm"]
 guardrails = ["dep:bitrouter-guardrails"]
 db-postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
 db-mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
@@ -127,11 +127,11 @@ tokio-util = { workspace = true, features = ["compat", "rt"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
 # Terminal implementations now live under the application tui module.
-ratatui.workspace = true
+ratatui = { workspace = true, optional = true }
 shell-words.workspace = true
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
-crossterm.workspace = true
+crossterm = { workspace = true, optional = true }
 jsonschema = { version = "0.47.0", default-features = false }
 schemars.workspace = true
 
@@ -240,3 +240,11 @@ required-features = ["core"]
 [[test]]
 name = "harness_mcp_check"
 required-features = ["mcp"]
+
+[[test]]
+name = "code_tui_pty"
+required-features = ["tui"]
+
+[[test]]
+name = "native_agent_tui"
+required-features = ["core", "tui"]
