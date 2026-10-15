@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -512,6 +512,10 @@ impl Recorder {
             let forked = event.kind == CaptureKind::Response
                 && event.method == "session/fork"
                 && created_id.is_some();
+            // SessionKey is this table's only unique key. SeaQuery's MySQL
+            // polyfill assigns that key to itself; PostgreSQL/SQLite keep DO
+            // NOTHING, preserving the existing head, origin and fork metadata.
+            // https://docs.rs/sea-query/0.32.7/sea_query/query/struct.OnConflict.html#method.do_nothing_on
             sessions::Entity::insert(sessions::ActiveModel {
                 session_key: Set(key.clone()),
                 owner: Set(identity.owner),
@@ -529,13 +533,18 @@ impl Recorder {
             })
             .on_conflict(
                 OnConflict::column(sessions::Column::SessionKey)
-                    .do_nothing()
+                    .do_nothing_on([sessions::Column::SessionKey])
                     .to_owned(),
             )
             .do_nothing()
             .exec(&tx)
             .await?;
+            // The connection read can establish an older MySQL RR snapshot.
+            // The upsert locks the session but does not refresh that snapshot;
+            // read its current tombstone and history before accepting content.
+            // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
             let current = sessions::Entity::find_by_id(&key)
+                .lock_exclusive()
                 .one(&tx)
                 .await?
                 .context("capture session disappeared")?;
@@ -551,6 +560,7 @@ impl Recorder {
                             .add(events::Column::ConnectionId.ne(&self.connection_id))
                             .add(events::Column::Sequence.lt(call.request_sequence)),
                     )
+                    .lock_exclusive()
                     .one(&tx)
                     .await?;
                 let origin = if prior.is_some() {

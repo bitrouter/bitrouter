@@ -31,7 +31,20 @@ async fn fixture_with_inventory(
 )> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
-    let service = BlockPolicyStore::new(db.clone(), "owner")?;
+    fixture_in(db, "owner", acknowledge).await
+}
+
+async fn fixture_in(
+    db: sea_orm::DatabaseConnection,
+    owner: &str,
+    acknowledge: bool,
+) -> Result<(
+    BlockPolicyStore,
+    CanonicalStore,
+    Arc<Recorder>,
+    SessionIdentity,
+)> {
+    let service = BlockPolicyStore::new(db.clone(), owner)?;
     let inventory = crate::gateway::observability::inventory::GatewayInventory::new(db.clone());
     let canonical = CanonicalStore::new(db);
     service
@@ -61,13 +74,13 @@ async fn fixture_with_inventory(
         .await?;
     service.set_mode(EvolutionMode::Manual, None).await?;
     let identity = SessionIdentity {
-        owner: "owner".into(),
+        owner: owner.into(),
         source: "fixture".into(),
         native_session_id: "s".into(),
     };
     let recorder = canonical
         .recorder(RecordingScope {
-            owner: "owner".into(),
+            owner: owner.into(),
             source: "fixture".into(),
             controller_instance_id: Some("controller".into()),
             route_scope_id: Some("principal".into()),
@@ -736,4 +749,70 @@ fn active_time_merges_parallel_intervals_and_does_not_invent_missing_ends() -> R
     events.pop();
     assert_eq!(prompt_active_ms(&events)?, None);
     Ok(())
+}
+
+#[cfg(feature = "db-mysql")]
+mod mysql_tests {
+    use super::*;
+    use sea_orm::IsolationLevel;
+    use std::time::Duration;
+
+    #[tokio::test]
+    #[ignore = "requires db-mysql and a dedicated MySQL BITROUTER_TEST_DATABASE_URL"]
+    async fn publication_rejects_a_human_revision_committed_after_its_snapshot() -> Result<()> {
+        let url = std::env::var("BITROUTER_TEST_DATABASE_URL")
+            .context("set BITROUTER_TEST_DATABASE_URL to a dedicated MySQL test database")?;
+        let parsed = url::Url::parse(&url)?;
+        ensure!(
+            parsed.scheme() == "mysql" && !parsed.path().trim_matches('/').is_empty(),
+            "publication regression requires an explicitly named MySQL database"
+        );
+        let db = crate::db::connect(&url).await?;
+        let result = tokio::time::timeout(Duration::from_secs(120), async {
+            crate::db::run_migrations(&db).await?;
+            let owner = format!("publication-{}", uuid::Uuid::new_v4());
+            let (service, canonical, _recorder, identity) =
+                fixture_in(db.clone(), &owner, false).await?;
+            score(&canonical, &identity, 950_000, "before").await?;
+            let snapshot = service.learning_snapshot("a", None).await?;
+            let key = identity.key()?;
+            let expected = snapshot
+                .assessment_heads
+                .get(&key)
+                .context("learning snapshot did not include the assessment")?
+                .clone();
+            ensure!(expected.is_some());
+            // An existing read view must not hide a later human correction
+            // when publication acquires the connection/session fences.
+            // https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html
+            let reader = db
+                .begin_with_config(Some(IsolationLevel::RepeatableRead), None)
+                .await?;
+            ensure!(assessment_head(&reader, &key).await? == expected);
+            score(&canonical, &identity, 100_000, "human-correction").await?;
+            ensure!(assessment_head(&reader, &key).await? == expected);
+            ensure!(assessment_head(&db, &key).await? != expected);
+            let validation = snapshot.validate(&reader, &service.store).await;
+            reader.rollback().await?;
+            let error = validation
+                .err()
+                .context("publication accepted an obsolete human assessment")?;
+            ensure!(
+                format!("{error:#}").contains("assessment revised"),
+                "publication failed for an unrelated reason: {error:#}"
+            );
+            let current = service.learning_snapshot("a", None).await?;
+            let tx = db.begin().await?;
+            current.validate(&tx, &service.store).await?;
+            tx.rollback().await?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await
+        .context("MySQL publication regression exceeded its deadline")
+        .and_then(|result| result);
+        let closed = db.close().await;
+        result?;
+        closed?;
+        Ok(())
+    }
 }

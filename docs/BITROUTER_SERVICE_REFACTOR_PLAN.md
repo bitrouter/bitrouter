@@ -1101,6 +1101,24 @@ before selecting their capabilities: `--features harness` alone retains the
 full default product. Every application profile keeps its normal dependency on
 `bitrouter-ai`; gateway support and its public contracts are always present.
 
+The nontrivial feature implications are:
+
+```mermaid
+flowchart LR
+    TUI["tui"] --> Harness["harness"]
+    Harness --> MCP["mcp"]
+    Tools["server-tools"] --> MCP
+    OTel["otel (alias)"] --> HTTP["otel-http"]
+```
+
+`core`, `guardrails`, `otel-grpc`, `db-postgres` and `db-mysql` are independently
+selectable application capabilities. None of these arrows enables core.
+The local native connector uses the intersection `core AND harness`; the ACP
+export adapter uses `harness AND (otel-http OR otel-grpc)`. These intersections
+gate wiring rather than introduce new public features. Gateway and essential CLI
+support sit below this graph and are never optional. SDK transport features
+belong to the SDK's own dependency graph, not this application feature graph.
+
 The default database drivers reflect today's full application, which enables
 SQLite, PostgreSQL and MySQL. SQLite remains available without a flag. Retaining
 a driver is distinct from promising distributed correctness.
@@ -1615,6 +1633,15 @@ not newly written data with a different version field. Reuse existing historical
 fixtures where available and record any unsupported evidence claim as an open
 acceptance item. Likewise, a PostgreSQL/MySQL driver build does not establish
 that migrations or reads have been exercised against that backend.
+
+Backend execution evidence must include fresh and repeated migrations, pool
+close/reopen, scoped reads and writes, duplicate handling, and the concurrent
+mutation guarantees already required by a single gateway process. Exercise each
+backend's actual transaction behavior: a successful conflict-handling statement
+alone does not prove that its returned record, revision or authorization check
+is current. Keep these P0 compatibility checks separate from P1 shared admission,
+cross-instance recovery and global resource authority. Supporting concurrent
+requests in one process is part of preserving the existing gateway.
 
 The independent process test starts the packaged official gateway with a Rust mock
 provider and a private temporary server configuration/database directory.

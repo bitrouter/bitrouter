@@ -159,7 +159,7 @@ jobs:
             retries: "0"
             targets: >-
               --test acp --test acp_checkpoints --test native_acp --test cloud_api --test daemon --test e2e
-              --test full_stack --test configuration_state --test extension_host --test subscription --test feature_ingress --test database_backends
+              --test full_stack --test configuration_state --test extension_host --test subscription --test feature_ingress --test database_backends --test database_capture
               --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
           - shard: gateway
             retries: "0"
@@ -439,6 +439,24 @@ jobs:
         run: >-
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --test database_backends -- --include-ignored --test-threads=1
+
+      - name: exercise retained core and capture records on the selected backend
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --test database_backends --test database_capture -- --include-ignored --test-threads=1
+
+      - name: verify MySQL transaction snapshot boundaries
+        if: matrix.backend == 'mysql'
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+        run: |
+          cargo test -p bitrouter --no-default-features --features db-mysql \
+          --lib mysql_tests -- --ignored --test-threads=1
+          cargo test -p bitrouter --no-default-features --features db-mysql,core,harness \
+          --lib mysql_tests -- --ignored --test-threads=1
 
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})

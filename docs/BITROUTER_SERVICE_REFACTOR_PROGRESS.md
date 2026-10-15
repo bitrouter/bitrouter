@@ -63,7 +63,7 @@ the contract move must preserve its bytes.
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; remaining harness/TUI module and dependency isolation precede the complete matrix |
+| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; remaining harness/TUI module and dependency isolation precede the complete matrix |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -1951,3 +1951,77 @@ Those paths need their own real-backend evidence; inserted-versus-duplicate
 outcomes must not be changed through a blanket polyfill replacement. They remain
 follow-up work, alongside historical data/profile transitions and the rest of
 A01–A16. This stage does not establish multi-instance semantics or complete P0.
+
+## P0 5 retained backend state and transaction authority (2026-10-16)
+
+This stage follows `b88f071`. Real backend execution of
+shared evolution initialization exposed the same unsupported MySQL conflict
+syntax as the user upsert. Evolution initialization and capture now use the
+primary-key self-assignment polyfill, retaining first-writer data. Reliability
+appends instead use a plain insert and unique-constraint handling so MySQL's
+found-rows behavior cannot report a duplicate as a new event.
+
+Independent review then identified MySQL REPEATABLE READ snapshot hazards.
+Controlled tests reproduced missing initialization winners, obsolete locked
+revisions, content appended after a capture tombstone, missed prior events,
+checkpoint writes after a changed/deleted prefix, and an obsolete assessment
+replacing a concurrently committed human correction. The fix keeps SQLite's
+existing write fences and adds current reads at mutation-time authority checks;
+ordinary read-only projections retain their existing behavior. No global
+transaction-isolation setting is changed.
+
+Validation evidence for this stage:
+
+- Shared-record regressions reproduced both snapshot failures, then passed
+  **2/2** after current-read changes, including saving revision 2 without losing
+  the competing writer's data (`backend-snapshot-red/green` logs).
+- Capture race cases reproduced **3/3** failures. The fixed capture target then
+  passed **5/5**, including the ordinary SQLite and MySQL scenarios, in 0.43s
+  (`capture-snapshot-red/green` logs).
+- Checkpoint freeze and human-correction cases reproduced **3/3** failures.
+  Adding actual learner publication and inventory connection/coverage cases
+  yielded six reproduced failures, while the two already-fixed shared-record
+  tests stayed green. With the authority fixes, the full selection passed
+  **8/8**, 0.70s, including both absent and existing coverage revisions.
+- A normal SQLite regression passed **1/1**, 0.05s: historical assessments across
+  different fork ancestries acquire all required source locks, and a duplicate
+  receipt remains idempotent when an obsolete expected-head dependency is
+  tombstoned after discovery.
+- Strict full-workspace/all-targets and minimum-application Clippy passed
+  (1m07s and 39.18s); strict full/minimum Rustdoc passed (33.37s and 24.73s).
+  An initial lint run caught one unused import after sharing connection locking;
+  the import was removed rather than suppressing the lint.
+- Independent stage review found no remaining concrete issue in production
+  changes, regression tests, CI or documentation. Runtime execution is recorded
+  separately from that static review.
+- Final current-source MySQL library selection: **8/8 passed**, 0.70s; the
+  minimum application selection: **7/7 passed**, 0.36s (core publication is
+  absent). These crate-private store tests do not assert that remaining harness
+  implementation dependencies have already been removed from the minimum graph.
+- Final MySQL integration: `database_backends` **2/2**, 0.33s, and
+  `database_capture` **5/5**, 0.44s. PostgreSQL: **2/2** in each target, 0.35s and
+  0.25s, respectively. Each target includes its separate SQLite fixture.
+- No-feature SQLite integration: **1 passed, 1 explicitly ignored**, 0.06s;
+  the capture integration target contains zero cases without harness by design.
+  No server test silently substitutes SQLite for its requested backend.
+- Final all-feature related unit/integration selection: **141/141 passed**,
+  5.530s, across the application library, `acp_checkpoints` and
+  `workflow_state_replay`. The filter includes capture/checkpoints, shared
+  storage, adequacy, learning publication, gateway inventory/block routing and
+  policy-file behavior; 3,327 unrelated/ignored cases were not exercised by
+  this selection. This is not the final whole-workspace P0 suite.
+- Formatting, whitespace, workflow YAML and the new CI shell commands parse
+  cleanly. New Rust additions contain no panic/unwrap/expect suppression or
+  public forwarding exports. Logs use `/tmp/bitrouter-p0-authority-*`, with
+  earlier red/green capture and shared-record logs recorded above. Runtime
+  checks use stable Rust, debug symbols disabled and two build workers;
+  strict checks use Rust 1.97.0. Existing linker/future-compatibility warnings
+  remain. The new backend CI steps have not run remotely yet.
+
+These are isolated development databases and UUID-scoped fixtures. No resident
+service or user database was used. Independent review and the targeted backend,
+profile and regression checks complete this follow-up; they do not close the
+historical-payload, complete feature-isolation, packaged-client or final-suite
+acceptance gates. A01–A16 and publication remain open. This work does not claim
+multi-instance semantics. The next implementation stage separates shared plain
+transcript formatting from terminal rendering before gating TUI dependencies.

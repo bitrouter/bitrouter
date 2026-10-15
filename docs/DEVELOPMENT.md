@@ -618,6 +618,48 @@ compilation or SQL-string assertion is not evidence of backend execution.
 Historical session formats and cross-profile compatibility have separate P0
 acceptance gates.
 
+The same target also checks owner-scoped shared record initialization and stale
+revision rejection. With `core`, it checks that concurrent reliability appends
+report one insertion and one duplicate, retain the original observation, and
+reject conflicting reuse. `database_capture` requires `harness` and exercises
+the actual recorder's new/fork/update path, first-writer metadata, owner/source
+isolation and reconnect readback. Run both targets against the dedicated server:
+
+```sh
+BITROUTER_TEST_DATABASE_URL='mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test' \
+  cargo test -p bitrouter --no-default-features --features db-mysql,core,harness \
+  --test database_backends --test database_capture -- --include-ignored --test-threads=1
+```
+
+Select `db-postgres` and a PostgreSQL test URL for the other backend. CI runs both
+the gateway-only and core/harness selections; these checks do not promise
+distributed execution or a complete historical session-format audit.
+
+With `db-mysql`, `database_capture` also runs three ignored REPEATABLE READ races:
+concurrent session creation, append after deletion, and native-ID reuse. A
+connection-specific pending INSERT barrier fixes the interleaving; the test
+checks persisted content as well as the returned result. Those cases require a
+MySQL URL, so use the backend-specific profiles above rather than all features
+when running against PostgreSQL.
+
+The ignored library `mysql_tests` cases exercise shared-state revisions,
+connection/coverage fences, checkpoint freezes and human assessment corrections.
+They establish an old snapshot before a separate connection commits, then check
+the mutation's current authority. The core profile also checks publication
+against a concurrent human correction. Run them explicitly on the dedicated
+MySQL test database:
+
+```sh
+BITROUTER_TEST_DATABASE_URL='mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test' \
+  cargo test -p bitrouter --no-default-features --features db-mysql,core,harness \
+  --lib mysql_tests -- --ignored --test-threads=1
+```
+
+These tests retain MySQL's REPEATABLE READ behavior and the application's SQLite
+write fences; they do not change the service's global isolation setting. Fixtures
+use unique scopes, with only explicitly scoped cleanup/deletion. CI serializes
+the cases so independent modules do not race initial migration setup.
+
 ### Public API dependency guards
 
 Public API guards must track both AI contracts and the new SDK client surface.

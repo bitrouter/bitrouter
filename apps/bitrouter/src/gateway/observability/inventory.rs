@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, QueryFilter,
+    ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect,
     TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,9 @@ use crate::storage::evolution::{EvolutionStore, records};
 use crate::storage::execution::ExecutionOutcome;
 use crate::storage::execution::{EXECUTION_KIND, ExecutionRecord, ExecutionSettlement};
 use crate::storage::session_identity::SessionIdentity;
+
+#[cfg(all(test, feature = "db-mysql"))]
+mod mysql_tests;
 
 pub const INVENTORY_VERSION: &str = "gateway-request-inventory-v1";
 pub(crate) const COVERAGE_KIND: &str = "gateway_coverage";
@@ -194,7 +197,11 @@ impl GatewayInventory {
                 .filter(sessions::Column::SessionKey.eq(&key))
                 .exec(&tx)
                 .await?;
-            match sessions::Entity::find_by_id(&key).one(&tx).await? {
+            match sessions::Entity::find_by_id(&key)
+                .lock_exclusive()
+                .one(&tx)
+                .await?
+            {
                 Some(row) if !row.deleted && anchors.contains_key(&proposed.connection_id) => {
                     proposed.watermark = row.head;
                 }
@@ -202,6 +209,7 @@ impl GatewayInventory {
             }
         }
         if records::Entity::find_by_id(store.id(INVENTORY_KIND, request_id)?)
+            .lock_exclusive()
             .one(&tx)
             .await?
             .is_some()
@@ -295,7 +303,12 @@ impl GatewayInventory {
             if let Some(binding) = &request.binding {
                 let bound_store = EvolutionStore::new(self.db.clone(), &binding.identity.owner)?;
                 let id = bound_store.id(EXECUTION_KIND, &request.request_id)?;
-                if records::Entity::find_by_id(&id).one(&tx).await?.is_some() {
+                if records::Entity::find_by_id(&id)
+                    .lock_exclusive()
+                    .one(&tx)
+                    .await?
+                    .is_some()
+                {
                     let (bound_row, mut execution): (_, ExecutionRecord) = bound_store
                         .lock(&tx, EXECUTION_KIND, &request.request_id)
                         .await?;
@@ -321,12 +334,14 @@ impl GatewayInventory {
         let mut complete = true;
         for id in anchors.keys() {
             let connection = connections::Entity::find_by_id(id)
+                .lock_exclusive()
                 .one(tx)
                 .await?
                 .context("capture disappeared")?;
             let store = EvolutionStore::new(self.db.clone(), &connection.owner)?;
             let record_id = store.id(COVERAGE_KIND, id)?;
             if records::Entity::find_by_id(record_id)
+                .lock_exclusive()
                 .one(tx)
                 .await?
                 .is_none()
@@ -348,8 +363,9 @@ impl GatewayInventory {
     }
 }
 
-/// Callers publishing a snapshot first lock these capture connections. Missing
-/// registration is itself fenced, so a later acknowledgement cannot be hidden.
+/// Read-only snapshot comparison. Mutation-time publication uses the current
+/// read variant after locking its capture connections and sessions.
+#[cfg(feature = "core")]
 pub(crate) async fn coverage_matches(
     store: &EvolutionStore,
     db: &impl sea_orm::ConnectionTrait,
@@ -358,6 +374,23 @@ pub(crate) async fn coverage_matches(
     for (id, expected) in revisions {
         let actual = store
             .get_in::<CoverageRegistration>(db, COVERAGE_KIND, id)
+            .await?
+            .map(|(revision, _)| revision);
+        if actual != *expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) async fn coverage_matches_locked(
+    store: &EvolutionStore,
+    tx: &DatabaseTransaction,
+    revisions: &BTreeMap<String, Option<i64>>,
+) -> Result<bool> {
+    for (id, expected) in revisions {
+        let actual = store
+            .get_current_in::<CoverageRegistration>(tx, COVERAGE_KIND, id)
             .await?
             .map(|(revision, _)| revision);
         if actual != *expected {
@@ -379,7 +412,11 @@ pub(crate) async fn lock_connection(
         .filter(connections::Column::ConnectionId.eq(id))
         .exec(tx)
         .await?;
+    // Keep the write for SQLite, then read current state on MySQL even when
+    // an earlier connection in this transaction established a read view.
+    // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
     connections::Entity::find_by_id(id)
+        .lock_exclusive()
         .one(tx)
         .await?
         .context("capture connection is missing")

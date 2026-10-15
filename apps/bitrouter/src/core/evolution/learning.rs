@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder,
-    TransactionTrait,
+    QuerySelect, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,13 +18,15 @@ use super::rubric::RubricEvaluation;
 use crate::acp_trajectory::checkpoint::entities::{checkpoints, heads, resources};
 use crate::acp_trajectory::checkpoint::types::RESOURCE_MEMBERSHIP_VERSION;
 use crate::acp_trajectory::{CanonicalEvent, CanonicalStore};
-use crate::gateway::observability::inventory::{INVENTORY_VERSION, coverage_matches};
+use crate::gateway::observability::inventory::{
+    INVENTORY_VERSION, coverage_matches, coverage_matches_locked, lock_connection,
+};
 use crate::gateway::routing::blocks::allocation::BatchPlan;
 use crate::gateway::routing::blocks::control::{BlockStatus, ControlState, EvolutionMode};
 use crate::gateway::routing::blocks::store::{
     BlockPolicyStore, CONTROL_KEY, CONTROL_KIND, SESSION_KIND, SessionEnrollment,
 };
-use crate::storage::capture::{connections, sessions};
+use crate::storage::capture::sessions;
 use crate::storage::evolution::digest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,10 +69,11 @@ async fn assessment_head(db: &impl ConnectionTrait, key: &str) -> Result<Option<
         .and_then(|row| row.revision_id))
 }
 
-async fn resource_head(db: &impl ConnectionTrait, checkpoint: &str) -> Result<Option<String>> {
+async fn resource_head(db: &DatabaseTransaction, checkpoint: &str) -> Result<Option<String>> {
     Ok(resources::Entity::find()
         .filter(resources::Column::CheckpointId.eq(checkpoint))
         .order_by_desc(resources::Column::Revision)
+        .lock_exclusive()
         .one(db)
         .await?
         .map(|row| row.observation_id))
@@ -508,19 +511,8 @@ impl Snapshot {
         // Capture takes connection locks before session locks. Use the same
         // order so a concurrent append can never deadlock with publication.
         for (id, expected) in &self.connection_states {
-            connections::Entity::update_many()
-                .col_expr(
-                    connections::Column::Head,
-                    Expr::col(connections::Column::Head).into(),
-                )
-                .filter(connections::Column::ConnectionId.eq(id))
-                .exec(tx)
-                .await?;
             ensure!(
-                connections::Entity::find_by_id(id)
-                    .one(tx)
-                    .await?
-                    .is_some_and(|row| &row.state == expected),
+                lock_connection(tx, id).await?.state == *expected,
                 "capture health changed before publication; retry"
             );
         }
@@ -529,10 +521,6 @@ impl Snapshot {
                 .keys()
                 .all(|id| self.connection_states.contains_key(id)),
             "resource coverage references an unlocked connection"
-        );
-        ensure!(
-            coverage_matches(store, tx, &self.coverage_revisions).await?,
-            "gateway inventory changed before publication; refresh resources"
         );
         let keys: BTreeSet<_> = self
             .session_fences
@@ -549,6 +537,7 @@ impl Snapshot {
                 .exec(tx)
                 .await?;
             let row = sessions::Entity::find_by_id(key)
+                .lock_exclusive()
                 .one(tx)
                 .await?
                 .context("session metadata disappeared")?;
@@ -564,16 +553,34 @@ impl Snapshot {
                     "inherited source changed before publication; retry"
                 );
             }
-            if let Some(expected) = self.assessment_heads.get(key) {
-                ensure!(
-                    assessment_head(tx, key).await? == *expected,
-                    "assessment revised before publication; retry"
-                );
-            }
+        }
+        // Acquire every connection/session fence before dependent records.
+        // Each dependent read must be current too: row locks do not refresh
+        // an already established MySQL RR consistent-read snapshot.
+        // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
+        ensure!(
+            coverage_matches_locked(store, tx, &self.coverage_revisions).await?,
+            "gateway inventory changed before publication; refresh resources"
+        );
+        for (key, expected) in &self.assessment_heads {
+            ensure!(
+                self.session_fences.contains_key(key) || self.ancestor_fences.contains_key(key),
+                "assessment references an unlocked session"
+            );
+            let current = heads::Entity::find_by_id(key)
+                .lock_exclusive()
+                .one(tx)
+                .await?
+                .and_then(|row| row.revision_id);
+            ensure!(
+                current == *expected,
+                "assessment revised before publication; retry"
+            );
         }
         for id in &self.checkpoint_ids {
             ensure!(
                 checkpoints::Entity::find_by_id(id)
+                    .lock_exclusive()
                     .one(tx)
                     .await?
                     .is_some_and(|row| !row.deleted),

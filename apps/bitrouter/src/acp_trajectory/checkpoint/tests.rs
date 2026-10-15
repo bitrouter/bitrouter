@@ -660,3 +660,98 @@ async fn interruption_after_scoring_invalidates_freshness_without_rewriting_the_
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn historical_assessments_lock_both_fork_ancestries_and_keep_duplicate_receipts() -> Result<()>
+{
+    // Fork request/response fixtures follow the upstream ACP session schema.
+    // https://github.com/agentclientprotocol/agent-client-protocol
+    let store = store().await?;
+    let recorder = store.recorder(scope()).await?;
+    new_session(recorder.as_ref(), "parent-a").await?;
+    new_session(recorder.as_ref(), "parent-b").await?;
+    let child = identity("reused-child");
+    let mut checkpoints = Vec::new();
+    for (call, parent) in [(10, "parent-a"), (11, "parent-b")] {
+        recorder
+            .record(event(
+                CaptureKind::Request,
+                Some(call),
+                "session/fork",
+                json!({"sessionId": parent}),
+            ))
+            .await?;
+        recorder
+            .record(event(
+                CaptureKind::Response,
+                Some(call),
+                "session/fork",
+                json!({"result": {"sessionId": child.native_session_id}}),
+            ))
+            .await?;
+        checkpoints.push(freeze(&store, &child.native_session_id).await?);
+    }
+    let first = checkpoints
+        .first()
+        .context("first fork checkpoint missing")?;
+    let second = checkpoints
+        .get(1)
+        .context("second fork checkpoint missing")?;
+    ensure!(first.segments[0].identity == identity("parent-a"));
+    ensure!(second.segments[0].identity == identity("parent-b"));
+    let original = store
+        .submit_assessment(
+            &child,
+            input(first, "original", None, AssessmentSource::Human),
+        )
+        .await?;
+    let current = store
+        .submit_assessment(
+            &child,
+            input(
+                second,
+                "current",
+                Some(&original.revision_id),
+                AssessmentSource::Human,
+            ),
+        )
+        .await?;
+    ensure!(current.selected_on_submission);
+    let historical_input = input(
+        first,
+        "historical",
+        Some(&current.revision_id),
+        AssessmentSource::Human,
+    );
+    let historical = store
+        .submit_assessment(&child, historical_input.clone())
+        .await?;
+    ensure!(!historical.selected_on_submission);
+    ensure!(historical.selection_reason == "historical_checkpoint");
+    // The expected head's old source may disappear after dependency discovery.
+    // The receipt belongs to the still-valid first checkpoint and remains
+    // idempotent before compare-and-set against that now obsolete expected head.
+    let second_parent = identity("parent-b").key()?;
+    let duplicate = store
+        .submit_assessment_checked(&child, historical_input, move |tx| {
+            Box::pin(async move {
+                sessions::Entity::update_many()
+                    .col_expr(sessions::Column::Deleted, Expr::value(true))
+                    .filter(sessions::Column::SessionKey.eq(&second_parent))
+                    .exec(tx)
+                    .await?;
+                delete_dependents(tx, &second_parent).await
+            })
+        })
+        .await?;
+    ensure!(duplicate.revision_id == historical.revision_id);
+    ensure!(
+        store
+            .checkpoint_content(&child, &first.checkpoint_id)
+            .await?
+            .checkpoint
+            .checkpoint_id
+            == first.checkpoint_id
+    );
+    Ok(())
+}

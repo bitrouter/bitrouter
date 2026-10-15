@@ -8,8 +8,9 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
+#[cfg(test)]
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set, SqlErr};
 
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
@@ -246,17 +247,11 @@ impl AdequacyStore {
             task_id: Set(task_id.to_string()),
             created_at: Set(Utc::now().to_rfc3339()),
         };
-        match SemanticSuccess::insert(row)
-            .on_conflict(
-                OnConflict::column(adequacy_semantic_success::Column::EvidenceId)
-                    .do_nothing()
-                    .to_owned(),
-            )
-            .exec(&self.db)
-            .await
-        {
+        match SemanticSuccess::insert(row).exec(&self.db).await {
             Ok(_) => Ok(true),
-            Err(DbErr::RecordNotInserted) => Ok(false),
+            Err(error) if matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) => {
+                Ok(false)
+            }
             Err(e) => Err(BitrouterError::internal(format!(
                 "adequacy record semantic success: {e}"
             ))),
@@ -296,17 +291,15 @@ impl AdequacyStore {
             observed_at_unix: Set(observed_at_unix),
             created_at: Set(Utc::now().to_rfc3339()),
         };
-        match ReliabilityEvents::insert(row)
-            .on_conflict(
-                OnConflict::column(adequacy_reliability_events::Column::RequestId)
-                    .do_nothing()
-                    .to_owned(),
-            )
-            .exec(&self.db)
-            .await
-        {
+        // A MySQL no-op update can report an affected row with CLIENT_FOUND_ROWS,
+        // so it cannot distinguish Inserted from Duplicate. Let the unique key
+        // arbitrate the insert, then validate the existing event on conflict.
+        // This statement runs on the pool, not inside an aborted transaction.
+        // https://dev.mysql.com/doc/refman/8.4/en/insert-on-duplicate.html
+        // https://docs.rs/sea-orm/1.1.20/sea_orm/error/enum.DbErr.html#method.sql_err
+        match ReliabilityEvents::insert(row).exec(&self.db).await {
             Ok(_) => Ok(ReliabilityAppendOutcome::Inserted),
-            Err(DbErr::RecordNotInserted) => {
+            Err(error) if matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) => {
                 let existing = ReliabilityEvents::find()
                     .filter(adequacy_reliability_events::Column::RequestId.eq(&event.request_id))
                     .one(&self.db)
