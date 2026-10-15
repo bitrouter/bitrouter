@@ -57,6 +57,7 @@ pub mod managed_store;
 pub mod managed_task;
 pub mod mcp_registry;
 pub mod metering;
+#[cfg(feature = "harness")]
 pub mod native_acp;
 pub mod native_code;
 pub mod onboarding;
@@ -81,6 +82,7 @@ pub mod spawn;
 pub mod storage;
 pub mod style;
 pub mod supervisor;
+#[cfg(feature = "mcp")]
 pub mod tools;
 mod tracing_filter;
 pub mod trajectory;

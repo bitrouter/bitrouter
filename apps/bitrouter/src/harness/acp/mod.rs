@@ -31,7 +31,7 @@
 //! depending on the ACP SDK. This protocol stack belongs to the orchestrator;
 //! the app supplies host configuration, route/cost services and durable capture.
 //!
-//! [`native`] is the inbound v1/v2 agent over the host's existing ThreadService.
+//! With the harness feature, `native` is the inbound v1/v2 agent over the host's existing ThreadService.
 //! It projects native history and controls without using the external controller
 //! as an execution backend. The app's stdio bridge owns bytes only; its EOF does
 //! not cancel daemon-owned native Turns or pending approval.
@@ -58,6 +58,7 @@
 pub mod capture;
 pub mod client;
 pub mod controller;
+#[cfg(feature = "harness")]
 pub mod native;
 pub(crate) mod permission;
 pub mod telemetry;

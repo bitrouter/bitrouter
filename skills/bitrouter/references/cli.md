@@ -1,5 +1,11 @@
 # CLI reference
 
+MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
+Without `harness`, the daemon opens no local task or native ACP listener, and
+`agent_api.enabled` and `acp serve` report the missing capability before startup.
+Empty MCP configuration and disabled agent API settings remain readable.
+Local native headless execution requires both `core` and `harness`.
+
 Evidence and learning commands require the application's `core` feature:
 `eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`
 and `evolve`, plus `acp evolution` and checkpoint `judge`, `judge-job` and
@@ -19,8 +25,8 @@ records remain available; the default distribution includes `otel-http`.
 
 ## Native tasks through the managed core
 
-Local native execution requires the application's `core` feature (enabled in
-the default distribution). A build without core can inspect stored sessions
+Local native execution requires the application's `core` and `harness` features
+(enabled in the default distribution). A harness build without core can inspect stored sessions
 and validate their checkpoints, but cannot create or resume native work. Check
 the runtime's `native_execution` capability before submission; unavailable work
 is rejected before execution ownership or workspace resources are acquired.

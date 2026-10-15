@@ -63,7 +63,7 @@ the contract move must preserve its bytes.
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/local native bridge, evaluation, policy production and workflow research gated by core; core-disabled inspection, pending outbox preservation and no-OTLP activation isolation verified; evolution workers/commands are core-gated; the complete isolated dependency/startup matrix remains |
+| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; remaining supervisor/session initialization, terminal and dependency isolation precede the complete matrix |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -1659,3 +1659,49 @@ All A01–A16 gates remain open. Empty-feature MCP/harness errors, remaining
 module/dependency/startup isolation, harness SDK coverage, historical/backend/
 artifact/performance evidence, whole-candidate validation and independent final
 review still precede the requested PR. P1 and publication remain excluded.
+
+## Optional MCP and harness ingress
+
+This stage follows `8da53d4`. MCP executor/routing construction and diagnostics
+now require `mcp`. Local task/ACP listeners, ThreadService resources and the
+optional execution HTTP listener require `harness`; their existing lifecycle
+is retained when enabled. Native managed CLI execution requires both core and
+harness. Unsupported commands reject before configuration discovery or logging.
+Configured MCP servers and enabled execution HTTP reject at assembly, reload
+and profile preflight when their capability is absent.
+
+The new isolated-process suite exercises real gateway inference and shutdown.
+Without harness it supplies dormant invalid workspace paths and sentinel files
+at task/ACP endpoint paths, then verifies those resources remain untouched.
+With harness it connects to both existing local endpoints. It also checks
+unsupported configuration and CLI forms for side effects. The original process
+fixture used an incorrect provider route and model ID; correcting its fixture
+and retaining explicit upstream-call counting produced passing tests without
+relaxing production validation. Independent review found no actionable source
+finding in the implementation, including the early native-task guard.
+
+Validation:
+
+- Actual empty-feature application/all-target checking passed; this resolves the
+  nine compiler errors recorded by the preceding stages, not the remaining
+  dependency or runtime isolation gates.
+- The full-feature affected runtime selection passed **431/431** in 17.188
+  seconds, with 3,095 tests outside the filter. It covers host/assembly,
+  local clients, MCP, native ACP, configuration, extensions, daemon and HTTP.
+- Latest-source isolated profile runs passed: minimum **3/3** (2.136 seconds),
+  core-only **3/3** (2.439 seconds), harness-only **10/10** (2.551 seconds;
+  2,931 filtered out), and MCP-only **5/5** (2.259 seconds). The latter two
+  retain the existing MCP discovery and protocol-version tests.
+- Strict Rust 1.97.0 full-workspace/all-feature/all-target and empty-feature
+  application/all-target Clippy passed. Strict Rustdoc passed for both profiles;
+  optional MCP/native documentation links were corrected for reduced builds.
+- Formatting and patch-whitespace checks passed. Source/manifests remained
+  frozen throughout runtime tests, including sequential profile builds. Logs
+  use `/tmp/bitrouter-p0-optional-ingress-*`. The previously recorded toolchain
+  linker and third-party future-compatibility warnings remain unchanged.
+
+All final A01–A16 gates remain open. The minimum host still constructs an ACP
+route-lease adapter and opens the supervisor ledger; full harness/TUI dependency
+isolation, server-tool/database flags and the remaining artifact, compatibility,
+performance, complete validation and final review work are outstanding. This
+stage does not establish complete gateway runtime isolation or P0 delivery.

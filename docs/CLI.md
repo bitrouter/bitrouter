@@ -1,5 +1,11 @@
 # BitRouter CLI Reference
 
+MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
+Without `harness`, the daemon opens no local task or native ACP listener, and
+`agent_api.enabled` and `acp serve` report the missing capability before startup.
+Empty MCP configuration and disabled agent API settings remain readable.
+Local native headless execution requires both `core` and `harness`.
+
 Evidence and learning commands require the application's `core` feature:
 `eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`
 and `evolve`, plus `acp evolution` and checkpoint `judge`, `judge-job` and

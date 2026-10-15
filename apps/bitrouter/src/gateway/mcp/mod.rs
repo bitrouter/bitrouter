@@ -32,8 +32,8 @@
 //!
 //! The bundled implementation that dials real upstream MCP servers via
 //! [rmcp](https://github.com/modelcontextprotocol/rust-sdk) lives behind the
-//! crate's `mcp` feature; see [`rmcp_executor::RmcpExecutor`] and
-//! [`config_routing::ConfigMcpRoutingTable`].
+//! crate's `mcp` feature; see `rmcp_executor::RmcpExecutor` and
+//! `config_routing::ConfigMcpRoutingTable`.
 
 use std::sync::Arc;
 #[cfg(feature = "mcp")]
@@ -226,7 +226,7 @@ pub struct McpResponse {
 }
 
 /// One member of an aggregate fan-out — the per-server view used by
-/// [`aggregating_executor::AggregatingExecutor`] when dispatching
+/// `aggregating_executor::AggregatingExecutor` when dispatching
 /// `tools/list` / `tools/call` / etc. across multiple upstreams.
 #[derive(Debug, Clone)]
 pub struct AggregateMember {
@@ -268,9 +268,9 @@ pub trait RoutingTable: Send + Sync {
 }
 
 /// One cache-invalidation event published by the upstream-side handler
-/// (typically [`rmcp_executor::RmcpExecutor`]) when an MCP server sends a
+/// (typically `rmcp_executor::RmcpExecutor`) when an MCP server sends a
 /// `notifications/*` indicating its tool/resource/prompt list changed. The
-/// [`caching_executor::CachingExecutor`] subscribes to this stream and evicts
+/// `caching_executor::CachingExecutor` subscribes to this stream and evicts
 /// the affected cache entries.
 #[derive(Debug, Clone)]
 pub struct InvalidationEvent {

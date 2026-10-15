@@ -1846,6 +1846,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     );
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn e2e_mcp_aggregate_and_sse_endpoints() {
     use async_trait::async_trait;

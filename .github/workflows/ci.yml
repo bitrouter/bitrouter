@@ -159,7 +159,7 @@ jobs:
             retries: "0"
             targets: >-
               --test acp --test acp_checkpoints --test native_acp --test cloud_api --test daemon --test e2e
-              --test full_stack --test configuration_state --test extension_host --test subscription
+              --test full_stack --test configuration_state --test extension_host --test subscription --test feature_ingress
               --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
           - shard: gateway
             retries: "0"
@@ -362,7 +362,7 @@ jobs:
           PROFILE_FEATURES: ${{ matrix.features }}
         run: >-
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
-          --test core_disabled --test trajectory_progress_control --test gateway_workflow
+          --test core_disabled --test trajectory_progress_control --test gateway_workflow --test feature_ingress
 
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})

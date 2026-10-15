@@ -3,25 +3,32 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "harness")]
 use crate::gateway::caller::CallerContext;
 use crate::harness::agent::AgentConfig;
-use crate::harness::service::{ErrorCode, RuntimeCapabilities, ThreadService};
+#[cfg(feature = "harness")]
+use crate::harness::service::ThreadService;
+use crate::harness::service::{ErrorCode, RuntimeCapabilities};
 use crate::harness::turn::TurnSnapshot;
 use anyhow::{Context, Result};
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+#[cfg(feature = "harness")]
+use tokio::io::AsyncRead;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+#[cfg(feature = "harness")]
 use tokio_util::sync::CancellationToken;
 
 use crate::daemon::transport;
 
-use crate::harness::thread::{
-    PermissionProfile, ThreadHistoryPage, ThreadHistoryRequest, ThreadObservation, ThreadRequest,
-    ThreadSnapshot, ThreadTarget, ThreadView,
-};
-use crate::harness::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringReceipt, SteeringRequest, TurnReceipt, TurnRequest,
-};
+#[cfg(any(feature = "harness", test))]
+use crate::harness::thread::PermissionProfile;
+use crate::harness::thread::{ThreadHistoryPage, ThreadObservation, ThreadSnapshot, ThreadView};
+#[cfg(feature = "harness")]
+use crate::harness::thread::{ThreadHistoryRequest, ThreadRequest, ThreadTarget};
+#[cfg(feature = "harness")]
+use crate::harness::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest};
+use crate::harness::turn::{SteeringReceipt, TurnReceipt};
 
 pub const CONTRACT_VERSION: u32 = 17;
 const MAX_COMMAND_BYTES: u64 = 64 * 1024;
@@ -207,6 +214,7 @@ pub enum ReplyResult {
     },
 }
 
+#[cfg(feature = "harness")]
 pub(crate) async fn serve(
     mut listener: transport::ControlListener,
     service: ThreadService,
@@ -241,6 +249,7 @@ pub(crate) async fn serve(
     Ok(())
 }
 
+#[cfg(any(feature = "harness", test))]
 async fn write_reply(
     write: &mut (impl AsyncWrite + Unpin),
     request_id: Option<&str>,
@@ -264,6 +273,7 @@ async fn write_reply(
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 async fn serve_connection<S>(stream: S, service: ThreadService) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -348,6 +358,7 @@ where
     .await
 }
 
+#[cfg(feature = "harness")]
 async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResult {
     if command.command_id.is_empty() || command.command_id.len() > 128 {
         return ReplyResult::Error {
@@ -599,6 +610,7 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
     })
 }
 
+#[cfg(feature = "harness")]
 fn target(
     service: &ThreadService,
     command: &ThreadCommand,
@@ -864,7 +876,7 @@ fn decode_reply(line: &str, request_id: &str) -> Result<ReplyResult> {
     }
 }
 
-#[cfg(all(test, not(feature = "core")))]
+#[cfg(all(test, feature = "harness", not(feature = "core")))]
 mod core_disabled_tests;
 
 #[cfg(test)]

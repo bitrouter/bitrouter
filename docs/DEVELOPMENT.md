@@ -58,7 +58,14 @@ entries. The three inspection tools form the read-only profile. The server
 resolves one interpreter before a coding execution; model commands and
 verification share it. See [the six-tool contract](BRO_BASE_TOOLS_SPEC.md).
 
-The native BRO runtime has one `ThreadService` per serving instance. App-owned
+The host constructs `ThreadService` and binds task/native ACP endpoints only
+with `harness`. A reduced gateway leaves those endpoint paths and workspace
+resources untouched. Configured MCP upstreams require `mcp`; enabled agent HTTP
+ingress requires `harness`. Startup, reload and profile preflight reject missing
+capabilities before activating the service. This runtime separation does not yet
+complete the remaining harness/TUI dependency isolation.
+
+The native BRO runtime has one `ThreadService` per harness-enabled serving instance. App-owned
 SQLite stores Thread/Turn facts, acceptance keys, public events and owner/version
 fences. Clients only project state; detaching does not cancel, approve or resume.
 Bounded tool workers, ordered exclusive effects, FIFO/steering, joined shutdown,

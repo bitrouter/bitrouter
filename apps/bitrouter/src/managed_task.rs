@@ -2,23 +2,23 @@
 
 use bitrouter_ai::types::ReasoningEffort;
 use std::path::PathBuf;
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use std::sync::Arc;
 
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use anyhow::Context;
 
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use crate::gateway::caller::CallerContext;
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use crate::harness::agent::ToolMode;
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession};
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use crate::storage::checkpoint::snapshot::RunStatus;
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 use tokio_util::sync::CancellationToken;
 
 pub struct Options {
@@ -33,10 +33,10 @@ pub struct Options {
     pub max_output_tokens: Option<u32>,
 }
 
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 struct HeadlessApproval;
 
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 #[async_trait::async_trait]
 impl NativeApproval for HeadlessApproval {
     async fn approve(&self, _: &ToolExecute) -> Result<bool, CoreError> {
@@ -46,7 +46,7 @@ impl NativeApproval for HeadlessApproval {
     }
 }
 
-#[cfg(feature = "core")]
+#[cfg(all(feature = "core", feature = "harness"))]
 pub async fn run(options: Options) -> anyhow::Result<()> {
     anyhow::ensure!(
         options.max_output_tokens != Some(0),
@@ -153,7 +153,7 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "core"))]
+#[cfg(not(all(feature = "core", feature = "harness")))]
 pub async fn run(_options: Options) -> anyhow::Result<()> {
-    anyhow::bail!(crate::harness::agent::NATIVE_UNAVAILABLE)
+    anyhow::bail!("native managed execution requires the core feature and harness feature")
 }

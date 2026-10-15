@@ -14,9 +14,13 @@ use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
 use crate::gateway::assembly::{App, PromptTransform};
+#[cfg(feature = "mcp")]
 use crate::gateway::mcp::aggregating_executor::AggregatingExecutor;
+#[cfg(feature = "mcp")]
 use crate::gateway::mcp::caching_executor::{CacheTtls, CachingExecutor};
+#[cfg(feature = "mcp")]
 use crate::gateway::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
+#[cfg(feature = "mcp")]
 use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
 use crate::gateway::model::client::HttpTimeouts;
 use crate::gateway::model::protocol::OutboundDispatch;
@@ -250,6 +254,14 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// This belongs to the product host, not the SDK parser: trusted custom hosts
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    anyhow::ensure!(
+        cfg!(feature = "mcp") || config.mcp_servers.is_empty(),
+        "configured MCP servers require the mcp feature"
+    );
+    anyhow::ensure!(
+        cfg!(feature = "harness") || !config.agent_api.enabled,
+        "agent_api.enabled requires the harness feature"
+    );
     validate_telemetry_availability(config)?;
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
@@ -709,26 +721,29 @@ async fn assemble_app(
         }
     }
 
-    let mcp_routing = if config.mcp_servers.is_empty() {
-        None
-    } else {
-        Some(Arc::new(
-            ConfigMcpRoutingTable::from_configs(config.mcp_servers.iter().map(|(k, v)| {
-                let agg = McpServerAggregateConfig {
-                    aggregate: v.aggregate,
-                    tool_prefix: v.tool_prefix.clone().unwrap_or_else(|| format!("{k}__")),
-                };
-                (k.clone(), v.clone(), agg)
-            }))
-            .context("building the MCP routing table from config.mcp_servers")?,
-        ))
-    };
+    #[cfg(feature = "mcp")]
+    let mcp_routing: Option<Arc<dyn crate::gateway::mcp::RoutingTable>> =
+        if config.mcp_servers.is_empty() {
+            None
+        } else {
+            Some(Arc::new(
+                ConfigMcpRoutingTable::from_configs(config.mcp_servers.iter().map(|(k, v)| {
+                    let agg = McpServerAggregateConfig {
+                        aggregate: v.aggregate,
+                        tool_prefix: v.tool_prefix.clone().unwrap_or_else(|| format!("{k}__")),
+                    };
+                    (k.clone(), v.clone(), agg)
+                }))
+                .context("building the MCP routing table from config.mcp_servers")?,
+            ))
+        };
     // The MCP executor stack — composed innermost-out so a single
     // `/mcp tools/list` with cold caches dials N servers once, after which
     // it's all cache hits:
     //   AggregatingExecutor → CachingExecutor → RmcpExecutor
     // Caches sit at the leaves so a single-server `notifications/*` only
     // invalidates that server's slice.
+    #[cfg(feature = "mcp")]
     let mcp_executor = mcp_routing.as_ref().map(|_| {
         let rmcp: Arc<RmcpExecutor> = Arc::new(RmcpExecutor::new().with_protocol_version(
             crate::gateway::mcp::upstream_protocol_version(config.mcp.upstream_protocol),
@@ -746,6 +761,11 @@ async fn assemble_app(
                 as Arc<dyn crate::gateway::mcp::Executor>
         }
     });
+
+    #[cfg(not(feature = "mcp"))]
+    let mcp_routing: Option<Arc<dyn crate::gateway::mcp::RoutingTable>> = None;
+    #[cfg(not(feature = "mcp"))]
+    let mcp_executor: Option<Arc<dyn crate::gateway::mcp::Executor>> = None;
 
     // Nested-completion runner for the advisor / sub-agent / fusion server tools
     // — built when any of them is configured. Their nested calls run on a
@@ -1151,7 +1171,7 @@ pub async fn merge_registry_into(config: &mut Config) {
 /// it (each advertised only when the request declares it).
 fn build_server_tool_loop(
     config: &Config,
-    mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
+    mcp_routing: &Option<Arc<dyn crate::gateway::mcp::RoutingTable>>,
     mcp_executor: &Option<Arc<dyn crate::gateway::mcp::Executor>>,
     nested_runner: Option<Arc<dyn NestedRunner>>,
 ) -> Option<Arc<ServerToolLoop>> {

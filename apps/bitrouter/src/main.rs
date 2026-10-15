@@ -40,9 +40,9 @@ use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::DaemonActionReport;
 #[cfg(feature = "core")]
 use bitrouter::output::reports::eval::EvalReport;
-use bitrouter::output::reports::mcp::{
-    McpAddReport, McpCheckReport, McpCheckRow, McpRegistryReport, McpRegistryRow,
-};
+use bitrouter::output::reports::mcp::{McpAddReport, McpRegistryReport, McpRegistryRow};
+#[cfg(feature = "mcp")]
+use bitrouter::output::reports::mcp::{McpCheckReport, McpCheckRow};
 use bitrouter::output::reports::observe::ObserveStatusReport;
 #[cfg(feature = "core")]
 use bitrouter::output::reports::optimization::{
@@ -50,6 +50,7 @@ use bitrouter::output::reports::optimization::{
 };
 use bitrouter::output::reports::policy::PolicyReport;
 use bitrouter::output::reports::routing::{ProviderRow, ProvidersReport};
+#[cfg(feature = "mcp")]
 use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
     ToolsStatusReport,
@@ -1922,6 +1923,31 @@ async fn async_main() {
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
+    #[cfg(not(all(feature = "core", feature = "harness")))]
+    if matches!(&cli.command, Some(Command::Task { .. })) {
+        anyhow::bail!("native task execution requires the core feature and harness feature");
+    }
+    #[cfg(not(feature = "mcp"))]
+    if matches!(
+        &cli.command,
+        Some(
+            Command::Tools { .. }
+                | Command::Mcp {
+                    action: McpAction::Check { .. }
+                }
+        )
+    ) {
+        anyhow::bail!("MCP diagnostics require the mcp feature");
+    }
+    #[cfg(not(feature = "harness"))]
+    if matches!(
+        &cli.command,
+        Some(Command::Acp {
+            cmd: AcpCmd::Serve { .. }
+        })
+    ) {
+        anyhow::bail!("ACP serving requires the harness feature");
+    }
     #[cfg(not(feature = "core"))]
     if matches!(
         &cli.command,
@@ -3406,6 +3432,9 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
 
 async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
     match action {
+        #[cfg(not(feature = "mcp"))]
+        McpAction::Check { .. } => anyhow::bail!("MCP diagnostics require the mcp feature"),
+        #[cfg(feature = "mcp")]
         McpAction::Check { server, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config = bitrouter::paths::load_config(&source).await?;
@@ -5651,6 +5680,12 @@ async fn legacy_providers_report(
     Ok(ProvidersReport { providers })
 }
 
+#[cfg(not(feature = "mcp"))]
+async fn tools(_action: ToolsAction, _output: &Output) -> Result<()> {
+    anyhow::bail!("MCP diagnostics require the mcp feature")
+}
+
+#[cfg(feature = "mcp")]
 async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
     use bitrouter::tools as tools_cmd;
 
@@ -6446,6 +6481,9 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let Some(agent) = agent else {
+                #[cfg(not(feature = "harness"))]
+                anyhow::bail!("native ACP serving requires the harness feature");
+                #[cfg(feature = "harness")]
                 return bitrouter::native_acp::bridge(
                     &source,
                     &cfg,

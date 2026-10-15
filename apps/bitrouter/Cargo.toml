@@ -234,3 +234,7 @@ required-features = ["core"]
 [[example]]
 name = "checkpoint_ts_simulation"
 required-features = ["core"]
+
+[[test]]
+name = "harness_mcp_check"
+required-features = ["mcp"]

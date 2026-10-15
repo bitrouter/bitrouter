@@ -126,7 +126,7 @@ pub enum McpConfigError {
 
 impl McpServerConfig {
     /// Verify the config is internally consistent. Called by
-    /// [`super::config_routing::ConfigMcpRoutingTable`] at construction time so
+    /// `super::config_routing::ConfigMcpRoutingTable` at construction time so
     /// a malformed `bitrouter.yaml` is rejected at startup, not on first use.
     pub fn validate(&self) -> Result<(), McpConfigError> {
         if self.name.is_empty() {

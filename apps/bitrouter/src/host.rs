@@ -299,9 +299,13 @@ async fn serve_with_options(
             .await
             .with_context(|| format!("bind inference listener {listen}"))?;
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
+        #[cfg(feature = "harness")]
         let task_socket = crate::agent_local::socket_path(&socket_path);
+        #[cfg(feature = "harness")]
         let task_listener = daemon::transport::bind(&task_socket).await?;
+        #[cfg(feature = "harness")]
         let acp_listener = daemon::transport::bind(&crate::native_acp::socket_path(&socket_path)).await?;
+        #[cfg(feature = "harness")]
         let task_service = crate::harness::service::ThreadService::with_store(
             app.clone(),
             &cfg.agent_api.workspaces,
@@ -310,6 +314,7 @@ async fn serve_with_options(
         .map_err(anyhow::Error::msg)?
         .with_resources(native_harness_config(&cfg, home))
         .map_err(anyhow::Error::msg)?;
+        #[cfg(feature = "harness")]
         let native_acp = crate::harness::acp::native::NativeAcpServer::new(
             task_service.clone(), crate::gateway::caller::CallerContext::local(),
             crate::harness::acp::native::NativeSessionConfig {
@@ -324,6 +329,7 @@ async fn serve_with_options(
                 || cfg.control.credentials.iter().all(|credential| credential.token_env != cfg.agent_api.token_env),
             "agent API and control API must use distinct credential environment variables"
         );
+        #[cfg(feature = "harness")]
         let agent_api = crate::agent_api::BoundAgentApi::bind(&cfg.agent_api, task_service.clone()).await?;
         let remote_control = match remote_control {
             Some(server) => Some(
@@ -346,6 +352,7 @@ async fn serve_with_options(
         // Native requests and queue workers do not yet participate in an atomic
         // handoff gate. Hold admission for the endpoint's whole lifetime so an
         // idle ACP/inference projection cannot authorize stopping BRO work.
+        #[cfg(feature = "harness")]
         let native_admission = if cfg!(feature = "core") {
             Some(handoff_gate.admit().ok_or_else(|| anyhow::anyhow!("native runtime admission is closed"))?)
         } else {
@@ -431,39 +438,47 @@ async fn serve_with_options(
                 }
             };
             let task = async move {
-                let _native_admission = native_admission;
-                if cfg!(feature = "core") && let Err(error) = task_service.initialize_execution().await {
-                    tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
-                }
-                let runtime = task_service.clone();
-                let acp_cleanup = native_acp.clone();
-                let runtime_shutdown = task_shutdown_for_server.clone();
-                let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
-                let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
-                let local = crate::agent_local::serve(
-                    task_listener,
-                    task_service,
-                    task_shutdown_for_server.clone(),
-                );
-                let task_shutdown_for_cleanup = task_shutdown_for_server.clone();
-                let http = async move {
-                    match agent_api {
-                        Some(api) => api.serve(async move {
-                            task_shutdown_for_server.cancelled().await;
-                        }).await,
-                        None => {
-                            task_shutdown_for_server.cancelled().await;
-                            Ok(())
-                        }
+                #[cfg(feature = "harness")]
+                {
+                    let _native_admission = native_admission;
+                    if cfg!(feature = "core") && let Err(error) = task_service.initialize_execution().await {
+                        tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
                     }
-                };
-                let serving = async {
-                    let result = tokio::try_join!(local, http, acp).map(|_| ());
-                    task_shutdown_for_cleanup.cancel();
+                    let runtime = task_service.clone();
+                    let acp_cleanup = native_acp.clone();
+                    let runtime_shutdown = task_shutdown_for_server.clone();
+                    let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
+                    let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
+                    let local = crate::agent_local::serve(
+                        task_listener,
+                        task_service,
+                        task_shutdown_for_server.clone(),
+                    );
+                    let task_shutdown_for_cleanup = task_shutdown_for_server.clone();
+                    let http = async move {
+                        match agent_api {
+                            Some(api) => api.serve(async move {
+                                task_shutdown_for_server.cancelled().await;
+                            }).await,
+                            None => {
+                                task_shutdown_for_server.cancelled().await;
+                                Ok(())
+                            }
+                        }
+                    };
+                    let serving = async {
+                        let result = tokio::try_join!(local, http, acp).map(|_| ());
+                        task_shutdown_for_cleanup.cancel();
+                        result
+                    };
+                    let (result, ()) = tokio::join!(serving, cleanup);
                     result
-                };
-                let (result, ()) = tokio::join!(serving, cleanup);
-                result
+                }
+                #[cfg(not(feature = "harness"))]
+                {
+                    task_shutdown_for_server.cancelled().await;
+                    Ok::<(), anyhow::Error>(())
+                }
             };
             let mut inference = Box::pin(inference);
             let mut remote = Box::pin(remote);
@@ -956,6 +971,7 @@ fn other_provider_env_var_hints() -> Vec<String> {
 }
 
 /// Static daemon-owned resources; opening or browsing a Thread never connects.
+#[cfg(feature = "harness")]
 pub(crate) fn native_harness_config(
     cfg: &crate::config::Config,
     home: &std::path::Path,
