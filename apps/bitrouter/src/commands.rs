@@ -159,7 +159,7 @@ pub async fn key_sign(
 ) -> Result<GeneratedKey> {
     let db = crate::db::connect(db_url)
         .await
-        .with_context(|| format!("connecting to database {db_url}"))?;
+        .context("connecting to database")?;
     crate::db::run_migrations(&db)
         .await
         .context("running database migrations")?;

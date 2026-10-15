@@ -68,6 +68,12 @@ ingress requires `harness`. Startup, reload and profile preflight reject missing
 capabilities before activating the service. This runtime separation does not yet
 complete the remaining harness/TUI dependency isolation.
 
+SQLite is available in every application build. PostgreSQL and MySQL drivers
+require `db-postgres` and `db-mysql`, both enabled by the default distribution.
+Reduced builds preserve configuration parsing and reject an unavailable selected
+backend before connecting, including reload and profile preflight. Driver
+selection does not provide multi-instance coordination.
+
 The native BRO runtime has one `ThreadService` per harness-enabled serving instance. App-owned
 SQLite stores Thread/Turn facts, acceptance keys, public events and owner/version
 fences. Clients only project state; detaching does not cancel, approve or resume.

@@ -3113,7 +3113,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             };
             let db = bitrouter::db::connect(&database_url)
                 .await
-                .with_context(|| format!("connect metering database {database_url}"))?;
+                .context("connect metering database")?;
             let mut records = MeteringStore::new(db)
                 .export_usage(window)
                 .await
@@ -3142,7 +3142,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .with_context(|| format!("load reliability config {}", config.display()))?;
             let db = bitrouter::db::connect(&database_url)
                 .await
-                .with_context(|| format!("connect reliability database {database_url}"))?;
+                .context("connect reliability database")?;
             let rows = AdequacyStore::new(db)
                 .load_reliability_events()
                 .await
@@ -3255,7 +3255,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .context("build request settlement client")?;
             let db = bitrouter::db::connect(&database_url)
                 .await
-                .with_context(|| format!("connect metering database {database_url}"))?;
+                .context("connect metering database")?;
             bitrouter::db::run_migrations(&db)
                 .await
                 .context("run metering reconciliation migrations")?;
@@ -3324,7 +3324,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             .context("build workflow artifact for reward feedback")?;
             let db = bitrouter::db::connect(&database_url)
                 .await
-                .with_context(|| format!("connect eval exchange database {database_url}"))?;
+                .context("connect eval exchange database")?;
             bitrouter::db::run_migrations(&db).await?;
             let summary = import_semantic_reward_feedback(
                 &EvalService::new(EvalStore::new(db), Default::default()),

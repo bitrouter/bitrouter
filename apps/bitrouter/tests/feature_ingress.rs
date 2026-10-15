@@ -20,6 +20,96 @@ fn command(directory: &Path) -> tokio::process::Command {
 }
 
 #[tokio::test]
+async fn unavailable_database_backend_rejects_before_service_activation() -> Result<()> {
+    let mut cases = Vec::new();
+    if !cfg!(feature = "db-postgres") {
+        cases.extend([("postgres", "db-postgres"), ("postgresql", "db-postgres")]);
+    }
+    if !cfg!(feature = "db-mysql") {
+        cases.push(("mysql", "db-mysql"));
+    }
+    for (scheme, feature) in cases {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("bitrouter.yaml");
+        let url = format!("{scheme}://fixture:private-password@127.0.0.1:1/fixture");
+        let raw = format!(
+            "inherit_defaults: false\nregistry:\n  enabled: false\ndatabase:\n  url: '{url}'\n"
+        );
+        std::fs::write(&path, &raw)?;
+        let source = ConfigSource::File(path.clone());
+        let config = bitrouter::config::parse_with(&raw, |_| None)?;
+        // A reduced artifact still decodes the full saved configuration.
+        ensure!(config.database.url == url);
+        let connect = bitrouter::db::connect(&url)
+            .await
+            .err()
+            .context("driver accepted")?;
+        let assembly = bitrouter::build_app_with_path(&config, Some(&path))
+            .await
+            .err()
+            .context("assembly accepted unavailable driver")?;
+        let reload = bitrouter::reload::load_configuration_baseline(&source)
+            .await
+            .err()
+            .context("reload accepted unavailable driver")?;
+        let preflight = bitrouter::upgrade_preflight::Preflight::check_explicit(&source)
+            .await
+            .err()
+            .context("preflight accepted unavailable driver")?;
+        for diagnostic in [
+            connect.to_string(),
+            format!("{assembly:#}"),
+            format!("{reload:#}"),
+            format!("{preflight:#}"),
+        ] {
+            ensure!(diagnostic.contains(feature), "{diagnostic}");
+            ensure!(
+                !diagnostic.contains("private-password"),
+                "credential in diagnostic"
+            );
+        }
+        ensure!(std::fs::read_to_string(&path)? == raw);
+        ensure!(std::fs::read_dir(directory.path())?.count() == 1);
+
+        // CLI context layers must not reintroduce the connection credentials.
+        for human in [false, true] {
+            let cli_directory = tempfile::tempdir()?;
+            let mut cli = command(cli_directory.path());
+            if human {
+                cli.arg("--human");
+            }
+            let output = tokio::time::timeout(
+                Duration::from_secs(20),
+                cli.args(["key", "sign", "--user", "fixture", "--db", &url])
+                    .output(),
+            )
+            .await??;
+            ensure!(!output.status.success());
+            if !human {
+                let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+                ensure!(
+                    report["error"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains(feature)),
+                    "missing structured driver diagnostic"
+                );
+            }
+            let diagnostic = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            ensure!(diagnostic.contains(feature), "missing driver diagnostic");
+            ensure!(
+                !diagnostic.contains("private-password"),
+                "credential in CLI diagnostic"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn unavailable_ingress_rejects_before_assembly_reload_or_preflight_effects() -> Result<()> {
     let mut cases = Vec::new();
     if !cfg!(feature = "mcp") {

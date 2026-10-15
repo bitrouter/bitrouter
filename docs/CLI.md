@@ -8,6 +8,9 @@ Local native headless execution requires both `core` and `harness`.
 Supervised sessions and ACP route-lease control also require `harness`; a
 gateway-only daemon leaves the supervisor ledger untouched. Request identity
 and existing session-attributed spend remain available.
+SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
+`db-mysql`; both are included in the default distribution. Reduced builds report
+an unavailable selected backend before connecting.
 
 Evidence and learning commands require the application's `core` feature:
 `eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`

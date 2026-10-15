@@ -2498,9 +2498,12 @@ fn classify_database_error(error: &anyhow::Error) -> DatabaseErrorClassification
         classification.unique_violation |= db_error.is_unique_violation();
         let code = db_error.code();
         let code = code.as_deref();
+        #[cfg(feature = "db-mysql")]
         let mysql_number = db_error
             .try_downcast_ref::<sea_orm::SqlxMySqlError>()
             .map(sea_orm::SqlxMySqlError::number);
+        #[cfg(not(feature = "db-mysql"))]
+        let mysql_number = None;
         classification.retryable_contention |= retryable_database_code(code, mysql_number);
     }
     classification

@@ -20,12 +20,14 @@ name = "bro"
 path = "src/main.rs"
 
 [features]
-default = ["core", "harness", "tui", "mcp", "otel-http"]
+default = ["core", "harness", "tui", "mcp", "otel-http", "db-postgres", "db-mysql"]
 core = ["dep:rand_distr"]
 harness = ["mcp"]
 mcp = []
 tui = ["harness"]
 guardrails = ["dep:bitrouter-guardrails"]
+db-postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
+db-mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
 
 otel = ["otel-http"]
 otel-http = [

@@ -256,6 +256,7 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// This belongs to the product host, not the SDK parser: trusted custom hosts
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    crate::db::validate_backend_availability(&config.database.url)?;
     anyhow::ensure!(
         cfg!(feature = "mcp") || config.mcp_servers.is_empty(),
         "configured MCP servers require the mcp feature"
@@ -507,7 +508,7 @@ async fn assemble_app(
     // SQL — so it lands identically on whichever backend is configured.
     let db = crate::db::connect(&config.database.url)
         .await
-        .with_context(|| format!("connecting to database {}", config.database.url))?;
+        .context("connecting to database")?;
     crate::db::run_migrations(&db)
         .await
         .context("running database migrations")?;

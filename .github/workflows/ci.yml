@@ -355,6 +355,18 @@ jobs:
                  echo '::error::profile without gRPC pulled tonic'; exit 1
                fi ;;
           esac
+          case ",$PROFILE_FEATURES," in
+            *,db-postgres,*) ;;
+            *) if grep -Eq '^sqlx-postgres v' profile-tree.txt; then
+                 echo '::error::profile without PostgreSQL pulled its driver'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,db-mysql,*) ;;
+            *) if grep -Eq '^sqlx-mysql v' profile-tree.txt; then
+                 echo '::error::profile without MySQL pulled its driver'; exit 1
+               fi ;;
+          esac
 
       - name: verify gateway behavior without learning services
         if: matrix.features == '' || matrix.features == 'harness'
@@ -363,6 +375,12 @@ jobs:
         run: >-
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --test core_disabled --test trajectory_progress_control --test gateway_workflow --test feature_ingress
+
+      - name: verify database feature availability
+        if: matrix.features == 'db-postgres' || matrix.features == 'db-mysql'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
 
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})

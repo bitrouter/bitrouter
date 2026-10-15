@@ -1772,3 +1772,55 @@ be harness-gated. Remaining harness/TUI dependencies, server-tool/database flags
 capability-aware artifact identity, harness SDK delivery, historical/backend/
 packaged-process/performance evidence, whole-candidate validation and final
 independent review still precede the requested PR. P1 remains excluded.
+
+## P0 5 database driver features (2026-10-16)
+
+This stage follows `d83989c`. SQLite remains unconditional; PostgreSQL and MySQL
+now activate through application `db-postgres` and `db-mysql` features, retained
+in the full default product. Shared ORM/migration declarations no longer force
+both drivers into every application profile. The MySQL-specific trajectory
+error downcast follows its driver feature; generic SQLSTATE classification and
+SQLite behavior remain unchanged.
+
+A parsed PostgreSQL (including `postgresql`) or MySQL URL requires its compiled
+driver before connecting. The same guard runs through host assembly, reload and
+explicit upgrade preflight. Saved configuration still parses, while unavailable
+activation reports the missing feature without including connection credentials.
+Independent review caught URL-bearing CLI context layers that defeated that
+specific guarantee. Those wrappers now use static contexts. The real-process
+regression invokes `bro key sign` for each absent scheme in both JSON and human
+modes, verifies the structured JSON message and checks both output streams for
+the fixture password. Follow-up source review found no actionable issue. This
+is a missing-driver diagnostic guarantee, not a claim that every existing
+underlying-driver error has been audited for credential redaction.
+
+Validation (non-incremental, debug symbols disabled, two build/test workers):
+
+- Application/all-target minimum check passed. Isolated normal/build dependency
+  trees for minimum, PostgreSQL-only, MySQL-only and all features show SQLite
+  always present and each remote driver only in its selected profile.
+- Before the CLI-context correction, the affected DB, trajectory-store and
+  feature-ingress nextest selection passed **72/72** in each profile: minimum
+  3.913s, PostgreSQL-only 3.814s, MySQL-only 3.895s and full 4.822s. The filter was
+  `test(db::) | test(trajectory::store::tests::) | binary(feature_ingress)` with
+  `--lib --test feature_ingress`. These exercise SQLite and feature availability,
+  not live PostgreSQL/MySQL execution.
+- On final source, `feature_ingress` passed **4/4** for minimum in 1.936s and
+  **4/4** for all features in 2.985s. Missing-driver cases execute in minimum;
+  the full profile instead retains the enabled gateway/listener process check.
+- Rust 1.97.0 strict Clippy passed for full workspace/all-targets and application
+  minimum/PostgreSQL-only/MySQL-only all-targets. Final full and minimum passes
+  followed the CLI correction. Final strict Rustdoc passed for full workspace
+  (38.75s) and minimum application (31.12s).
+- Formatting and whitespace checks passed. Logs use
+  `/tmp/bitrouter-p0-database-features-*`. Source/manifests were frozen during
+  runtime sequences; existing linker/future-compatibility warnings remain.
+  One initial nextest invocation supplied both `-j` and `--test-threads`, which
+  nextest treats as duplicate test-thread options; it ran no tests and was
+  corrected to `--build-jobs 2 --test-threads 2`.
+
+CI now checks both absent driver closures and runs the database feature fixture
+for individual remote-driver profiles. Live backend migration/read/write evidence
+remains open under A09. All final A01–A16 gates remain open, including remaining
+harness/TUI/MCP dependency isolation, server-tools gating, artifact capability
+identity, harness SDK delivery and whole-candidate acceptance. P1 is excluded.
