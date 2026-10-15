@@ -1,0 +1,41 @@
+{
+  "previous_head": "bfc50f68e4151f939b9a7051aa4b46472355ed31",
+  "fix_head": "308a183611ec14af97e43b2d01d688c1b6dc3260",
+  "previous_manifest": "docs/evidence/bro-goal-workflow/2026-10-15-main-goal-final-v1-source.sha256",
+  "fix_manifest": "docs/evidence/bro-goal-workflow/2026-10-15-windows-test-cfg-v1-source.sha256",
+  "changed_paths": [
+    "apps/bitrouter/src/goal_code.rs"
+  ],
+  "exact_change": "Only two cfg(test) helper-definition guards become cfg(all(test, unix)), matching the pre-existing consumer module. No function/test body, assertion, test registration, ignore, runtime or config change.",
+  "unchanged_frozen_inputs": 1022,
+  "local_validation": {
+    "source_files": 1023,
+    "scope": "Only test helper cfg matches existing Unix-only consumers. No test or production behavior changed; prior full local suite/R16 preserved, current complete CI required separately.",
+    "consumer-tests": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 212.637
+    },
+    "clippy": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 89.233
+    },
+    "fmt": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 22.68
+    },
+    "diff": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 0.007
+    },
+    "hashes": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 0.106
+    }
+  },
+  "full_suite_scope": "Original 4675-pass suite/R16 remain bound to their original source. Unix test and non-test compilation semantics are unchanged by these guards; no paid workflow rerun or new-source full local suite is claimed. Actual CI at the delivered head independently validates all platforms."
+}
