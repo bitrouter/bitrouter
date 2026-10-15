@@ -1,0 +1,41 @@
+{
+  "previous_head": "bfc50f68e4151f939b9a7051aa4b46472355ed31",
+  "failed_windows_head": "73d10e8498f15fc885913cb45214f96dc3ab9f5a",
+  "changed_inputs": [
+    "apps/bitrouter/src/goal_archive.rs",
+    "apps/bitrouter/src/goal_code.rs",
+    "apps/bitrouter/src/goal_runtime/permissions/tests.rs"
+  ],
+  "unchanged_frozen_inputs": 1020,
+  "scope": "Only test helper guards and two fixture setups change. All original assertions retained. Archive production decoder/policy source unchanged; prior R16/full local proof is not relabeled as a rerun.",
+  "local_validation": {
+    "source_files": 1023,
+    "scope": "Test-only native absolute archive paths and JSON-escaped fixture rebasing; all original identity/scope assertions preserved. Backslash workspace name also exercises JSON escaping on Unix.",
+    "tests": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 110.799
+    },
+    "clippy": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 43.418
+    },
+    "fmt": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 22.214
+    },
+    "diff": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 0.01
+    },
+    "hashes": {
+      "exit": 0,
+      "signal": null,
+      "seconds": 0.103
+    }
+  },
+  "hosted_validation": "Actual delivered-head full platform CI is inspected separately."
+}

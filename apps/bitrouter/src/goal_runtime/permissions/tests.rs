@@ -240,12 +240,18 @@ async fn local_file_policy_rejects_paths_through_an_external_symlink() -> Result
 async fn captured_context_allows_only_declared_workspace_reads_and_keeps_all_paths() -> Result<()> {
     use crate::supervisor::{ReplayBatch, SessionEventKind};
     let temporary = tempfile::tempdir()?;
-    let workspace = temporary.path().join("workspace");
+    // Also require JSON escaping on Unix, where a backslash is a valid filename.
+    let workspace = temporary.path().join("workspace\\scope");
     let artifacts = temporary.path().join("artifacts");
-    tokio::fs::create_dir(&workspace).await?;
+    tokio::fs::create_dir_all(&workspace).await?;
     let fixture = include_str!("../../../tests/fixtures/acp-permission-context.json");
+    let encoded_workspace = serde_json::to_string(&workspace)?;
+    let escaped_workspace = encoded_workspace
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .context("workspace path was not encoded as a JSON string")?;
     let replay: ReplayBatch =
-        serde_json::from_str(&fixture.replace("/fixture/workspace", &workspace.to_string_lossy()))?;
+        serde_json::from_str(&fixture.replace("/fixture/workspace", escaped_workspace))?;
     let permission = replay
         .events
         .iter()

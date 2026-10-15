@@ -70,15 +70,16 @@ mod tests {
 
     #[test]
     fn historical_content_needs_the_exact_goal_task_and_archive_receipt() -> Result<()> {
+        let root = tempfile::tempdir()?;
         let execution: Execution = serde_json::from_value(serde_json::json!({
-            "id":"old","workspace":"/work","requirements_revision":1,"task_revision":1,
+            "id":"old","workspace":root.path().join("work"),"requirements_revision":1,"task_revision":1,
             "observation":{"state":"failed","run_id":"run","reason":"failed"}
         }))?;
         let material = serde_json::json!({"goal_id":"goal","owner":"local","task_id":"left",
             "execution":execution,"decisions":[],"previous":null});
         let bytes = serde_json::to_vec(&material)?;
         let reference = ArtifactRef {
-            path: "/archive".into(),
+            path: root.path().join("archive.blob"),
             sha256: hex::encode(Sha256::digest(&bytes)),
             bytes: u64::try_from(bytes.len())?,
         };
@@ -115,7 +116,7 @@ mod tests {
         let Change::ArchiveExecution { execution, .. } = change.as_mut() else {
             anyhow::bail!("test archive missing")
         };
-        execution.workspace = "/another-workspace".into();
+        execution.workspace = root.path().join("another-workspace");
         assert!(decode("goal", "left", &reference, &bytes, &unrelated).is_err());
         Ok(())
     }
