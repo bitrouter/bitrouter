@@ -8,57 +8,14 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use agent_client_protocol::role::{HasPeer, Role};
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     Agent, Client, Conductor, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, Proxy,
 };
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// Which side originated a captured message, or a controller lifecycle fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureDirection {
-    /// A manager-originated request or notification.
-    Client,
-    /// A harness-originated request or notification.
-    Agent,
-    /// A fact observed by the controller itself.
-    Controller,
-}
-
-/// Requests and responses share a connection-local `call_id`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureKind {
-    /// Capture began for the controller connection.
-    Connected,
-    /// An outbound request, before forwarding.
-    Request,
-    /// A one-way protocol update, before forwarding.
-    Notification,
-    /// A response, before delivery to the requester.
-    Response,
-    /// The controller connection ended.
-    Disconnected,
-}
-
-/// Observable protocol data, before any display projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CaptureEvent {
-    /// Source side of this message.
-    pub direction: CaptureDirection,
-    /// Wire message kind or lifecycle fact.
-    pub kind: CaptureKind,
-    /// A correlation identifier, not a model request or native session ID.
-    pub call_id: Option<u64>,
-    /// ACP method; responses retain the originating request method.
-    pub method: String,
-    /// Request/notification parameters, or a response's `result` / `error`.
-    pub payload: Value,
-}
 
 /// A capture failure is visible to the caller and stops forwarding new data.
 #[derive(Debug, thiserror::Error)]

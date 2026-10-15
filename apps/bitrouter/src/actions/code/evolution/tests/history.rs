@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore, RevisionInput};
-use crate::evolution::scoring::{self, RubricSubmission};
+use crate::core::evolution::scoring::{self, RubricSubmission};
 
 async fn append_turn(fixture: &Fixture) -> Result<()> {
     for (direction, kind, payload) in [

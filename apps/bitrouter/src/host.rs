@@ -529,6 +529,7 @@ async fn serve_with_options(
                 runtime: acp_runtime_for_control,
                 metering: crate::metering::MeteringStore::new(assembled.db.clone()),
                 inventory: Some(assembled.gateway_requests.inventory()),
+                #[cfg(feature = "core")]
                 evolution: Some(assembled.evolution.clone()),
             },
             daemon::LocalControlOptions {
@@ -674,19 +675,23 @@ async fn serve_with_options(
         // that same future until axum and every required finalizer finish. An HTTP
         // failure still returns directly; a HUP listener failure only disables
         // reload signaling and leaves the server running.
+        #[cfg(feature = "core")]
         let evolution_stop = tokio_util::sync::CancellationToken::new();
+        #[cfg(feature = "core")]
         let evolution_worker = app.language_model().cloned().map(|pipeline| {
             let worker =
-                crate::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
+                crate::core::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
                     .with_handoff_gate(handoff_gate.clone());
             let stop = evolution_stop.clone();
             tokio::spawn(async move { worker.run(pipeline, stop).await })
         });
+        #[cfg(feature = "core")]
         let control = async {
             let result = control.await;
             evolution_stop.cancel();
             result
         };
+        #[cfg(feature = "core")]
         let term = async {
             let result = term.await;
             evolution_stop.cancel();
@@ -701,7 +706,9 @@ async fn serve_with_options(
             control_shutdown_tx,
         )
         .await;
+        #[cfg(feature = "core")]
         evolution_stop.cancel();
+        #[cfg(feature = "core")]
         if let Some(worker) = evolution_worker
             && worker.await.is_err()
         {

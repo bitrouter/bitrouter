@@ -1604,8 +1604,12 @@ enum AcpCheckpointAction {
     },
     /// Prepare or submit evidence-grounded rubric scores from recorded content.
     Rubric {
+        #[cfg(feature = "core")]
         #[command(subcommand)]
-        action: bitrouter::evolution::scoring::ScoringCommand,
+        action: bitrouter::core::evolution::scoring::ScoringCommand,
+        #[cfg(not(feature = "core"))]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<String>,
     },
     /// Freeze exactly the currently observed prefix; rejects a stale watermark.
     Create {
@@ -1638,8 +1642,12 @@ enum AcpCmd {
     Evolution {
         #[arg(short, long)]
         config: Option<PathBuf>,
+        #[cfg(feature = "core")]
         #[command(subcommand)]
-        action: bitrouter::evolution::operator::EvolutionAction,
+        action: bitrouter::core::evolution::operator::EvolutionAction,
+        #[cfg(not(feature = "core"))]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<String>,
     },
     /// Freeze and evaluate already recorded native-session prefixes locally.
     Checkpoints {
@@ -1914,6 +1922,22 @@ async fn async_main() {
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
+    #[cfg(not(feature = "core"))]
+    if matches!(
+        &cli.command,
+        Some(Command::Acp {
+            cmd: AcpCmd::Evolution { .. }
+                | AcpCmd::Checkpoints {
+                    action: AcpCheckpointAction::Judge { .. }
+                        | AcpCheckpointAction::JudgeJob { .. }
+                        | AcpCheckpointAction::Rubric { .. },
+                    ..
+                }
+        })
+    ) {
+        anyhow::bail!("checkpoint evaluation and evolution require the core feature");
+    }
+
     // Subscriber init splits by command: the long-running `serve` defers
     // its init until after the OTel exporter has installed a real tracer
     // provider globally (see `serve` below). Every other command — and
@@ -6186,6 +6210,11 @@ async fn resolve_prompt_input(
 
 async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     match cmd {
+        #[cfg(not(feature = "core"))]
+        AcpCmd::Evolution { .. } => {
+            anyhow::bail!("checkpoint evolution requires the core feature")
+        }
+        #[cfg(feature = "core")]
         AcpCmd::Evolution { config, action } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
@@ -6210,6 +6239,15 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             action,
         } => {
             use bitrouter::acp_trajectory::checkpoint::types::{CheckpointReport, RevisionInput};
+            #[cfg(not(feature = "core"))]
+            if matches!(
+                action,
+                AcpCheckpointAction::Judge { .. }
+                    | AcpCheckpointAction::JudgeJob { .. }
+                    | AcpCheckpointAction::Rubric { .. }
+            ) {
+                anyhow::bail!("checkpoint evaluation requires the core feature");
+            }
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let db = bitrouter::db::connect(&bitrouter::db::anchor_url(
@@ -6225,8 +6263,15 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                 native_session_id: session,
             };
             let report = match action {
+                #[cfg(not(feature = "core"))]
+                AcpCheckpointAction::Judge { .. }
+                | AcpCheckpointAction::JudgeJob { .. }
+                | AcpCheckpointAction::Rubric { .. } => {
+                    anyhow::bail!("checkpoint evaluation requires the core feature");
+                }
+                #[cfg(feature = "core")]
                 AcpCheckpointAction::Judge { checkpoint, model } => {
-                    let jobs = bitrouter::evolution::jobs::JudgeJobs::new(
+                    let jobs = bitrouter::core::evolution::jobs::JudgeJobs::new(
                         bitrouter::storage::evolution::EvolutionStore::new(db, &identity.owner)?,
                     );
                     let job = jobs.enqueue(&identity, &checkpoint, &model, None).await?;
@@ -6250,13 +6295,14 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                     let result = jobs.run(&job.job_id, pipeline).await.with_context(|| {
                         format!("judge job {} failed; inspect it with judge-job", job.job_id)
                     })?;
-                    output.emit(&bitrouter::evolution::scoring::ScoringReport::JudgeJob(
-                        result,
-                    ))?;
+                    output.emit(
+                        &bitrouter::core::evolution::scoring::ScoringReport::JudgeJob(result),
+                    )?;
                     return Ok(());
                 }
+                #[cfg(feature = "core")]
                 AcpCheckpointAction::JudgeJob { job_id, resume } => {
-                    let jobs = bitrouter::evolution::jobs::JudgeJobs::new(
+                    let jobs = bitrouter::core::evolution::jobs::JudgeJobs::new(
                         bitrouter::storage::evolution::EvolutionStore::new(db, &identity.owner)?,
                     );
                     let job = jobs.get(&job_id).await?;
@@ -6290,14 +6336,16 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                     } else {
                         job
                     };
-                    output.emit(&bitrouter::evolution::scoring::ScoringReport::JudgeJob(
-                        result,
-                    ))?;
+                    output.emit(
+                        &bitrouter::core::evolution::scoring::ScoringReport::JudgeJob(result),
+                    )?;
                     return Ok(());
                 }
+                #[cfg(feature = "core")]
                 AcpCheckpointAction::Rubric { action } => {
                     output.emit(
-                        &bitrouter::evolution::scoring::command(&store, &identity, action).await?,
+                        &bitrouter::core::evolution::scoring::command(&store, &identity, action)
+                            .await?,
                     )?;
                     return Ok(());
                 }

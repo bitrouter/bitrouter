@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter::acp_trajectory::{CanonicalStore, RecordingScope};
-use bitrouter::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
+use bitrouter::harness::acp::capture::CapturePort;
+use bitrouter::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::{Value, json};
 
 async fn command(config: &Path, cwd: &Path, args: &[&str]) -> Result<std::process::Output> {

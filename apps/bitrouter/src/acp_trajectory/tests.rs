@@ -2,9 +2,10 @@ use anyhow::Context;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
+use crate::harness::acp::capture::CapturePort;
 use crate::harness::acp::client::{AcpClient, ClientOptions};
 use crate::harness::acp::controller::{Controller, ControllerConfig, ControllerIdentity};
+use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, InitializeRequest, InitializeResponse, LoadSessionRequest,
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,

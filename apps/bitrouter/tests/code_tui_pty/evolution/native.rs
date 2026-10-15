@@ -3,10 +3,10 @@
 
 use super::*;
 use bitrouter::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use bitrouter::evolution::evidence::{EvidenceKind, EvidencePacket};
-use bitrouter::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
-use bitrouter::evolution::runtime::EvolutionRuntime;
-use bitrouter::evolution::scheduler::EvolutionScheduler;
+use bitrouter::core::evolution::evidence::{EvidenceKind, EvidencePacket};
+use bitrouter::core::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
+use bitrouter::core::evolution::runtime::EvolutionRuntime;
+use bitrouter::core::evolution::scheduler::EvolutionScheduler;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::build_router;
 use serde_json::{Value, json};

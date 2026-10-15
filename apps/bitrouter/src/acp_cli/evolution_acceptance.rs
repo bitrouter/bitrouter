@@ -22,13 +22,13 @@ use wiremock::{
 
 use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::CriterionScore;
-use crate::evolution::control::{BlockDefinition, BlockRule, EvolutionMode};
-use crate::evolution::evidence::{EvidenceKind, EvidencePacket};
-use crate::evolution::rubric::{
+use crate::core::evolution::evidence::{EvidenceKind, EvidencePacket};
+use crate::core::evolution::rubric::{
     Applicability, RUBRIC_VERSION, RubricEvaluation, RubricItem, library,
 };
-use crate::evolution::runtime::EvolutionRuntime;
-use crate::evolution::scheduler::EvolutionScheduler;
+use crate::core::evolution::runtime::EvolutionRuntime;
+use crate::core::evolution::scheduler::EvolutionScheduler;
+use crate::gateway::routing::blocks::control::{BlockDefinition, BlockRule, EvolutionMode};
 use crate::storage::session_identity::SessionIdentity;
 
 mod publication;
@@ -410,13 +410,13 @@ async fn configure(fixture: &Fixture, agent: &str) -> Result<()> {
                 }],
                 independence_rationale: "One fixture block".into(),
                 dependencies: BTreeMap::new(),
-                measurement_contract: crate::evolution::scoring::measurement_contract(
+                measurement_contract: crate::core::evolution::scoring::measurement_contract(
                     crate::acp_trajectory::checkpoint::types::AssessmentSource::Agentic,
                     "checkpoint-judge:judge",
-                    crate::evolution::judge::JUDGE_VERSION,
+                    crate::core::evolution::judge::JUDGE_VERSION,
                 )?,
                 batch_sessions: 4,
-                bandit: crate::evolution::bandit::BanditConfig {
+                bandit: crate::gateway::routing::blocks::allocation::BanditConfig {
                     initial_exposure_ppm: 500_000,
                     ..Default::default()
                 },
@@ -474,8 +474,8 @@ async fn run(agent: &str, adapter_variable: &str, worker_variable: &str) -> Resu
 async fn verify_judge_costs(
     fixture: &Fixture,
     minimum_calls: usize,
-) -> Result<crate::evolution::costs::report::CostSummary> {
-    use crate::evolution::operator::{EvolutionOperation, EvolutionReport};
+) -> Result<crate::core::evolution::costs::report::CostSummary> {
+    use crate::core::evolution::operator::{EvolutionOperation, EvolutionReport};
     let EvolutionReport::Status(status) = fixture
         .runtime
         .operate("local", EvolutionOperation::Status)

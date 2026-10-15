@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use bitrouter::evolution::bandit::{
-    Arm, BanditConfig, EffectiveObservations, Observation, Recommendation, draw_assignment, plan,
+use bitrouter::core::evolution::bandit::{EffectiveObservations, Observation, plan};
+use bitrouter::gateway::routing::blocks::allocation::{
+    Arm, BanditConfig, Recommendation, draw_assignment,
 };
 use clap::Parser;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
@@ -310,7 +311,8 @@ fn main() -> Result<()> {
         "scope":"allocator_only; promotion is not enacted; fixed allocation and TS share irreversible quality withdrawal; no live routing or judge accuracy claim",
         "likelihood":"normal_inverse_gamma; Student-t mean sampling; independent quality/log-cost/log-latency",
         "learner_config":BanditConfig {posterior_draws:2048,maximum_challenger_sessions:args.sessions,..BanditConfig::default()},
-        "learner_source_digest":bitrouter::storage::evolution::digest(&include_str!("../src/evolution/bandit.rs"))?,
+        "learner_source_digest":bitrouter::storage::evolution::digest(&include_str!("../src/core/evolution/bandit.rs"))?,
+        "allocation_source_digest":bitrouter::storage::evolution::digest(&include_str!("../src/gateway/routing/blocks/allocation.rs"))?,
         "seeds":args.seeds,"sessions_per_run":args.sessions,"summary":summary,"runs":runs});
     let serialized = serde_json::to_string_pretty(&report)?;
     if let Some(path) = args.output {

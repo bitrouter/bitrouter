@@ -12,7 +12,8 @@ pub mod types;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::harness::acp::capture::{CaptureEvent, CaptureKind};
+use crate::storage::capture::{CaptureEvent, CaptureKind};
+
 use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{

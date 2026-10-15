@@ -166,7 +166,11 @@ pub enum DaemonCommand {
     Inspect { inspection: DaemonInspection },
     /// Local, owner-scoped checkpoint evolution control.
     Evolution {
-        operation: crate::evolution::operator::EvolutionOperation,
+        #[cfg(feature = "core")]
+        operation: crate::core::evolution::operator::EvolutionOperation,
+        // Decode only to reject the unavailable operation on reduced builds.
+        #[cfg(not(feature = "core"))]
+        operation: serde_json::Value,
     },
     /// Acknowledge request inventory for a recorder before capture starts.
     AcpRecordingRegister {
@@ -367,7 +371,10 @@ pub enum DaemonResponse {
         report: DaemonInspectionReport,
     },
     Evolution {
-        report: Box<crate::evolution::operator::EvolutionReport>,
+        #[cfg(feature = "core")]
+        report: Box<crate::core::evolution::operator::EvolutionReport>,
+        #[cfg(not(feature = "core"))]
+        report: Box<serde_json::Value>,
     },
     /// This daemon shares the recorder's database and records gateway requests.
     AcpRecordingRegistered {
@@ -639,6 +646,7 @@ pub async fn run_control_socket(
             runtime: Arc::new(AcpRuntime::new()),
             metering,
             inventory: None,
+            #[cfg(feature = "core")]
             evolution: None,
         },
     )
@@ -662,7 +670,8 @@ pub struct AcpControlPlane {
     /// The inventory installed in this daemon's model request pipeline.
     pub inventory: Option<crate::gateway::observability::inventory::GatewayInventory>,
     /// Live route validation and checkpoint worker status, when installed.
-    pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
+    #[cfg(feature = "core")]
+    pub evolution: Option<crate::core::evolution::runtime::EvolutionRuntime>,
 }
 
 pub async fn run_control_socket_with_acp_runtime(
@@ -1013,6 +1022,11 @@ async fn dispatch(
                 }
             }
         }
+        #[cfg(not(feature = "core"))]
+        DaemonCommand::Evolution { .. } => DaemonResponse::Error {
+            message: "checkpoint evolution requires the core feature".into(),
+        },
+        #[cfg(feature = "core")]
         DaemonCommand::Evolution { operation } => {
             let Some(runtime) = &acp.evolution else {
                 return DaemonResponse::Error {

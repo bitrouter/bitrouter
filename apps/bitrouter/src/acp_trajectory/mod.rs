@@ -8,7 +8,8 @@ pub mod checkpoint;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use crate::harness::acp::capture::{CaptureError, CaptureEvent, CaptureKind, CapturePort};
+use crate::harness::acp::capture::{CaptureError, CapturePort};
+use crate::storage::capture::{CaptureEvent, CaptureKind};
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use sea_orm::sea_query::{Expr, OnConflict};

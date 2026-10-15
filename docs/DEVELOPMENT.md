@@ -333,16 +333,24 @@ require core, as does `BITROUTER_WORKFLOW_TRACE_JSONL` capture. Unavailable work
 is rejected before its input files or execution stores are opened. Ordinary
 trajectory inspection/replay/pruning remains available without core.
 
-This does not finish the core feature boundary: evolution startup/commands and
-the remaining feature dependencies still require separation. The progress ledger
-records the remaining work before claiming a minimum gateway profile.
+Checkpoint learning, scoring, operator controls and the background worker now
+live in `core::evolution`. Published block contracts, allocation draws, session
+membership, request intents and live dispatch fences belong to
+`gateway::routing::blocks`. Every build uses the same serving implementation,
+including adopted policies while evolution mode is Off. Core supplies posterior
+learning and operator/publication mutations through separate implementations.
+Without core, no evolution worker starts; unavailable CLI and local control
+operations reject execution, and the TUI omits its evolution panel. Ordinary checkpoint storage operations retain
+their existing harness owner. This does not establish minimum-gateway closure:
+harness, TUI, MCP and the remaining feature dependencies still require isolation.
+The progress ledger records the outstanding validation.
 
 Reserved judge request admission and attempt bookkeeping now belong to
 `gateway::metering::judge::JudgeCosts`. They retain their pre-authentication
 ordering and existing dispatch/replay checks. Always-run accounting and
 evaluation consume the replay markers from `gateway::metering::replay` instead
 of depending on a learning runtime. Job reservation construction and cost-report
-operations remain in `evolution::costs`; their implementation extends the
+operations remain in `core::evolution::costs`; their implementation extends the
 gateway-owned handle without changing its admission behavior.
 
 The supporting record store and digest live in `storage::evolution`. Persisted

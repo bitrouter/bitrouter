@@ -61,9 +61,9 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; evolution activation and final dependency matrix remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/local native bridge, evaluation, policy production and workflow research gated by core; core-disabled inspection, pending outbox preservation and no-OTLP activation isolation verified; evolution and the complete isolated dependency/startup matrix remain |
+| P0 5 Feature isolation | In progress | Scheduler/local native bridge, evaluation, policy production and workflow research gated by core; core-disabled inspection, pending outbox preservation and no-OTLP activation isolation verified; evolution workers/commands are core-gated; the complete isolated dependency/startup matrix remains |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -1587,3 +1587,75 @@ passing minimum-gateway claim. Evolution startup/source, harness/TUI/MCP and
 remaining dependency isolation still require implementation. All final A01–A16
 gates remain open; historical/backend/artifact/performance evidence, complete
 validation, final independent review and PR remain required. P1 is excluded.
+
+
+## Core evolution and published block serving
+
+This stage follows `d0db976`. Evolution posterior inference, scoring, jobs,
+operator mutations, publication and workers now live under `core::evolution`.
+The core feature owns `rand_distr`; the core-disabled normal/build dependency
+tree has no such dependency. CLI, IPC, TUI actions and examples follow their
+owner, while existing stored data and gateway behavior remain independently
+available.
+
+Independent review caught an incorrect initial boundary: gating the entire
+old evolution hook would stop applying already adopted blocks. The corrected
+`gateway::routing::blocks` owns published allocation/control data, baseline
+ancestry and dependency checks, sticky enrollment and transactional route intent,
+serving catalog checks and the request-time admission/revalidation fences.
+`BlockPolicyRouter` is installed unconditionally in the original hook order.
+Core owns the learning and operator methods on that state. Feature selection
+does not rewrite the persisted evolution mode.
+
+The three existing capture DTOs moved unchanged to `storage::capture`, removing
+the policy store's dependency on a live harness capture module. The writer and
+controller remain harness-owned. An audit compared 15 original serving method
+bodies against their extracted implementations, normalizing only whitespace,
+owner/module qualifiers and visibility: all matched. Independent review also
+confirmed unchanged compared serde representations and retention of all 87
+original evolution tests.
+
+Three new ungated gateway regressions dispatch through an actual mock upstream:
+persisted adopted blocks still choose the candidate after reopening a disk
+store (including named policies), preexisting baseline sessions retain their
+membership, and changed route dependencies trigger the original fallback.
+The persisted-adoption case also checks duplicate rejection and unchanged
+control state. These are controlled current-schema fixtures, not empirical
+promotion evidence or historical/cross-artifact compatibility proof.
+
+The initial core-disabled runtime selection passed 401 of 402 tests. The new
+unavailable-command test found session-log creation before rejection. The guard
+now runs before logging or file/store access; 14 unavailable command forms are
+covered without weakening an assertion. Review also found a pure fresh-session
+PTY regression hidden inside the core-only evolution target. Its unchanged body
+and supporting enum now live in the ungated parent suite. Follow-up independent
+review reported no remaining actionable source finding.
+
+Validation on the corrected stage:
+
+- All-feature application/all-target checking passed. The selected full runtime
+  suite passed **546/546** in 84.418 seconds (two slow; 3,022 filtered out),
+  covering evolution, capture/controller, gateway accounting/routing, daemon,
+  full-stack, checkpoints, CLI and the affected PTY behavior.
+- The core/OTLP-disabled profile (`--no-default-features --features
+  harness,tui,mcp`) passed **407/407** in 80.184 seconds (one slow; 2,677
+  filtered out), including all new block-routing cases, unavailable CLI/IPC
+  behavior and the ungated fresh-session PTY case.
+- After making the posterior dependency optional and updating example
+  provenance, the final disabled block/CLI/daemon selection passed **22/22**
+  in 2.934 seconds, with 2,932 filtered out.
+- Final strict Rust 1.97.0 workspace/all-feature/all-target Clippy and disabled
+  application/all-target Clippy passed. Strict Rustdoc passed for the full
+  workspace and disabled application; later source changes affected only
+  example provenance and the optional dependency declaration.
+- Formatting and patch-whitespace checks passed. Runtime source/manifests were
+  frozen during tests and nested example builds. Logs use the
+  `/tmp/bitrouter-p0-block-routing-*` prefix. The previously recorded stable
+  linker and third-party future-compatibility warnings remain unchanged.
+
+The final plan also incorporates the documentation review's explicit published
+block migration, persisted-mode and cross-profile acceptance requirements.
+All A01–A16 gates remain open. Empty-feature MCP/harness errors, remaining
+module/dependency/startup isolation, harness SDK coverage, historical/backend/
+artifact/performance evidence, whole-candidate validation and independent final
+review still precede the requested PR. P1 and publication remain excluded.

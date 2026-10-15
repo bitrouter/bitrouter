@@ -648,7 +648,7 @@ crate-root module declarations at the inventory baseline.
 | `db` | `storage` connection/bootstrap and complete historical migration sequence |
 | `error_report` | `cli::error_report` and terminal-independent presentation; public API error payloads in AI only where shared |
 | `eval` | Evaluation admission/compiler/control/storage to `core::eval`; split the gateway trajectory settlement path out of `settlement`, retaining required observation snapshots and routing-evidence helpers without core; public exchange DTOs to AI |
-| `evolution` | Catalog, scheduler, learning, job, scoring and control to `core::evolution`; `inventory` and request tracking to gateway observability, persisted reservation/replay enforcement and settlement-protection events from `costs/runtime` to gateway admission/metering; shared record definitions/store/digest helpers to application storage; workspace execution delegates to harness |
+| `evolution` | Scheduler, learning, jobs, scoring and operator control/publication to `core::evolution`; published block definitions, serving catalog/dependency checks, sticky allocation/enrollment and route selection from `bandit/catalog/control/service/runtime` to `gateway::routing::blocks`; `inventory` and request tracking to gateway observability, persisted reservation/replay enforcement and settlement-protection events from `costs/runtime` to gateway admission/metering; shared record definitions/store/digest helpers to application storage; workspace execution delegates to harness |
 | `gateways` | `harness::gateways` launch-time integration configuration |
 | `harness` | `harness::catalog` existing generated harness metadata and lookup |
 | `host` | `host` foreground lifecycle, listeners, readiness, reload, signals and ordered shutdown |
@@ -715,6 +715,18 @@ assignment and verification helpers available to gateway builds. Core owns
 creating, evaluating and promoting experiments; disabling core must neither
 disable an already published experiment nor skip its certificate checks.
 
+The persisted policy-block path in `evolution` needs the same treatment.
+`EvolutionService::select_with_bypass` applies an adopted block even when
+`EvolutionMode::Off`; that mode stops trial behavior, not serving an adopted
+policy. Move published block state, baseline ancestry, routing dependency checks,
+sticky session allocation, enrollment and intent persistence, and request-time
+admission/revalidation into `gateway::routing::blocks`. Core retains posterior
+inference, scoring, experiment planning, operator mutations and publication.
+Disabling core must not silently select the original route, reset an existing
+session's arm, or weaken a pre-dispatch fence. Do not equate a compiled feature
+with the persisted learning mode or rewrite that mode during profile changes.
+These are internal application contracts and algorithms, not additions to AI.
+
 Published policies may also carry `progress_guard`. Ordinary routing calls
 `trajectory::store::begin_guarded_request`, whose evaluation and event append
 depend on `trajectory::health::reduce`. Keep this request-time guard path, its
@@ -735,9 +747,10 @@ checks while changing Rust paths.
 | `evolution::inventory` | `gateway::observability::inventory`; request admission inventory, coverage bindings, attempt identity and terminal/settlement updates remain usable without a learning scheduler |
 | `evolution::store` and its record-key digest helper in `evolution::rubric` | `storage::evolution`; the existing scoped persistence primitive and ORM records serve both gateway request accounting and core jobs, without importing the job runtime |
 | `evolution::runtime::{ExecutionHop, ExecutionOutcome, ExecutionSettlement, ExecutionRecord}` and `EXECUTION_KIND` | `storage::execution`; preserve decoding of earlier full-product records in reduced builds |
-| `evolution::service::{DecisionContext, RouteIntent}` | `storage::execution` for the persisted data embedded in `ExecutionRecord`; live route selection, enrollment and learning stay in core |
+| `evolution::service::{DecisionContext, RouteIntent}` | `storage::execution` for the persisted data embedded in `ExecutionRecord`; published-policy route selection, enrollment and intent transactions stay in gateway; learning and operator publication stay in core |
+| Serving portions of `evolution::{bandit, catalog, control, service, runtime}` | `gateway::routing::blocks`; preserve published allocation data, adopted baseline ancestry, scoped session pinning, dependency/bypass checks and dispatch fences; posterior algorithms and state-changing learning/operator methods remain core-owned |
 | `acp_trajectory::SessionIdentity` and its storage-key validation | `storage::session_identity`; share the existing scoped identifier without importing ACP execution or exposing internal storage identity through AI |
-| `acp_trajectory::entities::{connections, sessions, events}` | `storage::capture`; shared ORM definitions only. Harness keeps capture/session mutation authority; gateway reads existing correlation evidence and writes its own inventory/settlement facts |
+| `acp_trajectory::entities::{connections, sessions, events}` and persisted ACP capture envelopes | `storage::capture`; shared ORM and record definitions only. Harness keeps capture/session mutation authority; gateway reads existing correlation evidence and writes its own inventory/settlement facts; decoding an existing capture record must not require an ACP execution runtime |
 
 The canonical request path in `EvolutionRuntime::admit` first resolves an
 authenticated controller/session binding, rejects existing execution IDs and
@@ -753,11 +766,12 @@ The bound `ExecutionRecord` initialization and generic routing/session checks
 also belong to gateway admission. Preserve their existing identity scope,
 attempt conflict checks and routing/policy-generation validation when learning
 is disabled. Inventory admission alone cannot replace the persisted execution
-check: its binding scope differs from the execution record's scope. Core may
-provide the learned route intent and validate live learning control; it must
-not be required to create the gateway record or protect an earlier attempt's
-accounting. Test repeated and competing admissions as well as context
-revalidation before dispatch, without starting the learning runtime.
+check: its binding scope differs from the execution record's scope. Published
+route selection, its persisted generation/dependency fences, gateway record
+creation and protection of an earlier attempt's accounting remain gateway-owned.
+Core supplies newly published control state through its own operations. Test
+repeated and competing admissions as well as context revalidation before
+dispatch, without starting the learning runtime.
 
 Gateway readers of shared record definitions must not start a capture service,
 reconstruct the full conversation or take over harness checkpoint commits.
@@ -1380,6 +1394,11 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
   their identity/certificate checks, plus progress-guard evaluation and its
   required trajectory health/state checks; only learning and scheduling depend
   on core.
+- Split persisted policy-block serving from evolution workers: retain adopted
+  baselines, sticky enrollment/allocation, routing dependency validation,
+  transaction boundaries and pre-dispatch fences under gateway ownership.
+  Preserve the persisted learning mode and reject unavailable learning commands;
+  do not substitute feature disablement for an operator mode change.
 - Keep ordinary request preparation and decision-policy/pricing validation
   available without core. Preserve configured decision assessment and its bounds;
   core-only planning/accounting consumers must not own the shared settings.
@@ -1477,6 +1496,12 @@ over harness persistence or execution.
   retain its request/attempt facts without constructing the learning runtime.
   Verify trajectory terminal facts, cost-based progress guards, pending outbox
   rows and idempotent publication after core returns.
+- Across the same profile transitions, serve persisted adopted blocks through
+  real upstream fixtures. Preserve preexisting baseline sessions, named-policy
+  selection, dependency-change fallback and replay protection; show that no
+  learning worker runs in the minimum profile. Controlled published-state
+  fixtures validate serving, while baseline-written transition fixtures validate
+  cross-artifact compatibility; neither proves empirical policy promotion.
 
 Exit: all supported isolated feature combinations build, headless output has no
 TUI dependency, and a gateway starts with agent/UI resources unavailable.
@@ -1562,6 +1587,7 @@ coverage that justifies a profile.
 | Profile or boundary | Required behavior evidence |
 | --- | --- |
 | Minimum gateway | Real-process inference/control, configured authentication, decision-policy/pricing validation and bounded decision assessment, published-policy load/validation and equivalent routing including published experiment assignment, certificate rejection and progress-guard escalation/tool safety floors with persisted-history validation, usage finalization and shutdown without agent resources or a terminal |
+| Published policy blocks | With core disabled, persisted adopted blocks still select the published route, including named policies; existing baseline sessions keep their assignment, changed dependencies trigger the existing fallback, and dispatch/replay fences remain enforced. Full → minimum → full artifacts retain control state and enrollment without starting a learning worker or rewriting learning mode. |
 | Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness; existing eval HTTP subject/result/snapshot/status behavior and tenant isolation |
 | Core SDK | SDK-only consumer negotiates capabilities and the existing channel against a separate core-enabled server; bind and checkpoint ACK unblock work only after the test caller persists it; managed Responses, operation/head lookup, release, scope/epoch/version errors, bounded frames and disconnect preserve existing semantics; no implicit ACK, tool execution or mutation replay |
 | Harness HTTP SDK | SDK-only consumer uses the explicit loopback execution endpoint and credential; verify instance changes, workspace authorization, stored-session reads/observation, native mutations with core, and capability rejection without core; inference/control credentials are not interchangeable with execution credentials |

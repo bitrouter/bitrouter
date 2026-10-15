@@ -4,12 +4,12 @@
 use crate::tui::code::{Inspector, Selector, SelectorRow};
 use anyhow::{Context, Result, bail, ensure};
 
+use crate::core::evolution::control::restoration::RestoreRequest;
+use crate::core::evolution::operator::checkpoint::{CheckpointAction, CheckpointReport};
+use crate::core::evolution::operator::{EvolutionOperation, EvolutionReport, EvolutionStatus};
+use crate::core::evolution::runtime::candidates::{CandidateAction, CandidateReport};
 use crate::daemon::{DaemonCommand, DaemonResponse, send_command};
-use crate::evolution::control::EvolutionMode;
-use crate::evolution::control::restoration::RestoreRequest;
-use crate::evolution::operator::checkpoint::{CheckpointAction, CheckpointReport};
-use crate::evolution::operator::{EvolutionOperation, EvolutionReport, EvolutionStatus};
-use crate::evolution::runtime::candidates::{CandidateAction, CandidateReport};
+use crate::gateway::routing::blocks::control::EvolutionMode;
 
 use super::CodeServices;
 use candidate::CandidateDraft;
@@ -186,7 +186,7 @@ fn status_text(status: &EvolutionStatus) -> String {
     text
 }
 
-fn cost_text(cost: &crate::evolution::costs::report::CostSummary) -> String {
+fn cost_text(cost: &crate::core::evolution::costs::report::CostSummary) -> String {
     let amount = |value: u64| format!("${}.{:06}", value / 1_000_000, value % 1_000_000);
     match cost.total_cost_micro_usd {
         Some(total) => format!(
@@ -227,10 +227,18 @@ fn learning_text(report: &EvolutionReport) -> Result<String> {
     };
     let plan = &report.plan;
     let action = match plan.recommendation {
-        crate::evolution::bandit::Recommendation::Explore => "Continue controlled exploration",
-        crate::evolution::bandit::Recommendation::Hold => "Wait for more comparable evidence",
-        crate::evolution::bandit::Recommendation::Promote => "Adopt the candidate",
-        crate::evolution::bandit::Recommendation::Rollback => "Withdraw the candidate",
+        crate::gateway::routing::blocks::allocation::Recommendation::Explore => {
+            "Continue controlled exploration"
+        }
+        crate::gateway::routing::blocks::allocation::Recommendation::Hold => {
+            "Wait for more comparable evidence"
+        }
+        crate::gateway::routing::blocks::allocation::Recommendation::Promote => {
+            "Adopt the candidate"
+        }
+        crate::gateway::routing::blocks::allocation::Recommendation::Rollback => {
+            "Withdraw the candidate"
+        }
     };
     let mut text = format!(
         "Policy block: {}\nOriginal trial recommendation: {action}\nReason: {}\nRouting update published: {}\nTrial cohort resolved: {}\nTrial candidate allocation: {:.1}%\n",
@@ -874,7 +882,8 @@ impl CodeServices {
                     "May update exploration, adopt a candidate or withdraw it",
                 )];
                 if !learning.archived
-                    && learning.block_status != crate::evolution::control::BlockStatus::RolledBack
+                    && learning.block_status
+                        != crate::gateway::routing::blocks::control::BlockStatus::RolledBack
                 {
                     rows.push(SelectorRow::new(
                         format!(

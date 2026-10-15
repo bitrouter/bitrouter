@@ -103,7 +103,8 @@ pub struct Assembled {
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
     /// explicitly enabled; this handle shares the serving routing snapshots.
-    pub evolution: crate::evolution::runtime::EvolutionRuntime,
+    #[cfg(feature = "core")]
+    pub evolution: crate::core::evolution::runtime::EvolutionRuntime,
     /// Canonical gateway request tracking; capture registration shares its runtime epoch.
     pub gateway_requests: crate::gateway::observability::requests::GatewayRequestTracker,
     /// Generic eval exchange used by the local CLI and REST control plane.
@@ -883,12 +884,17 @@ async fn assemble_app(
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
-    let evolution = crate::evolution::runtime::EvolutionRuntime::new(
+    #[cfg(feature = "core")]
+    let evolution = crate::core::evolution::runtime::EvolutionRuntime::new(
         db.clone(),
         routing_table.clone(),
         policy_runtime.clone(),
     );
-    let evolution_for_hooks = evolution.clone();
+    let block_policies = crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
+        db.clone(),
+        routing_table.clone(),
+        policy_runtime.clone(),
+    );
     let canonical_binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
         db.clone(),
         routing_table.clone(),
@@ -948,7 +954,7 @@ async fn assemble_app(
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             lm.route_hook(canonical_binding.clone());
-            lm.route_hook(evolution_for_hooks.clone());
+            lm.route_hook(block_policies.clone());
             let metering_recorder =
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter");
@@ -983,7 +989,7 @@ async fn assemble_app(
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
             lm.router_preparation_hook(gateway_requests_for_hooks.clone());
-            lm.router_preparation_hook(evolution_for_hooks);
+            lm.router_preparation_hook(block_policies);
             lm.router_preparation_hook(canonical_binding);
             lm.pre_request_hook_for(
                 PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
@@ -1072,6 +1078,7 @@ async fn assemble_app(
         acp_runtime,
         policy_store: policy_store_for_reload,
         policy_runtime,
+        #[cfg(feature = "core")]
         evolution,
         gateway_requests,
         #[cfg(feature = "core")]

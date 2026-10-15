@@ -69,6 +69,7 @@ impl RunningFixture {
                     runtime: assembled.acp_runtime,
                     metering: bitrouter::metering::MeteringStore::new(assembled.db),
                     inventory: None,
+                    #[cfg(feature = "core")]
                     evolution: None,
                 },
                 Some(administration),

@@ -61,6 +61,7 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
             runtime: assembled.acp_runtime,
             metering: MeteringStore::new(assembled.db.clone()),
             inventory: Some(assembled.gateway_requests.inventory()),
+            #[cfg(feature = "core")]
             evolution: Some(assembled.evolution.clone()),
         },
     ));
@@ -84,56 +85,82 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
         bitrouter::gateway::observability::inventory::INVENTORY_VERSION
     );
     assert!(registration.invalid_reason.is_none());
-    use bitrouter::evolution::{
-        control::EvolutionMode,
-        operator::{EvolutionOperation, EvolutionReport},
-    };
-    let response = daemon::send_command(
-        &socket,
-        &DaemonCommand::Evolution {
-            operation: EvolutionOperation::Status,
-        },
-    )
-    .await?;
-    let DaemonResponse::Evolution { report } = response else {
-        anyhow::bail!("evolution status missing");
-    };
-    let EvolutionReport::Status(status) = *report else {
-        anyhow::bail!("unexpected evolution report");
-    };
-    assert_eq!(status.control.mode, EvolutionMode::Off);
-    assert!(matches!(
-        daemon::send_command(
-            &socket,
-            &DaemonCommand::Evolution {
-                operation: EvolutionOperation::Mode {
-                    mode: EvolutionMode::Automatic,
-                    judge_model: None
-                },
-            }
-        )
-        .await?,
-        DaemonResponse::Error { .. }
-    ));
-    for mode in [EvolutionMode::Manual, EvolutionMode::Off] {
+    #[cfg(feature = "core")]
+    {
+        use bitrouter::core::evolution::operator::{EvolutionOperation, EvolutionReport};
+        use bitrouter::gateway::routing::blocks::control::EvolutionMode;
         let response = daemon::send_command(
             &socket,
             &DaemonCommand::Evolution {
-                operation: EvolutionOperation::Mode {
-                    mode,
-                    judge_model: None,
-                },
+                operation: EvolutionOperation::Status,
             },
         )
         .await?;
         let DaemonResponse::Evolution { report } = response else {
-            anyhow::bail!("evolution mutation receipt missing");
+            anyhow::bail!("evolution status missing");
         };
         let EvolutionReport::Status(status) = *report else {
             anyhow::bail!("unexpected evolution report");
         };
-        assert_eq!(status.control.mode, mode);
-        assert!(status.jobs.is_empty());
+        assert_eq!(status.control.mode, EvolutionMode::Off);
+        assert!(matches!(
+            daemon::send_command(
+                &socket,
+                &DaemonCommand::Evolution {
+                    operation: EvolutionOperation::Mode {
+                        mode: EvolutionMode::Automatic,
+                        judge_model: None
+                    },
+                }
+            )
+            .await?,
+            DaemonResponse::Error { .. }
+        ));
+        for mode in [EvolutionMode::Manual, EvolutionMode::Off] {
+            let response = daemon::send_command(
+                &socket,
+                &DaemonCommand::Evolution {
+                    operation: EvolutionOperation::Mode {
+                        mode,
+                        judge_model: None,
+                    },
+                },
+            )
+            .await?;
+            let DaemonResponse::Evolution { report } = response else {
+                anyhow::bail!("evolution mutation receipt missing");
+            };
+            let EvolutionReport::Status(status) = *report else {
+                anyhow::bail!("unexpected evolution report");
+            };
+            assert_eq!(status.control.mode, mode);
+            assert!(status.jobs.is_empty());
+        }
+    }
+    #[cfg(not(feature = "core"))]
+    {
+        use sea_orm::{EntityTrait, PaginatorTrait};
+        let before = bitrouter::storage::evolution::records::Entity::find()
+            .count(&assembled.db)
+            .await?;
+        for operation in [
+            serde_json::json!({"operation": "status"}),
+            serde_json::json!({"operation": "mode", "mode": "automatic", "judge_model": "fixture"}),
+        ] {
+            let command = serde_json::from_value(serde_json::json!({
+                "cmd": "evolution", "operation": operation
+            }))?;
+            let response = daemon::send_command(&socket, &command).await?;
+            assert!(
+                matches!(response, DaemonResponse::Error { message } if message.contains("core feature"))
+            );
+        }
+        assert_eq!(
+            before,
+            bitrouter::storage::evolution::records::Entity::find()
+                .count(&assembled.db)
+                .await?
+        );
     }
     daemon::send_command(&socket, &DaemonCommand::Stop).await?;
     server.await??;
@@ -374,6 +401,7 @@ async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
             runtime: runtime.clone(),
             metering: MeteringStore::new(assembled.db.clone()),
             inventory: Some(assembled.gateway_requests.inventory()),
+            #[cfg(feature = "core")]
             evolution: Some(assembled.evolution.clone()),
         },
     ));
@@ -1030,6 +1058,7 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
             runtime: runtime.clone(),
             metering: metering.clone(),
             inventory: Some(assembled.gateway_requests.inventory()),
+            #[cfg(feature = "core")]
             evolution: Some(assembled.evolution.clone()),
         },
     ));

@@ -3808,7 +3808,7 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "core"))]
 mod evolution_acceptance;
 
 #[cfg(test)]

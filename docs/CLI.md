@@ -2,8 +2,9 @@
 
 Evidence and learning commands require the application's `core` feature:
 `eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`
-and `evolve`. Without core they report the requirement before opening inputs or
-stores. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` also requires core.
+and `evolve`, plus `acp evolution` and checkpoint `judge`, `judge-job` and
+`rubric` operations. Without core they report the requirement before opening
+inputs or stores. The TUI evolution panel also requires core. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` also requires core.
 `serve`, `start` and `restart` reject it before creating runtime files or stopping
 a resident daemon. Published-policy loading/enforcement, ordinary
 policy inspection/reload/rollback, request metering and trajectory inspection,

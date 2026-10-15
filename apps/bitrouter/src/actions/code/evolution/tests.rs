@@ -5,13 +5,14 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
+use crate::harness::acp::capture::CapturePort;
+use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::json;
 
 use crate::acp_trajectory::{CanonicalStore, Recorder, RecordingScope};
 use crate::administration_target::InspectionTarget;
+use crate::core::evolution::evidence::EvidenceKind;
 use crate::daemon::{AcpControlPlane, NoopObserveStatus, NoopReloader};
-use crate::evolution::evidence::EvidenceKind;
 use crate::paths::ConfigSource;
 use crate::storage::session_identity::SessionIdentity;
 
@@ -20,7 +21,7 @@ struct Fixture {
     canonical: CanonicalStore,
     recorder: Arc<Recorder>,
     session: SessionRef,
-    evolution: crate::evolution::runtime::EvolutionRuntime,
+    evolution: crate::core::evolution::runtime::EvolutionRuntime,
     routing: Arc<crate::config::routing_table::ConfigRoutingTable>,
     server: tokio::task::JoinHandle<Result<()>>,
     _home: tempfile::TempDir,
@@ -182,7 +183,7 @@ mod history;
 
 #[tokio::test]
 async fn judge_cost_status_over_local_ipc_keeps_missing_fees_unknown() -> Result<()> {
-    use crate::evolution::jobs::{JudgeJob, JudgeJobs};
+    use crate::core::evolution::jobs::{JudgeJob, JudgeJobs};
     let fixture = fixture().await?;
     let draft = fixture.review().await?;
     let store = fixture.evolution.service("local")?.store;

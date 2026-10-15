@@ -22,6 +22,7 @@ use {
     bitrouter_ai::control::administration::PolicyView,
 };
 
+#[cfg(feature = "core")]
 pub(crate) mod evolution;
 
 /// A selectable ACP facet, with its exact configured/catalog identity.

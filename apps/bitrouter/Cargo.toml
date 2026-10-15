@@ -21,7 +21,7 @@ path = "src/main.rs"
 
 [features]
 default = ["core", "harness", "tui", "mcp", "otel-http"]
-core = []
+core = ["dep:rand_distr"]
 harness = ["mcp"]
 mcp = []
 tui = ["harness"]
@@ -93,7 +93,7 @@ subtle.workspace = true
 base64.workspace = true
 zstd = { version = "0.13", default-features = false }
 rand.workspace = true
-rand_distr = "0.6"
+rand_distr = { version = "0.6", optional = true }
 hex.workspace = true
 uuid = { workspace = true }
 serde-saphyr.workspace = true
@@ -225,4 +225,12 @@ required-features = ["core"]
 
 [[test]]
 name = "policy_eval_control_plane"
+required-features = ["core"]
+
+[[example]]
+name = "checkpoint_ts_publication"
+required-features = ["core"]
+
+[[example]]
+name = "checkpoint_ts_simulation"
 required-features = ["core"]

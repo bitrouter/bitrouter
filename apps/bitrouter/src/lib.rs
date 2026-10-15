@@ -48,7 +48,6 @@ pub mod daemon_locator;
 pub mod dashboard;
 pub mod db;
 pub mod error_report;
-pub mod evolution;
 pub mod gateway;
 pub mod gateways;
 pub mod harness;

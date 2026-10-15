@@ -5,11 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter::evolution::bandit::{
-    Arm, BanditConfig, EffectiveObservations, Observation, Recommendation, monitor, plan,
-    trial_seed,
+use bitrouter::core::evolution::bandit::{
+    EffectiveObservations, Observation, monitor, plan, trial_seed,
 };
-use bitrouter::evolution::control::{
+use bitrouter::gateway::routing::blocks::allocation::{Arm, BanditConfig, Recommendation};
+use bitrouter::gateway::routing::blocks::control::{
     BlockDefinition, BlockRule, BlockStatus, ControlState, EvolutionMode,
 };
 use bitrouter::storage::evolution::digest;
@@ -337,7 +337,7 @@ impl Experiment {
             let evidence = digest(&self.deployment)?;
             if self.last_monitor_digest.as_ref() != Some(&evidence) {
                 let seed = digest(&(
-                    bitrouter::evolution::bandit::MONITOR_VERSION,
+                    bitrouter::core::evolution::bandit::MONITOR_VERSION,
                     &experiment_id,
                 ))?;
                 let monitor = monitor(
@@ -765,7 +765,7 @@ fn main() -> Result<()> {
     let report = serde_json::json!({
         "schema_version": 1,
         "source": "synthetic_enacted_publication_experiment",
-        "learner_version": bitrouter::evolution::bandit::LEARNER_VERSION,
+        "learner_version": bitrouter::gateway::routing::blocks::allocation::LEARNER_VERSION,
         "posterior_seed": "production trial_seed(experiment_id); common draws per experiment and learner version, independent of source revisions and session assignment randomness",
         "scope": "production reserve_trial/apply_plan/apply_monitoring and learner; in-memory simulated session outcomes, no canonical capture/DB/daemon/real judge; adoption routes new sessions to candidate; rollback is latched",
         "config": BanditConfig::default(),
@@ -779,8 +779,10 @@ fn main() -> Result<()> {
         "outcomes": "baseline quality 0.94 +/- 0.04; good candidate 0.94 +/- 0.04; harmful 0.55 +/- 0.04; drift at half horizon; baseline cost 1 USD and candidate 0.35 USD times uniform 0.8..1.2, synthetic and excluding judge cost",
         "source_digests": {
             "simulation": digest(&include_str!("checkpoint_ts_publication.rs"))?,
-            "bandit": digest(&include_str!("../src/evolution/bandit.rs"))?,
-            "control": digest(&include_str!("../src/evolution/control.rs"))?
+            "bandit": digest(&include_str!("../src/core/evolution/bandit.rs"))?,
+            "control": digest(&include_str!("../src/core/evolution/control.rs"))?,
+            "published_control": digest(&include_str!("../src/gateway/routing/blocks/control.rs"))?,
+            "allocation_contract": digest(&include_str!("../src/gateway/routing/blocks/allocation.rs"))?
         },
         "seeds": args.seeds,
         "seed_start": args.seed_start,

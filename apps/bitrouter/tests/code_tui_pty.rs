@@ -41,6 +41,7 @@ const END_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026l";
 const MOCK_DAEMON_CONFIG: &str =
     "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  enabled: false\n";
 
+#[cfg(feature = "core")]
 #[path = "code_tui_pty/evolution.rs"]
 mod evolution;
 
@@ -3127,6 +3128,79 @@ fn code_late_adapter_disconnect_preserves_terminal_cleanup() -> Result<()> {
         disconnected.contains("FXRP1"),
         "late adapter disconnect discarded the completed transcript: {disconnected:?}"
     );
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
+fn code_fresh_session_preserves_direct_routing_and_timeout_in_the_terminal() -> Result<()> {
+    let mock = MockAcp::new(MockScenario::FreshSessions)?;
+    let child_pid_path = mock._directory.path().join("code-child.pid");
+    let mut command = shell_command(&mock, None)?;
+    for arg in [
+        "code",
+        "stub",
+        "--direct",
+        "--turn-timeout",
+        "1",
+        "--config",
+    ] {
+        command.arg(arg);
+    }
+    command.arg(&mock.config_path);
+    let mut code = CodeFixture {
+        mock,
+        child_pid_path,
+        pty: PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?,
+    };
+    code.wait_for_agent_ready()?;
+    code.pty.send(b"First native session\r")?;
+    code.pty.wait_for_text("FXRP1")?;
+    code.pty.wait_for_text("Turn completed")?;
+    let first = code.mock.wait_for_request("session/prompt")?;
+    code.pty.send(b"/")?;
+    code.pty.wait_for_text("Commands")?;
+    let opening = code.pty.checkpoint();
+    code.pty.send(b"new\r")?;
+    let first_id = first["params"]["sessionId"]
+        .as_str()
+        .context("native id missing")?;
+    code.pty.wait_for_screen_inner(
+        Some(&opening),
+        "a different ready native session",
+        |screen| {
+            screen.contains("FXRD pty-fresh-")
+                && !screen.contains(first_id)
+                && screen.contains("stub · direct · ready")
+        },
+    )?;
+    code.pty.wait_for_text("stub · direct · ready")?;
+    let second = code.pty.checkpoint();
+    code.pty.send(b"wait-for-timeout in the new session\r")?;
+    code.pty.wait_for_text_since(&second, "FXWAIT")?;
+    code.pty.wait_for_text_since(&second, "FXCS")?;
+    let cancel = code.mock.wait_for_request("session/cancel")?;
+    assert_ne!(cancel["params"]["sessionId"], first["params"]["sessionId"]);
+    let captures = std::fs::read_to_string(&code.mock.capture_path)?;
+    let requests = captures
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r["method"] == "session/new")
+            .count(),
+        2
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|r| r["method"] == "session/load" || r["method"] == "session/resume")
+    );
+    assert_eq!(code.mock.captured_prompts()?.len(), 2);
+    // Timeout cancellation finishes cooperatively; closing Code reaps the
+    // replacement child and restores the terminal just as the initial launch.
     code.pty.send(b"\x04")?;
     code.assert_terminal_restored()
 }

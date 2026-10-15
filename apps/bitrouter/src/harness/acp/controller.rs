@@ -412,9 +412,9 @@ where
         if let Some(port) = &capture {
             super::capture::record(
                 port.as_ref(),
-                super::capture::CaptureEvent {
-                    direction: super::capture::CaptureDirection::Controller,
-                    kind: super::capture::CaptureKind::Connected,
+                crate::storage::capture::CaptureEvent {
+                    direction: crate::storage::capture::CaptureDirection::Controller,
+                    kind: crate::storage::capture::CaptureKind::Connected,
                     call_id: None,
                     method: "controller/connect".into(),
                     payload: capture_metadata,
@@ -432,9 +432,9 @@ where
             Some(port) => {
                 super::capture::record(
                     port.as_ref(),
-                    super::capture::CaptureEvent {
-                        direction: super::capture::CaptureDirection::Controller,
-                        kind: super::capture::CaptureKind::Disconnected,
+                    crate::storage::capture::CaptureEvent {
+                        direction: crate::storage::capture::CaptureDirection::Controller,
+                        kind: crate::storage::capture::CaptureKind::Disconnected,
                         call_id: None,
                         method: "controller/disconnect".into(),
                         payload: serde_json::json!({"clean": result.is_ok()}),
@@ -1060,13 +1060,13 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct RecordingCapture(Mutex<Vec<crate::harness::acp::capture::CaptureEvent>>);
+    struct RecordingCapture(Mutex<Vec<crate::storage::capture::CaptureEvent>>);
 
     #[async_trait::async_trait]
     impl crate::harness::acp::capture::CapturePort for RecordingCapture {
         async fn record(
             &self,
-            event: crate::harness::acp::capture::CaptureEvent,
+            event: crate::storage::capture::CaptureEvent,
         ) -> Result<(), crate::harness::acp::capture::CaptureError> {
             self.0
                 .lock()
@@ -2843,7 +2843,7 @@ mod tests {
         assert!(
             recorded
                 .iter()
-                .any(|event| event.kind == crate::harness::acp::capture::CaptureKind::Response)
+                .any(|event| event.kind == crate::storage::capture::CaptureKind::Response)
         );
         assert!(!recorded.iter().any(|event| matches!(
             event.method.as_str(),
@@ -3171,7 +3171,7 @@ mod tests {
         assert!(
             recorded
                 .iter()
-                .any(|event| event.kind == crate::harness::acp::capture::CaptureKind::Response)
+                .any(|event| event.kind == crate::storage::capture::CaptureKind::Response)
         );
         assert!(!recorded.iter().any(|event| matches!(
             event.method.as_str(),

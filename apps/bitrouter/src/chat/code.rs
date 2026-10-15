@@ -17,8 +17,11 @@ use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
 use crate::acp_cli::SessionSelection;
+#[cfg(feature = "core")]
 use crate::actions::code::evolution::candidate::CandidateDraft;
+#[cfg(feature = "core")]
 use crate::actions::code::evolution::manual::ReviewDraft;
+#[cfg(feature = "core")]
 use crate::actions::code::evolution::{Panel, SessionRef};
 use crate::actions::code::{CodeServices, OpenedSession};
 use crate::actions::supervised::SupervisedHandle;
@@ -31,6 +34,7 @@ use super::code_controls::{picker, row};
 use super::code_wire::{CodeWire, WireEvent};
 
 enum JobResult {
+    #[cfg(feature = "core")]
     Evolution(Box<Panel>),
     Opened(Box<OpenedSession>),
     Selected {
@@ -74,7 +78,9 @@ struct Runtime {
     route_probe: Option<LocalBoxFuture<'static, Result<String>>>,
     disconnected_details: Option<String>,
     mutation_selector: Option<String>,
+    #[cfg(feature = "core")]
     evolution_review: Option<ReviewDraft>,
+    #[cfg(feature = "core")]
     evolution_candidate: Option<CandidateDraft>,
     last_launch: Option<SessionRequest>,
 }
@@ -133,7 +139,9 @@ pub(crate) async fn run(
         route_probe: None,
         disconnected_details: None,
         mutation_selector: None,
+        #[cfg(feature = "core")]
         evolution_review: None,
+        #[cfg(feature = "core")]
         evolution_candidate: None,
         last_launch: None,
     };
@@ -760,6 +768,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     fn evolution_action(&mut self, selector: &str, choice: String) -> Result<()> {
         if selector == "evolution:checkpoint" && choice.starts_with("freeze:") {
             self.idle()?;
@@ -786,9 +795,17 @@ impl Runtime {
         Ok(())
     }
 
+    #[cfg(not(feature = "core"))]
+    fn evolution_action(&mut self, _selector: &str, _choice: String) -> Result<()> {
+        anyhow::bail!("checkpoint evolution requires the core feature")
+    }
+
     fn clear_evolution_drafts(&mut self) {
-        self.evolution_review = None;
-        self.evolution_candidate = None;
+        #[cfg(feature = "core")]
+        {
+            self.evolution_review = None;
+            self.evolution_candidate = None;
+        }
         self.selectors
             .retain(|selector| !selector.id.starts_with("evolution:"));
         self.state.set_selectors(self.selectors.clone());
@@ -992,6 +1009,7 @@ impl Runtime {
     fn job_result(&mut self, result: JobResult) {
         let settings_changed = matches!(&result, JobResult::Config(_) | JobResult::Mode(_));
         match result {
+            #[cfg(feature = "core")]
             JobResult::Evolution(panel) => {
                 if panel.clear_drafts {
                     self.clear_evolution_drafts();
@@ -1389,6 +1407,7 @@ impl Runtime {
             }
             commands.push(command);
         }
+        #[cfg(feature = "core")]
         if self.services.evolution_available() {
             commands.push(Command::new(
                 "/evolution",
