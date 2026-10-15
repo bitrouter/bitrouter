@@ -11,7 +11,7 @@ use crate::workflow_state::archive::{
     RequestTransportOutcome, SemanticPolicyTransitionCandidate, SemanticSettlementOutcome,
 };
 use {
-    crate::eval::types::canonical_digest, crate::eval::types::evidence_digest,
+    crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
     bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
     bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
     bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,

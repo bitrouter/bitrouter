@@ -200,7 +200,7 @@ pub fn assess_cohort(
     let classifier_cohorts = groups
         .values()
         .flat_map(|group| &group.records)
-        .flat_map(|record| crate::eval::types::classifier_cohorts(&record.subject))
+        .flat_map(|record| crate::eval::compiler::classifier_cohorts(&record.subject))
         .collect::<BTreeSet<_>>();
     let ambiguous_classifier = classifier_cohorts.len() > 1;
 
@@ -1256,11 +1256,11 @@ mod tests {
                     redacted: true,
                     attributes: BTreeMap::from([(
                         "classifier_digest".into(),
-                        crate::eval::types::canonical_digest(&index)?,
+                        crate::storage::evaluation::canonical_digest(&index)?,
                     )]),
                 });
             record.subject.evidence_digest =
-                crate::eval::types::evidence_digest(&record.subject.evidence)?;
+                crate::storage::evaluation::evidence_digest(&record.subject.evidence)?;
             record.result.evidence_digest = record.subject.evidence_digest.clone();
         }
         let assessment = assess_cohort(

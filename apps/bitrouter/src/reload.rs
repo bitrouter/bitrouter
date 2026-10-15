@@ -2267,7 +2267,7 @@ policies:
             &initial,
             Some(&config_path),
             None,
-            crate::eval::settlement::PendingEvalDecisionStore::default(),
+            crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
             None,
         )
         .await?;
@@ -2436,7 +2436,7 @@ policies:
             &initial,
             Some(&path),
             None,
-            crate::eval::settlement::PendingEvalDecisionStore::default(),
+            crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
             None,
         )
         .await

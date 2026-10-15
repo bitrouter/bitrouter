@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::fixture::WorkflowTraceFixture;
 use super::replay::ReplayEvaluator;
-use crate::eval::types::canonical_digest;
+use crate::storage::evaluation::canonical_digest;
 
 pub const CLASSIFIER_BASELINE_SCHEMA_VERSION: u32 = 2;
 

@@ -572,10 +572,27 @@ and non-source assets have separate entries. New source added during execution
 must be assigned before its migration patch is accepted.
 
 The inventory was checked against all eight package manifests and their source
-entry points: application 72 library-root modules, AI 12, SDK 16, orchestrator
-12, TUI 19, telemetry one `otel` root with 11 child modules, matcher six root
-modules including tests, and helper three binary-root modules. Counts describe
-the source revision above; they are an audit aid, not a new architectural limit.
+entry points at the pinned baseline. Every declared module in the following
+entry points has a migration-table owner, including private and conditionally
+compiled modules:
+
+| Package | Audited entry point | Declared modules covered |
+| --- | --- | --- |
+| `bitrouter` | [`apps/bitrouter/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/apps/bitrouter/src/lib.rs) | 72 |
+| `bitrouter-ai` | [`crates/bitrouter-ai/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/crates/bitrouter-ai/src/lib.rs) | 12 |
+| `bitrouter-sdk` | [`crates/bitrouter-sdk/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/crates/bitrouter-sdk/src/lib.rs) | 16 |
+| `bitrouter-orchestrator` | [`crates/bitrouter-orchestrator/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/crates/bitrouter-orchestrator/src/lib.rs) | 12 |
+| `bitrouter-tui` | [`crates/bitrouter-tui/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/crates/bitrouter-tui/src/lib.rs) | 19 |
+| `bitrouter-telemetry` | [`crates/bitrouter-telemetry/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/crates/bitrouter-telemetry/src/lib.rs) and [`otel/mod.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/crates/bitrouter-telemetry/src/otel/mod.rs) | One root and all 11 children |
+| `bitrouter-guardrails` | [`extensions/regex-checker/matcher/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/extensions/regex-checker/matcher/src/lib.rs) | Six, including tests |
+| `dist-helper` | [`helpers/dist-helper/src/main.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/helpers/dist-helper/src/main.rs) | Three |
+
+Counts describe the source revision above; they are an audit aid, not a new
+architectural limit. Root coverage establishes inventory completeness at this
+level. Implementation review must still resolve the explicitly mixed descendants
+below, record their actual destination paths, and verify their dependency and
+behavior boundaries. It must not treat a matched module name as completed
+migration evidence.
 
 ### Current bitrouter application
 
@@ -1028,7 +1045,7 @@ and is selected there. The new SDK does not retain empty server-feature aliases.
 | SDK `config_file` | Always-available application configuration parsing; SDK takes explicit client options |
 | SDK `mcp` | Application `mcp`; harness workspace connections belong to `harness`, which enables `mcp` |
 | SDK `testing` | AI `testing` for pure observation-schema conformance helpers; runtime fixtures stay with their implementation |
-| Orchestrator `acp` | Application `harness`; preserve native and external ACP support without enabling core or TUI |
+| Orchestrator `acp` | Application `harness`; external ACP, stored-session inspection and offline native validation remain available without core or TUI; local native execution requires `core,harness` |
 | Application's unconditional TUI dependency | Application `tui`; command vocabulary, approval policy and plain output move outside that gate |
 | Telemetry `otel`, `otel-http`, `otel-grpc` | Application features of the same names, with the existing alias and transport precedence |
 | Telemetry `server` | Exporter ingress integration under the selected application OTLP transport; a gateway is always present |
@@ -1047,7 +1064,7 @@ this distinction for reduced builds.
 | --- | --- | --- |
 | Full product | Default | Preserve current local product behavior |
 | Minimum gateway | `--no-default-features` | Small single-instance model service with SQLite |
-| Gateway with existing optional integrations | `--no-default-features --features mcp,server-tools,otel-http,db-postgres,db-mysql` | Official service artifact without agent runtime or TUI |
+| Gateway with existing optional integrations | `--no-default-features --features mcp,server-tools,otel-http,db-postgres,db-mysql` | Supported gateway build without agent runtime or TUI |
 | Scheduling service | `--no-default-features --features core` | Gateway plus core, without workspace execution |
 | Headless harness | `--no-default-features --features harness` | Supported harness/ACP paths, no terminal drawing |
 | Local managed headless | `--no-default-features --features core,harness` | Existing native managed execution without TUI |

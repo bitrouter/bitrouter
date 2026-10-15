@@ -310,9 +310,22 @@ Learning and replay consumers import these owners rather than supplying a second
 projection or assignment algorithm. The existing model/provider wire formats,
 experiment digest domains and policy-decision records are unchanged.
 
-This ownership move does not finish the core feature boundary: the current
-policy router still uses the evaluation bridge, and trajectory settlement/outbox
-consumption and learning startup still require separation. The progress ledger
+Gateway `observability::decision` owns bounded pending policy observations and
+routing receipts; `observability::prediction` owns the response observer.
+`observability::settlement` captures the owner-bound decision once, before any
+awaited trajectory lookup, and delegates ordinary request evaluation only when
+that consumer is assembled. Cache expiry or eviction during the lookup cannot
+silently replace or erase the captured decision. Shared durable evaluation
+validation/digests live in application `storage::evaluation`, without publishing
+service algorithms through AI.
+
+Trajectory settlement always follows authoritative metering and persists its
+terminal fact and outbox envelope together. Without core, assembly does not
+construct an eval service/publisher or mount eval HTTP routes; outbox rows remain
+pending and retention protects them. Core-enabled assembly retains startup,
+request-triggered and shutdown drains. This does not finish the core feature
+boundary: evolution startup, reserved-request protections, learning commands and
+remaining mixed module imports still require separation. The progress ledger
 records the remaining work before claiming a minimum gateway profile.
 
 `bitrouter-ai` contains no model execution or authentication implementation.

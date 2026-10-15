@@ -16,11 +16,11 @@ use super::shadow_classifier::{
     SHADOW_CLASSIFIER_SCHEMA_VERSION, ShadowClassifierPrediction, ShadowClassifierSubmission,
     ShadowConfidenceKind, ShadowPredictorKind, ShadowPredictorProvenance,
 };
-use crate::eval::types::canonical_digest;
 use crate::gateway::routing::signals::TaskFamily;
 use crate::gateway::routing::workflow::predictive::{
     compiled_predictor_contract, predict_next_step,
 };
+use crate::storage::evaluation::canonical_digest;
 
 pub const CLASSIFIER_BAKEOFF_SCHEMA_VERSION: u32 = 2;
 const CLASSIFICATION_WEIGHT_TASK: u32 = 4;

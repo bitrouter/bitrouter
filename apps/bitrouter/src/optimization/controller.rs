@@ -2422,7 +2422,7 @@ mod file_tests {
         validate_document,
     };
     use {
-        crate::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
         bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalExperimentRef,
         bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
         bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
@@ -2770,7 +2770,7 @@ mod file_tests {
                                 experiment_id: exploration.experiment_id.clone(),
                                 arm,
                                 assignment_unit: ExperimentAssignmentUnit::Task,
-                                assignment_id_digest: crate::eval::types::canonical_digest(
+                                assignment_id_digest: crate::storage::evaluation::canonical_digest(
                                     &subject_id,
                                 )?,
                                 challenger_propensity_ppm: exploration.challenger_exposure_ppm,

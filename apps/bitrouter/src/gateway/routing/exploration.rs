@@ -201,8 +201,8 @@ mod tests {
         let latency = serde_json::to_value(&gate)?;
         assert_eq!(latency["objective"], "latency");
         assert_ne!(
-            crate::eval::types::canonical_digest(&legacy)?,
-            crate::eval::types::canonical_digest(&latency)?
+            crate::storage::evaluation::canonical_digest(&legacy)?,
+            crate::storage::evaluation::canonical_digest(&latency)?
         );
         assert_eq!(serde_json::from_value::<OptimizationGate>(latency)?, gate);
         Ok(())

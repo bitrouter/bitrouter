@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::eval::types::validate_route_measurement;
+use crate::storage::evaluation::validate_route_measurement;
 
 pub const TRAJECTORY_SCHEMA_VERSION: u32 = 1;
 
@@ -694,7 +694,7 @@ mod tests {
     fn route_measurement_is_rejected_outside_route_intent_events() {
         let mut event = event_fixture();
         event.evidence.route_measurement = Some(
-            crate::eval::types::route_decision_measurement(
+            crate::storage::evaluation::route_decision_measurement(
                 "economy",
                 "vendor/economy",
                 None,

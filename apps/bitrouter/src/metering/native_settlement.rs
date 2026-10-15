@@ -48,7 +48,7 @@ fn claim(
         basis,
         scope,
         micro_usd: amount,
-        evidence_sha256: crate::eval::types::canonical_digest(evidence).map_err(|_| {
+        evidence_sha256: crate::storage::evaluation::canonical_digest(evidence).map_err(|_| {
             crate::gateway::error::BitrouterError::internal("invalid monetary evidence")
         })?,
         provider: row.provider_id.clone(),

@@ -5,7 +5,6 @@ pub mod api;
 pub mod compiler;
 pub mod settlement;
 pub mod store;
-pub mod types;
 
 use crate::config::EvalConfig;
 

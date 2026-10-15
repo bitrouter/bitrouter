@@ -258,7 +258,7 @@ mod tests {
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
     use {
-        crate::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
         bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
         bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
         bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,

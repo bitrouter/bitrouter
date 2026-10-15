@@ -205,6 +205,7 @@ async fn serve_with_options(
     let assembled =
         crate::assemble::build_app_with_extensions(&cfg, config_path_for_reload, register).await?;
     let observe_for_shutdown = assembled.observe.clone();
+    #[cfg(feature = "core")]
     let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
     // Every failure after assembly follows the same flush/drain path, including
     // listener conflicts and locator/PID publication failures.
@@ -238,6 +239,7 @@ async fn serve_with_options(
             );
         }
         let app = Arc::new(assembled.app);
+        #[cfg(feature = "core")]
         let eval_router = crate::eval::api::router(
             assembled.eval_service.clone(),
             assembled.db.clone(),
@@ -371,6 +373,8 @@ async fn serve_with_options(
             let inference = async move {
                 let managed_wrapper = move |router: axum::Router| {
                     #[cfg(feature = "core")]
+                    let router = router.merge(eval_router.clone());
+                    #[cfg(feature = "core")]
                     { managed_core.wrap(router) }
                     #[cfg(not(feature = "core"))]
                     { router }
@@ -378,13 +382,12 @@ async fn serve_with_options(
                 match workflow_trace_capture {
                     Some(capture) => {
                         let workflow_wrapper = capture.router_wrapper();
-                        let eval_router = eval_router.clone();
                         http_app
                             .serve_listener_with_router_wrapper_and_shutdown(
                                 inference_listener,
                                 move |router| {
                                     workflow_wrapper(otel_wrapper(
-                                        managed_wrapper(router.merge(eval_router.clone())),
+                                        managed_wrapper(router),
                                     ))
                                 },
                                 inference_shutdown,
@@ -395,7 +398,7 @@ async fn serve_with_options(
                         http_app
                             .serve_listener_with_router_wrapper_and_shutdown(
                                 inference_listener,
-                                move |router| otel_wrapper(managed_wrapper(router.merge(eval_router.clone()))),
+                                move |router| otel_wrapper(managed_wrapper(router)),
                                 inference_shutdown,
                             )
                             .await
@@ -700,6 +703,7 @@ async fn serve_with_options(
     }
     .await;
 
+    #[cfg(feature = "core")]
     if let Some(publisher) = trajectory_outbox_for_shutdown {
         match publisher.drain_after_active_worker().await {
             Ok(summary) if summary.failed > 0 => tracing::warn!(

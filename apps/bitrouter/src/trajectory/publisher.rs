@@ -78,7 +78,7 @@ impl TrajectoryOutboxPublisher {
         self.start_worker_if_idle();
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "core"))]
     pub(crate) fn configured_batch_size(&self) -> usize {
         self.batch_size
     }

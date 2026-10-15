@@ -7,7 +7,7 @@ use bitrouter::eval::EvalService;
 use bitrouter::eval::api;
 use bitrouter::eval::store::EvalStore;
 use {
-    bitrouter::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+    bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
     bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
     bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
     bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,

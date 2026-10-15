@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::eval::types::canonical_digest;
+use crate::storage::evaluation::canonical_digest;
 
 pub const SHADOW_CLASSIFIER_SCHEMA_VERSION: u32 = 1;
 pub const ROUTE_CONTEXT_SCHEMA_VERSION: u32 = 3;

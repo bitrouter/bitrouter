@@ -3,25 +3,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use bitrouter::eval::EvalService;
 use bitrouter::eval::admission::SubmissionPrincipal;
 use bitrouter::eval::compiler::EvalEvidenceSnapshot;
-use bitrouter::eval::settlement::{
-    EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
-};
+use bitrouter::eval::settlement::EvalSettlementRecorder;
 use bitrouter::eval::store::EvalStore;
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::model::target::AuthScheme;
+use bitrouter::gateway::observability::decision::{
+    EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
+};
 use bitrouter::gateway::observability::event::EventBus;
+use bitrouter::gateway::observability::prediction::PredictiveResponseObserver;
 use bitrouter::gateway::pipeline::context::PipelineContext;
 use bitrouter::gateway::pipeline::hooks::{HopOutcome, ObserveHook};
 use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use bitrouter::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
 use bitrouter::policy_compile::{CompileInput, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
-use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
 };
 use {
-    bitrouter::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+    bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
     bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
     bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
     bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,

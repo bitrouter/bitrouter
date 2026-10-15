@@ -338,7 +338,7 @@ pub(crate) fn validate_eval_action_treatments(
             let Some(policy) = current.policies.get(&decision.policy) else {
                 continue;
             };
-            let assessed = crate::eval::types::classifier_cohorts(&record.subject)
+            let assessed = crate::eval::compiler::classifier_cohorts(&record.subject)
                 .iter()
                 .any(|cohort| cohort != "unassessed");
             if assessed && decision.route_measurement.is_none() {
@@ -348,7 +348,7 @@ pub(crate) fn validate_eval_action_treatments(
                 );
             }
             if let Some(measurement) = &decision.route_measurement {
-                crate::eval::types::validate_route_measurement(measurement)?;
+                crate::storage::evaluation::validate_route_measurement(measurement)?;
                 for tier in std::iter::once(decision.selected_tier.as_str())
                     .chain(decision.baseline_tier.as_deref())
                 {
@@ -579,7 +579,7 @@ mod tests {
         CertificateSource, PolicyDefinition, PolicyLock, PromotionVerdict, RouteOwner,
     };
     use {
-        crate::eval::types::evidence_digest, bitrouter_ai::eval::EvalDecisionRef,
+        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EvalDecisionRef,
         bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
         bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
         bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
@@ -805,7 +805,7 @@ mod tests {
             })
             .collect();
         eval.records[0].subject.decisions[0].route_measurement =
-            Some(crate::eval::types::route_decision_measurement(
+            Some(crate::storage::evaluation::route_decision_measurement(
                 "economy",
                 "openai:gpt-5.6",
                 Some(ReasoningEffort::Low),

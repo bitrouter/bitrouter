@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bitrouter_ai::types::{Content, StreamPart, Tool};
 use sha2::{Digest, Sha256};
 
-use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
+use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};
 
 const MAX_STREAM_BUFFER_BYTES: usize = 4_096;
 const MAX_STREAM_TOOL_CALLS: usize = 32;
@@ -1070,7 +1070,9 @@ mod tests {
     };
 
     use super::{ObservedActionClass, PredictiveResponseObserver};
-    use crate::eval::settlement::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
+    use crate::gateway::observability::decision::{
+        EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
+    };
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

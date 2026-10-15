@@ -14,7 +14,7 @@ use {
 };
 
 use crate::continuation::ContinuationAdjustment;
-use crate::eval::settlement::{
+use crate::gateway::observability::decision::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
 use crate::gateway::routing::exploration::RouteExploration;
@@ -340,7 +340,7 @@ impl PolicyTable {
         let target = self.target_of_tier(logging_action_tier).ok_or_else(|| {
             anyhow::anyhow!("logging action tier is absent from the policy snapshot")
         })?;
-        crate::eval::types::route_decision_measurement(
+        crate::storage::evaluation::route_decision_measurement(
             logging_action_tier,
             target.model(),
             target.effort().or(input_effort),
@@ -1713,7 +1713,7 @@ mod tests {
             let measurement =
                 table.route_measurement(tier, None, Some(&exploration), Some(&assignment))?;
             assert_eq!(measurement.logging_action_probability_ppm, expected);
-            crate::eval::types::validate_route_measurement_for_experiment(
+            crate::storage::evaluation::validate_route_measurement_for_experiment(
                 &measurement,
                 Some(&assignment),
             )?;
@@ -2141,7 +2141,7 @@ mod tests {
             "economy".to_string(),
         );
         let table = PolicyTable::from_config(&config).expect("configured");
-        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
             "auto:cost",
@@ -2204,7 +2204,7 @@ mod tests {
             PolicyModelTarget::from("vendor/reference"),
         );
         let table = PolicyTable::from_config(&table_config).expect("configured");
-        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let path = temp_path("certificate-baseline-decisions.jsonl");
         let recorder = PolicyDecisionJsonlRecorder::new(path.clone()).expect("recorder");
         let router = PolicyTableRouter::new(table)
@@ -3353,7 +3353,7 @@ mod tests {
     fn legacy_rejection_preserves_proposal_in_pending_eval_audit() {
         let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
         let table = PolicyTable::from_config(&config()).expect("configured");
-        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
             "auto:cost",

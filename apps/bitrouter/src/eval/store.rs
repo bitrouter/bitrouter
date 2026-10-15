@@ -11,9 +11,10 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use {
-    super::types::canonical_digest, super::types::validate_result, super::types::validate_subject,
-    bitrouter_ai::eval::AdmissionStatus, bitrouter_ai::eval::EvalScope,
-    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvaluationResult,
+    crate::storage::evaluation::canonical_digest, crate::storage::evaluation::validate_result,
+    crate::storage::evaluation::validate_subject, bitrouter_ai::eval::AdmissionStatus,
+    bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
+    bitrouter_ai::eval::EvaluationResult,
 };
 
 mod subject_entity {
@@ -153,7 +154,7 @@ impl EvalStore {
     ) -> Result<SubjectInsertOutcome> {
         validate_owner(owner_user_id)?;
         validate_subject(subject)?;
-        let content_digest = crate::eval::types::subject_digest(subject)?;
+        let content_digest = crate::storage::evaluation::subject_digest(subject)?;
         if let Some(existing) = subject_entity::Entity::find_by_id(&subject.eval_id)
             .one(&self.db)
             .await?
@@ -243,7 +244,7 @@ impl EvalStore {
         {
             anyhow::bail!("unknown eval subject '{}'", result.eval_id);
         }
-        let content_digest = crate::eval::types::result_digest(result)?;
+        let content_digest = crate::storage::evaluation::result_digest(result)?;
         if let Some(existing) = result_entity::Entity::find()
             .filter(result_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(result_entity::Column::IdempotencyKey.eq(&result.idempotency_key))
@@ -564,7 +565,7 @@ fn stored_subject(row: subject_entity::Model) -> Result<EvalSubject> {
     let subject: EvalSubject =
         serde_json::from_str(&row.subject_json).context("parsing stored eval subject")?;
     if subject.eval_id != row.eval_id
-        || crate::eval::types::subject_digest(&subject)? != row.content_digest
+        || crate::storage::evaluation::subject_digest(&subject)? != row.content_digest
     {
         anyhow::bail!("stored eval subject does not match its content address");
     }
@@ -574,7 +575,7 @@ fn stored_subject(row: subject_entity::Model) -> Result<EvalSubject> {
 fn stored_result(row: result_entity::Model) -> Result<StoredEvaluationResult> {
     let result: EvaluationResult =
         serde_json::from_str(&row.result_json).context("parsing stored evaluation result")?;
-    let semantic_digest = crate::eval::types::result_digest(&result)?;
+    let semantic_digest = crate::storage::evaluation::result_digest(&result)?;
     if result.eval_id != row.eval_id
         || semantic_digest != row.content_digest
         || semantic_digest != row.result_id
@@ -653,7 +654,7 @@ mod tests {
     use sea_orm::IntoActiveModel;
 
     use super::*;
-    use crate::eval::types::*;
+    use crate::storage::evaluation::*;
     use bitrouter_ai::eval::{EvalDecisionRef, EvalVerdict, EvaluatorIdentity, EvaluatorKind};
 
     async fn store() -> anyhow::Result<EvalStore> {

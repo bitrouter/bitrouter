@@ -61,9 +61,9 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow projections and experiment assignment/identity moved to gateway; eval/outbox separation, remaining policy ownership and final dependency matrix remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow projections, pending observations and settlement moved to gateway; eval publication is optional; reserved-request protections, remaining policy ownership and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/local native bridge gated by core; core-disabled inspection and no-OTLP activation isolation verified; complete isolated dependency/startup matrix remains |
+| P0 5 Feature isolation | In progress | Scheduler/local native bridge, eval HTTP mounting and automatic outbox publication gated by core; core-disabled inspection and no-OTLP activation isolation verified; complete isolated dependency/startup matrix remains |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -1151,3 +1151,97 @@ All final A01–A16 gates remain open. The next ownership work is the gateway's
 pending decision/settlement contract and published-policy services versus core
 learning/evaluation, followed by the remaining feature/startup and delivery gates.
 This stage has not created a PR or published an artifact.
+
+## Gateway settlement and optional evaluation consumption
+
+Changes against `2ac9664` move pending policy decisions, bounded prediction
+observations and routing-evidence construction into gateway observability.
+The response observer moves from `workflow_state::response_observer` to
+`gateway::observability::prediction`; the new gateway settlement recorder owns
+trajectory disposition and delegates ordinary request evaluation only when a
+consumer is assembled. Shared persisted evidence validation and digests move
+from `eval::types` to `storage::evaluation`. Classifier cohort construction stays
+with the evaluation compiler, not the shared storage contract.
+
+The response observer is byte-equivalent after its import changes and rustfmt.
+The evidence validator is likewise equivalent after its module documentation,
+self-reference updates and the unchanged classifier function's move; all 14 of
+its tests remain. Public evaluation DTOs stay in AI. No service algorithm or
+new trait/framework was added to the public contract library.
+
+Gateway trajectory settlement still runs after authoritative metering. It owns
+the existing atomic terminal fact/outbox persistence and accepts an optional
+notification callback. The production publisher, startup/shutdown drain and
+`/v1/evals/*` route mounting now require core. Without core, no evaluation service
+or automatic publisher is assembled, and pending outbox rows remain durable,
+inspectable and protected from retention. Unit-test publisher fixtures remain
+available independently to preserve their durability/validation coverage.
+
+Independent review found a concurrency regression in the first split: the
+ordinary eval delegate re-read pending state after an awaited trajectory lookup.
+Cache eviction or expiry could discard the original decision. The fix carries
+the captured decision through a private, fully redacted event bound to its
+invocation and owner, including an explicit absent snapshot. Retries select the
+latest capture; cleanup still follows successful persistence. Tests hold the
+single SQLite connection to suspend the actual trajectory lookup, then evict the
+original entry or insert a late entry. They verify that the original decision is
+retained and a late decision is not substituted. A separate test checks owner,
+invocation and serialization isolation. These three regressions passed before
+running the broader final candidate checks.
+
+Validation evidence for the reviewed candidate:
+
+- Full-feature focused runtime: **407 passed**, 3,023 outside the selected filter,
+  in 12.145 seconds.
+- Core/OTLP-disabled focused runtime: **403 passed**, 2,795 outside the filter,
+  in 10.035 seconds, with `--no-default-features --features harness,tui,mcp`.
+  This remains an intermediate profile, not the final minimum gateway.
+- Both runs retain response-observation, evidence validation, ordinary eval,
+  policy compilation/routing, trajectory disposition, idempotent settlement,
+  publisher/restart, progress-guard, continuation and full-stack request tests.
+  Existing core-only admission cases remain exercised in the full run.
+- Added core-disabled assembly tests verify cleanup of untracked observations
+  without eval subject/result writes. The trajectory HTTP test preserves one
+  pending envelope and one terminal fact across retry, process-state restart and
+  retention, with zero publication attempts and no repeated metering.
+  The real CLI host test verifies eval routes return 200 with core and 404
+  without it, while retaining ordinary inference and shutdown assertions.
+- Rust 1.97.0 strict workspace all-feature/all-target Clippy and application
+  core/OTLP-disabled all-target Clippy passed. Strict Rustdoc passed for the
+  all-feature workspace and the disabled application profile. Formatting,
+  whitespace, moved-source parity and updated documentation link checks passed.
+- Final independent read-only source review reported no actionable findings,
+  including the snapshot fix, missing-metering behavior, transaction/notification
+  ordering, ownership and core-disabled wiring. The reviewer did not run Cargo;
+  the runtime evidence above is recorded separately.
+
+The final runtime commands share this filter:
+
+```sh
+settlement_filter='test(gateway::observability::decision::) | test(gateway::observability::prediction::) | test(storage::evaluation::) | test(trajectory::) | test(eval::) | test(assemble::trajectory_assembly_tests::) | test(policy_table_router::) | test(policy_lock::) | test(policy_compile::) | binary(trajectory_progress_control) | binary(policy_eval_control_plane) | binary(eval_exchange_equivalence) | binary(extension_host) | binary(full_stack)'
+
+cargo nextest run -p bitrouter --all-features --lib \
+  --test trajectory_progress_control --test policy_eval_control_plane \
+  --test eval_exchange_equivalence --test extension_host --test full_stack \
+  --build-jobs 2 --test-threads 2 --no-fail-fast -E "$settlement_filter"
+
+cargo nextest run -p bitrouter --no-default-features \
+  --features harness,tui,mcp --lib \
+  --test trajectory_progress_control --test policy_eval_control_plane \
+  --test eval_exchange_equivalence --test extension_host --test full_stack \
+  --build-jobs 2 --test-threads 2 --no-fail-fast -E "$settlement_filter"
+```
+
+Toolchain/debug/incremental settings remain those recorded above. Ambient OTLP
+endpoint configuration was unset for runtime invocations. Source and manifests
+stayed frozen through the tests and nested CLI fixture builds. The accepted
+plan's source-inventory table and two reviewed feature/delivery clarifications
+are synchronized, with baseline links pinned to the inventory revision and the
+implementation status/legacy TUI retirements preserved.
+
+All A01–A16 final gates remain open. This stage does not gate all eval/learning
+source or CLI operations: evolution startup and reserved-request protection
+still require their gateway/core split. Full-to-minimum-to-full artifact
+transition evidence, final dependency/startup isolation, harness HTTP clients,
+packaging, performance, full final verification and PR remain required. P1 is
+excluded. No artifact was published and no PR was created in this stage.

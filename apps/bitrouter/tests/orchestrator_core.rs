@@ -590,7 +590,7 @@ policy:
         .context("Core selected plan")?;
     assert_eq!(
         selected.digest,
-        bitrouter::eval::types::canonical_digest(core_plan)?
+        bitrouter::storage::evaluation::canonical_digest(core_plan)?
     );
     assert_eq!(
         selected.attributes.get("model").map(String::as_str),

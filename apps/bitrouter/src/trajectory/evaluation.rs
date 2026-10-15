@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use {
-    crate::eval::types::canonical_digest, crate::eval::types::evidence_digest,
-    crate::eval::types::validate_result_for_subject, bitrouter_ai::eval::DecisionCredit,
+    crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
+    crate::storage::evaluation::validate_result_for_subject, bitrouter_ai::eval::DecisionCredit,
     bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
     bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
     bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
@@ -921,27 +921,28 @@ mod tests {
             "planning",
             ("economy", false),
         )?;
-        route.evidence.route_measurement = Some(crate::eval::types::route_decision_measurement(
-            "economy",
-            "vendor/economy",
-            None,
-            vec![
-                RouteActionCandidate {
-                    context: Default::default(),
-                    tier: "economy".into(),
-                    model: "vendor/economy".into(),
-                    effort: None,
-                    logging_probability_ppm: 1_000_000,
-                },
-                RouteActionCandidate {
-                    context: Default::default(),
-                    tier: "strong".into(),
-                    model: "vendor/strong".into(),
-                    effort: None,
-                    logging_probability_ppm: 0,
-                },
-            ],
-        )?);
+        route.evidence.route_measurement =
+            Some(crate::storage::evaluation::route_decision_measurement(
+                "economy",
+                "vendor/economy",
+                None,
+                vec![
+                    RouteActionCandidate {
+                        context: Default::default(),
+                        tier: "economy".into(),
+                        model: "vendor/economy".into(),
+                        effort: None,
+                        logging_probability_ppm: 1_000_000,
+                    },
+                    RouteActionCandidate {
+                        context: Default::default(),
+                        tier: "strong".into(),
+                        model: "vendor/strong".into(),
+                        effort: None,
+                        logging_probability_ppm: 0,
+                    },
+                ],
+            )?);
         resign(&mut route)?;
 
         let decoded = decode_eval_decision(&route)?

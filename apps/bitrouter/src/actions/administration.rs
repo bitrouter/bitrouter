@@ -275,7 +275,7 @@ mod snapshot_tests {
             &initial,
             Some(&path),
             None,
-            crate::eval::settlement::PendingEvalDecisionStore::default(),
+            crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
             None,
         )
         .await?;

@@ -1,4 +1,5 @@
-//! Service-side evaluation validation, evidence construction and semantic digests.
+//! Shared validation and semantic digests for persisted evaluation evidence.
+//! No evaluator service, admission authority or storage connection is constructed here.
 
 use bitrouter_ai::eval::{
     EVAL_SCHEMA_VERSION, EvalExperimentRef, EvalSubject, EvaluationResult, EvidenceItem,
@@ -52,21 +53,6 @@ pub(crate) fn subject_digest(value: &EvalSubject) -> Result<String> {
 pub(crate) fn result_digest(value: &EvaluationResult) -> Result<String> {
     validate_result(value)?;
     canonical_digest(value)
-}
-
-/// Classification cohorts are commitments to backend revision, rubric and
-/// acceptance threshold. Missing semantic evidence is its own cohort.
-pub(crate) fn classifier_cohorts(subject: &EvalSubject) -> BTreeSet<String> {
-    let mut cohorts = subject
-        .evidence
-        .iter()
-        .filter(|item| item.kind == "routing.assessment")
-        .filter_map(|item| item.attributes.get("classifier_digest").cloned())
-        .collect::<BTreeSet<_>>();
-    if cohorts.is_empty() {
-        cohorts.insert("unassessed".into());
-    }
-    cohorts
 }
 
 pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
@@ -518,8 +504,8 @@ mod tests {
             .map(ToString::to_string)
             .collect();
         assert_eq!(
-            crate::eval::types::subject_digest(&left)?,
-            crate::eval::types::subject_digest(&right)?
+            crate::storage::evaluation::subject_digest(&left)?,
+            crate::storage::evaluation::subject_digest(&right)?
         );
         Ok(())
     }
@@ -671,7 +657,7 @@ mod tests {
                 logging_probability_ppm: 100_000,
             },
         ];
-        let measurement = crate::eval::types::route_decision_measurement(
+        let measurement = crate::storage::evaluation::route_decision_measurement(
             "economy",
             "bitrouter:economy",
             Some(ReasoningEffort::Low),
@@ -725,7 +711,7 @@ mod tests {
                 assignment_id_digest: subject.policy_digest.clone(),
                 challenger_propensity_ppm: 100_000,
             }),
-            route_measurement: Some(crate::eval::types::route_decision_measurement(
+            route_measurement: Some(crate::storage::evaluation::route_decision_measurement(
                 "economy",
                 "bitrouter:economy",
                 None,
@@ -752,7 +738,7 @@ mod tests {
 
         let mut split = base;
         split.experiment.as_mut().unwrap().arm = ExperimentArm::Challenger;
-        split.route_measurement = Some(crate::eval::types::route_decision_measurement(
+        split.route_measurement = Some(crate::storage::evaluation::route_decision_measurement(
             "economy",
             "bitrouter:economy",
             None,
@@ -787,7 +773,7 @@ mod tests {
 
     #[test]
     fn route_measurement_validation_rejects_forged_probability_evidence() -> anyhow::Result<()> {
-        let valid = crate::eval::types::route_decision_measurement(
+        let valid = crate::storage::evaluation::route_decision_measurement(
             "balanced",
             "bitrouter:balanced",
             None,

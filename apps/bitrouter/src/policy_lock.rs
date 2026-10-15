@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
-use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
+use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};
 use crate::gateway::routing::experiment_identity::{
     HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, experiment_id, explore_compiler_config_digest,
     retreat_compiler_config_digest, treatment_context_digest,
@@ -2532,7 +2532,7 @@ async fn verify_document_evidence_with_config(
     let reconstructed = eval
         .as_ref()
         .map(|eval| eval.evidence_root.clone())
-        .unwrap_or(crate::eval::types::canonical_digest(&(
+        .unwrap_or(crate::storage::evaluation::canonical_digest(&(
             "policy-evidence-v4",
             "empty",
         ))?);

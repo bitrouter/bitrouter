@@ -11,7 +11,6 @@ pub mod fixture;
 pub mod measurement;
 pub mod real_trace;
 pub mod replay;
-pub mod response_observer;
 pub mod reward;
 pub mod reward_feedback;
 pub mod shadow_classifier;

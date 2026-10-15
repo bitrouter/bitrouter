@@ -49,11 +49,11 @@ impl EvalEvidenceSnapshot {
             let subject = store.subject(&entry.eval_id).await?.ok_or_else(|| {
                 anyhow::anyhow!("snapshot subject '{}' is missing", entry.eval_id)
             })?;
-            let subject_digest = crate::eval::types::subject_digest(&subject)?;
+            let subject_digest = crate::storage::evaluation::subject_digest(&subject)?;
             if subject_digest != entry.subject_content_digest {
                 anyhow::bail!("snapshot subject '{}' changed content", entry.eval_id);
             }
-            super::types::validate_result_for_subject(&stored.result, &subject)?;
+            crate::storage::evaluation::validate_result_for_subject(&stored.result, &subject)?;
             records.push(EvalEvidenceRecord {
                 result_id: entry.result_id,
                 content_digest: entry.content_digest,
@@ -153,7 +153,7 @@ impl EvalEvidenceSnapshot {
                 }
                 route
                     .classifier_cohorts
-                    .extend(super::types::classifier_cohorts(&record.subject));
+                    .extend(classifier_cohorts(&record.subject));
                 route.sources.insert(record.result.evaluator.kind);
                 route
                     .evaluator_config_digests
@@ -325,6 +325,21 @@ fn add_metric(
     Ok(())
 }
 
+/// Classification cohorts are commitments to backend revision, rubric and
+/// acceptance threshold. Missing semantic evidence is its own cohort.
+pub(crate) fn classifier_cohorts(subject: &EvalSubject) -> BTreeSet<String> {
+    let mut cohorts = subject
+        .evidence
+        .iter()
+        .filter(|item| item.kind == "routing.assessment")
+        .filter_map(|item| item.attributes.get("classifier_digest").cloned())
+        .collect::<BTreeSet<_>>();
+    if cohorts.is_empty() {
+        cohorts.insert("unassessed".into());
+    }
+    cohorts
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -335,7 +350,7 @@ mod tests {
     use crate::eval::EvalService;
     use crate::eval::admission::SubmissionPrincipal;
     use crate::eval::store::EvalStore;
-    use crate::eval::types::*;
+    use crate::storage::evaluation::*;
     use bitrouter_ai::eval::{EvalDecisionRef, EvalScope, EvaluatorIdentity, MetricValue};
 
     #[tokio::test]

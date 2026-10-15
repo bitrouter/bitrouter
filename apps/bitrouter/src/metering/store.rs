@@ -1169,7 +1169,7 @@ impl MeteringStore {
                         })?,
                         effective_rates: Default::default(),
                         pricing_source: PricingSource::AuthoritativeReceipt,
-                        pricing_version: crate::eval::types::canonical_digest(receipt)
+                        pricing_version: crate::storage::evaluation::canonical_digest(receipt)
                             .map_err(|error| BitrouterError::internal(error.to_string()))?,
                         unknown_reason: None,
                     }

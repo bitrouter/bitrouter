@@ -512,6 +512,22 @@ async fn official_cli_uses_shared_host_without_extension_registrations() -> Resu
     std::fs::write(&config_path, without_checks)?;
     let mut host = Host::official(home.path())?;
     host.ready(home.path(), inference, control).await?;
+    let eval_status = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?
+        .get(format!("http://{inference}/v1/evals/subjects"))
+        .send()
+        .await?
+        .status();
+    let expected_eval_status = if cfg!(feature = "core") {
+        reqwest::StatusCode::OK
+    } else {
+        reqwest::StatusCode::NOT_FOUND
+    };
+    ensure!(
+        eval_status == expected_eval_status,
+        "eval route does not match compiled core capability: {eval_status}"
+    );
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?

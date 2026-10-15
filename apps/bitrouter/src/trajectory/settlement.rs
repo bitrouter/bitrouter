@@ -6,13 +6,12 @@ use crate::gateway::pipeline::settlement::SettlementContext;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, TimeDelta};
 
-use crate::eval::settlement::PredictionObservationSnapshot;
+use crate::gateway::observability::decision::PredictionObservationSnapshot;
 use crate::metering::MeteringSettlementEvent;
 
 use super::{
     canonical::CorrelationKey,
     evaluation::{TRAJECTORY_EVAL_TOPIC, build_operational_evaluation},
-    publisher::TrajectoryOutboxPublisher,
     store::TrajectoryStore,
     types::{
         OutboxPayload, OutboxWrite, RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION,
@@ -23,7 +22,7 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct TrajectorySettlementRecorder {
     store: TrajectoryStore,
-    publisher: TrajectoryOutboxPublisher,
+    notify_outbox: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     identity_key: CorrelationKey,
 }
 
@@ -38,13 +37,19 @@ pub(crate) enum TrajectorySettlementDisposition {
 impl TrajectorySettlementRecorder {
     pub(crate) fn new(
         store: TrajectoryStore,
-        publisher: TrajectoryOutboxPublisher,
+        notify_outbox: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
         identity_key: CorrelationKey,
     ) -> Self {
         Self {
             store,
-            publisher,
+            notify_outbox,
             identity_key,
+        }
+    }
+
+    fn notify_outbox(&self) {
+        if let Some(notify) = &self.notify_outbox {
+            notify();
         }
     }
 
@@ -67,7 +72,7 @@ impl TrajectorySettlementRecorder {
             self.store
                 .validate_reusable_terminal_settlement(owner_user_id, &request_id)
                 .await?;
-            self.publisher.kick();
+            self.notify_outbox();
             return Ok(TrajectorySettlementDisposition::AlreadyTerminal);
         }
         let Some(metering) = context.get_event::<MeteringSettlementEvent>().cloned() else {
@@ -76,7 +81,7 @@ impl TrajectorySettlementRecorder {
         if metering.request_id != context.request_id {
             anyhow::bail!("metering settlement identity does not match trajectory request")
         }
-        let routing = crate::eval::settlement::routing_evidence(context)?;
+        let routing = crate::gateway::observability::decision::routing_evidence(context)?;
         let owner = owner_user_id.to_owned();
         let settlement = self
             .store
@@ -96,13 +101,13 @@ impl TrajectorySettlementRecorder {
                 self.store
                     .validate_reusable_terminal_settlement(owner_user_id, &request_id)
                     .await?;
-                self.publisher.kick();
+                self.notify_outbox();
                 return Ok(TrajectorySettlementDisposition::AlreadyTerminal);
             } else {
                 return Err(error);
             }
         }
-        self.publisher.kick();
+        self.notify_outbox();
         Ok(TrajectorySettlementDisposition::Persisted)
     }
 }
@@ -257,6 +262,7 @@ fn digest_hex(digest: &str) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
     use crate::config::EvalConfig;
     use crate::gateway::caller::CallerContext;
@@ -272,13 +278,14 @@ mod tests {
         build_operational_evaluation, build_settlement,
     };
     use crate::eval::{
-        EvalService,
-        admission::SubmissionPrincipal,
-        settlement::{
-            EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
-        },
+        EvalService, admission::SubmissionPrincipal, settlement::EvalSettlementRecorder,
         store::EvalStore,
     };
+    use crate::gateway::observability::decision::{
+        EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
+    };
+    use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
+    use crate::gateway::observability::settlement::PolicySettlementRecorder;
     use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::metering::MeteringSettlementEvent;
     use crate::output::reports::trajectory::{inspect_report, replay_report};
@@ -289,7 +296,10 @@ mod tests {
     use crate::trajectory::publisher::TrajectoryOutboxPublisher;
     use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
     use crate::trajectory::types::{KeyedDigest, RequestStatus, canonical_digest};
-    use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
+
+    fn notify(publisher: TrajectoryOutboxPublisher) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        Some(Arc::new(move || publisher.kick()))
+    }
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -305,8 +315,11 @@ mod tests {
             EvalConfig::default(),
             10,
         )?;
-        let recorder =
-            TrajectorySettlementRecorder::new(store.clone(), publisher, identity_key.clone());
+        let recorder = TrajectorySettlementRecorder::new(
+            store.clone(),
+            notify(publisher),
+            identity_key.clone(),
+        );
         assert_eq!(
             recorder
                 .record_if_tracked(&context("untracked"), None)
@@ -396,13 +409,22 @@ mod tests {
             EvalConfig::default(),
             10,
         )?;
-        let trajectory =
-            TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
+        let trajectory = TrajectorySettlementRecorder::new(
+            store.clone(),
+            notify(publisher.clone()),
+            identity_key,
+        );
         let pending = PendingEvalDecisionStore::default();
         let invocation = EvalInvocation::new("owner-a");
         pending.insert(&invocation, pending_decision("external-request"));
-        let recorder = EvalSettlementRecorder::new(eval_store.clone(), pending.clone())
-            .with_trajectory(trajectory);
+        let recorder = PolicySettlementRecorder::new(
+            pending.clone(),
+            Some(trajectory),
+            Some(Arc::new(EvalSettlementRecorder::new(
+                eval_store.clone(),
+                pending.clone(),
+            ))),
+        );
         let mut missing_metering = context("external-request");
         missing_metering.emit(invocation.clone());
 
@@ -630,7 +652,7 @@ mod tests {
         )?;
         let recorder = TrajectorySettlementRecorder::new(
             store.clone(),
-            publisher.clone(),
+            notify(publisher.clone()),
             identity_key.clone(),
         );
         let mut first = context("external-request-1");
@@ -656,7 +678,7 @@ mod tests {
         )?;
         let restarted_recorder = TrajectorySettlementRecorder::new(
             restarted_store.clone(),
-            restarted_publisher,
+            notify(restarted_publisher),
             identity_key,
         );
         let mut retry = context("external-request-1");
@@ -852,7 +874,8 @@ mod tests {
             EvalConfig::default(),
             10,
         )?;
-        let recorder = TrajectorySettlementRecorder::new(store, publisher.clone(), identity_key);
+        let recorder =
+            TrajectorySettlementRecorder::new(store, notify(publisher.clone()), identity_key);
         let mut retry = context("external-request-current");
         retry.emit(routing_failure_metering("external-request-current", 175));
         let baseline_subjects = eval_store.list_subjects_for_owner("owner-a").await?.len();
@@ -896,7 +919,8 @@ mod tests {
             EvalConfig::default(),
             10,
         )?;
-        let recorder = TrajectorySettlementRecorder::new(store.clone(), publisher, identity_key);
+        let recorder =
+            TrajectorySettlementRecorder::new(store.clone(), notify(publisher), identity_key);
 
         assert_eq!(
             recorder
@@ -1101,8 +1125,11 @@ mod tests {
             EvalConfig::default(),
             10,
         )?;
-        let recorder =
-            TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
+        let recorder = TrajectorySettlementRecorder::new(
+            store.clone(),
+            notify(publisher.clone()),
+            identity_key,
+        );
         let mut settlement_context = context(SENTINELS[7]);
         settlement_context.emit(metering(SENTINELS[7]));
         assert_eq!(
@@ -1393,7 +1420,7 @@ mod tests {
             EvalConfig::default(),
             10,
         )?;
-        let recorder = TrajectorySettlementRecorder::new(store, publisher, identity_key);
+        let recorder = TrajectorySettlementRecorder::new(store, notify(publisher), identity_key);
         let mut first = context("external-request-1");
         first.emit(routing_failure_metering("external-request-1", 100));
         assert_eq!(

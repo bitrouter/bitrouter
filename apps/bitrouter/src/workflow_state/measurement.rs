@@ -6,8 +6,8 @@ use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
 use {
-    crate::eval::types::canonical_digest,
-    crate::eval::types::validate_route_measurement_for_experiment,
+    crate::storage::evaluation::canonical_digest,
+    crate::storage::evaluation::validate_route_measurement_for_experiment,
     bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
 };
 
@@ -329,7 +329,7 @@ mod tests {
                 },
             },
         ];
-        let measurement = crate::eval::types::route_decision_measurement(
+        let measurement = crate::storage::evaluation::route_decision_measurement(
             selected_tier,
             format!("vendor/{selected_tier}{model_suffix}"),
             None,
@@ -495,7 +495,7 @@ mod tests {
         let mut decision = record(Some("request-a"), "economy", "");
         decision.input_effort = Some(ReasoningEffort::Low);
         decision.selected_effort = Some(ReasoningEffort::Low);
-        decision.route_measurement = Some(crate::eval::types::route_decision_measurement(
+        decision.route_measurement = Some(crate::storage::evaluation::route_decision_measurement(
             "economy",
             "vendor/economy",
             Some(ReasoningEffort::Low),
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn baseline_preserves_declared_post_guard_compound_target() -> anyhow::Result<()> {
         let mut decision = record(Some("request-a"), "economy", "");
-        decision.route_measurement = Some(crate::eval::types::route_decision_measurement(
+        decision.route_measurement = Some(crate::storage::evaluation::route_decision_measurement(
             "economy",
             "vendor/same",
             Some(ReasoningEffort::Low),

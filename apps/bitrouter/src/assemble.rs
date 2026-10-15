@@ -64,18 +64,24 @@ use crate::continuation::{ContinuationKeySource, ContinuationRegistry, Continuat
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 use crate::daemon::ObserveStatusPayload;
 use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
+#[cfg(feature = "core")]
 use crate::eval::EvalService;
-use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
+#[cfg(feature = "core")]
+use crate::eval::settlement::EvalSettlementRecorder;
+#[cfg(feature = "core")]
 use crate::eval::store::EvalStore;
+use crate::gateway::observability::decision::PendingEvalDecisionStore;
+use crate::gateway::observability::prediction::PredictiveResponseObserver;
+use crate::gateway::observability::settlement::PolicySettlementRecorder;
 use crate::metering::tariff::CaptureTariffs;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
+#[cfg(feature = "core")]
 use crate::trajectory::publisher::TrajectoryOutboxPublisher;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
 use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
-use crate::workflow_state::response_observer::PredictiveResponseObserver;
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -99,6 +105,7 @@ pub struct Assembled {
     /// explicitly enabled; this handle shares the serving routing snapshots.
     pub evolution: crate::evolution::runtime::EvolutionRuntime,
     /// Generic eval exchange used by the local CLI and REST control plane.
+    #[cfg(feature = "core")]
     pub eval_service: EvalService,
     /// Always-active encrypted provider continuation registry.
     pub continuation_registry: ContinuationRegistry,
@@ -107,6 +114,7 @@ pub struct Assembled {
     #[cfg(test)]
     pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
+    #[cfg(feature = "core")]
     pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
@@ -789,8 +797,12 @@ async fn assemble_app(
         );
     }
     let pending_eval_decisions = PendingEvalDecisionStore::default();
+    #[cfg(feature = "core")]
     let eval_store = EvalStore::new(db.clone());
+    #[cfg(feature = "core")]
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
+    #[cfg(feature = "core")]
+    let mut trajectory_outbox_publisher = None;
     let trajectory_services = if config.trajectory.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
         let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
@@ -812,21 +824,32 @@ async fn assemble_app(
                 "pruned retained trajectory history at startup"
             );
         }
-        let publisher = TrajectoryOutboxPublisher::new(
-            trajectory_store.clone(),
-            eval_store.clone(),
-            config.eval.clone(),
-            config.trajectory.outbox_batch_size,
-        )?;
-        let startup_publication = publisher.drain_pending().await?;
-        if startup_publication.attempted > 0 {
-            tracing::info!(
-                attempted = startup_publication.attempted,
-                delivered = startup_publication.delivered,
-                failed = startup_publication.failed,
-                "drained durable trajectory evaluation outbox at startup"
-            );
-        }
+        let notify_outbox = {
+            #[cfg(feature = "core")]
+            {
+                let publisher = TrajectoryOutboxPublisher::new(
+                    trajectory_store.clone(),
+                    eval_store.clone(),
+                    config.eval.clone(),
+                    config.trajectory.outbox_batch_size,
+                )?;
+                let startup_publication = publisher.drain_pending().await?;
+                if startup_publication.attempted > 0 {
+                    tracing::info!(
+                        attempted = startup_publication.attempted,
+                        delivered = startup_publication.delivered,
+                        failed = startup_publication.failed,
+                        "drained durable trajectory evaluation outbox at startup"
+                    );
+                }
+                trajectory_outbox_publisher = Some(publisher.clone());
+                Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
+            }
+            #[cfg(not(feature = "core"))]
+            {
+                None
+            }
+        };
         let home = match config_path.and_then(std::path::Path::parent) {
             Some(home) => home.to_path_buf(),
             None => std::env::current_dir().context("resolve trajectory key home")?,
@@ -837,20 +860,17 @@ async fn assemble_app(
             Canonicalizer::new(correlation_key.clone()),
         ));
         let settlement =
-            TrajectorySettlementRecorder::new(trajectory_store, publisher.clone(), correlation_key);
-        Some((runtime, settlement, publisher))
+            TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key);
+        Some((runtime, settlement))
     } else {
         None
     };
     let trajectory_runtime = trajectory_services
         .as_ref()
-        .map(|(runtime, _, _)| runtime.clone());
-    let trajectory_for_eval = trajectory_services
+        .map(|(runtime, _)| runtime.clone());
+    let trajectory_for_settlement = trajectory_services
         .as_ref()
-        .map(|(_, settlement, _)| settlement.clone());
-    let trajectory_outbox_publisher = trajectory_services
-        .as_ref()
-        .map(|(_, _, publisher)| publisher.clone());
+        .map(|(_, settlement)| settlement.clone());
     let policy_runtime = crate::policy_lock::PolicyRuntime::new(
         config,
         config_path,
@@ -873,7 +893,22 @@ async fn assemble_app(
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
-    let eval_store_for_recorder = eval_service.store().clone();
+    let untracked_recorder = {
+        #[cfg(feature = "core")]
+        {
+            Some(Arc::new(EvalSettlementRecorder::new(
+                eval_service.store().clone(),
+                pending_eval_decisions.clone(),
+            ))
+                as Arc<
+                    dyn crate::gateway::pipeline::settlement::SettlementRecorder,
+                >)
+        }
+        #[cfg(not(feature = "core"))]
+        {
+            None
+        }
+    };
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     let acp_runtime_for_session = Arc::clone(&acp_runtime);
@@ -968,13 +1003,14 @@ async fn assemble_app(
             lm.settlement_recorder_for(metering_recorder, OperationScope::Both);
             lm.settlement_recorder(evolution_for_hooks);
             lm.settlement_recorder(judge_costs);
-            let eval_recorder =
-                EvalSettlementRecorder::new(eval_store_for_recorder, pending_eval_decisions);
-            let eval_recorder = match trajectory_for_eval {
-                Some(trajectory) => eval_recorder.with_trajectory(trajectory),
-                None => eval_recorder,
-            };
-            lm.settlement_recorder_for(eval_recorder, OperationScope::Both);
+            lm.settlement_recorder_for(
+                PolicySettlementRecorder::new(
+                    pending_eval_decisions,
+                    trajectory_for_settlement,
+                    untracked_recorder,
+                ),
+                OperationScope::Both,
+            );
             // Server-side tool loop (router-executed MCP tools), when configured.
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);
@@ -1033,12 +1069,14 @@ async fn assemble_app(
         policy_store: policy_store_for_reload,
         policy_runtime,
         evolution,
+        #[cfg(feature = "core")]
         eval_service,
         continuation_registry,
         #[cfg(test)]
         pending_eval_decisions: pending_eval_decisions_for_tests,
         #[cfg(test)]
         response_observer: response_observer_for_tests,
+        #[cfg(feature = "core")]
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
@@ -2561,7 +2599,9 @@ mod server_tools_tests {
 
 #[cfg(test)]
 mod trajectory_assembly_tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
+    #[cfg(feature = "core")]
+    use std::collections::BTreeSet;
 
     use crate::gateway::caller::CallerContext;
     use crate::gateway::pipeline::types::PipelineRequest;
@@ -2575,7 +2615,10 @@ mod trajectory_assembly_tests {
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, deterministic_yaml, semantic_digest,
     };
-    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+    #[cfg(feature = "core")]
+    use crate::trajectory::guard::IncompleteHistoryAction;
+    use crate::trajectory::guard::ProgressGuardPolicy;
+    #[cfg(feature = "core")]
     use bitrouter_ai::eval::EvalScope;
 
     async fn assemble_named_policy(
@@ -2705,6 +2748,7 @@ presets:
             .ok_or_else(|| anyhow::anyhow!("assembled App has no language model pipeline"))?
             .execute(request)
             .await?;
+        #[cfg(feature = "core")]
         if let Some(publisher) = &assembled.trajectory_outbox_publisher {
             publisher.wait_for_idle().await;
         }
@@ -2712,6 +2756,25 @@ presets:
         Ok((assembled, digest))
     }
 
+    #[cfg(not(feature = "core"))]
+    #[tokio::test]
+    async fn no_core_cleans_untracked_observation_without_eval_writes() -> anyhow::Result<()> {
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+        for trajectory_enabled in [false, true] {
+            let (assembled, _) = assemble_named_policy(trajectory_enabled, None).await?;
+            assert!(assembled.pending_eval_decisions.is_empty());
+            assert_eq!(assembled.response_observer.buffered_request_count(), 0);
+            let row = assembled.db.query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT (SELECT COUNT(*) FROM eval_subjects) + (SELECT COUNT(*) FROM eval_results) AS count".to_owned(),
+            )).await?.ok_or_else(|| anyhow::anyhow!("missing eval count"))?;
+            assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn disabled_trajectory_preserves_named_policy_request_eval() -> anyhow::Result<()> {
         let (assembled, digest) = assemble_named_policy(false, None).await?;
@@ -2743,6 +2806,7 @@ presets:
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn unguarded_policy_preserves_request_eval_when_trajectory_is_enabled()
     -> anyhow::Result<()> {
@@ -2768,6 +2832,7 @@ presets:
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn guarded_policy_emits_only_episode_eval_without_pending_decision() -> anyhow::Result<()>
     {
@@ -2828,6 +2893,7 @@ presets:
                 .await?;
 
         assert!(!disabled.policy_runtime.trajectory_is_active());
+        #[cfg(feature = "core")]
         assert!(disabled.trajectory_outbox_publisher.is_none());
         assert!(!disabled_home.path().join("correlation.key").exists());
 
@@ -2838,6 +2904,7 @@ presets:
             build_app_with_path(&config, Some(&enabled_home.path().join("bitrouter.yaml"))).await?;
 
         assert!(enabled.policy_runtime.trajectory_is_active());
+        #[cfg(feature = "core")]
         assert_eq!(
             enabled
                 .trajectory_outbox_publisher

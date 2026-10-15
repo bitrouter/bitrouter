@@ -2,3 +2,5 @@
 //! Core and harness share codecs without sharing live execution authority.
 
 pub mod checkpoint;
+
+pub mod evaluation;
