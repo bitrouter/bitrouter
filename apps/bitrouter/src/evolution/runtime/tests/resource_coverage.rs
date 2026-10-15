@@ -1,7 +1,7 @@
 use super::*;
 use crate::acp_trajectory::Recorder;
 use crate::acp_trajectory::checkpoint::types::{Checkpoint, ResourceObservation};
-use crate::evolution::inventory::{COVERAGE_KIND, CoverageRegistration};
+use crate::gateway::observability::inventory::{COVERAGE_KIND, CoverageRegistration};
 
 async fn prompt(recorder: &Recorder, id: &str, call: u64, kind: CaptureKind) -> Result<()> {
     let payload = if kind == CaptureKind::Request {
@@ -157,7 +157,7 @@ async fn post_stop_calls_extend_own_resources_without_changing_content() -> Resu
         checkpoint.watermark
     );
 
-    let inventory = fixture.assembled.evolution.inventory();
+    let inventory = fixture.assembled.gateway_requests.inventory();
     let BeginResult::Tracked(pending) = inventory
         .begin(
             "local",
@@ -351,10 +351,13 @@ async fn unresolved_requests_are_retained_and_known_other_sessions_are_excluded(
         prior.metering_complete,
         "later unresolved traffic does not enter an older prefix"
     );
-    let inventory = fixture.assembled.evolution.inventory();
+    let inventory = fixture.assembled.gateway_requests.inventory();
     let (_, saved): (_, GatewayRequest) = inventory
         .scoped_store("local", "controller")?
-        .get(crate::evolution::inventory::INVENTORY_KIND, "unresolved")
+        .get(
+            crate::gateway::observability::inventory::INVENTORY_KIND,
+            "unresolved",
+        )
         .await?
         .context("unresolved request disappeared")?;
     assert!(saved.binding.is_none());
@@ -485,7 +488,9 @@ async fn missing_handshake_disables_new_trials_and_cannot_be_repaired_retroactiv
         Some("gateway_inventory_unavailable")
     );
     assert!(
-        runtime
+        fixture
+            .assembled
+            .gateway_requests
             .inventory()
             .register_capture(recorder.connection_id(), "local", "controller")
             .await
@@ -505,7 +510,7 @@ async fn missing_handshake_disables_new_trials_and_cannot_be_repaired_retroactiv
 async fn late_settlement_revises_resources_without_mutating_checkpoint_content() -> Result<()> {
     let fixture = fixture(false).await?;
     let (identity, recorder) = recording(&fixture, "pending", "fixture", true).await?;
-    let inventory = fixture.assembled.evolution.inventory();
+    let inventory = fixture.assembled.gateway_requests.inventory();
     let head = CanonicalStore::new(fixture.assembled.db.clone())
         .transcript(&identity)
         .await?
@@ -591,7 +596,7 @@ async fn capture_acknowledgement_fences_namespace_preexisting_requests_and_runti
             route_scope_id: Some("local".into()),
         })
         .await?;
-    let inventory = fixture.assembled.evolution.inventory();
+    let inventory = fixture.assembled.gateway_requests.inventory();
     assert!(
         inventory
             .register_capture(recorder.connection_id(), "other", "startup")

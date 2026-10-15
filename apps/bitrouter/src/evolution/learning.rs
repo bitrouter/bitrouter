@@ -15,15 +15,15 @@ use serde::{Deserialize, Serialize};
 use super::bandit::{self, BatchPlan, EffectiveObservations, Observation};
 use super::control::{BlockStatus, ControlState, EvolutionMode};
 use super::evidence::EvidencePacket;
-use super::inventory::{INVENTORY_VERSION, coverage_matches};
 use super::rubric::RubricEvaluation;
 use super::service::{
     CONTROL_KEY, CONTROL_KIND, EvolutionService, SESSION_KIND, SessionEnrollment,
 };
 use crate::acp_trajectory::checkpoint::entities::{checkpoints, heads, resources};
 use crate::acp_trajectory::checkpoint::types::RESOURCE_MEMBERSHIP_VERSION;
-use crate::acp_trajectory::entities::{connections, sessions};
 use crate::acp_trajectory::{CanonicalEvent, CanonicalStore};
+use crate::gateway::observability::inventory::{INVENTORY_VERSION, coverage_matches};
+use crate::storage::capture::{connections, sessions};
 use crate::storage::evolution::digest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

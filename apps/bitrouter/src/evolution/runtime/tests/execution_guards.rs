@@ -78,6 +78,7 @@ async fn mode_changes_fence_a_prepared_request_and_session_overrides_keep_preced
     SessionContextHook::new(fixture.assembled.acp_runtime.clone())
         .check(&mut ctx)
         .await?;
+    fixture.assembled.gateway_requests.check(&mut ctx).await?;
     runtime.check(&mut ctx).await?;
     service.set_mode(EvolutionMode::Off, None).await?;
     assert!(runtime.resolve(&mut Vec::new(), &mut ctx).await.is_err());

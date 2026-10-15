@@ -8,3 +8,5 @@ pub mod evaluation;
 pub mod evolution;
 pub mod execution;
 pub mod session_identity;
+
+pub mod capture;

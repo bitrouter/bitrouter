@@ -278,7 +278,7 @@ models:
             AcpControlPlane {
                 runtime: assembled.acp_runtime,
                 metering: bitrouter::metering::MeteringStore::new(assembled.db),
-                inventory: Some(evolution.inventory()),
+                inventory: Some(assembled.gateway_requests.inventory()),
                 evolution: Some(evolution.clone()),
             },
             Some(administration),

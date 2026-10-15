@@ -15,11 +15,11 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::runtime::{EXECUTION_KIND, ExecutionRecord, ExecutionSettlement};
-use crate::acp_trajectory::entities::{connections, sessions};
+use crate::storage::capture::{connections, sessions};
 use crate::storage::evolution::digest;
 use crate::storage::evolution::{EvolutionStore, records};
 use crate::storage::execution::ExecutionOutcome;
+use crate::storage::execution::{EXECUTION_KIND, ExecutionRecord, ExecutionSettlement};
 use crate::storage::session_identity::SessionIdentity;
 
 pub const INVENTORY_VERSION: &str = "gateway-request-inventory-v1";

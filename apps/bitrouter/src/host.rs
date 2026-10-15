@@ -519,7 +519,7 @@ async fn serve_with_options(
             daemon::AcpControlPlane {
                 runtime: acp_runtime_for_control,
                 metering: crate::metering::MeteringStore::new(assembled.db.clone()),
-                inventory: Some(assembled.evolution.inventory()),
+                inventory: Some(assembled.gateway_requests.inventory()),
                 evolution: Some(assembled.evolution.clone()),
             },
             daemon::LocalControlOptions {

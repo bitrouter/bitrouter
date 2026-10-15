@@ -371,7 +371,7 @@ pub enum DaemonResponse {
     },
     /// This daemon shares the recorder's database and records gateway requests.
     AcpRecordingRegistered {
-        registration: crate::evolution::inventory::CoverageRegistration,
+        registration: crate::gateway::observability::inventory::CoverageRegistration,
     },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
@@ -660,7 +660,7 @@ pub struct AcpControlPlane {
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
     /// The inventory installed in this daemon's model request pipeline.
-    pub inventory: Option<crate::evolution::inventory::GatewayInventory>,
+    pub inventory: Option<crate::gateway::observability::inventory::GatewayInventory>,
     /// Live route validation and checkpoint worker status, when installed.
     pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
 }
@@ -796,8 +796,8 @@ async fn active_recording_count(acp: &AcpControlPlane) -> Result<Option<u64>> {
     let Some(inventory) = &acp.inventory else {
         return Ok(None);
     };
-    let count = crate::acp_trajectory::entities::connections::Entity::find()
-        .filter(crate::acp_trajectory::entities::connections::Column::State.eq("recording"))
+    let count = crate::storage::capture::connections::Entity::find()
+        .filter(crate::storage::capture::connections::Column::State.eq("recording"))
         .count(&inventory.db)
         .await?;
     Ok(Some(count))

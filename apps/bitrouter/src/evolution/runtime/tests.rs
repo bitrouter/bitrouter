@@ -1,4 +1,10 @@
 use super::*;
+use crate::auth::events::ApiPrincipalEstablished;
+use crate::gateway::observability::inventory::{
+    BeginResult, GatewayInventory, GatewayRequest, InventoryBinding,
+};
+use crate::storage::execution::{ExecutionOutcome, ExecutionSettlement};
+use std::collections::BTreeMap;
 mod execution_guards;
 mod judge_costs;
 mod resource_coverage;
@@ -169,7 +175,7 @@ async fn recording(
     if acknowledge {
         fixture
             .assembled
-            .evolution
+            .gateway_requests
             .inventory()
             .register_capture(recorder.connection_id(), "local", "controller")
             .await?;
@@ -537,6 +543,7 @@ async fn dependency_scope_ignores_unrelated_routes_but_dispatch_fences_aba_reloa
     SessionContextHook::new(fixture.assembled.acp_runtime.clone())
         .check(&mut ctx)
         .await?;
+    fixture.assembled.gateway_requests.check(&mut ctx).await?;
     runtime.check(&mut ctx).await?;
     let original = fixture.assembled.routing_table.snapshot_config();
     let policies = fixture.assembled.policy_runtime.routing_snapshot();
@@ -604,7 +611,7 @@ async fn canonical_binding_requires_authenticated_scope_and_unambiguous_recorded
     assert!(
         fixture
             .assembled
-            .evolution
+            .gateway_requests
             .identify(&ctx, &normalized)
             .await?
             .is_some()
@@ -624,7 +631,7 @@ async fn canonical_binding_requires_authenticated_scope_and_unambiguous_recorded
     assert!(
         fixture
             .assembled
-            .evolution
+            .gateway_requests
             .identify(&foreign, &normalized_foreign)
             .await?
             .is_none()
@@ -633,7 +640,7 @@ async fn canonical_binding_requires_authenticated_scope_and_unambiguous_recorded
     assert!(
         fixture
             .assembled
-            .evolution
+            .gateway_requests
             .identify(&ctx, &normalized)
             .await?
             .is_none()

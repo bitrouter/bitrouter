@@ -60,7 +60,7 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
         daemon::AcpControlPlane {
             runtime: assembled.acp_runtime,
             metering: MeteringStore::new(assembled.db.clone()),
-            inventory: Some(assembled.evolution.inventory()),
+            inventory: Some(assembled.gateway_requests.inventory()),
             evolution: Some(assembled.evolution.clone()),
         },
     ));
@@ -81,7 +81,7 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
     assert_eq!(registration.connection_id, recorder.connection_id());
     assert_eq!(
         registration.version,
-        bitrouter::evolution::inventory::INVENTORY_VERSION
+        bitrouter::gateway::observability::inventory::INVENTORY_VERSION
     );
     assert!(registration.invalid_reason.is_none());
     use bitrouter::evolution::{
@@ -373,7 +373,7 @@ async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: MeteringStore::new(assembled.db.clone()),
-            inventory: Some(assembled.evolution.inventory()),
+            inventory: Some(assembled.gateway_requests.inventory()),
             evolution: Some(assembled.evolution.clone()),
         },
     ));
@@ -1029,7 +1029,7 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: metering.clone(),
-            inventory: Some(assembled.evolution.inventory()),
+            inventory: Some(assembled.gateway_requests.inventory()),
             evolution: Some(assembled.evolution.clone()),
         },
     ));

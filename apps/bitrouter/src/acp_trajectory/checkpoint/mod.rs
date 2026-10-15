@@ -22,8 +22,8 @@ use sea_orm::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::entities::{connections, events, sessions};
 use super::{CANONICAL_VERSION, CanonicalEvent, CanonicalStore, SessionIdentity};
+use crate::storage::capture::{connections, events, sessions};
 use entities::{checkpoints, heads, members, resources, revisions};
 use types::*;
 

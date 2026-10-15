@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::acp_trajectory::RequestAssociation;
-use crate::evolution::inventory::{
+use crate::gateway::observability::inventory::{
     COVERAGE_KIND, CoverageRegistration, GatewayInventory, GatewayRequest, INVENTORY_KIND,
     INVENTORY_VERSION,
 };

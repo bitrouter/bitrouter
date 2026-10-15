@@ -5,3 +5,7 @@ pub mod event;
 pub mod metrics;
 pub mod prediction;
 pub mod settlement;
+
+pub mod inventory;
+
+pub mod requests;

@@ -104,6 +104,8 @@ pub struct Assembled {
     /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
     /// explicitly enabled; this handle shares the serving routing snapshots.
     pub evolution: crate::evolution::runtime::EvolutionRuntime,
+    /// Canonical gateway request tracking; capture registration shares its runtime epoch.
+    pub gateway_requests: crate::gateway::observability::requests::GatewayRequestTracker,
     /// Generic eval exchange used by the local CLI and REST control plane.
     #[cfg(feature = "core")]
     pub eval_service: EvalService,
@@ -887,6 +889,9 @@ async fn assemble_app(
         policy_runtime.clone(),
     );
     let evolution_for_hooks = evolution.clone();
+    let gateway_requests =
+        crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
+    let gateway_requests_for_hooks = gateway_requests.clone();
     let judge_costs = crate::gateway::metering::judge::JudgeCosts::new(db.clone());
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
@@ -981,7 +986,8 @@ async fn assemble_app(
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
-            lm.router_preparation_hook(evolution_for_hooks.clone());
+            lm.router_preparation_hook(gateway_requests_for_hooks.clone());
+            lm.router_preparation_hook(evolution_for_hooks);
             lm.pre_request_hook_for(
                 PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
                 OperationScope::Both,
@@ -994,14 +1000,14 @@ async fn assemble_app(
                 lm.observe_hook_for(OtelObserveHook::new(exporter), OperationScope::Both);
             }
             lm.observe_hook(response_observer);
-            lm.observe_hook(evolution_for_hooks.clone());
+            lm.observe_hook(gateway_requests_for_hooks.clone());
             lm.observe_hook(judge_costs.clone());
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
             // for spend caps.
             lm.settlement_recorder_for(metering_recorder, OperationScope::Both);
-            lm.settlement_recorder(evolution_for_hooks);
+            lm.settlement_recorder(gateway_requests_for_hooks);
             lm.settlement_recorder(judge_costs);
             lm.settlement_recorder_for(
                 PolicySettlementRecorder::new(
@@ -1069,6 +1075,7 @@ async fn assemble_app(
         policy_store: policy_store_for_reload,
         policy_runtime,
         evolution,
+        gateway_requests,
         #[cfg(feature = "core")]
         eval_service,
         continuation_registry,

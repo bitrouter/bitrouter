@@ -1,7 +1,7 @@
 //! Resource snapshots can advance without mutating an immutable content prefix.
 
 use super::*;
-use crate::evolution::inventory::{coverage_matches, lock_connection};
+use crate::gateway::observability::inventory::{coverage_matches, lock_connection};
 use crate::storage::evolution::EvolutionStore;
 
 mod coverage;

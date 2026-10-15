@@ -6,7 +6,7 @@ See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for verified
 results and open acceptance gates. The target tables below are not a claim that
 every boundary has already been implemented.
 
-Date: 2026-10-15. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
+Updated: 2026-10-16. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
 on `main`, version `1.0.0-alpha.33`.
 
 BitRouter will ship as an independently running service assembled by the `bitrouter`
@@ -587,7 +587,8 @@ compiled modules:
 | `bitrouter-guardrails` | [`extensions/regex-checker/matcher/src/lib.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/extensions/regex-checker/matcher/src/lib.rs) | Six, including tests |
 | `dist-helper` | [`helpers/dist-helper/src/main.rs`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/helpers/dist-helper/src/main.rs) | Three |
 
-Counts describe the source revision above; they are an audit aid, not a new
+Source links are pinned so package retirement does not erase this inventory's
+references. Counts describe the source revision above; they are an audit aid, not a new
 architectural limit. Root coverage establishes inventory completeness at this
 level. Implementation review must still resolve the explicitly mixed descendants
 below, record their actual destination paths, and verify their dependency and
@@ -603,7 +604,7 @@ crate-root module declarations at the inventory baseline.
 | --- | --- |
 | `acp_cli` | `cli::acp` command adapter; execution/acceptance helpers under `harness::acp`; evolution operations delegate to core |
 | `acp_runtime` | `harness::acp` product runtime assembly; startup registration through host |
-| `acp_trajectory` | `harness::trajectory` capture, entities and durable checkpoints; learning/analysis consumers in core |
+| `acp_trajectory` | `harness::trajectory` capture, conversation projection and durable checkpoints; move `SessionIdentity` and the ORM-only `entities` definitions to application storage for existing gateway readers; learning/analysis consumers remain in core; shared records do not grant gateway conversation-write authority |
 | `actions` | `commands` shared operations/reports; `administration/models/requests/route/status` delegate to gateway/control, `code/session/supervised` to harness, skills to their existing resource owner |
 | `adequacy` | `core::adequacy` existing evidence/read/report behavior; do not reactivate legacy learning merely by moving it |
 | `administration_target` | `client` endpoint/transport selection; portable remote HTTP implementation in SDK |
@@ -633,7 +634,7 @@ crate-root module declarations at the inventory baseline.
 | `db` | `storage` connection/bootstrap and complete historical migration sequence |
 | `error_report` | `cli::error_report` and terminal-independent presentation; public API error payloads in AI only where shared |
 | `eval` | Evaluation admission/compiler/control/storage to `core::eval`; split the gateway trajectory settlement path out of `settlement`, retaining required observation snapshots and routing-evidence helpers without core; public exchange DTOs to AI |
-| `evolution` | Catalog, scheduler, learning, job, scoring and control to `core::evolution`; existing persisted request-reservation/replay enforcement and settlement-protection events from `costs/runtime`, plus their required record readers/validators, to gateway admission/metering; workspace execution delegates to harness |
+| `evolution` | Catalog, scheduler, learning, job, scoring and control to `core::evolution`; `inventory` and request tracking to gateway observability, persisted reservation/replay enforcement and settlement-protection events from `costs/runtime` to gateway admission/metering; shared record definitions/store/digest helpers to application storage; workspace execution delegates to harness |
 | `gateways` | `harness::gateways` launch-time integration configuration |
 | `harness` | `harness::catalog` existing generated harness metadata and lookup |
 | `host` | `host` foreground lifecycle, listeners, readiness, reload, signals and ordered shutdown |
@@ -709,6 +710,36 @@ applying an existing policy. Core owns offline analysis and policy production;
 the shared reducer's use by those consumers does not make request-time policy
 enforcement core-only. These are gateway request facts, not harness session
 authority or a reason to start a learning worker.
+
+Resolve these concrete record dependencies before gating core or harness. The
+target names below identify cohesive application owners; preserve the existing
+serialized representations, namespace hashes, record kinds and transaction
+checks while changing Rust paths.
+
+| Baseline descendant or definition | Target owner and retained responsibility |
+| --- | --- |
+| `evolution::inventory` | `gateway::observability::inventory`; request admission inventory, coverage bindings, attempt identity and terminal/settlement updates remain usable without a learning scheduler |
+| `evolution::store` and its record-key digest helper in `evolution::rubric` | `storage::evolution`; the existing scoped persistence primitive and ORM records serve both gateway request accounting and core jobs, without importing the job runtime |
+| `evolution::runtime::{ExecutionHop, ExecutionOutcome, ExecutionSettlement, ExecutionRecord}` and `EXECUTION_KIND` | `storage::execution`; preserve decoding of earlier full-product records in reduced builds |
+| `evolution::service::{DecisionContext, RouteIntent}` | `storage::execution` for the persisted data embedded in `ExecutionRecord`; live route selection, enrollment and learning stay in core |
+| `acp_trajectory::SessionIdentity` and its storage-key validation | `storage::session_identity`; share the existing scoped identifier without importing ACP execution or exposing internal storage identity through AI |
+| `acp_trajectory::entities::{connections, sessions, events}` | `storage::capture`; shared ORM definitions only. Harness keeps capture/session mutation authority; gateway reads existing correlation evidence and writes its own inventory/settlement facts |
+
+The canonical request path in `EvolutionRuntime::admit` first resolves an
+authenticated controller/session binding, rejects existing execution IDs and
+records gateway inventory before it consults learning state. Split that path
+and its hop/terminal/settlement observers from optional learning control; moving
+the replay marker alone is insufficient. Keep the existing authentication scope,
+unresolved-binding behavior, ordering and metering protections. Ordinary
+uncaptured traffic remains untracked by this inventory. P0 does not require
+starting an ACP recorder in the minimum gateway or turn this scoped protection
+into general request idempotency.
+
+Gateway readers of shared record definitions must not start a capture service,
+reconstruct the full conversation or take over harness checkpoint commits.
+Keep the record definitions internal even when several application owners need
+them. Do not introduce a second partial decoder that drops fields or bypasses
+the existing identity and integrity checks.
 
 Two further mixed paths must be split before gating core:
 
@@ -1304,6 +1335,10 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
   events from evolution before gating its jobs. Extract gateway trajectory
   settlement and operational outbox construction from the eval bridge; retain
   terminal facts and pending rows when the core consumer is unavailable.
+- Move canonical request inventory and its admission/hop/terminal tracking to
+  the gateway. Move shared capture/identity/execution record definitions and
+  scoped persistence primitives to application storage before gating their old
+  core/harness owners; keep capture and conversation writes harness-owned.
 - Split DTOs from implementation within mixed files; keep public API errors and
   observation views free of credentials and internal runtime objects.
 - Move runtime tests and fixtures with their implementations. Preserve protocol
@@ -1385,6 +1420,9 @@ over harness persistence or execution.
   records, including malformed snapshots and immutable-history violations.
 - Across full-product → minimum → full-product, reject reused reserved judge
   request IDs before any provider call and preserve the original accounting.
+  Exercise the canonical replay path separately with its existing authenticated
+  controller/capture scope, including unresolved bindings and early failures;
+  retain its request/attempt facts without constructing the learning runtime.
   Verify trajectory terminal facts, cost-based progress guards, pending outbox
   rows and idempotent publication after core returns.
 
@@ -1485,7 +1523,7 @@ coverage that justifies a profile.
 | gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |
 | No OTLP transport | Minimum and harness-only profiles retain essential request/usage facts, finalization, basic logs and enabled harness-local records; dormant export configuration is readable, while effective export opt-in is rejected at startup/reload/profile preflight before installation-ID creation, bearer resolution or exporter tasks |
 | Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full and full → harness-only → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
-| Reserved request identities | Create judge reservations and accounting in a full build; submit the reserved IDs through the minimum gateway, including an early authentication rejection; assert zero upstream calls and unchanged original attempt/charge records; retain canonical replay accounting protection where its existing scope applies |
+| Reserved request identities | Create judge reservations and accounting in a full build; submit the reserved IDs through the minimum gateway, including an early authentication rejection; assert zero upstream calls and unchanged original attempt/charge records. Separately exercise canonical inventory under its existing authenticated controller/capture scope: preserve duplicate rejection, unresolved-binding tracking, terminal/settlement facts and original accounting with core disabled, without starting a recorder or learning runtime. |
 | Trajectory settlement and outbox | Minimum gateway records terminal facts only from authoritative metering and applies equivalent cost-based progress guards; preexisting and new outbox rows remain pending without core, with no disabled-consumer retry loop; restoring core validates and drains them idempotently without repeated settlement or duplicate admitted evidence |
 
 Historical-format compatibility requires payload fixtures with known provenance,

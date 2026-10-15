@@ -139,7 +139,7 @@ presets:
         AcpControlPlane {
             runtime: assembled.acp_runtime,
             metering: crate::metering::MeteringStore::new(assembled.db),
-            inventory: Some(assembled.evolution.inventory()),
+            inventory: Some(assembled.gateway_requests.inventory()),
             evolution: Some(assembled.evolution),
         },
     ));

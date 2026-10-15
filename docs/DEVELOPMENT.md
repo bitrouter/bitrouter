@@ -324,7 +324,7 @@ terminal fact and outbox envelope together. Without core, assembly does not
 construct an eval service/publisher or mount eval HTTP routes; outbox rows remain
 pending and retention protects them. Core-enabled assembly retains startup,
 request-triggered and shutdown drains. This does not finish the core feature
-boundary: evolution startup, reserved-request protections, learning commands and
+boundary: evolution startup, learning commands and
 remaining mixed module imports still require separation. The progress ledger
 records the remaining work before claiming a minimum gateway profile.
 
@@ -336,14 +336,23 @@ of depending on a learning runtime. Job reservation construction and cost-report
 operations remain in `evolution::costs`; their implementation extends the
 gateway-owned handle without changing its admission behavior.
 
-The supporting record store and digest live in `storage::evolution`, persisted
-`ExecutionHop`/`ExecutionOutcome` in `storage::execution`, and the native
-`SessionIdentity` index in `storage::session_identity`. Capture, gateway and
-learning consumers use the same definitions. Storage table names, digest domains,
+The supporting record store and digest live in `storage::evolution`. Persisted
+execution, settlement and route-intent data live in `storage::execution`, the
+native `SessionIdentity` index in `storage::session_identity`, and shared
+capture ORM definitions in `storage::capture`. Capture, gateway and learning
+consumers use the same definitions. Storage table names, digest domains,
 serialized fields and validation remain unchanged. These are internal application
-records, not new SDK contracts or authority to execute a session. Canonical
-execution admission and learning activation still need their remaining split
-before evolution can be fully gated by core.
+records, not new SDK contracts or authority to execute a session.
+
+`gateway::observability::requests::GatewayRequestTracker` owns canonical request
+identification, duplicate rejection and admission inventory, plus hop, terminal
+and settlement observation. The host gives its inventory handle directly to
+capture-registration consumers so they share the serving epoch. The tracker runs
+before learning selection; `EvolutionRuntime` consumes its observation and keeps
+the existing routing/control fences. Gateway bookkeeping does not construct the
+learning service or mutate canonical conversation content. Optional learning
+startup, source and command gates remain unfinished; this move alone does not
+establish the complete minimum-gateway dependency closure.
 
 `bitrouter-ai` contains no model execution or authentication implementation.
 Optional guardrails adapters and telemetry remain application modules; enabling

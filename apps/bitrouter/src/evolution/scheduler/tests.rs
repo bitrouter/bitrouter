@@ -98,7 +98,8 @@ providers:
             route_scope_id: Some("local".into()),
         })
         .await?;
-    runtime
+    assembled
+        .gateway_requests
         .inventory()
         .register_capture(recorder.connection_id(), "local", "controller")
         .await?;

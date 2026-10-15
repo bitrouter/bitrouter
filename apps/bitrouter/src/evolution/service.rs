@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 
 use super::bandit::Arm;
 use super::control::{BlockDefinition, BlockState, BlockStatus, ControlState, EvolutionMode};
-use crate::acp_trajectory::entities::{events, sessions};
+use crate::storage::capture::{events, sessions};
 use crate::storage::evolution::digest;
 use crate::storage::evolution::{EvolutionStore, records};
+use crate::storage::execution::{DecisionContext, RouteIntent};
 use crate::storage::session_identity::SessionIdentity;
 
 pub(crate) const CONTROL_KIND: &str = "control";
@@ -64,14 +65,6 @@ impl RoutingDependencies {
         };
         live == Some(&block.routing_config_digest)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DecisionContext {
-    /// The effective selector at the admission boundary, before this controller
-    /// changes it. This never contains a post-hoc task classification or score.
-    pub selector: String,
-    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,31 +119,6 @@ pub struct SessionEnrollment {
     /// Preexisting sessions are retained but never opportunistically enrolled
     /// after some of their results have become visible.
     pub admission_reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RouteIntent {
-    pub request_id: String,
-    pub identity: SessionIdentity,
-    pub context: DecisionContext,
-    pub selected_route: String,
-    pub applied_block: Option<String>,
-    pub reason: String,
-    pub bypass: Option<String>,
-    pub mode_epoch: u64,
-    pub control_generation: u64,
-    /// Joint assignment, including blocks that did not match this request. The
-    /// session's eventual outcome is not copied once per intent.
-    pub assignments: BTreeMap<String, String>,
-    #[serde(default)]
-    pub monitoring: BTreeMap<String, String>,
-    pub captured_watermark: i64,
-    pub routing_dependencies: BTreeMap<String, String>,
-    #[serde(default)]
-    pub archived_routing_dependencies: BTreeMap<String, String>,
-    #[serde(default)]
-    pub trial_ready: bool,
-    pub recorded_at: String,
 }
 
 #[derive(Clone)]

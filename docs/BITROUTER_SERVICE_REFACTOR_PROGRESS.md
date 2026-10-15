@@ -61,7 +61,7 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical request protection, remaining policy ownership and final dependency matrix remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation now have a gateway owner; bound-record/fence separation, learning activation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
 | P0 5 Feature isolation | In progress | Scheduler/local native bridge, eval HTTP mounting and automatic outbox publication gated by core; core-disabled inspection and no-OTLP activation isolation verified; complete isolated dependency/startup matrix remains |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
@@ -1334,3 +1334,112 @@ learning activation/CLI gates, the rest of the feature matrix and all final P0
 acceptance/delivery evidence. Full/minimum/full artifact transitions are still
 unverified. All A01–A16 final gates remain open; no PR or publication is claimed,
 and P1 remains excluded.
+
+## Gateway canonical request inventory and tracking
+
+Changes against `2f3ca1e` move `evolution::inventory` to
+`gateway::observability::inventory` and extract `GatewayRequestTracker` into
+`gateway::observability::requests`. The tracker owns the original authenticated
+identity lookup, execution/inventory duplicate checks, request admission and
+hop/terminal/settlement observations. `EvolutionRuntime` consumes the same typed
+observation for optional learning selection and retains its existing routing,
+session and control fences. Assembly installs the tracker immediately before
+learning at router preparation, preserving generation-only operation scope and
+the existing observer/settlement order. Control registration receives the
+inventory directly from the gateway handle, preserving its serving runtime epoch.
+
+The remaining shared durable definitions move to their actual application owner:
+
+- `ExecutionRecord`, `ExecutionSettlement`, `EXECUTION_KIND`, `DecisionContext`
+  and `RouteIntent` join `storage::execution`;
+- capture connection/session/event ORM definitions move to `storage::capture`.
+
+Gateway, checkpoint, learning, CLI and fixture consumers import these owners
+without forwarding facades. The capture recorder, conversation projection and
+checkpoint writers retain their existing authority. No new AI API, migration,
+serialized representation or broad idempotency contract is introduced. Source
+comparison verified the inventory implementation, capture ORM definitions,
+identity lookup, execution/intent data, observation/settlement algorithms and
+learning selection/fences against the parent revision. Moving an observation
+into the gateway event avoids an extra clone; its existing event name is retained.
+
+Independent review found that the new preparation hook initially inherited the
+trait's rejecting `revalidate_context` default. The existing real-assembly
+`orchestrator_core::assembled_app_revalidates_rebuilt_context_before_fresh_count_and_execution`
+test reproduced that failure before repair: the second managed run failed with
+`preparation hook has no context revalidation contract`. The tracker now explicitly
+retains its original observation during authorized history removal without
+re-admitting, writing or executing a request. Other hooks still revalidate their
+live policy fences. The new focused test trims managed messages and verifies
+that repeated revalidation preserves the original request/attempt and one
+inventory entry. The existing assembly reconstruction test remains unchanged.
+
+New real-HTTP pipeline fixtures construct no learning service, scheduler or
+capture recorder. They seed the existing ORM representation to exercise tracked
+and unresolved requests, duplicate rejection, protection of earlier execution
+records, route-phase failures and ordinary preparation failures. Successful
+execution is followed by the actual pending-work drain before asserting terminal
+observation. Preparation failures deliberately retain unsettled inventory and
+no usage row; route failures retain the existing pre-dispatch failed settlement.
+The fixtures do not claim historical payload compatibility or full artifact
+profile-transition evidence.
+
+Validation evidence for this stage:
+
+- Initial all-feature/all-target application check found grouped imports and
+  inventory-handle callers still using the old owner; after updating them, the
+  check passed in 46.50 seconds.
+- The first new fixture pass exposed two incorrect test assumptions: ordinary
+  preparation rejection does not settle, and successful delivery observation
+  completes asynchronously. Tests now preserve those existing semantics and
+  use the actual pipeline drain. The four original gateway fixtures then passed.
+- Independent review's context-revalidation regression was reproduced with the
+  unchanged real-assembly test before repair. The final broad full-profile run
+  passed **281/281** in 84.903 seconds, with 3,186 outside the filter. It includes
+  all five gateway-only fixtures and the entire `orchestrator_core` integration
+  suite, including real process recovery, managed history reconstruction,
+  authentication, continuations and protocol/accounting behavior.
+- Final Rust 1.97.0 strict all-feature/all-target workspace Clippy and disabled
+  application all-target Clippy passed. Strict Rustdoc passed in both profiles.
+  Formatting, whitespace and source-parity checks passed.
+- Disabled-core/OTLP runtime passed **213/213** in 8.695 seconds, with 2,956
+  outside the filter. Its profile is `--no-default-features --features
+  harness,tui,mcp`. All five independent tracker regressions passed in both profiles.
+  The full run has exactly 66 additional orchestrator integration cases and two
+  existing OTLP full-stack cases; there is no unexplained test-identity gap.
+- Independent follow-up review confirmed the context-revalidation finding is
+  resolved and found no additional actionable issue. Review was read-only;
+  Cargo evidence is recorded separately.
+
+The final runtime commands use stable, `CARGO_INCREMENTAL=0`,
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, and two build/test jobs:
+
+```sh
+inventory_filter='test(evolution::) | test(gateway::observability::requests::) | test(gateway::metering::) | test(acp_trajectory::) | test(metering::) | test(actions::code::evolution::) | binary(acp_checkpoints) | binary(full_stack) | binary(source_boundaries) | binary(orchestrator_core)'
+
+cargo nextest run -p bitrouter --all-features --lib \
+  --test acp_checkpoints --test full_stack --test source_boundaries \
+  --test orchestrator_core --build-jobs 2 --test-threads 2 --no-fail-fast \
+  -E "$inventory_filter"
+
+cargo nextest run -p bitrouter --no-default-features \
+  --features harness,tui,mcp --lib \
+  --test acp_checkpoints --test full_stack --test source_boundaries \
+  --build-jobs 2 --test-threads 2 --no-fail-fast -E "$inventory_filter"
+```
+
+The before-repair reproduction selected only
+`assembled_app_revalidates_rebuilt_context_before_fresh_count_and_execution` from
+`--test orchestrator_core --all-features`. Strict checks use the same commands
+and separate 1.97 target directory documented in preceding stages. Source and
+manifests remained frozen during runtime tests and their nested executable builds.
+
+All final A01–A16 gates remain open. Bound `ExecutionRecord` initialization and
+its routing/session/control fences still run in `EvolutionRuntime`. Before
+removing that runtime from a profile, preserve any gateway-required record
+creation, cross-controller canonical identity protection and live revalidation;
+the tracker-only fixtures do not establish that complete transition. Evolution
+source/startup/commands are still present in the core-disabled profile; passing
+bookkeeping tests do not establish minimum-gateway isolation. Remaining work includes learning feature gates, the other package/module
+and feature boundaries, historical/backend/artifact/performance evidence, full
+validation, final review and PR. P1 and package publication remain excluded.

@@ -1,96 +1,38 @@
 //! Authenticated canonical admission and actual model execution bookkeeping.
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::config::routing_table::ConfigRoutingTable;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::context::StreamContext;
 use crate::gateway::pipeline::hooks::HookDecision;
-use crate::gateway::pipeline::hooks::HopOutcome;
-use crate::gateway::pipeline::hooks::ObserveHook;
-use crate::gateway::pipeline::hooks::Phase;
 use crate::gateway::pipeline::hooks::PreRequestHook;
-use crate::gateway::pipeline::hooks::RequestOutcome;
 use crate::gateway::pipeline::hooks::RouteHook;
-use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::pipeline::settlement::SettlementRecorder;
 use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
-use bitrouter_ai::types::StreamPart;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::catalog::{block_digest, request_compatible};
 use super::control::{BlockDefinition, ControlState};
-use super::inventory::{BeginResult, GatewayInventory, GatewayRequest, InventoryBinding};
-use super::service::{DecisionContext, EvolutionService, RouteIntent, RoutingDependencies};
-use crate::acp_trajectory::entities::{connections, events, sessions};
-use crate::auth::events::ApiPrincipalEstablished;
-use crate::metering::recorder::MeteringSettlementEvent;
+use super::service::{EvolutionService, RoutingDependencies};
+use crate::gateway::observability::requests::GatewayRequestObserved;
 use crate::policy_lock::{PolicyRoutingSnapshot, PolicyRuntime};
 use crate::session_identity::RequestSessionContext;
+use crate::storage::capture::sessions;
 use crate::storage::evolution::EvolutionStore;
 use crate::storage::session_identity::SessionIdentity;
 
-pub(super) const EXECUTION_KIND: &str = "execution";
-
 use crate::gateway::metering::replay::CanonicalRequestReplayRejected;
-use crate::storage::execution::{ExecutionHop, ExecutionOutcome};
+use crate::storage::execution::{DecisionContext, EXECUTION_KIND, ExecutionRecord};
 
 pub mod candidates;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecutionSettlement {
-    pub settled_at: String,
-    pub hops: Vec<ExecutionHop>,
-    pub final_model: String,
-    pub final_provider: String,
-    pub error_code: Option<String>,
-    pub duration_ms: u64,
-    /// Filled by the terminal observer, including disconnects without an error.
-    pub outcome: Option<ExecutionOutcome>,
-    /// Metering's final observation; multiple attempts may have additional cost.
-    pub final_metered_cost_micro_usd: Option<u64>,
-    /// Complete request cost only when every attempted generation is covered.
-    pub total_cost_micro_usd: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionRecord {
-    pub request_id: String,
-    pub attempt_id: String,
-    pub identity: SessionIdentity,
-    pub connection_id: String,
-    pub captured_watermark: i64,
-    pub started_at: String,
-    pub intent: Option<RouteIntent>,
-    /// Effective route after the arm's request-capability guard.
-    pub dispatch_route: String,
-    pub route_guard_reason: Option<String>,
-    /// None is an unfinished or interrupted request, never a zero-cost success.
-    pub settlement: Option<ExecutionSettlement>,
-}
 
 #[derive(Debug, Serialize)]
 struct CanonicalRequestBound {
     request: ExecutionRecord,
-}
-
-#[derive(Debug, Serialize)]
-struct GatewayRequestObserved {
-    request: GatewayRequest,
-    #[serde(skip)]
-    hops: Arc<Mutex<Vec<ExecutionHop>>>,
-}
-
-impl PipelineEvent for GatewayRequestObserved {
-    fn event_name(&self) -> &'static str {
-        "evolution.gateway_request_observed"
-    }
 }
 
 impl PipelineEvent for CanonicalRequestBound {
@@ -111,7 +53,6 @@ pub struct EvolutionRuntime {
     pub(crate) db: DatabaseConnection,
     routing: Arc<ConfigRoutingTable>,
     policies: Arc<PolicyRuntime>,
-    inventory: GatewayInventory,
     pub(crate) worker_status: Arc<Mutex<super::scheduler::WorkerStatus>>,
 }
 
@@ -123,16 +64,10 @@ impl EvolutionRuntime {
     ) -> Self {
         Self {
             worker_status: Arc::new(Mutex::new(Default::default())),
-            inventory: GatewayInventory::new(db.clone()),
             db,
             routing,
             policies,
         }
-    }
-
-    /// The control listener must share this exact runtime epoch with serving.
-    pub fn inventory(&self) -> GatewayInventory {
-        self.inventory.clone()
     }
 
     pub fn worker_status(&self) -> super::scheduler::WorkerStatus {
@@ -266,126 +201,14 @@ impl EvolutionRuntime {
         Ok(rows)
     }
 
-    async fn identify(
-        &self,
-        ctx: &PipelineContext,
-        session: &RequestSessionContext,
-    ) -> Result<Option<(SessionIdentity, String, i64)>> {
-        let Some(controller) = &session.claimed_controller_instance_id else {
-            return Ok(None);
-        };
-        let principal = if ctx.caller().is_local() {
-            "local"
-        } else {
-            let Some(auth) = ctx.get_event::<ApiPrincipalEstablished>() else {
-                return Ok(None);
-            };
-            auth.route_scope_id.as_str()
-        };
-        let connections = connections::Entity::find()
-            .filter(connections::Column::ControllerInstanceId.eq(controller))
-            .filter(connections::Column::RouteScopeId.eq(principal))
-            .filter(connections::Column::State.eq("recording"))
-            .all(&self.db)
-            .await?;
-        // An explicit ACP identity is authoritative within the authenticated
-        // recorder scope. Otherwise prefer the exact recorded thread to a root.
-        let claims = if let Some(acp) = &session.acp_session_id {
-            vec![acp]
-        } else {
-            session
-                .native
-                .agent_thread_id
-                .iter()
-                .chain(session.native.root_session_id.iter())
-                .collect()
-        };
-        for claim in claims {
-            let mut matches = BTreeMap::new();
-            for connection in &connections {
-                let identity = SessionIdentity {
-                    owner: connection.owner.clone(),
-                    source: connection.source.clone(),
-                    native_session_id: claim.clone(),
-                };
-                let key = identity.key()?;
-                let Some(row) = sessions::Entity::find_by_id(&key).one(&self.db).await? else {
-                    continue;
-                };
-                if row.deleted {
-                    continue;
-                }
-                let observed = events::Entity::find()
-                    .filter(events::Column::SessionKey.eq(&key))
-                    .filter(events::Column::ConnectionId.eq(&connection.connection_id))
-                    .one(&self.db)
-                    .await?
-                    .is_some();
-                if observed {
-                    matches.insert(key, (identity, connection.connection_id.clone(), row.head));
-                }
-            }
-            if matches.len() > 1 {
-                return Ok(None);
-            }
-            if let Some(binding) = matches.into_values().next() {
-                return Ok(Some(binding));
-            }
-        }
-        Ok(None)
-    }
-
     async fn admit(&self, ctx: &mut PipelineContext) -> Result<()> {
         let Some(session) = ctx.extension::<RequestSessionContext>() else {
             return Ok(());
         };
-        let Some(controller) = session.claimed_controller_instance_id.as_deref() else {
+        let Some(observed) = ctx.get_event::<GatewayRequestObserved>() else {
             return Ok(());
         };
-        let principal = if ctx.caller().is_local() {
-            "local".to_owned()
-        } else if let Some(auth) = ctx.get_event::<ApiPrincipalEstablished>() {
-            auth.route_scope_id.clone()
-        } else {
-            return Ok(());
-        };
-        let binding =
-            self.identify(ctx, &session)
-                .await?
-                .map(|(identity, connection_id, watermark)| InventoryBinding {
-                    identity,
-                    connection_id,
-                    watermark,
-                });
-        if let Some(binding) = &binding {
-            let store = EvolutionStore::new(self.db.clone(), &binding.identity.owner)?;
-            if store
-                .get::<ExecutionRecord>(EXECUTION_KIND, ctx.request_id())
-                .await?
-                .is_some()
-            {
-                ctx.emit(CanonicalRequestReplayRejected);
-                anyhow::bail!("canonical request ID already has an execution record");
-            }
-        }
-        let observed = match self
-            .inventory
-            .begin(&principal, controller, ctx.request_id(), binding)
-            .await?
-        {
-            BeginResult::Untracked => return Ok(()),
-            BeginResult::Duplicate => {
-                ctx.emit(CanonicalRequestReplayRejected);
-                anyhow::bail!("gateway request ID already has an execution record");
-            }
-            BeginResult::Tracked(request) => *request,
-        };
-        // Insert before routing/evolution work: even a failed admission or an
-        // unresolved session must remain visible to the accounting boundary.
-        ctx.emit(GatewayRequestObserved {
-            request: observed.clone(),
-            hops: Arc::new(Mutex::new(Vec::new())),
-        });
+        let observed = observed.request.clone();
         let Some(binding) = &observed.binding else {
             return Ok(());
         };
@@ -585,116 +408,6 @@ impl RouteHook for EvolutionRuntime {
         ctx: &PipelineContext,
     ) -> crate::gateway::error::Result<()> {
         self.revalidate_admission(ctx).await
-    }
-}
-
-#[async_trait]
-impl ObserveHook for EvolutionRuntime {
-    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
-    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
-    async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
-        let Some(bound) = ctx.get_event::<GatewayRequestObserved>() else {
-            return;
-        };
-        let outcome = match outcome {
-            RequestOutcome::Completed => ExecutionOutcome::Completed,
-            RequestOutcome::Failed(_) => ExecutionOutcome::Failed,
-            RequestOutcome::ClientDisconnected => ExecutionOutcome::ClientDisconnected,
-        };
-        let save = self.inventory.terminal(&bound.request, outcome).await;
-        if let Err(error) = save {
-            tracing::warn!(%error, "canonical execution terminal was not persisted");
-        }
-    }
-
-    async fn on_hop_start(&self, ctx: &PipelineContext, target: &RoutingTarget) {
-        if let Some(bound) = ctx.get_event::<GatewayRequestObserved>() {
-            let mut hops = match bound.hops.lock() {
-                Ok(hops) => hops,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            hops.push(ExecutionHop {
-                provider: target.provider_name.clone(),
-                model: target.service_id.clone(),
-                account: target.account_label.clone(),
-                protocol: target.api_protocol.as_str().into(),
-                status: "attempting".into(),
-                error_code: None,
-            });
-        }
-    }
-
-    async fn on_hop_end(
-        &self,
-        ctx: &PipelineContext,
-        _target: &RoutingTarget,
-        outcome: HopOutcome<'_>,
-    ) {
-        if let Some(bound) = ctx.get_event::<GatewayRequestObserved>() {
-            let mut hops = match bound.hops.lock() {
-                Ok(hops) => hops,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Some(hop) = hops.last_mut() {
-                let (status, error) = match outcome {
-                    HopOutcome::Generated(_) => ("completed", None),
-                    HopOutcome::StreamStarted => ("stream_started", None),
-                    HopOutcome::Failed(error) => ("failed", Some(error.error_code().into())),
-                };
-                hop.status = status.into();
-                hop.error_code = error;
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl SettlementRecorder for EvolutionRuntime {
-    async fn record(&self, ctx: &mut SettlementContext) -> crate::gateway::error::Result<()> {
-        let Some(bound) = ctx.get_event::<GatewayRequestObserved>() else {
-            return Ok(());
-        };
-        let mut hops = match bound.hops.lock() {
-            Ok(hops) => hops.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
-        let metered = ctx
-            .get_event::<MeteringSettlementEvent>()
-            .filter(|m| m.request_id == ctx.request_id);
-        let final_cost = metered.and_then(|m| m.cost_micro_usd);
-        if let Some(hop) = hops.last_mut().filter(|hop| hop.status == "stream_started") {
-            hop.status = if ctx.error.is_some() {
-                "failed"
-            } else if ctx.finish_reason.is_some() {
-                "completed"
-            } else {
-                "incomplete"
-            }
-            .into();
-            hop.error_code = ctx.error.as_ref().map(|error| error.error_code().into());
-        }
-        let total_cost = if hops.is_empty() && ctx.error.is_some() {
-            Some(0)
-        } else if hops.len() == 1
-            && ctx.usage_origin == bitrouter_ai::types::UsageOrigin::ProviderReported
-        {
-            final_cost
-        } else {
-            None
-        };
-        let settlement = ExecutionSettlement {
-            settled_at: chrono::Utc::now().to_rfc3339(),
-            hops,
-            final_model: ctx.model_id.clone(),
-            final_provider: ctx.provider_id.clone(),
-            error_code: ctx.error.as_ref().map(|error| error.error_code().into()),
-            duration_ms: ctx.request_duration_ms,
-            outcome: None,
-            final_metered_cost_micro_usd: final_cost,
-            total_cost_micro_usd: total_cost,
-        };
-        let save = self.inventory.settle(&bound.request, settlement).await;
-        save.map_err(internal)
     }
 }
 

@@ -5,7 +5,6 @@ mod catalog;
 pub mod control;
 pub mod costs;
 pub mod evidence;
-pub mod inventory;
 pub mod jobs;
 pub mod judge;
 pub mod learning;

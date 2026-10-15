@@ -365,7 +365,7 @@ models:
                 crate::daemon::AcpControlPlane {
                     runtime: assembled.acp_runtime,
                     metering: crate::metering::MeteringStore::new(assembled.db),
-                    inventory: Some(runtime.inventory()),
+                    inventory: Some(assembled.gateway_requests.inventory()),
                     evolution: Some(runtime),
                 },
             )

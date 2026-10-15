@@ -5,9 +5,9 @@ use crate::evolution::{
     control::{BlockDefinition, BlockRule},
     rubric::{Applicability, RUBRIC_VERSION, RubricItem, library},
     scoring,
-    service::DecisionContext,
 };
 use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CapturePort};
+use crate::storage::execution::DecisionContext;
 use crate::storage::session_identity::SessionIdentity;
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ async fn fixture_with_inventory(
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let service = EvolutionService::new(db.clone(), "owner")?;
-    let inventory = crate::evolution::inventory::GatewayInventory::new(db.clone());
+    let inventory = crate::gateway::observability::inventory::GatewayInventory::new(db.clone());
     let canonical = CanonicalStore::new(db);
     service
         .register(
@@ -581,7 +581,8 @@ async fn publication_rechecks_inventory_even_when_canonical_content_did_not_chan
             .values()
             .all(|observation| observation.total_cost_micro_usd == Some(0))
     );
-    let restarted = crate::evolution::inventory::GatewayInventory::new(service.store.db.clone());
+    let restarted =
+        crate::gateway::observability::inventory::GatewayInventory::new(service.store.db.clone());
     restarted
         .begin("principal", "controller", "late-unresolved", None)
         .await?;

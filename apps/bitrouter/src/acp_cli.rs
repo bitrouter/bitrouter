@@ -2874,7 +2874,8 @@ async fn open_capture(
         match acknowledged {
             Ok(Ok(crate::daemon::DaemonResponse::AcpRecordingRegistered { registration }))
                 if registration.connection_id == recorder.connection_id()
-                    && registration.version == crate::evolution::inventory::INVENTORY_VERSION
+                    && registration.version
+                        == crate::gateway::observability::inventory::INVENTORY_VERSION
                     && registration.invalid_reason.is_none() => {}
             response => tracing::warn!(
                 ?response,

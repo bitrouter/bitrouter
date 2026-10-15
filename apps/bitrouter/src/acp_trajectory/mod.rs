@@ -4,7 +4,6 @@
 //! for audit, separately from live canonical events and model execution costs.
 
 pub mod checkpoint;
-pub mod entities;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -20,7 +19,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use entities::{connections, events, sessions};
+use crate::storage::capture::{connections, events, sessions};
 
 /// Version of the canonical event interpretation, independent of ACP's version.
 pub const CANONICAL_VERSION: u32 = 1;
