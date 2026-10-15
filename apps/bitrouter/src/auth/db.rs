@@ -92,12 +92,15 @@ pub async fn upsert_user(db: &DatabaseConnection, user_id: &str) -> Result<()> {
         id: Set(user_id.to_string()),
         created_at: Set(Utc::now().to_rfc3339()),
     };
-    // `do_nothing` makes this idempotent; on a conflict sea-orm reports
-    // `RecordNotInserted`, which here is the success path, not an error.
+    // Keep existing rows unchanged on every backend. SeaQuery requires the
+    // primary-key polyfill for valid MySQL ON DUPLICATE KEY syntax; PostgreSQL
+    // and SQLite still emit ON CONFLICT DO NOTHING. RecordNotInserted is also
+    // success here because the caller only needs the user to exist.
+    // https://docs.rs/sea-query/0.32.7/sea_query/query/struct.OnConflict.html#method.do_nothing_on
     match users::Entity::insert(row)
         .on_conflict(
             OnConflict::column(users::Column::Id)
-                .do_nothing()
+                .do_nothing_on([users::Column::Id])
                 .to_owned(),
         )
         .exec(db)

@@ -1882,3 +1882,72 @@ and server-tools profiles. All final A01–A16 remain open: remaining harness/TU
 MCP dependency isolation, artifact capability identity, harness SDK delivery,
 historical/live-backend/packaged-process/performance evidence and whole-candidate
 validation/review still precede the requested PR. P1 remains excluded.
+
+## P0 5 live gateway database backends (2026-10-16)
+
+This stage follows `70074c8`. Live backend execution exposed two baseline MySQL
+defects, distinct from the earlier driver-availability checks. Migration 12's
+owner-scoped pending-outbox index exceeded the default utf8mb4 InnoDB key limit;
+the failed migration left its tables and first four indexes committed, with only
+the first eleven migrations in the ledger. Its MySQL definition now uses
+64-character timestamp prefixes in that nonunique index. Stored values, full
+owner/outbox keys, uniqueness constraints and SQLite/PostgreSQL index definitions
+are unchanged. MySQL checks existing indexes explicitly so the same migration
+can finish after partial DDL without deleting tables or rows. No migration ID,
+order or ledger format changes.
+
+After migration recovery, the backend test exposed the user upsert generating
+invalid MySQL `ON DUPLICATE KEY IGNORE` syntax. It now uses SeaQuery's documented
+primary-key self-assignment polyfill. PostgreSQL/SQLite retain `DO NOTHING`,
+existing users retain their creation timestamp, and reserved-user rejection is
+unchanged.
+
+`database_backends` contains a normal temporary-file SQLite case and an explicitly
+ignored PostgreSQL/MySQL case requiring a dedicated test URL. UUID-scoped fixture
+records support repeated runs without dropping/truncating databases. The common
+scenario checks the full migration ledger, repeated migration, users/keys,
+metering upsert and scoped spend, trajectory start/route/settlement idempotence,
+cross-owner rejection, pending outbox content, direct migration-12 rerun over
+populated tables, and persistence after pool teardown/reconnection. These are
+store-level backend checks, not historical-payload or independent-process
+gateway acceptance.
+
+Local execution used isolated PostgreSQL 17 and MySQL 8.4 containers, with default
+MySQL utf8mb4 settings. The original partially applied MySQL database recovered
+all 26 ledger entries and retained a pre-migration sentinel user unchanged.
+Fresh databases exercised bootstrap separately from recovery. CI provisions one
+server per backend job with its corresponding driver feature and runs the same
+scenario; the ordinary SQLite case also joins the existing Ubuntu integration
+shard. Development documentation records the explicit test URL and commands.
+
+Validation uses stable runtime builds and Rust 1.97.0 strict Clippy/Rustdoc,
+non-incremental builds, debug symbols disabled and two build/test workers:
+
+- Existing all-feature migration unit selection: **14/14 passed**, 0.424s.
+- Final MySQL-only integration on the recovered database: **2/2 passed**, 0.23s.
+  A fresh utf8mb4 MySQL database: **2/2 passed**, 0.80s. Each run also exercises a
+  separate temporary SQLite file.
+- PostgreSQL-only integration on a fresh PostgreSQL database: **2/2 passed**,
+  0.39s, including its temporary SQLite case.
+- No-feature SQLite profile: **1 passed, 1 explicitly ignored**, 0.05s; the
+  ignored server case requires its URL and driver rather than silently falling
+  back to SQLite.
+- Final strict Clippy passed for full workspace/all-targets (1m03s) and minimum
+  application/all-targets (36.80s). Strict Rustdoc passed for full workspace
+  (34.61s) and minimum application (27.30s).
+- Final all-feature related unit selection passed **244/244**, 7.268s. The filter
+  was `test(auth::) | test(metering::) | test(trajectory::store::) | test(db::)`
+  with `--lib`; 3,158 unrelated cases were filtered out.
+- Formatting, whitespace and workflow YAML parsing passed. Independent review
+  found no blocking issue and one overly broad test-header claim about partial
+  migrations; it now explicitly covers only the observed migration-12 state.
+  Logs use `/tmp/bitrouter-p0-backend-*`. Existing linker/future-compatibility
+  warnings remain. This records local execution; the new CI jobs have not run
+  remotely yet.
+
+The source audit also identified other existing `OnConflict::do_nothing` uses in
+shared evolution-record initialization, ACP capture and core reliability writes.
+Those paths need their own real-backend evidence; inserted-versus-duplicate
+outcomes must not be changed through a blanket polyfill replacement. They remain
+follow-up work, alongside historical data/profile transitions and the rest of
+A01–A16. This stage does not establish multi-instance semantics or complete P0.

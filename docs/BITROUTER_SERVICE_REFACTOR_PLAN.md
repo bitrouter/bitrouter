@@ -1310,6 +1310,12 @@ distinguish a successful build from an exercised runtime path. Link unresolved
 items to the acceptance IDs below rather than declaring the stage complete by
 file movement alone.
 
+Each stage receives an independent review of its ownership changes, dependency
+boundaries and retained behavior. Record the reviewed revision, findings and
+their resolution alongside the validation evidence. After all stages, obtain a
+separate independent review of the complete candidate against this plan and
+A01–A16; a collection of stage approvals does not replace that final review.
+
 Treat baseline test removal as a separate review decision: identify the behavior
 it covered and its replacement evidence, or establish that the code has no
 supported caller. Do not silently turn a behavior change into a relocation by
@@ -1649,6 +1655,14 @@ is evidence only for the paths it covers. Keep an unexercised acceptance gate
 open. P0 is complete when all its gates pass together on the final candidate;
 P1 work, package publication and external consumers' release status remain
 separate from that result.
+
+Use this record shape for each gate, with an explicit `open`, `passed` or
+`blocked` status. An open or blocked gate means P0 remains incomplete; a passing
+result states its limits rather than implying coverage of another profile.
+
+| Gate | Candidate revision and profile | Exercised evidence | Result and limits | Independent review |
+| --- | --- | --- | --- | --- |
+| `Axx` | Source revision, enabled features and artifact identity where relevant | Exact command or reproducible scenario, test identities and output location | Status, observed behavior and remaining gap | Reviewed revision, findings and resolution |
 
 ## P1 Native gateway multi-instance operation
 

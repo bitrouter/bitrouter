@@ -593,6 +593,31 @@ cargo test --workspace --all-features
 
 CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum, the OTel stack never reaches the SDK at any feature combination, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).
 
+### Database backend regression
+
+`database_backends` exercises migrations and gateway persistence through the
+application's store APIs. Its ordinary SQLite case uses a temporary database.
+The ignored server-backend case requires `BITROUTER_TEST_DATABASE_URL` pointing
+to a dedicated test database; it applies migrations and writes uniquely scoped
+fixture records. It never drops or truncates the database, and repeated runs
+retain earlier fixture records. Do not point it at a service database.
+
+```sh
+cargo test -p bitrouter --no-default-features --test database_backends
+BITROUTER_TEST_DATABASE_URL='postgres://fixture:fixture-password@127.0.0.1:5432/bitrouter_test' \
+  cargo test -p bitrouter --no-default-features --features db-postgres \
+  --test database_backends -- --include-ignored --test-threads=1
+BITROUTER_TEST_DATABASE_URL='mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test' \
+  cargo test -p bitrouter --no-default-features --features db-mysql \
+  --test database_backends -- --include-ignored --test-threads=1
+```
+
+CI provisions PostgreSQL 17 and MySQL 8.4 independently and runs each with its
+own driver feature. This validates actual schema and store operations; a driver
+compilation or SQL-string assertion is not evidence of backend execution.
+Historical session formats and cross-profile compatibility have separate P0
+acceptance gates.
+
 ### Public API dependency guards
 
 Public API guards must track both AI contracts and the new SDK client surface.
