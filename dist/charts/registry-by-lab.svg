@@ -218,9 +218,9 @@
 <text class="model" x="338.0" y="593.0">gemini-3.8-flash</text>
 <text class="routes" x="578.0" y="593.0" text-anchor="end">5</text>
 <rect x="330.0" y="604.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="330.0" y="604.0" width="42.8" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="330.0" y="604.0" width="53.5" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="338.0" y="619.0">gemini-4-argon</text>
-<text class="routes" x="578.0" y="619.0" text-anchor="end">4</text>
+<text class="routes" x="578.0" y="619.0" text-anchor="end">5</text>
 <rect x="612.0" y="514.0" width="268.0" height="30.0" rx="5" fill="#0a0a0a"/>
 <text class="lab" x="622.0" y="533.0">ZHIPU</text>
 <text class="lab-count" x="870.0" y="533.0" text-anchor="end">3</text>
@@ -283,5 +283,5 @@
 <rect x="914.0" y="742.0" width="74.9" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="757.0">grok-4.7</text>
 <text class="routes" x="1162.0" y="757.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="824.0">59 models · 45 providers · 383 model→provider routes · 11 providers billed by subscription</text>
+<text class="caption" x="28.0" y="824.0">59 models · 45 providers · 384 model→provider routes · 11 providers billed by subscription</text>
 </svg>
