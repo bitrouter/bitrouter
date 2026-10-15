@@ -447,14 +447,26 @@ async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry
             let attempt = &cancelled.root_turn().ok_or("turn")?.steps[0].attempts[0];
             let last = attempt.provider_work.last().ok_or("work")?;
             assert_eq!(last.work.work_index, index);
-            assert!(last.report.is_none());
+            let report = last.report.as_ref().ok_or("cancelled integration report")?;
+            assert_eq!(report.work, last.work);
+            assert_eq!(report.http_status, None);
+            assert_eq!(report.error_code.as_deref(), Some("request_cancelled"));
             let run = cancelled.run.as_ref().ok_or("run")?;
             assert_eq!(
                 run.token_accounting
                     .as_ref()
                     .ok_or("accounting")?
                     .pending_attempts(run.model_attempts),
-                u32::from(index == 6)
+                0,
+                "cancelled integration outcomes settle without inventing usage"
+            );
+            assert_eq!(
+                run.token_accounting
+                    .as_ref()
+                    .ok_or("accounting")?
+                    .unknown_attempts,
+                1 + u32::from(index == 6),
+                "each admitted HTTP attempt retains unknown usage"
             );
             if index == 2 {
                 assert_eq!(attempt.receipt.as_ref().ok_or("receipt")?.report.continuation.input,
@@ -599,10 +611,13 @@ async fn committed_run_cancel_stops_provider_without_waiting_for_its_response() 
             dispatch.work.kind,
             bitrouter_sdk::language_model::native_work::NativeProviderWorkKind::HttpDispatch
         );
-        assert!(
-            dispatch.report.is_none(),
-            "no fabricated response or zero cost"
-        );
+        let cancelled = dispatch
+            .report
+            .as_ref()
+            .ok_or("cancelled dispatch report")?;
+        assert_eq!(cancelled.work, dispatch.work);
+        assert_eq!(cancelled.http_status, None, "no fabricated response");
+        assert_eq!(cancelled.error_code.as_deref(), Some("request_cancelled"));
         assert_eq!(records.0.lock().await.len(), 1, "SDK settlement still runs");
         assert_eq!(
             done.run

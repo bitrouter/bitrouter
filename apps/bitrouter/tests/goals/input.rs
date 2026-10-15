@@ -4,6 +4,318 @@ use bitrouter_orchestrator::goal::input::{
     TaskUpdate,
 };
 
+pub(super) async fn commit_task_update(
+    goals: &GoalService,
+    id: &str,
+    key: &str,
+    update: TaskUpdate,
+) -> Result<()> {
+    let operation = admit(goals, id, key, Some(&update.task_id)).await?;
+    let source = operation.requirements_revision;
+    for (suffix, event) in [
+        (
+            "begin",
+            Event::Begin {
+                attempt_id: key.into(),
+                operation: Box::new(operation),
+                stage: Stage::Reasoning,
+            },
+        ),
+        (
+            "finish",
+            Event::Finish {
+                attempt_id: key.into(),
+                interpretation: Interpretation {
+                    task_updates: vec![update],
+                    ..Default::default()
+                },
+                reasoning_request_id: Some(format!("{key}-observed-model")),
+            },
+        ),
+    ] {
+        goals
+            .workflow_change(
+                actor(),
+                id,
+                &format!("{key}-{suffix}"),
+                source,
+                Change::Input { event },
+                130,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_check_additions_are_atomic_bounded_and_preserve_original_checks() -> Result<()> {
+    use bitrouter_orchestrator::goal::verification::{CheckRecipe, CheckSpec};
+    let db = database().await?;
+    let goals = service(db.clone());
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let original = CheckSpec {
+        id: "original-check".into(),
+        description: "Original required check".into(),
+        recipe: CheckRecipe::FileExists {
+            path: "left.txt".into(),
+        },
+        timeout_seconds: 10,
+    };
+    let update = |checks| TaskUpdate {
+        task_id: "left".into(),
+        instruction: "Keep original work and required verification".into(),
+        resources: None,
+        additional_checks: checks,
+    };
+    commit_task_update(&goals, &id, "first-check", update(vec![original.clone()])).await?;
+    let operation = admit(&goals, &id, "new-check", Some("left")).await?;
+    let source = operation.requirements_revision;
+    goals
+        .workflow_change(
+            actor(),
+            &id,
+            "new-check-begin",
+            source,
+            Change::Input {
+                event: Event::Begin {
+                    attempt_id: "new-check".into(),
+                    operation: Box::new(operation),
+                    stage: Stage::Reasoning,
+                },
+            },
+            140,
+        )
+        .await?;
+    let before = snapshot(&goals, &id).await?;
+    let marker = CheckSpec {
+        id: "marker-check".into(),
+        description: "Actual additional marker".into(),
+        recipe: CheckRecipe::FileContains {
+            path: "left.txt".into(),
+            text: "new-marker".into(),
+        },
+        timeout_seconds: 10,
+    };
+    for (key, checks) in [
+        (
+            "replace",
+            vec![CheckSpec {
+                recipe: CheckRecipe::FileExists {
+                    path: "other.txt".into(),
+                },
+                ..original.clone()
+            }],
+        ),
+        ("duplicate", vec![marker.clone(), marker.clone()]),
+        (
+            "escape",
+            vec![CheckSpec {
+                recipe: CheckRecipe::FileExists {
+                    path: "../outside".into(),
+                },
+                ..marker.clone()
+            }],
+        ),
+        (
+            "timeout",
+            vec![CheckSpec {
+                timeout_seconds: 0,
+                ..marker.clone()
+            }],
+        ),
+        (
+            "overflow",
+            (0..16)
+                .map(|index| CheckSpec {
+                    id: format!("new-{index}"),
+                    ..marker.clone()
+                })
+                .collect(),
+        ),
+    ] {
+        let result = goals
+            .workflow_change(
+                actor(),
+                &id,
+                &format!("invalid-{key}"),
+                source,
+                Change::Input {
+                    event: Event::Finish {
+                        attempt_id: "new-check".into(),
+                        interpretation: Interpretation {
+                            task_updates: vec![update(checks)],
+                            ..Default::default()
+                        },
+                        reasoning_request_id: Some("observed-model".into()),
+                    },
+                },
+                150,
+            )
+            .await;
+        assert!(result.is_err(), "invalid additional checks accepted: {key}");
+        assert_eq!(snapshot(&service(db.clone()), &id).await?, before);
+    }
+    goals
+        .workflow_change(
+            actor(),
+            &id,
+            "new-check-finish",
+            source,
+            Change::Input {
+                event: Event::Finish {
+                    attempt_id: "new-check".into(),
+                    interpretation: Interpretation {
+                        task_updates: vec![update(vec![original.clone(), marker.clone()])],
+                        ..Default::default()
+                    },
+                    reasoning_request_id: Some("observed-model".into()),
+                },
+            },
+            150,
+        )
+        .await?;
+    let saved = snapshot(&service(db), &id).await?;
+    assert_eq!(saved.workflow.tasks[0].spec.checks, vec![original, marker]);
+    assert_eq!(saved.requirements_revision, 3);
+    assert_eq!(saved.workflow.tasks[0].requirements_revision, 3);
+    assert_eq!(saved.workflow.tasks[1].requirements_revision, 1);
+    assert_eq!(saved.workflow.tasks[2].requirements_revision, 3);
+    assert_eq!(saved.run_intent, RunIntent::Run);
+    assert!(
+        saved
+            .inputs
+            .latest
+            .as_ref()
+            .is_some_and(|input| input.requirements_saved && input.control_saved.is_none())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn independent_candidate_reopens_review_in_new_goal_context_without_worker_replay()
+-> Result<()> {
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let old = request_handoff(&goals, &id, workspace.path(), "right").await?;
+    commit_task_update(
+        &goals,
+        &id,
+        "change-left-only",
+        TaskUpdate {
+            task_id: "left".into(),
+            instruction: "Updated left requirement".into(),
+            resources: None,
+            additional_checks: Vec::new(),
+        },
+    )
+    .await?;
+    let current = snapshot(&goals, &id).await?;
+    assert_eq!(current.workflow.tasks[1].requirements_revision, 1);
+    let request = Change::RequestReview {
+        execution_id: "right-execution".into(),
+        attempt_id: "fresh-right-review".into(),
+        workspace: old.workspace.clone(),
+    };
+    assert!(
+        goals
+            .workflow_change(
+                actor(),
+                &id,
+                "in-flight-review-replacement",
+                2,
+                request.clone(),
+                150
+            )
+            .await
+            .is_err()
+    );
+    goals.workflow_change(actor(), &id, "retain-cancelled-review", 1, Change::RejectReview {
+        execution_id: "right-execution".into(), attempt_id: old.attempt_id.clone(),
+        reason: "Original review ended at the changed Goal authority boundary; original fees remain recorded".into(), report: None,
+    }, 150).await?;
+    assert!(
+        goals
+            .workflow_change(
+                actor(),
+                &id,
+                "reuse-rejected-result",
+                2,
+                Change::ApproveHandoff {
+                    execution_id: "right-execution".into(),
+                    handoff: old.clone()
+                },
+                150
+            )
+            .await
+            .is_err()
+    );
+    goals
+        .workflow_change(
+            actor(),
+            &id,
+            "fresh-context-review",
+            2,
+            request.clone(),
+            150,
+        )
+        .await?;
+    assert!(
+        goals
+            .workflow_change(
+                actor(),
+                &id,
+                "duplicate-current-review",
+                2,
+                request.clone(),
+                150
+            )
+            .await
+            .is_err()
+    );
+    let fresh = Handoff {
+        attempt_id: "fresh-right-review".into(),
+        requirements_revision: 2,
+        review: report(workspace.path(), "fresh Goal 2 assessment")?,
+        review_request_id: "fresh-right-provider-request".into(),
+        ..old
+    };
+    goals
+        .workflow_change(
+            actor(),
+            &id,
+            "fresh-context-handoff",
+            2,
+            Change::ApproveHandoff {
+                execution_id: "right-execution".into(),
+                handoff: fresh,
+            },
+            150,
+        )
+        .await?;
+    let saved = snapshot(&goals, &id).await?;
+    let right = &saved.workflow.tasks[1];
+    assert_eq!(right.executions.len(), 1);
+    assert_eq!(right.executions[0].id, "right-execution");
+    assert_eq!(right.executions[0].task_revision, 1);
+    assert!(right.executions[0].handoff.as_ref().is_some_and(|handoff| handoff.requirements_revision==2 && handoff.task_revision==1));
+    assert!(
+        goals
+            .workflow_change(
+                actor(),
+                &id,
+                "invalidate-approved-independent-task",
+                2,
+                request,
+                150
+            )
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn clarification_resolution_preserves_scope_and_rejects_false_or_stale_closure() -> Result<()>
 {
@@ -63,6 +375,7 @@ async fn clarification_resolution_preserves_scope_and_rejects_false_or_stale_clo
     proposal.task_updates = vec![TaskUpdate {
         task_id: "left".into(),
         instruction: "Original work plus the clarified left regression".into(),
+        additional_checks: Vec::new(),
         resources: None,
     }];
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -461,6 +774,7 @@ fn query(answer: &str) -> Interpretation {
         permission_response: None,
         clarification_kind: None,
         resolutions: Vec::new(),
+        modification_scope: None,
         clarification: None,
     }
 }
@@ -490,6 +804,7 @@ async fn resource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume() 
     proposal.task_updates.push(TaskUpdate {
         task_id: "left".into(),
         instruction: "Original work and added context".into(),
+        additional_checks: Vec::new(),
         resources: Some(Selection {
             context_files: vec!["context.md".into()],
             ..Default::default()
@@ -568,6 +883,7 @@ async fn resource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume() 
             task_id: "left".into(),
             instruction: "Keep original work; use saved resource selection".into(),
             resources,
+            additional_checks: Vec::new(),
         });
         goals
             .workflow_change(
@@ -672,6 +988,277 @@ async fn finish(
 }
 
 #[tokio::test]
+async fn selected_modification_scope_rejects_widening_and_keeps_independent_tasks() -> Result<()> {
+    use bitrouter_orchestrator::goal::input::scope::{Binding, Selection};
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let operation = admit(&goals, &id, "named-left-change", None).await?;
+    begin(&goals, &id, operation).await?;
+    let before = snapshot(&goals, &id).await?;
+    let binding = Binding {
+        input_id: "named-left-change".into(),
+        requirements_revision: 1,
+        request_id: "scope-model-request".into(),
+        evidence: report(
+            workspace.path(),
+            "fixture selected only left; not a real model judgment",
+        )?,
+        selection: Selection::Tasks {
+            task_ids: vec!["left".into()],
+        },
+    };
+    let proposal = Interpretation {
+        task_updates: vec![TaskUpdate {
+            task_id: "left".into(),
+            instruction: "Reproduce the left failure without implementation changes".into(),
+            additional_checks: Vec::new(),
+            resources: None,
+        }],
+        modification_scope: Some(Box::new(binding.clone())),
+        ..Default::default()
+    };
+    for mutation in [
+        "objective",
+        "independent",
+        "different-input",
+        "different-version",
+        "missing-task",
+        "duplicate-task",
+        "no-change",
+        "unknown",
+    ] {
+        let mut candidate = proposal.clone();
+        match mutation {
+            "objective" => candidate.objective = Some("Change the entire Goal".into()),
+            "independent" => candidate.task_updates.push(TaskUpdate {
+                task_id: "right".into(),
+                instruction: "New independent constraints".into(),
+                additional_checks: Vec::new(),
+                resources: None,
+            }),
+            "different-input" => {
+                candidate
+                    .modification_scope
+                    .as_mut()
+                    .context("scope missing")?
+                    .input_id = "other".into()
+            }
+            "different-version" => {
+                candidate
+                    .modification_scope
+                    .as_mut()
+                    .context("scope missing")?
+                    .requirements_revision = 2
+            }
+            "missing-task" => {
+                candidate
+                    .modification_scope
+                    .as_mut()
+                    .context("scope missing")?
+                    .selection = Selection::Tasks {
+                    task_ids: vec!["missing".into()],
+                }
+            }
+            "duplicate-task" => {
+                candidate
+                    .modification_scope
+                    .as_mut()
+                    .context("scope missing")?
+                    .selection = Selection::Tasks {
+                    task_ids: vec!["left".into(), "left".into()],
+                }
+            }
+            "no-change" => {
+                candidate
+                    .modification_scope
+                    .as_mut()
+                    .context("scope missing")?
+                    .selection = Selection::NoChange
+            }
+            "unknown" => {
+                candidate
+                    .modification_scope
+                    .as_mut()
+                    .context("scope missing")?
+                    .selection = Selection::Unknown {
+                    reason: "Which task?".into(),
+                }
+            }
+            _ => anyhow::bail!("unexpected scope mutation"),
+        }
+        assert!(
+            finish(&goals, &id, "named-left-change", candidate)
+                .await
+                .is_err(),
+            "{mutation}"
+        );
+        assert_eq!(snapshot(&goals, &id).await?, before);
+    }
+    finish(&goals, &id, "named-left-change", proposal).await?;
+    let saved = snapshot(&goals, &id).await?;
+    assert_eq!(saved.requirements_revision, 2);
+    assert_eq!(saved.workflow.tasks[0].requirements_revision, 2);
+    assert_eq!(saved.workflow.tasks[1], before.workflow.tasks[1]);
+    assert_eq!(saved.workflow.tasks[2].requirements_revision, 2);
+    assert_eq!(
+        saved
+            .inputs
+            .latest
+            .context("scope result missing")?
+            .modification_scope,
+        Some(binding)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unresolved_modification_scope_preserves_independent_explicit_goal_pause() -> Result<()> {
+    use bitrouter_orchestrator::goal::input::scope::{Binding, Selection};
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let original = snapshot(&goals, &id).await?;
+    let operation = accepted(
+        goals
+            .execute(
+                "local",
+                GoalCommand::Input {
+                    operation_id: "pause-and-ambiguous-modification".into(),
+                    goal_id: id.clone(),
+                    expected_revision: original.revision,
+                    text: "Pause the Goal and change that branch's requirements".into(),
+                    task_reference: None,
+                },
+                100,
+            )
+            .await?,
+    )?;
+    begin(&goals, &id, operation).await?;
+    finish(
+        &goals,
+        &id,
+        "pause-and-ambiguous-modification",
+        Interpretation {
+            control: Some(ControlProposal {
+                target: "goal".into(),
+                intent: RunIntent::Pause,
+            }),
+            clarification: Some("Which branch's requirements should change?".into()),
+            clarification_kind: Some(ClarificationKind::Change),
+            modification_scope: Some(Box::new(Binding {
+                input_id: "pause-and-ambiguous-modification".into(),
+                requirements_revision: 1,
+                request_id: "scope-model-request".into(),
+                evidence: report(workspace.path(), "fixture unresolved modification scope")?,
+                selection: Selection::Unknown {
+                    reason: "Which branch?".into(),
+                },
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let saved = snapshot(&goals, &id).await?;
+    assert_eq!(saved.run_intent, RunIntent::Pause);
+    assert_eq!(saved.requirements_revision, original.requirements_revision);
+    assert_eq!(saved.workflow.tasks, original.workflow.tasks);
+    assert!(saved.inputs.completion_waits_for_input());
+    assert_eq!(saved.inputs.unresolved_inputs().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_clarification_preserves_explicit_pause_and_rejects_change_ambiguity() -> Result<()> {
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let original = snapshot(&goals, &id).await?;
+    let operation = accepted(
+        goals
+            .execute(
+                "local",
+                GoalCommand::Input {
+                    operation_id: "query-and-pause".into(),
+                    goal_id: id.clone(),
+                    expected_revision: original.revision,
+                    text: "为什么失败？先暂停当前 Goal。".into(),
+                    task_reference: None,
+                },
+                100,
+            )
+            .await?,
+    )?;
+    begin(&goals, &id, operation).await?;
+    let proposal = Interpretation {
+        control: Some(ControlProposal {
+            target: "goal".into(),
+            intent: RunIntent::Pause,
+        }),
+        clarification: Some(
+            "There is no recorded failure. Which attempt or log do you mean?".into(),
+        ),
+        clarification_kind: Some(ClarificationKind::Query),
+        ..Default::default()
+    };
+    finish(&goals, &id, "query-and-pause", proposal).await?;
+    let saved = snapshot(&goals, &id).await?;
+    assert_eq!(saved.run_intent, RunIntent::Pause);
+    assert_eq!(saved.requirements_revision, original.requirements_revision);
+    assert_eq!(saved.workflow.tasks, original.workflow.tasks);
+    assert_eq!(saved.workflow.completion, original.workflow.completion);
+    assert!(!saved.inputs.completion_waits_for_input());
+    assert_eq!(saved.inputs.unresolved_inputs().len(), 1);
+    let result = saved.inputs.latest.context("mixed input result missing")?;
+    assert_eq!(result.clarification_kind, ClarificationKind::Query);
+    assert_eq!(
+        result.control_saved.map(|control| control.intent),
+        Some(RunIntent::Pause)
+    );
+    assert!(!result.requirements_saved);
+    for (index, kind) in [
+        Some(ClarificationKind::Change),
+        Some(ClarificationKind::Unknown),
+        None,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let attempt = format!("ambiguous-change-{index}");
+        let operation = admit(&goals, &id, &attempt, None).await?;
+        begin(&goals, &id, operation).await?;
+        let before = snapshot(&goals, &id).await?;
+        let ambiguous = Interpretation {
+            control: Some(ControlProposal {
+                target: "goal".into(),
+                intent: RunIntent::Run,
+            }),
+            clarification: Some("The requested execution change has an unresolved target".into()),
+            clarification_kind: kind,
+            ..Default::default()
+        };
+        assert!(
+            finish(&goals, &id, &attempt, ambiguous.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(snapshot(&goals, &id).await?, before);
+        finish(
+            &goals,
+            &id,
+            &attempt,
+            Interpretation {
+                control: None,
+                ..ambiguous
+            },
+        )
+        .await?;
+        assert_eq!(snapshot(&goals, &id).await?.run_intent, RunIntent::Pause);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_does_not_mutate_requirements_or_run_intent() -> Result<()> {
     let goals = service(database().await?);
     let workspace = tempfile::tempdir()?;
@@ -730,6 +1317,7 @@ async fn paused_branch_edit_invalidates_dependents_and_preserves_execution_sourc
     proposal.task_updates.push(TaskUpdate {
         task_id: "left".into(),
         instruction: "Fix expiry and verify the regression with the original API".into(),
+        additional_checks: Vec::new(),
         resources: None,
     });
     finish(&goals, &id, "branch-edit", proposal).await?;
@@ -752,6 +1340,75 @@ async fn paused_branch_edit_invalidates_dependents_and_preserves_execution_sourc
     let result = head.inputs.latest.context("missing edit result")?;
     assert!(result.requirements_saved);
     assert_eq!(result.affected_tasks, vec!["integrate", "left"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn newer_pause_supersedes_old_resume_but_keeps_its_valid_scoped_edit() -> Result<()> {
+    use bitrouter_orchestrator::goal::input::scope::{Binding, Selection};
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let original = snapshot(&goals, &id).await?;
+    let operation = admit(&goals, &id, "older-resume", None).await?;
+    begin(&goals, &id, operation).await?;
+    let head = snapshot(&goals, &id).await?;
+    goals
+        .execute(
+            "local",
+            GoalCommand::Control {
+                operation_id: "newer-pause".into(),
+                goal_id: id.clone(),
+                expected_revision: head.revision,
+                intent: RunIntent::Pause,
+            },
+            120,
+        )
+        .await?;
+    let mut proposal = query("Resume was requested by the older input");
+    proposal.control = Some(ControlProposal {
+        target: "goal".into(),
+        intent: RunIntent::Run,
+    });
+    proposal.task_updates.push(TaskUpdate {
+        task_id: "left".into(),
+        instruction: "Preserve original left work and add negative input coverage".into(),
+        additional_checks: Vec::new(),
+        resources: None,
+    });
+    proposal.modification_scope = Some(Box::new(Binding {
+        input_id: "older-resume".into(),
+        requirements_revision: 1,
+        request_id: "fixture-scope-request".into(),
+        evidence: report(workspace.path(), "fixture scope selects left")?,
+        selection: Selection::Tasks {
+            task_ids: vec!["left".into()],
+        },
+    }));
+    finish(&goals, &id, "older-resume", proposal).await?;
+    let head = snapshot(&goals, &id).await?;
+    assert_eq!(head.run_intent, RunIntent::Pause);
+    assert_eq!(head.requirements_revision, 2);
+    assert_eq!(head.objective, original.objective);
+    for task in &head.workflow.tasks {
+        let before = original
+            .workflow
+            .tasks
+            .iter()
+            .find(|before| before.spec.id == task.spec.id)
+            .context("original task missing")?;
+        if task.spec.id == "right" {
+            assert_eq!(task, before);
+        } else {
+            assert_eq!(task.requirements_revision, 2);
+            assert_eq!(task.executions, before.executions);
+        }
+    }
+    let result = head.inputs.latest.context("missing input result")?;
+    assert!(result.requirements_saved);
+    assert_eq!(result.input_id, "older-resume");
+    assert!(result.control_superseded);
+    assert!(result.control_saved.is_none());
     Ok(())
 }
 
@@ -837,6 +1494,7 @@ async fn explicit_task_reference_cannot_modify_another_task_or_control_goal() ->
     wrong_task.task_updates.push(TaskUpdate {
         task_id: "right".into(),
         instruction: "Unauthorized target".into(),
+        additional_checks: Vec::new(),
         resources: None,
     });
     let mut wrong_control = query("Pause the wrong scope");
@@ -844,7 +1502,7 @@ async fn explicit_task_reference_cannot_modify_another_task_or_control_goal() ->
         target: "goal".into(),
         intent: RunIntent::Pause,
     });
-    let revision = snapshot(&goals, &id).await?.revision;
+    let before = snapshot(&goals, &id).await?;
     for (index, interpretation) in [wrong_task, wrong_control].into_iter().enumerate() {
         let result = goals
             .workflow_change(
@@ -856,15 +1514,15 @@ async fn explicit_task_reference_cannot_modify_another_task_or_control_goal() ->
                     event: Event::Finish {
                         attempt_id: "scoped-edit".into(),
                         interpretation,
-                        reasoning_request_id: None,
+                        reasoning_request_id: Some("fixture-understanding-request".into()),
                     },
                 },
                 120,
             )
             .await;
         assert!(matches!(result, Err(GoalError::Invalid { .. })));
+        assert_eq!(snapshot(&goals, &id).await?, before);
     }
-    assert_eq!(snapshot(&goals, &id).await?.revision, revision);
     finish(
         &goals,
         &id,
@@ -877,6 +1535,7 @@ async fn explicit_task_reference_cannot_modify_another_task_or_control_goal() ->
             permission_response: None,
             clarification_kind: None,
             resolutions: Vec::new(),
+            modification_scope: None,
             clarification: Some("Clarify the intended task control".into()),
         },
     )

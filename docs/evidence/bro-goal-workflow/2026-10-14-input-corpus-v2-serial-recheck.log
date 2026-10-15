@@ -1,0 +1,48 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 31s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 0a0b8308-8f8e-48a9-8c0c-9f59138fafb2 with nextest profile: default
+    Starting 3 tests across 38 binaries (2306 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        SLOW [>120.000s] (───) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        PASS [ 120.726s] (1/3) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        PASS [   7.737s] (2/3) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+        PASS [   6.142s] (3/3) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+────────────
+     Summary [ 134.613s] 3 tests run: 3 passed (1 slow), 2306 skipped

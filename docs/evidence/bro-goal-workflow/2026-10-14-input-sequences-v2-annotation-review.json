@@ -1,0 +1,13 @@
+{
+  "original_sha256": "124d253d3c996b78f2c3990ce44be18f70b019f092ffb40ae788d31331a10063",
+  "current_sha256": "38bae56e7ec7de03fcb66c69b870fcd8e75ad0cff164a2058d432bb853ca1b10",
+  "cases": 8,
+  "model_runs": 0,
+  "authority": "Codex candidate corrections from approved spec; not human gold",
+  "corrections": [
+    "s01 supplies explicitly labeled fictional plan facts",
+    "s03 unspecified verification cannot save invented requirements",
+    "s04 cross-scope proposal is rejected; separate valid-scope variant checks control ordering",
+    "s02 explicitly checks left and dependent join while preserving right"
+  ]
+}

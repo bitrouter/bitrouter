@@ -1,0 +1,53 @@
+{
+  "source_files": 942,
+  "sdk": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 21.458
+  },
+  "review-race": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 276.457
+  },
+  "goals": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 119.898
+  },
+  "nextest": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 309.081
+  },
+  "clippy": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 113.316
+  },
+  "bro-build": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 117.951
+  },
+  "fmt": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 4.682
+  },
+  "diff": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.067
+  },
+  "hashes": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.131
+  },
+  "workspace-nextest": {
+    "exit": 100,
+    "signal": null,
+    "seconds": 1410.375
+  }
+}

@@ -1,0 +1,43 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 0b0fe664-ca23-4996-a9fd-116a785ca543 with nextest profile: default
+    Starting 30 tests across 1 binary (53 tests skipped)
+        PASS [   0.086s] ( 1/30) bitrouter::goals input_tests::branch_control_cannot_retarget_an_explicit_reference_or_missing_task
+        PASS [   0.088s] ( 2/30) bitrouter::goals input_tests::branch_pause_seals_its_dependency_closure_and_keeps_independent_work_eligible
+        PASS [   0.075s] ( 3/30) bitrouter::goals input_tests::branch_resume_does_not_resume_a_paused_goal
+        PASS [   0.083s] ( 4/30) bitrouter::goals input_tests::clarification_resolution_preserves_scope_and_rejects_false_or_stale_closure
+        PASS [   0.086s] ( 5/30) bitrouter::goals input_tests::direct_withdrawal_works_without_model_or_budget_and_preserves_other_inputs
+        PASS [   0.079s] ( 6/30) bitrouter::goals input_tests::explicit_clarification_reference_closes_only_that_request_and_never_another_goal
+        PASS [   0.081s] ( 7/30) bitrouter::goals input_tests::explicit_task_reference_cannot_modify_another_task_or_control_goal
+        PASS [   0.088s] ( 8/30) bitrouter::goals input_tests::legacy_latest_only_question_retains_its_original_scope_after_query_and_reload
+        PASS [   0.095s] ( 9/30) bitrouter::goals input_tests::newer_explicit_pause_dominates_older_model_resume
+        PASS [   0.089s] (10/30) bitrouter::goals input_tests::newer_pause_supersedes_old_resume_but_keeps_its_valid_scoped_edit
+        PASS [   0.015s] (11/30) bitrouter::goals input_tests::only_an_exact_unquoted_withdrawal_uses_the_direct_path
+        PASS [   0.075s] (12/30) bitrouter::goals input_tests::obsolete_planning_is_retained_and_only_new_requirements_can_rearm_it
+        PASS [   0.080s] (13/30) bitrouter::goals input_tests::paused_branch_edit_invalidates_dependents_and_preserves_execution_source
+        PASS [   0.084s] (14/30) bitrouter::goals input_tests::query_clarification_preserves_explicit_pause_and_rejects_change_ambiguity
+        PASS [   0.070s] (15/30) bitrouter::goals input_tests::query_does_not_mutate_requirements_or_run_intent
+        PASS [   0.085s] (16/30) bitrouter::goals input_tests::resource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume
+        PASS [   0.079s] (17/30) bitrouter::goals input_tests::selected_modification_scope_rejects_widening_and_keeps_independent_tasks
+        PASS [   0.070s] (18/30) bitrouter::goals input_tests::typed_classification_cannot_directly_pause_execution
+        PASS [   0.071s] (19/30) bitrouter::goals input_tests::understanding_cannot_forge_or_reorder_original_input
+        PASS [   0.070s] (20/30) bitrouter::goals input_tests::unresolved_modification_scope_preserves_independent_explicit_goal_pause
+        PASS [   0.073s] (21/30) bitrouter::goals permission_input_tests::asking_about_a_permission_does_not_choose_an_option
+        PASS [   0.079s] (22/30) bitrouter::goals permission_input_tests::changed_requirements_finish_the_reply_without_granting_the_old_request
+        PASS [   0.078s] (23/30) bitrouter::goals permission_input_tests::exhausted_budget_rejects_late_allow_without_blocking_a_recorded_denial
+        PASS [   0.080s] (24/30) bitrouter::goals permission_input_tests::paused_goal_rejects_late_allow_but_can_save_an_explicit_denial
+        PASS [   0.075s] (25/30) bitrouter::goals permission_input_tests::permission_reply_persistence_failure_rolls_back_the_choice_and_input_result
+        PASS [   0.017s] (26/30) bitrouter::goals permission_input_tests::permission_scope_comes_from_the_original_explicit_reference
+        PASS [   0.079s] (27/30) bitrouter::goals permission_input_tests::reply_is_saved_with_original_input_identity_before_permission_delivery
+        PASS [   0.077s] (28/30) bitrouter::goals permission_input_tests::typed_classification_cannot_grant_permission_even_with_a_valid_reference
+        PASS [   0.193s] (29/30) bitrouter::goals permission_input_tests::persistent_allow_requires_the_explicit_offered_option_identity
+        PASS [   0.204s] (30/30) bitrouter::goals permission_input_tests::unscoped_foreign_unoffered_and_cross_scope_proposals_cannot_grant_permission
+────────────
+     Summary [   1.347s] 30 tests run: 30 passed, 53 skipped

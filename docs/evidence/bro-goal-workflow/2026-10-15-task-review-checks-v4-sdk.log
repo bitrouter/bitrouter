@@ -1,0 +1,19 @@
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+error[E0046]: not all trait items implemented, missing: `before_attempt`, `after_attempt`
+   --> crates/bitrouter-sdk/src/language_model/native_work.rs:278:5
+    |
+278 |     impl NativeExecutionControl for Control {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `before_attempt`, `after_attempt` in implementation
+    |
+   ::: crates/bitrouter-sdk/src/language_model/native.rs:623:5
+    |
+623 |     async fn before_attempt(&self, request_id: &str, attempt_index: u32) -> Result<()>;
+    |     ----------------------------------------------------------------------------------- `before_attempt` from trait
+...
+652 |     async fn after_attempt(&self, report: NativeAttemptReport);
+    |     ----------------------------------------------------------- `after_attempt` from trait
+
+For more information about this error, try `rustc --explain E0046`.
+error: could not compile `bitrouter-sdk` (lib test) due to 1 previous error
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter-sdk --lib --all-features` exited with code 101

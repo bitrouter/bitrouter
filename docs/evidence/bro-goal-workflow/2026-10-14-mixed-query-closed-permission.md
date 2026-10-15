@@ -1,0 +1,15 @@
+# Query clarification and closed permission requests
+
+The [combined RED](2026-10-14-mixed-query-closed-permission-red.log), `9b085486-99d7-4a78-aa69-555bcb508cbc`, fails both cases: the core rejects a query clarification combined with explicit pause, and the actual ACP scenario leaves the stopped request pending in the Goal.
+
+Query-only missing evidence can now coexist with independently understood effects from the same original input. Existing reasoning identity, requirements version, task/Decision scope, original authorization, offered option, budget and late-control checks still apply. Change, unknown and unspecified clarifications cannot commit guessed effects. PRD/spec and model instructions state this distinction; q26 is a proposed evaluation annotation, and allows either a factual answer or query clarification.
+
+For an original pending Decision, confirmed execution stop plus an actual same-run Stopped snapshot with no matching pending request produces the existing Obsolete state. The original request and controller refusal remain in history. Closing the card is neither consent, confirmed response delivery nor reconciliation of tool effects.
+
+The [first corrected-source run](2026-10-14-mixed-query-closed-permission-v1-nextest.log) executes 53 cases: 52 pass, including all actual protocol scenarios, and the new mixed-input test fails with a revision conflict. Its negative loop verified rejection and rollback but left the original understanding job pending before beginning the next input. The fixture now finishes that original job with a clarification-only disposition after checking exact rollback; no rejection or snapshot assertion is weakened. The failed log and [v1 source](2026-10-14-mixed-query-closed-permission-v1-source.sha256) remain preserved.
+
+Source review also found that a matching option ID alone could report controller teardown rejection as a Goal response selection. Selection recovery now requires exactly one actual resolution, with ControllerChoice/automatic=false or ConfiguredPolicy/automatic=true. Legacy missing origins, teardown, cancellation, conflicting automatic metadata, different request/option IDs and duplicate resolutions do not establish selection. This does not clear an unknown dispatch or resend a response.
+
+[v2 source](2026-10-14-mixed-query-closed-permission-v2-source.sha256) is frozen; fresh local regressions, actual model evaluation and static/full checks remain pending. This evidence does not prove commercial harness delivery, calibrated classification quality or the complete MVP.
+
+The [fresh v2 regression run](2026-10-14-mixed-query-closed-permission-v2-nextest.log), `e7c7b89c-1982-422c-b032-2591a51fc756`, passes all 54 in 144.569 seconds. This includes the repaired mixed query/control transaction, all ambiguity rollback cases, unique resolution origin checks, and actual ACP pause, edit, resource, recovery and cold-history scenarios. The new 26-case credentialed corpus is running against this source. Static and complete repository checks remain required.

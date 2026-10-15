@@ -439,6 +439,15 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
     ) -> Result<crate::language_model::native::NativePlanAdmission> {
         self.inner.plan(plan).await
     }
+    async fn plan_with_token_reservations(
+        &self,
+        plan: crate::language_model::native::NativePlan,
+        reservations: Vec<Option<crate::language_model::native_accounting::NativeTokenReservation>>,
+    ) -> Result<crate::language_model::native::NativePlanAdmission> {
+        self.inner
+            .plan_with_token_reservations(plan, reservations)
+            .await
+    }
     async fn before_input_count(
         &self,
         plan: &crate::language_model::native::NativePlan,
@@ -490,6 +499,16 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
     }
     async fn before_attempt(&self, request_id: &str, index: u32) -> Result<()> {
         self.inner.before_attempt(request_id, index).await
+    }
+    async fn before_attempt_with_token_reservation(
+        &self,
+        request_id: &str,
+        index: u32,
+        reservation: Option<&crate::language_model::native_accounting::NativeTokenReservation>,
+    ) -> Result<()> {
+        self.inner
+            .before_attempt_with_token_reservation(request_id, index, reservation)
+            .await
     }
     async fn after_attempt(&self, report: crate::language_model::native::NativeAttemptReport) {
         self.inner.after_attempt(report).await

@@ -1,0 +1,45 @@
+   Compiling bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.78s
+────────────
+ Nextest run ID fb47122a-5b76-468c-8c19-72da0a78220e with nextest profile: default
+    Starting 27 tests across 1 binary (264 tests skipped)
+        PASS [   0.009s] ( 1/27) bitrouter-tui goals::budget::tests::amounts_are_exact_and_ambiguous_or_overflowing_numbers_are_rejected
+        PASS [   0.010s] ( 2/27) bitrouter-tui goals::tests::acceptance_requires_explicit_confirmation_of_the_pinned_artifact
+        PASS [   0.008s] ( 3/27) bitrouter-tui goals::tests::archived_records_stay_read_only_pinned_and_return_to_the_original_task
+        PASS [   0.008s] ( 4/27) bitrouter-tui goals::tests::allow_requires_loaded_request_and_explicit_deny_remains_available
+        PASS [   0.008s] ( 5/27) bitrouter-tui goals::tests::busy_enter_targets_the_current_goal_and_preserves_the_draft_until_acceptance
+        PASS [   0.008s] ( 6/27) bitrouter-tui goals::tests::budget_form_pins_goal_and_limits_without_editing_the_goal_draft
+        PASS [   0.008s] ( 7/27) bitrouter-tui goals::tests::decision_browsing_uses_pinned_identities_and_ignores_late_foreign_evidence
+        PASS [   0.008s] ( 8/27) bitrouter-tui goals::tests::changed_permission_binding_disables_the_pinned_choice
+        PASS [   0.008s] ( 9/27) bitrouter-tui goals::tests::directory_filters_use_facts_and_never_start_or_retarget_work
+        PASS [   0.008s] (10/27) bitrouter-tui goals::tests::decision_has_no_default_consent_and_preserves_the_offered_version
+        PASS [   0.008s] (11/27) bitrouter-tui goals::tests::drafts_pending_scope_and_read_positions_are_independent_per_goal
+        PASS [   0.011s] (12/27) bitrouter-tui goals::tests::directory_pages_release_idle_cache_and_keep_unsubmitted_drafts
+        PASS [   0.008s] (13/27) bitrouter-tui goals::tests::empty_arrows_navigate_but_nonempty_arrows_edit
+        PASS [   0.008s] (14/27) bitrouter-tui goals::tests::expanded_readonly_nodes_preserve_status_scope_draft_and_per_goal_state
+        FAIL [   0.008s] (15/27) bitrouter-tui goals::tests::external_editor_targets_only_the_visible_goal_composer
+  stdout ───
+
+    running 1 test
+    test goals::tests::external_editor_targets_only_the_visible_goal_composer ... FAILED
+
+    failures:
+
+    failures:
+        goals::tests::external_editor_targets_only_the_visible_goal_composer
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 290 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'goals::tests::external_editor_targets_only_the_visible_goal_composer' (5524159) panicked at crates/bitrouter-tui/src/goals/tests.rs:59:5:
+    assertion failed: state.notebooks.get("second").is_some_and(|book| book.editor.is_empty())
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 1 test still running
+        PASS [   0.010s] (16/27) bitrouter-tui goals::tests::fullscreen_browsing_preserves_the_pinned_version_read_position_and_draft
+────────────
+     Summary [   0.078s] 16/27 tests run: 15 passed, 1 failed, 264 skipped
+        FAIL [   0.008s] (15/27) bitrouter-tui goals::tests::external_editor_targets_only_the_visible_goal_composer
+warning: 11/27 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+error: test run failed

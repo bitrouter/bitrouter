@@ -1,0 +1,68 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 37s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 5a705da7-d0c0-49f2-a2c9-e81c9f1b8800 with nextest profile: default
+    Starting 50 tests across 1 binary (1735 tests skipped)
+        PASS [   0.016s] ( 1/50) bitrouter acp_cli::lifecycle_receipt_tests::typed_lifecycle_receipts_survive_context_without_error_text_matching
+        PASS [   0.042s] ( 2/50) bitrouter acp_cli::session_host_tests::cancelled_initialize_reaps_the_owned_controller
+        PASS [   0.051s] ( 3/50) bitrouter goal_code::tests::actual_database_receipt_must_match_the_original_client_payload
+        PASS [   0.025s] ( 4/50) bitrouter goal_code::tests::changed_protocol_outbox_is_preserved_without_reinterpreting_or_replaying
+        PASS [   0.015s] ( 5/50) bitrouter goal_code::tests::old_receipt_with_identical_text_cannot_clear_a_different_pending_draft
+        PASS [   0.021s] ( 6/50) bitrouter goal_code::tests::outbox_retains_exact_identity_scope_and_text_without_replaying
+        PASS [   0.018s] ( 7/50) bitrouter goal_code::tests::permission_preview_separates_earlier_declarations_from_original_rpc
+        PASS [   0.068s] ( 8/50) bitrouter goal_code::tests::exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt
+        PASS [   0.017s] ( 9/50) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.047s] (10/50) bitrouter goal_code::tests::projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer
+        PASS [   0.043s] (11/50) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        PASS [   0.016s] (12/50) bitrouter goal_code::tests::receipt_recovery_rotates_lanes_without_replaying_or_replacing_identity
+        PASS [   0.010s] (13/50) bitrouter goal_code::tests::unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop
+        PASS [   0.050s] (14/50) bitrouter goal_code::tests::real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        PASS [ 122.024s] (15/50) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [ 122.736s] (16/50) bitrouter goal_runtime::tests::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        PASS [  39.524s] (17/50) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        PASS [  40.601s] (18/50) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        PASS [   5.473s] (19/50) bitrouter goal_runtime::tests::confirmed_stop_keeps_original_permission_history_after_cold_reopen
+        PASS [   7.487s] (20/50) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [   7.919s] (21/50) bitrouter goal_runtime::tests::goal_model_route_is_confirmed_before_prompt_and_persisted_through_delivery
+        PASS [   7.667s] (22/50) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+        PASS [   0.366s] (23/50) bitrouter goal_runtime::tests::live_input::corpus::corpus_seeds_keep_actual_original_input_receipts_without_model_work
+        PASS [  11.642s] (24/50) bitrouter goal_runtime::tests::independent_review_recovers_from_goal_revision_without_worker_replay
+        PASS [   9.994s] (25/50) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [   2.986s] (26/50) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        PASS [  11.087s] (27/50) bitrouter goal_runtime::tests::pre_session_recovery_exhausts_its_bound_without_prompt_or_delivery
+        PASS [   0.531s] (28/50) bitrouter goal_runtime::tests::start_recovery::initialize_failure_retains_actual_phase_and_reaped_process_receipt
+        PASS [   8.019s] (29/50) bitrouter goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery
+        PASS [   0.815s] (30/50) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   3.980s] (31/50) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [   5.471s] (32/50) bitrouter goal_runtime::tests::teardown_denial_has_controller_origin_and_does_not_become_user_consent
+        PASS [   0.010s] (33/50) bitrouter supervisor::tests::attachment_snapshot_and_replay_share_one_sequence_boundary
+        PASS [   0.010s] (34/50) bitrouter supervisor::tests::cached_actions_reject_stale_generations_and_payload_reuse
+        PASS [   0.010s] (35/50) bitrouter supervisor::tests::cancelled_turn_is_canonical_and_old_settlement_cannot_touch_successor
+        PASS [   0.011s] (36/50) bitrouter supervisor::tests::dispatcher_fences_every_control_mutation_and_cached_replay
+        PASS [   0.009s] (37/50) bitrouter supervisor::tests::legacy_permission_resolution_keeps_an_unknown_origin
+        PASS [   0.010s] (38/50) bitrouter supervisor::tests::list_projection_omits_permission_context_and_failure_text
+        PASS [   0.012s] (39/50) bitrouter supervisor::tests::live_ledger_rows_recover_as_interrupted
+        PASS [   0.011s] (40/50) bitrouter supervisor::tests::local_capability_grants_are_exact_reused_and_redacted
+        PASS [   0.011s] (41/50) bitrouter supervisor::tests::original_start_lookup_is_durable_readonly_and_credential_free
+        PASS [   0.011s] (42/50) bitrouter supervisor::tests::replay_pins_unresolved_permission_and_unread_result_until_reviewed
+        PASS [   0.011s] (43/50) bitrouter supervisor::tests::replay_reports_a_bounded_history_gap
+        PASS [   0.017s] (44/50) bitrouter supervisor::tests::startup_abort_requires_a_positive_receipt_and_preserves_failed_history
+        PASS [   0.017s] (45/50) bitrouter supervisor::tests::stopped_history_is_hash_bound_and_cannot_cross_run_or_live_state
+        PASS [   0.017s] (46/50) bitrouter supervisor::tests::stopping_startup_releases_completion_lock_before_waiting
+        PASS [   0.011s] (47/50) bitrouter supervisor::tests::takeover_serializes_before_queued_stale_mutation
+        PASS [   0.009s] (48/50) bitrouter supervisor::tests::unanswered_permission_selects_the_exact_reject_option
+        PASS [   0.011s] (49/50) bitrouter supervisor::tests::unconfirmed_startup_cannot_stop_cleanly_or_be_removed
+        PASS [   4.485s] (50/50) bitrouter goal_runtime::tests::user_pause_prevents_pre_session_recovery_from_admitting_new_work
+────────────
+     Summary [ 207.824s] 50 tests run: 50 passed (2 slow), 1735 skipped

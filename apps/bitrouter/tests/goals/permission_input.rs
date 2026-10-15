@@ -59,6 +59,7 @@ fn proposal(decision_id: &str, option_id: &str) -> Interpretation {
         }),
         clarification_kind: None,
         resolutions: Vec::new(),
+        modification_scope: None,
         clarification: None,
     }
 }

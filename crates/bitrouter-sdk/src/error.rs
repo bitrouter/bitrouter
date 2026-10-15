@@ -160,6 +160,9 @@ fn upstream_payload_text(error: &serde_json::Value) -> String {
 impl BitrouterError {
     /// Select the safe public presentation before a model codec encodes SSE.
     pub fn stream_error(&self) -> bitrouter_ai::stream::StreamError {
+        if let Self::Incompatible { report } = self {
+            tracing::warn!(conversion = ?report, "model stream conversion refused");
+        }
         bitrouter_ai::stream::StreamError {
             message: self.public_message(),
             error_type: self.error_type().to_owned(),

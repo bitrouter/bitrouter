@@ -1,0 +1,19 @@
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.89s
+────────────
+ Nextest run ID c21e1ff9-ae16-46eb-b143-a57eb2cedfad with nextest profile: default
+    Starting 12 tests across 1 binary (721 tests skipped)
+        PASS [   0.012s] ( 1/12) bitrouter-sdk language_model::native_work::tests::cancelled_durable_admission_preserves_identity_without_dispatch
+        PASS [   0.012s] ( 2/12) bitrouter-sdk language_model::native_work::tests::accepted_headers_keep_their_original_observation_after_flush
+        PASS [   0.010s] ( 3/12) bitrouter-sdk language_model::native_work::tests::cancelled_http_future_records_one_unknown_outcome
+        PASS [   0.010s] ( 4/12) bitrouter-sdk language_model::tests::native_stream::controlled_stream_preserves_blocks_signatures_tools_and_accounting
+        PASS [   0.021s] ( 5/12) bitrouter-sdk language_model::tests::native_stream::controlled_http_stream_retains_complete_responses_private_output
+        PASS [   0.010s] ( 6/12) bitrouter-sdk language_model::tests::native_stream::interrupted_stream_retains_observed_usage_without_fallback
+        PASS [   0.011s] ( 7/12) bitrouter-sdk language_model::tests::native_stream::invalid_native_terminal_retains_error_usage_in_attempt_and_settlement
+        PASS [   0.009s] ( 8/12) bitrouter-sdk language_model::tests::native_stream::native_stream_uses_frozen_rates_including_unknown
+        PASS [   0.010s] ( 9/12) bitrouter-sdk language_model::tests::native_stream::native_reasoning_preserves_interleaved_lanes_and_rejects_changed_text
+        PASS [   0.011s] (10/12) bitrouter-sdk language_model::tests::native_stream::oversized_stream_frame_and_duplicate_tool_identity_are_rejected
+        PASS [   0.012s] (11/12) bitrouter-sdk language_model::tests::native_stream::native_terminal_cannot_restore_reasoning_removed_by_stream_policy
+        PASS [   0.010s] (12/12) bitrouter-sdk language_model::tests::native_stream_leaves_client_tool_calls_for_the_agent
+────────────
+     Summary [   0.076s] 12 tests run: 12 passed, 721 skipped

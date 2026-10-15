@@ -1,0 +1,38 @@
+{
+  "source_files": 951,
+  "app": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 411.129
+  },
+  "bro-build": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 154.263
+  },
+  "clippy": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 160.259
+  },
+  "fmt": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 40.929
+  },
+  "diff": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.096
+  },
+  "hashes": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.155
+  },
+  "workspace-nextest": {
+    "exit": null,
+    "signal": 2,
+    "seconds": 298.487
+  }
+}
