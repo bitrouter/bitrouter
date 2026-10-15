@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/bitrouter/bitrouter",
+  "pull_request": 981,
+  "source_commit": "4772d9e09deb9c69f539e97d2b24dda9ca770e0c",
+  "source_base": "eafa838383dcdfa3bd79a74a5be3d3c87c056d72",
+  "archive_branch": "codex/pr981-evidence-archive-20261015",
+  "archived_at": "2026-10-15",
+  "payload_files": 891,
+  "payload_bytes": 64181265,
+  "payload_scope": [
+    "docs/evidence/bro-goal-workflow/**",
+    "docs/BRO_GOAL_ORIENTED_IMPLEMENTATION.md"
+  ],
+  "preservation": "Original committed bytes, file modes and Git blob identities; includes failures and superseded runs. No private credentials, unpublished transcripts or local-only data added.",
+  "sha256_manifest": "SHA256SUMS",
+  "sha256_manifest_digest": "b9ee7aee0a4b375f0239f8f692f6c932b9e7f23bf31fb2a0d6c20b993db95c36",
+  "archive_commit": "382c2b58c5c25b02805175a33d60707dc4227b46",
+  "archive_tree": "052d05d3e4e0290efaf899d967e9923a0abc10f6",
+  "archive_url": "https://github.com/bitrouter/bitrouter/tree/382c2b58c5c25b02805175a33d60707dc4227b46",
+  "sha256_manifest_url": "https://github.com/bitrouter/bitrouter/blob/382c2b58c5c25b02805175a33d60707dc4227b46/SHA256SUMS"
+}

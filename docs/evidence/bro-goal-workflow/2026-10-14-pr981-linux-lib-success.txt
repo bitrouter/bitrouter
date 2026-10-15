@@ -1,6 +1,0 @@
-PR head: 50a4605f2e145b96692da51cc3d7d011dda76b3b
-Job: https://github.com/bitrouter/bitrouter/actions/runs/38547648773/job/115798813433
-2026-10-14T10:15:59.1052714Z  Nextest run ID 30142e38-d788-4082-85ff-374814923d55 with nextest profile: default
-2026-10-14T10:15:59.1054050Z     Starting 1743 tests across 1 binary (5 tests skipped)
-2026-10-14T10:19:52.7384261Z         PASS [  85.702s] ( 701/1743) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
-2026-10-14T10:20:11.5311493Z      Summary [ 252.426s] 1743 tests run: 1743 passed (7 slow), 5 skipped

@@ -1,1 +1,0 @@
-2026-10-14T20:25:05.426936Z  WARN bitrouter_sdk::server: model request conversion refused conversion=ConversionReport { issues: [ConversionIssue { stage: RequestProjection, protocol: Responses, location: MessageContent { message: 0, block: 0 }, reason: NativeReasoningAuthorityUnproven, effect: ReplayAuthority, disposition: RejectReplay }], admitted: [] }
