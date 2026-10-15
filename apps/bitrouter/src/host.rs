@@ -95,7 +95,7 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 /// spans into OTel via the supplied exporter's SDK tracer.
 ///
 /// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
-/// so this MUST be called after [`crate::telemetry::exporter::OtelExporter::new`]
+/// so this MUST be called after `OtelExporter::new`
 /// has built the real exporter; passing `None` (OTel disabled in config)
 /// installs the fmt-only registry.
 ///
@@ -104,7 +104,9 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 /// `bro reload` re-reads the config but cannot re-install the
 /// subscriber, so a changed `log_level` needs a restart.
 fn init_serve_tracing_subscriber(
-    exporter: Option<&crate::telemetry::exporter::OtelExporter>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))] exporter: Option<
+        &crate::telemetry::exporter::OtelExporter,
+    >,
     config_log_level: &str,
 ) -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
@@ -113,13 +115,16 @@ fn init_serve_tracing_subscriber(
     let registry = tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer());
-    match exporter {
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    let initialized = match exporter {
         Some(exp) => registry
             .with(crate::telemetry::subscriber::tracing_subscriber_layer(exp))
             .try_init(),
         None => registry.try_init(),
-    }
-    .map_err(|error| anyhow::anyhow!("installing host tracing subscriber: {error}"))?;
+    };
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let initialized = registry.try_init();
+    initialized.map_err(|error| anyhow::anyhow!("installing host tracing subscriber: {error}"))?;
     if let Some(warning) = warning {
         tracing::warn!("{warning}");
     }
@@ -209,7 +214,11 @@ async fn serve_with_options(
         // Hand its SDK tracer to the `tracing-opentelemetry` bridge layer now
         // — the bridge captures its tracer at construction, so this can only
         // happen after the exporter exists.
-        init_serve_tracing_subscriber(assembled.otel_exporter.as_deref(), &cfg.server.log_level)?;
+        init_serve_tracing_subscriber(
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+            assembled.otel_exporter.as_deref(),
+            &cfg.server.log_level,
+        )?;
         // Surface any deferred OTel-init failure now that the subscriber is up.
         if let Some(msg) = &assembled.otel_init_error {
             tracing::error!("{msg}");
@@ -330,6 +339,7 @@ async fn serve_with_options(
         // for implicitly. With OTel disabled there is no ingress span at all,
         // which is the honest behaviour: the previous `TraceLayer` ran regardless
         // and built `tracing` spans that went nowhere.
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         let otel_router_wrapper = assembled
             .otel_exporter
             .as_deref()
@@ -345,6 +355,7 @@ async fn serve_with_options(
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
             let otel_wrapper = move |router: axum::Router| {
+                #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
                 let router = match &otel_router_wrapper {
                     Some(wrapper) => wrapper(router),
                     None => router,

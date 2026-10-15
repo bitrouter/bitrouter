@@ -177,6 +177,37 @@ mod session_host_tests {
     use crate::config::Config;
     use crate::config::agent::{AcpAgentConfig, AcpTransport};
 
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    #[tokio::test]
+    async fn unavailable_export_rejects_before_agent_or_workspace_discovery() -> anyhow::Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let mut config = Config::default();
+        config.plugins.insert(
+            "bitrouter-telemetry".into(),
+            serde_json::json!({ "telemetry": { "enabled": true, "attribution": "account" } }),
+        );
+        let error = SessionHost::prepare(
+            SpawnContext {
+                source: &source,
+                config,
+                agent_id: "unconfigured-agent",
+                options: launch_options(None),
+                routing: RoutingOptions::default(),
+            },
+            false,
+        )
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("unavailable export was accepted"))?;
+        assert!(error.to_string().contains("otel-http or otel-grpc"));
+        assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+        Ok(())
+    }
+
     const STUB: &str = r#"
 while read line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
@@ -1969,6 +2000,7 @@ impl SessionHost {
             mut options,
             routing,
         } = ctx;
+        crate::assemble::validate_telemetry_availability(&config)?;
         let agent_id = resolve_agent_id(&config, agent_id)?;
         let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
         let routed = apply_routing_with_diagnostics(
@@ -2293,6 +2325,7 @@ fn show_session_log(error: anyhow::Error) -> anyhow::Error {
 pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     use std::io::IsTerminal as _;
 
+    crate::assemble::validate_telemetry_availability(&ctx.config)?;
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         let (services, request) = crate::actions::code::CodeServices::from_spawn_context(ctx)?;
         return crate::chat::code::run(services, Some(request)).await;
@@ -2333,6 +2366,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         agent_id,
         &routed,
         options,
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         &cloud_credentials,
         binding,
         crate::actions::session::SessionSurface {
@@ -2400,6 +2434,7 @@ async fn chat_piped(
     agent_id: &str,
     routed: &Routed,
     options: LaunchOptions,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     binding: Option<LocalControllerBinding>,
     mut surface: crate::actions::session::SessionSurface<'_>,
@@ -2435,8 +2470,13 @@ async fn chat_piped(
             });
         }
     };
+    for message in crate::assemble::ignored_config_warnings(config) {
+        tracing::warn!("{message}");
+    }
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let observability =
         build_observability(config, agent_id, &ids.acp_session_id, cloud_credentials).await;
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     if let Some(recorder) = observability.recorder.clone() {
         spawn_tool_spans(recorder, session.client.subscribe_updates());
     }
@@ -2447,6 +2487,7 @@ async fn chat_piped(
         &session.client,
         &ids.acp_session_id,
         agent_id,
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         observability.recorder,
         surface,
     )
@@ -2455,6 +2496,7 @@ async fn chat_piped(
     // Teardown is here rather than in the loop: the loop borrows the client,
     // and the controller that owns the harness child is this function's.
     session.shutdown().await;
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     if let Some(exporter) = observability.exporter {
         exporter.shutdown();
     }
@@ -2497,6 +2539,7 @@ where
         cwd,
     } = options;
     let mut presenter = Presenter::new(format, contract.is_some(), out);
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     let host = match SessionHost::prepare(ctx, false).await {
         Ok(host) => host,
@@ -2545,8 +2588,13 @@ where
     };
     let mut updates = session.take_updates();
     let permissions = session.take_permissions();
+    for message in crate::assemble::ignored_config_warnings(&config) {
+        tracing::warn!("{message}");
+    }
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let observability =
         build_observability(&config, &agent_id, &session.session_id, &cloud_credentials).await;
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     if let Some(recorder) = observability.recorder.clone() {
         spawn_tool_spans(recorder, session.client.subscribe_updates());
     }
@@ -2590,6 +2638,7 @@ where
         // between ack and teardown is denied by the client's own ledger.
         presenter.submitted().await?;
         let clean = session.shutdown().await;
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         if let Some(exporter) = observability.exporter {
             exporter.shutdown();
         }
@@ -2606,6 +2655,7 @@ where
         client: &session.client,
         session_id: &session.session_id,
         agent_id: &agent_id,
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         recorder: observability.recorder.clone(),
         permissions,
         policy,
@@ -2614,6 +2664,7 @@ where
     let outcome = prompt_wait(&mut turn, &mut updates, text, contract, &mut presenter).await;
     let tally = turn.tally;
     let clean = session.shutdown().await;
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     if let Some(exporter) = observability.exporter {
         // Flush the span batch before exit; spans are lost otherwise.
         exporter.shutdown();
@@ -2958,6 +3009,7 @@ struct Turn<'a> {
     client: &'a AcpClient,
     session_id: &'a str,
     agent_id: &'a str,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     recorder: Option<Arc<crate::telemetry::acp::AcpSpanRecorder>>,
     /// The wire half of the session's effects — the same interpreter `chat`
     /// runs, so an answer here reaches the agent as an answer there does.
@@ -3092,6 +3144,7 @@ where
     report_turn(
         turn.client,
         turn.agent_id,
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         turn.recorder.as_ref(),
         &response,
         started.elapsed(),
@@ -3113,7 +3166,9 @@ where
 pub(crate) fn report_turn(
     client: &AcpClient,
     agent_id: &str,
-    recorder: Option<&Arc<crate::telemetry::acp::AcpSpanRecorder>>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))] recorder: Option<
+        &Arc<crate::telemetry::acp::AcpSpanRecorder>,
+    >,
     response: &agent_client_protocol::schema::v1::PromptResponse,
     latency: Duration,
 ) {
@@ -3123,6 +3178,7 @@ pub(crate) fn report_turn(
         latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
         context: client.context_usage().lock().ok().and_then(|slot| *slot),
     };
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     if let Some(recorder) = recorder {
         recorder.turn_completed(&crate::telemetry::acp::TurnRecord {
             stop_reason: record.stop_reason.clone(),
@@ -3519,6 +3575,7 @@ pub async fn commands(
 
 /// The OTel exporter for this process and, when one exists, the span recorder
 /// bound to one session.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 struct Observability {
     exporter: Option<Arc<crate::telemetry::exporter::OtelExporter>>,
     recorder: Option<Arc<crate::telemetry::acp::AcpSpanRecorder>>,
@@ -3527,23 +3584,13 @@ struct Observability {
 /// Build the exporter and the session's span recorder. `conversation_id` is
 /// the span attribute every turn and tool span correlates on — the
 /// harness-native ACP session id on the controller path.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 async fn build_observability(
     config: &Config,
     agent_id: &str,
     conversation_id: &str,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Observability {
-    // These surfaces never build an `App`, so they do not get the daemon's
-    // ignored-config warnings for free — and they read the same telemetry
-    // config, which is exactly what the skill documents. Without this, a stale
-    // `plugins.bitrouter-observe` block is silent on `chat` and `acp prompt`
-    // while being loud on `bro serve`. `acp_cli::serve` emits the same
-    // set itself, since it never reaches this function. The subscriber is
-    // already installed on all of these paths, so unlike the daemon these can
-    // be emitted in place.
-    for message in crate::assemble::ignored_config_warnings(config) {
-        tracing::warn!("{message}");
-    }
     let exporter =
         crate::assemble::build_otel_exporter_standalone_with_credentials(config, cloud_credentials)
             .await;
@@ -3560,6 +3607,7 @@ async fn build_observability(
 /// Emit an `execute_tool` span per completed tool call, read off the
 /// translated update stream. Exporter-gated by its `recorder` argument:
 /// without one there is nothing to emit to.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 fn spawn_tool_spans(
     recorder: Arc<crate::telemetry::acp::AcpSpanRecorder>,
     mut updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdateKind> + Send>>,
@@ -3594,7 +3642,7 @@ fn spawn_tool_spans(
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
 mod standalone_cloud_credentials_tests {
     use std::sync::Arc;
 

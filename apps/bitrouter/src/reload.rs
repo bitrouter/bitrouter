@@ -1289,6 +1289,13 @@ async fn load_configuration_baseline_at(
         }
         crate::paths::ConfigSource::Default { .. } => {
             let mut config = crate::providers::apply::zero_config();
+            crate::assemble::validate_host_configuration(&config).map_err(|error| {
+                ConfigurationLoadError {
+                    saved: SavedConfigState::Invalid,
+                    error,
+                    guardrails_migration_required: false,
+                }
+            })?;
             crate::cloud::enable_in_zero_config(&mut config);
             crate::policy_lock::apply_defaults(&mut config, None);
             Ok(ConfigurationBaseline {

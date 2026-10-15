@@ -1,5 +1,12 @@
 # CLI reference
 
+Telemetry export requires the build's `otel-http` or `otel-grpc` capability.
+Without either, an enabled `plugins.bitrouter-telemetry.telemetry` block, nested
+`otel` block or `OTEL_EXPORTER_OTLP_ENDPOINT` opt-in fails before export-related
+initialization. Startup, reload, handoff preflight and standalone ACP preparation
+apply this check. Dormant settings, basic logs, request metering and local ACP
+records remain available; the default distribution includes `otel-http`.
+
 ## Native tasks through the managed core
 
 Local native execution requires the application's `core` feature (enabled in

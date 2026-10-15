@@ -9,6 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
@@ -54,12 +55,15 @@ use bitrouter_ai::types::OperationScope;
 use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::telemetry::OTEL_ENABLED;
 use crate::telemetry::config::{ContentCaptureMode, MetricsConfig, OtelConfig};
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 use crate::telemetry::exporter::{OtelExporter, OtelObserveHook};
 
 use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
 use crate::continuation::{ContinuationKeySource, ContinuationRegistry, ContinuationRuntime};
-use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+use crate::daemon::ObserveStatusPayload;
+use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
 use crate::eval::EvalService;
 use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
 use crate::eval::store::EvalStore;
@@ -121,6 +125,7 @@ pub struct Assembled {
     /// can hand it to the `tracing-opentelemetry` bridge layer at
     /// subscriber-init time (the bridge captures its tracer eagerly).
     /// `None` when OTel is disabled in config.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub otel_exporter: Option<Arc<OtelExporter>>,
     /// Captured `OtelExporter::new` failure message, when one occurred.
     /// Surfaced as a `tracing::error!` line by the binary after the full
@@ -162,11 +167,13 @@ pub(crate) fn resolved_upstream_timeouts(
 /// observe-side `OtelStatus` lives in the plugin (no daemon dep); this
 /// adapter does the field-by-field copy so neither crate has to import
 /// the other's type.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 struct OtelExporterStatus {
     exporter: Arc<OtelExporter>,
 }
 
 #[async_trait::async_trait]
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 impl ObserveStatusProvider for OtelExporterStatus {
     fn status(&self) -> ObserveStatusPayload {
         let s = self.exporter.status();
@@ -232,6 +239,7 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// This belongs to the product host, not the SDK parser: trusted custom hosts
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    validate_telemetry_availability(config)?;
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
         "plugins.bitrouter-guardrails requires migration: the default bro no longer \
@@ -242,6 +250,16 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
          every protected entry point and output requirement before explicitly removing \
          the old key, including empty/null configuration; see docs/GUARDRAILS_EXTENSION.md."
     );
+    Ok(())
+}
+
+/// Reject explicit export when this artifact has no OTLP transport, before
+/// resolving installation or credential state. Enabled exporters retain their
+/// existing initialization and failure policy at the owning call site.
+pub(crate) fn validate_telemetry_availability(config: &Config) -> Result<()> {
+    if !OTEL_ENABLED {
+        build_otel_config(config, || None)?;
+    }
     Ok(())
 }
 
@@ -340,13 +358,9 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
 ///
-/// Public because `bro acp serve|prompt|chat` never builds an `App`: it
-/// takes its exporter straight from
-/// `build_otel_exporter_standalone_with_credentials`, which reads the same
-/// config. A guard covering only the daemon would leave those surfaces exactly
-/// as silent as before, on paths the skill documents as honouring the same
-/// telemetry configuration. `acp_cli::serve` calls it directly; the other
-/// three reach it through `acp_cli::build_observability`.
+/// Public because standalone ACP surfaces never build an `App`. They report
+/// these warnings directly, whether or not an exporter is compiled in; a guard
+/// covering only daemon assembly would leave their configuration mistakes silent.
 pub fn ignored_config_warnings(config: &Config) -> Vec<String> {
     ignored_config_file_warnings(config)
         .into_iter()
@@ -592,9 +606,10 @@ async fn assemble_app(
     // subscriber is not installed yet (it depends on the exporter being
     // built first), so a tracing line here would be dropped. The binary
     // surfaces this once the subscriber is up.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let (otel_exporter, otel_init_error): (Option<Arc<OtelExporter>>, Option<String>) =
-        match build_otel_config(config)? {
-            Some(plan) => {
+        match build_otel_config(config, telemetry_install_id)? {
+            Some((otel_config, bearer_plan)) => {
                 // Resolve the LIVE account-bearer source per the plan. Only the
                 // telemetry opt-in with `attribution: auto`/`account` and no
                 // explicit token wants one; `anonymous` (and every other
@@ -602,11 +617,11 @@ async fn assemble_app(
                 // store. Best-effort: a `None` source means the export proceeds
                 // anonymously — for `account` we additionally warn.
                 let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
-                    match plan.bearer_plan {
+                    match bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
                             let source = crate::cloud::cloud_bearer_source(
                                 Arc::clone(&cloud_manager),
-                                plan.config.endpoint.clone(),
+                                otel_config.endpoint.clone(),
                             )
                             .await;
                             if source.is_none() && warn_if_unmet {
@@ -621,7 +636,7 @@ async fn assemble_app(
                         }
                         BearerPlan::StaticOnly => None,
                     };
-                match OtelExporter::new(plan.config, bearer) {
+                match OtelExporter::new(otel_config, bearer) {
                     Ok(exporter) => (Some(Arc::new(exporter)), None),
                     Err(e) => (
                         None,
@@ -631,16 +646,22 @@ async fn assemble_app(
             }
             None => (None, None),
         };
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
         Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
         None => Arc::new(NoopObserveStatus {
             compiled_in: OTEL_ENABLED,
         }),
     };
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let (observe_provider, otel_init_error): (Arc<dyn ObserveStatusProvider>, Option<String>) =
+        (Arc::new(NoopObserveStatus { compiled_in: false }), None);
     // Two handles to the same exporter: one moves into the pipeline as an
     // `ObserveHook`, the other lands on `Assembled` so the binary can hand
     // it to the `tracing-opentelemetry` bridge layer.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let otel_for_hook = otel_exporter.clone();
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let otel_for_assembled = otel_exporter;
 
     // Optional MCP pure-routing pipeline — wired only when the config
@@ -933,6 +954,7 @@ async fn assemble_app(
             // OpenTelemetry exporter — register the *same* Arc as a hook
             // here. Construction happened above so `Assembled.observe`
             // can hold a query handle on it.
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook_for(OtelObserveHook::new(exporter), OperationScope::Both);
             }
@@ -1021,6 +1043,7 @@ async fn assemble_app(
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
         observe: observe_provider,
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         otel_exporter: otel_for_assembled,
         otel_init_error,
         ignored_config,
@@ -1557,11 +1580,12 @@ enum BearerPlan {
 /// opt-in, the `otel:` block, env vars), including the live account-bearer
 /// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
 /// surfaced as warnings, never as session failures.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub(crate) async fn build_otel_exporter_standalone_with_credentials(
     config: &Config,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Option<Arc<OtelExporter>> {
-    let plan = match build_otel_config(config) {
+    let (otel_config, bearer_plan) = match build_otel_config(config, telemetry_install_id) {
         Ok(Some(plan)) => plan,
         Ok(None) => return None,
         Err(e) => {
@@ -1569,11 +1593,10 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
             return None;
         }
     };
-    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> = match plan.bearer_plan
-    {
+    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> = match bearer_plan {
         BearerPlan::LiveSource { warn_if_unmet } => {
             let source = cloud_credentials
-                .telemetry_bearer(&plan.config.endpoint)
+                .telemetry_bearer(&otel_config.endpoint)
                 .await;
             if source.is_none() && warn_if_unmet {
                 tracing::warn!(
@@ -1586,7 +1609,7 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
         }
         BearerPlan::StaticOnly => None,
     };
-    match OtelExporter::new(plan.config, bearer) {
+    match OtelExporter::new(otel_config, bearer) {
         Ok(exporter) => Some(Arc::new(exporter)),
         Err(e) => {
             tracing::warn!("telemetry: failed to initialise OpenTelemetry: {e}");
@@ -1595,13 +1618,20 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
     }
 }
 
-/// An exporter config plus the account-bearer resolution plan for it. Returned
-/// by [`build_otel_config`] so the async `OtelExporter::new` call site can decide
-/// whether to build a live bearer source (which needs `.await` + network I/O,
-/// neither appropriate inside this pure config builder).
-struct OtelConfigPlan {
-    config: OtelConfig,
-    bearer_plan: BearerPlan,
+/// Resolve optional attribution only after a selected exporter is available.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+fn telemetry_install_id() -> Option<String> {
+    crate::paths::install_id()
+        .map_err(|error| tracing::warn!("telemetry: could not resolve install id: {error:#}"))
+        .ok()
+}
+
+fn require_otel_transport(source: &str) -> Result<()> {
+    anyhow::ensure!(
+        OTEL_ENABLED,
+        "{source} requires an OTLP transport: enable the otel-http or otel-grpc feature"
+    );
+    Ok(())
 }
 
 /// Build OpenTelemetry configuration from the app config. Returns `None` when
@@ -1611,10 +1641,13 @@ struct OtelConfigPlan {
 /// first-party opt-in) > `plugins.bitrouter-telemetry.otel` > an
 /// `OTEL_EXPORTER_OTLP_ENDPOINT`-only opt-in.
 ///
-/// This stays pure (no credential-store / network I/O): the account bearer is no
-/// longer snapshotted here — it is resolved live per export by a bearer source
-/// the async call site builds according to the returned [`BearerPlan`].
-fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
+/// The installation-ID resolver runs only after a supported first-party opt-in
+/// is selected. Preflight supplies a side-effect-free resolver. Account bearer
+/// resolution remains at the exporter call site, following the returned plan.
+fn build_otel_config(
+    config: &Config,
+    install_id: impl FnOnce() -> Option<String>,
+) -> Result<Option<(OtelConfig, BearerPlan)>> {
     // Named for the crate that reads it, like `plugins.bitrouter-guardrails`.
     // It was `bitrouter-observe` until the OTLP renderer moved out of the SDK;
     // the rename is safe to have made because `ignored_config_warnings` reports an
@@ -1637,11 +1670,7 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
         let opt_in = serde_json::from_value::<TelemetryOptIn>(tel_value.clone())
             .context("plugins.bitrouter-telemetry.telemetry failed to parse")?;
         if opt_in.enabled {
-            // Best-effort install id: a missing home just means anonymous
-            // attribution downstream, never a failure to export.
-            let install_id = crate::paths::install_id()
-                .map_err(|e| tracing::warn!("telemetry: could not resolve install id: {e:#}"))
-                .ok();
+            require_otel_transport("plugins.bitrouter-telemetry.telemetry.enabled")?;
             // Decide the live-bearer plan from attribution + whether an explicit
             // static token is present. The account bearer is NOT snapshotted
             // here anymore — when no explicit token is set and attribution is
@@ -1651,11 +1680,8 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
             let has_explicit =
                 opt_in.bearer_token.is_some() || std::env::var("BITROUTER_TELEMETRY_TOKEN").is_ok();
             let bearer_plan = telemetry_bearer_plan(opt_in.attribution, has_explicit);
-            let cfg = build_telemetry_otel_config(opt_in, install_id);
-            return Ok(Some(OtelConfigPlan {
-                config: cfg,
-                bearer_plan,
-            }));
+            let cfg = build_telemetry_otel_config(opt_in, install_id());
+            return Ok(Some((cfg, bearer_plan)));
         }
     }
 
@@ -1666,10 +1692,8 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     if let Some(otel_value) = telemetry.and_then(|c| c.get("otel")) {
         let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
             .context("plugins.bitrouter-telemetry.otel failed to parse")?;
-        return Ok(Some(OtelConfigPlan {
-            config: cfg,
-            bearer_plan: BearerPlan::StaticOnly,
-        }));
+        require_otel_transport("plugins.bitrouter-telemetry.otel")?;
+        return Ok(Some((cfg, BearerPlan::StaticOnly)));
     }
 
     // 2. Env-var-only opt-in.
@@ -1680,10 +1704,8 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     // key name v0 never had. `plugins.bitrouter-telemetry.otlp_endpoint` has
     // never existed in a released config, so there was nothing to preserve.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
-        return Ok(Some(OtelConfigPlan {
-            config: OtelConfig::default(),
-            bearer_plan: BearerPlan::StaticOnly,
-        }));
+        require_otel_transport("OTEL_EXPORTER_OTLP_ENDPOINT")?;
+        return Ok(Some((OtelConfig::default(), BearerPlan::StaticOnly)));
     }
 
     Ok(None)
@@ -1793,7 +1815,7 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 ///
 /// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
 /// The signed-in account bearer is NO LONGER snapshotted into the config — it is
-/// resolved live per export by a [`crate::telemetry::bearer::TelemetryBearer`]
+/// resolved live per export by a `TelemetryBearer`
 /// source the async call site builds (refresh-aware), so account attribution
 /// survives token expiry without a daemon restart. `attribution: anonymous`
 /// still drops even the explicit token (the opt-out guarantee).
@@ -2131,7 +2153,9 @@ mod sqlite_path_tests {
 
 #[cfg(test)]
 mod otel_config_tests {
-    use super::{BearerPlan, Config, build_otel_config};
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    use super::BearerPlan;
+    use super::{Config, build_otel_config};
 
     /// Build a `Config` carrying a single `bitrouter-telemetry` plugin value.
     /// Constructed directly (no YAML round-trip) so the test never touches
@@ -2146,6 +2170,59 @@ mod otel_config_tests {
     }
 
     #[test]
+    fn first_party_activation_checks_transport_before_resolving_installation() -> anyhow::Result<()>
+    {
+        let config = config_with_telemetry(serde_json::json!({
+            "telemetry": { "enabled": true, "attribution": "anonymous" },
+            // The first-party opt-in wins; this lower-priority block is not read.
+            "otel": { "sampler": "not_a_real_sampler" }
+        }));
+        let resolutions = std::cell::Cell::new(0);
+        let result = build_otel_config(&config, || {
+            resolutions.set(resolutions.get() + 1);
+            Some("fixture-installation".to_owned())
+        });
+        if super::OTEL_ENABLED {
+            let (export, _) = result?
+                .ok_or_else(|| anyhow::anyhow!("first-party opt-in did not select export"))?;
+            assert_eq!(resolutions.get(), 1);
+            assert_eq!(
+                export.resource_attributes["bitrouter.install_id"],
+                "fixture-installation"
+            );
+        } else {
+            let error = result
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("unavailable export was accepted"))?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("plugins.bitrouter-telemetry.telemetry.enabled")
+            );
+            assert!(error.to_string().contains("otel-http or otel-grpc"));
+            assert_eq!(resolutions.get(), 0);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    #[test]
+    fn disabled_first_party_block_does_not_hide_generic_export() -> anyhow::Result<()> {
+        let config = config_with_telemetry(serde_json::json!({
+            "telemetry": { "enabled": false },
+            "otel": { "endpoint": "http://collector:4318", "bearer_token": "private-token" }
+        }));
+        let error = super::validate_host_configuration(&config)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("generic export opt-in was ignored"))?;
+        let message = error.to_string();
+        assert!(message.contains("plugins.bitrouter-telemetry.otel"));
+        assert!(message.contains("otel-http or otel-grpc"));
+        assert!(!message.contains("private-token"));
+        Ok(())
+    }
+
+    #[test]
     fn malformed_otel_block_is_a_hard_error() {
         // `sampler` is a closed enum — an unknown variant fails to parse.
         // An explicit opt-in must surface that, not silently fall through.
@@ -2153,22 +2230,23 @@ mod otel_config_tests {
             "otel": { "sampler": "not_a_real_sampler" }
         }));
         assert!(
-            build_otel_config(&config).is_err(),
+            build_otel_config(&config, || None).is_err(),
             "a malformed otel block must be a hard error",
         );
     }
 
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     #[test]
-    fn valid_otel_block_parses() {
+    fn valid_otel_block_parses() -> anyhow::Result<()> {
         let config = config_with_telemetry(serde_json::json!({
             "otel": { "endpoint": "http://collector:4318" }
         }));
-        let plan = build_otel_config(&config)
-            .expect("valid otel block is Ok")
-            .expect("valid otel block yields Some");
-        assert_eq!(plan.config.endpoint, "http://collector:4318");
+        let (config, bearer_plan) = build_otel_config(&config, || None)?
+            .ok_or_else(|| anyhow::anyhow!("valid otel block must select an exporter"))?;
+        assert_eq!(config.endpoint, "http://collector:4318");
         // The generic `otel` block never reads the credential store.
-        assert_eq!(plan.bearer_plan, BearerPlan::StaticOnly);
+        assert_eq!(bearer_plan, BearerPlan::StaticOnly);
+        Ok(())
     }
 
     #[test]
@@ -2181,7 +2259,7 @@ mod otel_config_tests {
             "otlp_endpoint": "http://legacy:4318"
         }));
         assert!(
-            build_otel_config(&config)
+            build_otel_config(&config, || None)
                 .expect("an unknown sub-key is not an error")
                 .is_none(),
             "otlp_endpoint must no longer wire an exporter"
@@ -2199,7 +2277,7 @@ mod otel_config_tests {
             serde_json::json!({ "otel": { "endpoint": "http://collector:4318" } }),
         );
         assert!(
-            build_otel_config(&config)
+            build_otel_config(&config, || None)
                 .expect("an unread plugin block is not an error")
                 .is_none()
         );

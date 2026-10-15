@@ -63,7 +63,7 @@ the contract move must preserve its bytes.
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/local native bridge gated by core; core-disabled inspection and early rejection verified; complete isolated dependency/startup matrix remains |
+| P0 5 Feature isolation | In progress | Scheduler/local native bridge gated by core; core-disabled inspection and no-OTLP activation isolation verified; complete isolated dependency/startup matrix remains |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -978,3 +978,97 @@ separation, complete dependency/activation isolation, terminal-free headless
 formatting, public harness contracts/clients, historical format/backend evidence,
 packaged service delivery, performance comparison, final review and PR remain
 required P0 work. P1 remains excluded.
+
+
+## Exporter feature isolation
+
+Changes against `d99f3d3` remove exporter-bearing assembly, host subscriber,
+HTTP ingress, account adapter and ACP fields/calls when neither OTLP transport
+is enabled. Application export configuration remains available without OTel;
+request settlement, basic tracing and harness-local ACP records stay outside the
+export gate. The observer status reports that export is not compiled in instead
+of constructing a dummy exporter. Provider/account authentication remains
+available independently of its optional export adapter.
+
+The same effective opt-in parser checks first-party, nested OTLP and endpoint
+environment activation. A selected unavailable exporter fails before its
+installation-ID resolver or credential source runs. Dormant settings retain
+their representation and existing precedence. File and zero-config startup,
+reload, handoff preflight, standalone SessionHost and direct interactive/piped
+chat apply the check. Enabled-exporter initialization retains its existing
+failure policy and HTTP-versus-gRPC behavior.
+
+Independent review identified two missing early checks in the first candidate:
+the generated-default configuration branch and direct interactive chat dispatch.
+Both were corrected. New tests exercise an environment-only zero-config process
+and a real PTY calling the public chat entry with a supplied configuration. The
+PTY test verifies terminal stdin/stdout and rejection before drawing or creating
+session state. Existing full-stack auth, policy, request-check and streaming
+metering tests remain enabled without OTLP; only export-specific cases/assertions
+require their HTTP transport.
+
+Validation evidence:
+
+- No-OTLP targeted runtime: **60 passed**, 3,115 outside the selected filter,
+  in 3.682 seconds. This uses `--no-default-features --features harness,tui,mcp`;
+  it proves exporter isolation, not the final minimum or terminal-free harness
+  profile. It covers actual serve/configuration/reload/preflight/PTY entry paths,
+  standalone ACP preparation, external ACP lifecycle and ordinary request
+  finalization. Two earlier runs exposed fixture assumptions about the existing
+  stdout JSON error envelope and explicit `BITROUTER_HOME` resolution; corrected
+  fixtures now exercise the intended branches.
+- The no-OTLP normal/build dependency closure contains no OpenTelemetry,
+  tracing-OpenTelemetry or tonic packages. Test-only OTLP protocol dependencies
+  are not treated as production dependency evidence.
+- Strict Rust 1.97.0 application no-OTLP/all-target and workspace
+  all-feature/all-target Clippy passed. The final zero-config fixture correction
+  also passed targeted strict Clippy. Strict workspace all-feature and application
+  no-OTLP Rustdoc passed. Formatting and whitespace checks passed.
+- HTTP-only regression: **116 passed**, 3,284 outside the filter, in 4.216
+  seconds. It covers schema conformance, ingress/body lifetime, trace hierarchy,
+  batching, metrics, HTTP bearer refresh, shared account auth, standalone ACP
+  wiring, full-stack metering and real host/reload lifecycle.
+- gRPC-only collector test: **1 passed**, no skips, in 0.029 seconds, verifying
+  actual span/metric delivery, static metadata and shutdown flush. HTTP is absent
+  from that build; HTTP-preferred all-feature tests are not used as a substitute.
+- Independent review confirmed the early-validation fixes and corrected process
+  fixtures. Final documentation review found no actionable issues. It reviewed
+  source and reported evidence, without independently running Cargo.
+
+The no-OTLP runtime command is:
+
+```sh
+cargo nextest run -p bitrouter --no-default-features \
+  --features harness,tui,mcp --lib --test telemetry_disabled \
+  --test configuration_state --test full_stack --test extension_host \
+  --build-jobs 2 --test-threads 2 --no-fail-fast \
+  -E 'test(assemble::telemetry_opt_in_tests::) | test(assemble::otel_config_tests::) | test(telemetry::config::) | test(cloud::tests::) | test(acp_cli::session_host_tests::) | test(harness::acp::capture::) | test(harness::acp::telemetry::) | binary(telemetry_disabled) | binary(configuration_state) | binary(full_stack) | binary(extension_host)'
+```
+
+The transport regression commands are:
+
+```sh
+cargo nextest run -p bitrouter --no-default-features \
+  --features core,harness,tui,mcp,guardrails,otel-http --lib \
+  --test full_stack --test observe_hierarchy --test telemetry_ingress_log_target \
+  --test configuration_state --test extension_host \
+  --build-jobs 2 --test-threads 2 --no-fail-fast \
+  -E 'test(telemetry::) | test(assemble::telemetry_opt_in_tests::) | test(assemble::otel_config_tests::) | test(cloud::tests::) | test(acp_cli::standalone_cloud_credentials_tests::) | test(acp_cli::session_host_tests::) | binary(full_stack) | binary(observe_hierarchy) | binary(telemetry_ingress_log_target) | binary(configuration_state) | binary(extension_host)'
+
+cargo nextest run -p bitrouter --no-default-features \
+  --features core,harness,tui,mcp,otel-grpc --test telemetry_grpc_transport \
+  --build-jobs 2 --test-threads 2 --no-fail-fast
+```
+
+Runtime processes explicitly unset ambient `OTEL_EXPORTER_OTLP_ENDPOINT`;
+opt-in subprocess fixtures set their own isolated environment. The Cargo/Rust
+versions, debug-symbol/incremental settings and separate strict-check target
+directory remain those recorded above. Source and manifests stay frozen during
+runtime tests and any nested fixture builds.
+
+The accepted plan's added exporter/configuration split and explicit harness HTTP
+SDK boundary are synchronized here without undoing reviewed TUI retirements or
+implementation status. All final A01–A16 gates remain open. Feature combinations
+that omit harness/TUI/MCP, gateway serving-policy versus core-learning separation,
+public harness clients, historical/back-end evidence, packaged-service delivery,
+performance, full final verification and PR are still required. P1 is excluded.

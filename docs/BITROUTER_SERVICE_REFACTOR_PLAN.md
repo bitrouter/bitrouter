@@ -60,6 +60,7 @@ Navigation:
 - [Product and ownership decisions](#product-and-ownership-decisions)
 - [Target package graph](#target-package-graph)
 - [Public contracts and clients](#public-contract-and-client-boundaries)
+- [Built-in telemetry and extension boundaries](#telemetry-ownership)
 - [Consumer migration paths](#consumer-migration-paths)
 - [Existing service surfaces](#existing-service-surfaces-and-feature-ownership)
 - [Complete source migration inventory](#source-migration-inventory)
@@ -80,7 +81,7 @@ Navigation:
 | TUI | Internal `bitrouter::tui` module behind `tui`; `tui` enables `harness` |
 | Shared contracts | `bitrouter-ai`; no `bitrouter-protocol` package |
 | Service client | Repurpose `bitrouter-sdk` for HTTP and supported core streaming clients after removing its server framework |
-| Telemetry | Internal optional application module; retire `bitrouter-telemetry` |
+| Telemetry | Internal application module with optional exporter runtime; retire `bitrouter-telemetry` |
 | Extensions | Keep concrete capability implementations where useful; no dynamic loader, stable Rust ABI or new remote checker protocol |
 | New implementation packages | Do not introduce `bitrouter-gateway`, `bitrouter-core`, `bitrouter-harness`, `bitrouter-cli` or another orchestrator package |
 
@@ -220,7 +221,7 @@ apps/bitrouter/src/
   host/                   assembly, daemon lifecycle, shutdown and upgrade
   config/                 application configuration and feature availability checks
   storage/                bootstrap, migration ledger and shared checkpoint codecs
-  telemetry/              optional OTLP implementation
+  telemetry/              internal export configuration and optional OTLP runtime
   integrations/           hosted account/product-management clients
 ```
 
@@ -372,8 +373,11 @@ whether a principal may use a resource or whether a conversion is admissible.
 
 The SDK owns explicit endpoint/authentication options, HTTP transport, request
 serialization, public error decoding, streaming response consumption and
-capability discovery. Gateway and remote-control methods cover the existing
-supported endpoints. P0 also delivers clients for the existing core capability
+capability discovery. Gateway, remote-control and harness HTTP methods cover the
+existing supported endpoints. The harness client targets the separately enabled
+loopback `/agent/v2/*` listener with its execution credential and instance checks;
+it does not discover local sockets or make that listener remotely exposed.
+P0 also delivers clients for the existing core capability
 endpoint, managed Responses HTTP/SSE and versioned WebSocket channel. Local-only
 harness operations remain explicitly local; these clients do not constitute
 complete HTTP coverage for the long-term core service.
@@ -397,10 +401,10 @@ Use public AI types directly rather than duplicating them or adding public
 re-export compatibility facades. Keep client transport errors distinct from the
 service's public error payload.
 
-The base SDK supports gateway and control HTTP calls. Add an optional client
-`core` feature only for the existing core streaming transport when it introduces
-additional dependencies. That feature never enables the application's `core`.
-Do not add client feature names for hypothetical APIs.
+The base SDK supports gateway, control and existing harness HTTP calls. Add an
+optional client `core` feature only for the existing core streaming transport
+when it introduces additional dependencies. That feature never enables the
+application's `core`. Do not add client feature names for hypothetical APIs.
 
 Client construction takes endpoint and credential values explicitly; environment
 variables, saved profiles and local credential discovery remain application
@@ -470,6 +474,32 @@ genuinely shared observation views and schema move to AI.
 
 Always-on request facts, metering and scheduler observation must work with no
 OTLP feature. `otel-http` and `otel-grpc` control egress, not correctness.
+
+Apply feature gates to exporter dependencies and wiring, not to every module
+whose name contains telemetry:
+
+| Concern | Owner and availability |
+| --- | --- |
+| Observation schema, attribute vocabulary and public lifecycle views | AI contracts, independent of any exporter feature |
+| Export configuration, opt-in parsing and required-feature diagnostics | Application configuration/telemetry code, readable in every application profile without OTel types |
+| Request facts, metering, completion and ordinary logs | Gateway/host, always available; core and harness retain their own facts when those features are enabled |
+| ACP protocol capture and per-turn completion records | Harness, requiring `harness` but no OTLP transport |
+| Exporter, live export bearer adapter, subscriber bridge and ingress span | Application telemetry, requiring `otel-http` or `otel-grpc`; shared provider/account credentials remain available independently |
+| ACP span export | Application telemetry adapter, requiring both `harness` and an OTLP transport |
+
+The current application assembly, host logging, account bearer adapter and ACP
+command paths all reference exporter types. Migrate those call sites with the
+exporter, so the minimum and harness-only builds do not retain its dependencies
+through an argument or struct field. Keep basic logging and local ACP records
+outside exporter branches; do not introduce a dummy exporter that silently
+accepts configured export in an unsupported build.
+
+Separate effective opt-in validation from exporter initialization. Startup,
+reload and profile preflight must detect unavailable export before creating an
+installation identifier, resolving credentials or starting export tasks. Reuse
+the existing precedence rules; the plan's configuration activation table defines
+which saved settings are dormant. This application configuration is not a public
+AI contract merely because its representation can be lightweight.
 
 Preserve `plugins.bitrouter-telemetry`, `BITROUTER_TELEMETRY_*`, endpoint opt-in
 behavior and current default sampling/export behavior during P0. The historical
@@ -846,7 +876,8 @@ terminal-independent data and dependencies.
 | Package and module | Target owner |
 | --- | --- |
 | Telemetry `otel/acp` | `telemetry::acp`, compiled only when harness and a telemetry transport are enabled |
-| Telemetry `otel/auth_client/bearer/config/transport` | Application telemetry egress configuration/auth/transport |
+| Telemetry `otel/config` | Application-owned export configuration; pure parsing/validation remains available without OTLP, exporter-specific construction stays gated |
+| Telemetry `otel/auth_client/bearer/transport` | Application telemetry egress auth/transport behind the selected OTLP feature; `auth_client` remains HTTP-only |
 | Telemetry `otel/cardinality/processor_runtime` | Application telemetry bounded processing/runtime |
 | Telemetry `otel/exporter/metrics` | Application telemetry model spans/metrics; contract definitions in AI |
 | Telemetry `otel/http_layer/subscriber` | Application telemetry ingress and tracing bridge |
@@ -953,7 +984,9 @@ the public contract package. Narrow their Tokio features and keep interactive
 terminal presentation separate from the authentication mechanisms.
 
 Use internal `cfg(any(feature = "otel-http", feature = "otel-grpc"))` gates for
-telemetry common code. With both transports enabled, preserve the current
+the shared exporter runtime and its wiring. Keep export configuration parsing,
+availability checks and ordinary observation/logging outside that gate. With
+both transports enabled, preserve the current
 selection rule. ACP telemetry needs both harness and an exporter; gateway
 telemetry works without harness. There is no standalone `server` feature because
 every application build is a gateway.
@@ -1207,7 +1240,8 @@ pass. AI becomes fully lightweight after its runtime moves in P0 3.
   transcript/failure-output fixtures before removing the old renderer path.
 - Move the telemetry implementation into the application, keeping schema
   conformance tests, independent HTTP/gRPC transport tests and frozen names
-  intact.
+  intact. Separate application export configuration from exporter runtime, and
+  move assembly, host, bearer and ACP integration call sites with their owner.
 - Remove the three retired packages after consumers/tests/examples have moved.
   Their relocated code may still use the old SDK during this intermediate stage.
 
@@ -1274,7 +1308,9 @@ server API.
   control endpoint/scoped credential. Use the official gateway executable plus
   ordinary configuration as its server.
 - Keep local command/IPC adapters in the application and move portable remote
-  clients into SDK.
+  clients into SDK. Cover the existing harness HTTP API with its separate
+  execution credential, instance checks, stored-session reads and observation;
+  this does not add remote IPC/ACP or change workspace authorization.
 
 Exit: a separate client process can call the gateway, consume a stream and query
 supported remote control without custom server code or access to server files;
@@ -1292,6 +1328,10 @@ over harness persistence or execution.
   from shared dependency declarations; activate each at its actual owner.
 - Ensure minimum gateway startup initializes only gateway services and required
   storage/logging. Keep the full migration ledger.
+- Exercise export opt-in checks without an OTLP transport in both gateway and
+  harness profiles. Dormant settings retain their representation, explicit
+  activation fails before export-related side effects, and local completion
+  records/basic logs remain available without any exporter object.
 - Use one host lifecycle for official and advanced custom-host entry points:
   readiness follows required listener/service startup; failure and shutdown clean
   up owned resources; reload reports applied versus restart-required state.
@@ -1355,7 +1395,7 @@ refactor has already been implemented or tested.
 | --- | --- |
 | A01 Package ownership | Exactly the five target workspace packages remain; all baseline modules/assets have an owner; no new gateway/core/harness/protocol/TUI framework package |
 | A02 AI boundary | Default and all-public-features AI builds have no service/SDK dependency or network/runtime/DB/UI/OTel dependency; source/API review rejects protocol conversion, history repair and conversion-admission algorithms even if dependency-free, as well as runtime types leaked through signatures; retained public contracts identify actual SDK/extension consumers |
-| A03 SDK boundary | SDK-only consumer compiles without application, ORM, server, provider authentication or terminal dependencies; explicit endpoints and credentials suffice; existing core capability/managed Responses/channel clients are delivered, with caller-controlled checkpoint ACK and no automatic execution/replay |
+| A03 SDK boundary | SDK-only consumer compiles without application, ORM, server, provider authentication or terminal dependencies; explicit endpoints and credentials suffice for gateway/control/harness HTTP clients; existing core capability/managed Responses/channel clients are delivered, with caller-controlled checkpoint ACK and no automatic execution/replay |
 | A04 Gateway artifact | Official gateway profile runs as an independent process using configuration; no consumer-provided AppBuilder, hooks, database handles or source changes |
 | A05 Feature closure | Minimum/core/harness/tui/core+harness/core+tui/optional-gateway/default/all-features builds succeed in isolation; `tui` contains harness/CLI, harness does not implicitly enable core |
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state; default/dormant configuration is accepted, while unavailable activation is rejected consistently at startup, reload and profile preflight |
@@ -1364,7 +1404,7 @@ refactor has already been implemented or tested.
 | A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; reserved request-ID rejection preserves earlier accounting; trajectory terminal facts/outbox survive feature changes without duplicate settlement/publication; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
 | A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui |
-| A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves essential facts; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
+| A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves configuration readability, essential facts, basic logs and harness-local capture, and rejects unavailable export before related side effects; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
 | A13 Extensions | Matcher needs only contracts; real plugin installation preserves legacy global/output behavior and rule isolation; native checker fail-closed, revision/binding and permit lifetime tests pass; default activation is unchanged |
 | A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct; full-product and minimum-gateway candidate artifacts identify their features/revision, and the packaged gateway passes the independent SDK consumer scenario; updates preserve the installed profile or leave it unchanged with a profile-specific manual path |
 | A15 External migration | Every consumer migration path above has an explicit replacement example or documented local-only boundary; old SDK builder, AI ModelClient, telemetry imports and guardrails SDK adapter are covered; no claim that HTTP transparently replaces arbitrary custom hooks |
@@ -1400,6 +1440,7 @@ coverage that justifies a profile.
 | Minimum gateway | Real-process inference/control, configured authentication, decision-policy/pricing validation and bounded decision assessment, published-policy load/validation and equivalent routing including published experiment assignment, certificate rejection and progress-guard escalation/tool safety floors with persisted-history validation, usage finalization and shutdown without agent resources or a terminal |
 | Core only | Relocated `core_contract` and relevant `core_execution` ACK/recovery/cancellation tests using the mock harness port, without enabling production harness; existing eval HTTP subject/result/snapshot/status behavior and tenant isolation |
 | Core SDK | SDK-only consumer negotiates capabilities and the existing channel against a separate core-enabled server; bind and checkpoint ACK unblock work only after the test caller persists it; managed Responses, operation/head lookup, release, scope/epoch/version errors, bounded frames and disconnect preserve existing semantics; no implicit ACK, tool execution or mutation replay |
+| Harness HTTP SDK | SDK-only consumer uses the explicit loopback execution endpoint and credential; verify instance changes, workspace authorization, stored-session reads/observation, native mutations with core, and capability rejection without core; inference/control credentials are not interchangeable with execution credentials |
 | Harness only | Stored-session inspection, historical native snapshot decoding and corruption rejection, and existing external ACP/headless paths without production core or terminal drawing; native start/resume rejects before resource discovery, owner acquisition or durable mutation, with no automatic queue execution |
 | Core and harness | Existing managed execution, ThreadService ownership/queue/approval transitions, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
 | TUI | Existing PTY actions and terminal restoration; shared command results agree with the corresponding headless paths |
@@ -1408,7 +1449,7 @@ coverage that justifies a profile.
 | Guardrails | Real `GuardrailsPlugin::install` path plus native checker host tests; denied input makes zero upstream calls, output block/redact works, dynamic rules do not leak between requests |
 | HTTP-only telemetry | Trace/metric delivery to a test collector, configured headers, current bearer-refresh behavior and shutdown flushing |
 | gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |
-| No telemetry | Essential request/usage facts and finalization remain available with no exporter |
+| No OTLP transport | Minimum and harness-only profiles retain essential request/usage facts, finalization, basic logs and enabled harness-local records; dormant export configuration is readable, while effective export opt-in is rejected at startup/reload/profile preflight before installation-ID creation, bearer resolution or exporter tasks |
 | Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full and full → harness-only → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
 | Reserved request identities | Create judge reservations and accounting in a full build; submit the reserved IDs through the minimum gateway, including an early authentication rejection; assert zero upstream calls and unchanged original attempt/charge records; retain canonical replay accounting protection where its existing scope applies |
 | Trajectory settlement and outbox | Minimum gateway records terminal facts only from authoritative metering and applies equivalent cost-based progress guards; preexisting and new outbox rows remain pending without core, with no disabled-consumer retry loop; restoring core validates and drains them idempotently without repeated settlement or duplicate admitted evidence |

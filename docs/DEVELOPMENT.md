@@ -361,6 +361,11 @@ Common exporter code is compiled whenever either transport is selected. Ingress
 spans use the application's existing HTTP server; there is no separate `server`
 feature or transport-less exporter flag. ACP spans additionally require harness.
 Default installations retain HTTP export capability; endpoints remain opt-in.
+Without either transport, export configuration still parses, basic tracing logs
+and request accounting remain active, and harness-local ACP records remain
+available. Explicit export opt-in fails before installation-ID or export-bearer
+resolution at startup, reload and handoff preflight; dormant configuration stays
+readable. Standalone ACP preparation applies the same availability check.
 Keep `plugins.bitrouter-telemetry`, `BITROUTER_TELEMETRY_*`, `io.bitrouter.observe`,
 the `bitrouter` meter and `bitrouter::observe::*` log targets unchanged.
 

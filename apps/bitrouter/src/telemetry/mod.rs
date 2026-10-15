@@ -18,7 +18,6 @@ mod auth_client;
 pub mod bearer;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub mod cardinality;
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub mod config;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub mod exporter;

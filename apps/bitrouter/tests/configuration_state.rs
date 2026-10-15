@@ -111,6 +111,29 @@ fn configuration(report: &StatusReport) -> Result<Value> {
     Ok(state.clone())
 }
 
+#[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+#[tokio::test]
+async fn unavailable_export_reload_preserves_live_configuration() -> Result<()> {
+    let fixture = RunningFixture::start().await?;
+    let before = fixture.status(&fixture.source).await?;
+    let initial_config = yaml("127.0.0.1:14356", "old-private-api-key");
+    tokio::fs::write(
+        &fixture.source,
+        format!(
+            "{}plugins:\n  bitrouter-telemetry:\n    telemetry: {{ enabled: true, attribution: account }}\n",
+            yaml("127.0.0.1:14356", "replacement-private-api-key")
+        ),
+    )
+    .await?;
+    ensure!(fixture.reloader.reload().await.is_err());
+    let after = fixture.status(&fixture.source).await?;
+    ensure!(after.running && after.listen == before.listen);
+    ensure!(configuration(&after)?["saved"] == "invalid");
+    tokio::fs::write(&fixture.source, initial_config).await?;
+    ensure!(configuration(&fixture.status(&fixture.source).await?)?["running"] == "in_sync");
+    Ok(())
+}
+
 #[tokio::test]
 async fn saved_edits_reload_and_restart_have_target_owned_evidence() -> Result<()> {
     let fixture = RunningFixture::start().await?;

@@ -175,6 +175,10 @@ portable-pty = "0.9"
 vt100 = "0.15"
 
 [[test]]
+name = "observe_hierarchy"
+required-features = ["otel-http"]
+
+[[test]]
 name = "telemetry_ingress_log_target"
 required-features = ["otel-http"]
 

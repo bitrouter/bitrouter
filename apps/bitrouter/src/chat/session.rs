@@ -102,7 +102,9 @@ pub(crate) async fn chat_plain(
     client: &AcpClient,
     session_id: &str,
     agent_id: &str,
-    recorder: Option<std::sync::Arc<crate::telemetry::acp::AcpSpanRecorder>>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))] recorder: Option<
+        std::sync::Arc<crate::telemetry::acp::AcpSpanRecorder>,
+    >,
     surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     use std::io::Write as _;
@@ -206,6 +208,7 @@ pub(crate) async fn chat_plain(
                 crate::acp_cli::report_turn(
                     client,
                     agent_id,
+                    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
                     recorder.as_ref(),
                     &response,
                     started.elapsed(),
