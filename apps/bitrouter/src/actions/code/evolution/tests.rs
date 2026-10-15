@@ -138,6 +138,7 @@ presets:
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         AcpControlPlane {
+            #[cfg(feature = "harness")]
             runtime: assembled.acp_runtime,
             metering: crate::metering::MeteringStore::new(assembled.db),
             inventory: Some(assembled.gateway_requests.inventory()),

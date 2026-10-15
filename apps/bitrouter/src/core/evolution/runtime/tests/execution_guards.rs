@@ -15,9 +15,7 @@ async fn binding_retains_the_learning_snapshot_when_reload_precedes_record_creat
             .await?;
         let identity = session(&fixture, "handoff", "fixture").await?;
         let mut ctx = PipelineContext::new(request(&identity, "handoff-request", "coding")?);
-        SessionContextHook::new(fixture.assembled.acp_runtime.clone())
-            .check(&mut ctx)
-            .await?;
+        SessionContextHook::default().check(&mut ctx).await?;
         fixture.assembled.gateway_requests.check(&mut ctx).await?;
         block_hook(&fixture).check(&mut ctx).await?;
         assert!(
@@ -137,9 +135,7 @@ async fn mode_changes_fence_a_prepared_request_and_session_overrides_keep_preced
     service.set_mode(EvolutionMode::Manual, None).await?;
     let identity = session(&fixture, "mode", "fixture").await?;
     let mut ctx = PipelineContext::new(request(&identity, "prepared-request", "coding")?);
-    SessionContextHook::new(fixture.assembled.acp_runtime.clone())
-        .check(&mut ctx)
-        .await?;
+    SessionContextHook::default().check(&mut ctx).await?;
     fixture.assembled.gateway_requests.check(&mut ctx).await?;
     block_hook(&fixture).check(&mut ctx).await?;
     binding_hook(&fixture).check(&mut ctx).await?;
@@ -150,38 +146,41 @@ async fn mode_changes_fence_a_prepared_request_and_session_overrides_keep_preced
             .await
             .is_err()
     );
-    service.set_mode(EvolutionMode::Manual, None).await?;
-    let manual = session(&fixture, "manual-route", "fixture").await?;
-    fixture
-        .assembled
-        .acp_runtime
-        .set_route("local", "controller", &manual.native_session_id, "coding")
-        .map_err(anyhow::Error::msg)?;
-    fixture
-        .assembled
-        .app
-        .language_model()
-        .context("pipeline missing")?
-        .execute(request(&manual, "manual-request", "coding")?)
-        .await?;
-    let execution = runtime
-        .executions(&manual)
-        .await?
-        .pop()
-        .context("execution missing")?;
-    let intent = execution.intent.context("intent missing")?;
-    assert_eq!(
-        intent.bypass.as_deref(),
-        Some("session_route_override_precedence")
-    );
-    assert!(
-        intent.assignments.contains_key("coding-block"),
-        "bypasses retain intent-to-treat enrollment"
-    );
-    assert_eq!(
-        execution.settlement.context("settlement missing")?.hops[0].model,
-        "strong"
-    );
+    #[cfg(feature = "harness")]
+    {
+        service.set_mode(EvolutionMode::Manual, None).await?;
+        let manual = session(&fixture, "manual-route", "fixture").await?;
+        fixture
+            .assembled
+            .acp_runtime
+            .set_route("local", "controller", &manual.native_session_id, "coding")
+            .map_err(anyhow::Error::msg)?;
+        fixture
+            .assembled
+            .app
+            .language_model()
+            .context("pipeline missing")?
+            .execute(request(&manual, "manual-request", "coding")?)
+            .await?;
+        let execution = runtime
+            .executions(&manual)
+            .await?
+            .pop()
+            .context("execution missing")?;
+        let intent = execution.intent.context("intent missing")?;
+        assert_eq!(
+            intent.bypass.as_deref(),
+            Some("session_route_override_precedence")
+        );
+        assert!(
+            intent.assignments.contains_key("coding-block"),
+            "bypasses retain intent-to-treat enrollment"
+        );
+        assert_eq!(
+            execution.settlement.context("settlement missing")?.hops[0].model,
+            "strong"
+        );
+    }
     Ok(())
 }
 

@@ -5,6 +5,9 @@ Without `harness`, the daemon opens no local task or native ACP listener, and
 `agent_api.enabled` and `acp serve` report the missing capability before startup.
 Empty MCP configuration and disabled agent API settings remain readable.
 Local native headless execution requires both `core` and `harness`.
+Supervised sessions and ACP route-lease control also require `harness`; a
+gateway-only daemon leaves the supervisor ledger untouched. Request identity
+and existing session-attributed spend remain available.
 
 Evidence and learning commands require the application's `core` feature:
 `eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`

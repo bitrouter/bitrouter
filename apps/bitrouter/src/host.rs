@@ -277,6 +277,7 @@ async fn serve_with_options(
             policy: assembled.policy_runtime.clone(),
             observe: observe_provider.clone(),
         };
+        #[cfg(feature = "harness")]
         let acp_runtime_for_control = assembled.acp_runtime.clone();
         let reloader = crate::reload::AppReloader::new(
             policy_store.clone(),
@@ -541,6 +542,7 @@ async fn serve_with_options(
             reloader.clone(),
             observe_provider,
             daemon::AcpControlPlane {
+                #[cfg(feature = "harness")]
                 runtime: acp_runtime_for_control,
                 metering: crate::metering::MeteringStore::new(assembled.db.clone()),
                 inventory: Some(assembled.gateway_requests.inventory()),

@@ -22,11 +22,13 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
+#[cfg(feature = "harness")]
 use crate::gateway::pipeline::routing::RoutingPrefs;
 
 use chrono::{DateTime, Utc};
 
-use crate::acp_runtime::AcpRuntime;
+#[cfg(feature = "harness")]
+use crate::harness::acp::runtime::AcpRuntime;
 use crate::metering::{MeteringStore, TimeWindow};
 use crate::reload::{ReloadAdmissionError, ReloadReservation};
 use bitrouter_ai::control::reload::{ReloadReport, ReloadState};
@@ -643,6 +645,7 @@ pub async fn run_control_socket(
         reloader,
         observe,
         AcpControlPlane {
+            #[cfg(feature = "harness")]
             runtime: Arc::new(AcpRuntime::new()),
             metering,
             inventory: None,
@@ -664,6 +667,7 @@ pub async fn run_control_socket(
 #[derive(Clone)]
 pub struct AcpControlPlane {
     /// In-memory route leases, keyed by principal and controller.
+    #[cfg(feature = "harness")]
     pub runtime: Arc<AcpRuntime>,
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
@@ -752,6 +756,7 @@ pub(crate) async fn run_bound_control_socket(
     acp: AcpControlPlane,
     options: LocalControlOptions,
 ) -> Result<()> {
+    #[cfg(feature = "harness")]
     let supervisor = match &options.administration {
         Some(administration) => Some(
             crate::supervisor::Supervisor::open(
@@ -764,6 +769,7 @@ pub(crate) async fn run_bound_control_socket(
     };
     let services = LocalControlServices {
         administration: options.administration,
+        #[cfg(feature = "harness")]
         supervisor,
         gate: options.gate,
         cli_owned: options.cli_owned,
@@ -783,6 +789,7 @@ pub(crate) async fn run_bound_control_socket(
         &services,
     )
     .await;
+    #[cfg(feature = "harness")]
     if let Some(supervisor) = &services.supervisor {
         supervisor.shutdown().await;
     }
@@ -793,10 +800,32 @@ pub(crate) async fn run_bound_control_socket(
 #[derive(Clone)]
 struct LocalControlServices {
     administration: Option<Administration>,
+    #[cfg(feature = "harness")]
     supervisor: Option<crate::supervisor::Supervisor>,
     gate: crate::daemon_handoff::HandoffGate,
     cli_owned: bool,
     handoff_instance_id: String,
+}
+
+impl LocalControlServices {
+    async fn supervised_run_count(&self) -> Option<usize> {
+        #[cfg(feature = "harness")]
+        return match &self.supervisor {
+            Some(supervisor) => Some(supervisor.active_run_count().await),
+            None => None,
+        };
+        #[cfg(not(feature = "harness"))]
+        Some(0)
+    }
+}
+
+impl AcpControlPlane {
+    fn active_lease_count(&self) -> usize {
+        #[cfg(feature = "harness")]
+        return self.runtime.active_lease_count();
+        #[cfg(not(feature = "harness"))]
+        0
+    }
 }
 
 async fn active_recording_count(acp: &AcpControlPlane) -> Result<Option<u64>> {
@@ -944,6 +973,15 @@ async fn dispatch(
     services: &LocalControlServices,
 ) -> DaemonResponse {
     match command {
+        #[cfg(not(feature = "harness"))]
+        DaemonCommand::AcpControllerCleanup { .. }
+        | DaemonCommand::AcpRouteList { .. }
+        | DaemonCommand::AcpRouteSet { .. }
+        | DaemonCommand::AcpRouteReset { .. }
+        | DaemonCommand::Sessions { .. } => DaemonResponse::Error {
+            message: "ACP route leases and supervised sessions require the harness feature"
+                .to_string(),
+        },
         DaemonCommand::Stop => DaemonResponse::Ok,
         DaemonCommand::HandoffHello => DaemonResponse::HandoffHello {
             version: crate::VERSION.to_string(),
@@ -966,8 +1004,8 @@ async fn dispatch(
                     };
                 }
             };
-            let active_runs = match &services.supervisor {
-                Some(supervisor) => supervisor.active_run_count().await,
+            let active_runs = match services.supervised_run_count().await {
+                Some(count) => count,
                 None => {
                     services.gate.abort(&token);
                     return DaemonResponse::HandoffBusy {
@@ -975,7 +1013,7 @@ async fn dispatch(
                     };
                 }
             };
-            let leases = acp.runtime.active_lease_count();
+            let leases = acp.active_lease_count();
             let active_recordings = match active_recording_count(acp).await {
                 Ok(Some(count)) => count,
                 Ok(None) => {
@@ -1096,11 +1134,8 @@ async fn dispatch(
             let (operations, drain_in_progress) = services.gate.observed_activity();
             let handoff_activity = HandoffActivity {
                 operations,
-                supervised_runs: match &services.supervisor {
-                    Some(supervisor) => Some(supervisor.active_run_count().await),
-                    None => None,
-                },
-                route_leases: acp.runtime.active_lease_count(),
+                supervised_runs: services.supervised_run_count().await,
+                route_leases: acp.active_lease_count(),
                 acp_recordings: active_recording_count(acp).await.ok().flatten(),
                 drain_in_progress,
             };
@@ -1180,6 +1215,7 @@ async fn dispatch(
                 },
             }
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpControllerCleanup {
             api_principal,
             controller_instance_id,
@@ -1188,6 +1224,7 @@ async fn dispatch(
                 .remove_controller(&api_principal, &controller_instance_id);
             DaemonResponse::Ok
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpRouteList {
             api_principal,
             controller_instance_id,
@@ -1218,6 +1255,7 @@ async fn dispatch(
                 }
             }
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpRouteSet {
             api_principal,
             controller_instance_id,
@@ -1263,6 +1301,7 @@ async fn dispatch(
                 Err(message) => DaemonResponse::Error { message },
             }
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpRouteReset {
             api_principal,
             controller_instance_id,
@@ -1362,6 +1401,7 @@ async fn dispatch(
         DaemonCommand::Inspect { inspection } => {
             inspection_response(inspection, &services.administration).await
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::Sessions { request } => {
             let Some(supervisor) = &services.supervisor else {
                 return DaemonResponse::Error {
@@ -1454,6 +1494,7 @@ async fn inspection_response(
     }
 }
 
+#[cfg(feature = "harness")]
 fn route_suggestions(app: &Arc<App>) -> Vec<String> {
     app.language_model()
         .map(|pipeline| {

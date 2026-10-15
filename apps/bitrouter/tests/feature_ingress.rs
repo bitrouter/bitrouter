@@ -154,12 +154,33 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
     std::fs::write(&config_path, &raw)?;
     let config = bitrouter::config::parse_with(&raw, |_| None)?;
     let source = ConfigSource::File(config_path.clone());
+    // Seed the persisted v1 filename before the process starts. Its digest is
+    // the logical configuration path, with only the parent canonicalized.
+    use sha2::{Digest, Sha256};
+    let logical_config = std::fs::canonicalize(directory.path())?.join("bitrouter.yaml");
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::ffi::OsStrExt;
+        hex::encode(Sha256::digest(logical_config.as_os_str().as_bytes()))
+    };
+    #[cfg(windows)]
+    let identity = hex::encode(Sha256::digest(
+        logical_config
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .as_bytes(),
+    ));
+    let supervisor_ledger = source
+        .home()
+        .join(format!("supervisor-runs-v1-{identity}.json"));
+    let dormant_ledger = b"unavailable harness data must not be decoded or rewritten";
     let socket = daemon::socket_path_for(&source, &config);
     let endpoints = [
         socket.with_extension("agent.sock"),
         socket.with_extension("acp.sock"),
     ];
     if !cfg!(feature = "harness") {
+        std::fs::write(&supervisor_ledger, dormant_ledger)?;
         for endpoint in &endpoints {
             std::fs::write(endpoint, "not a harness endpoint")?;
         }
@@ -185,6 +206,50 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
         }
     })
     .await??;
+    if !cfg!(feature = "harness") {
+        let status = daemon::send_command(&socket, &DaemonCommand::Status).await?;
+        let DaemonResponse::Status {
+            handoff_activity: Some(activity),
+            ..
+        } = status
+        else {
+            anyhow::bail!("gateway did not report handoff activity");
+        };
+        ensure!(activity.supervised_runs == Some(0));
+        ensure!(activity.route_leases == 0);
+        let commands = [
+            DaemonCommand::AcpRouteList {
+                api_principal: "local".into(),
+                controller_instance_id: "fixture".into(),
+                session_id: "fixture".into(),
+            },
+            DaemonCommand::AcpRouteSet {
+                api_principal: "local".into(),
+                controller_instance_id: "fixture".into(),
+                session_id: "fixture".into(),
+                route: "test-model".into(),
+            },
+            DaemonCommand::AcpRouteReset {
+                api_principal: "local".into(),
+                controller_instance_id: "fixture".into(),
+                session_id: "fixture".into(),
+            },
+            DaemonCommand::AcpControllerCleanup {
+                api_principal: "local".into(),
+                controller_instance_id: "fixture".into(),
+            },
+            serde_json::from_value(serde_json::json!({
+                "cmd": "sessions", "request": {"version": 1, "command": {"op": "list"}}
+            }))?,
+        ];
+        for command in commands {
+            let response = daemon::send_command(&socket, &command).await?;
+            let DaemonResponse::Error { message } = response else {
+                anyhow::bail!("unavailable harness command was accepted");
+            };
+            ensure!(message.contains("harness feature"), "{message}");
+        }
+    }
     let client = reqwest::Client::new();
     ensure!(
         client
@@ -240,6 +305,9 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
         for endpoint in &endpoints {
             ensure!(!endpoint.exists());
         }
+    } else {
+        ensure!(std::fs::read(&supervisor_ledger)? == dormant_ledger);
+        ensure!(!supervisor_ledger.with_extension("json.tmp").exists());
     }
     Ok(())
 }

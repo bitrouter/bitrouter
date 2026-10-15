@@ -59,8 +59,11 @@ resolves one interpreter before a coding execution; model commands and
 verification share it. See [the six-tool contract](BRO_BASE_TOOLS_SPEC.md).
 
 The host constructs `ThreadService` and binds task/native ACP endpoints only
-with `harness`. A reduced gateway leaves those endpoint paths and workspace
-resources untouched. Configured MCP upstreams require `mcp`; enabled agent HTTP
+with `harness`. The supervisor and its recovery ledger, and the in-memory ACP
+route-lease runtime, also require harness. A reduced gateway leaves those
+endpoint paths, supervisor records and workspace resources untouched. Request
+identity normalization, accounting and existing session-spend reads remain
+available without that runtime. Configured MCP upstreams require `mcp`; enabled agent HTTP
 ingress requires `harness`. Startup, reload and profile preflight reject missing
 capabilities before activating the service. This runtime separation does not yet
 complete the remaining harness/TUI dependency isolation.

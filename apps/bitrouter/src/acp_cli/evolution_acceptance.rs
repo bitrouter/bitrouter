@@ -363,6 +363,7 @@ models:
                 Arc::new(crate::daemon::NoopReloader),
                 Arc::new(crate::daemon::NoopObserveStatus { compiled_in: false }),
                 crate::daemon::AcpControlPlane {
+                    #[cfg(feature = "harness")]
                     runtime: assembled.acp_runtime,
                     metering: crate::metering::MeteringStore::new(assembled.db),
                     inventory: Some(assembled.gateway_requests.inventory()),

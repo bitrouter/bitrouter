@@ -63,7 +63,7 @@ the contract move must preserve its bytes.
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; remaining supervisor/session initialization, terminal and dependency isolation precede the complete matrix |
+| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; remaining harness/TUI module and dependency isolation precede the complete matrix |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -1705,3 +1705,70 @@ route-lease adapter and opens the supervisor ledger; full harness/TUI dependency
 isolation, server-tool/database flags and the remaining artifact, compatibility,
 performance, complete validation and final review work are outstanding. This
 stage does not establish complete gateway runtime isolation or P0 delivery.
+
+## Harness supervisor and route-lease runtime isolation
+
+This stage follows `62321c2`. The foreground daemon constructs, opens and shuts
+down the supervisor only with harness. Without that feature, local supervised
+session and ACP route-lease commands retain their wire representation but return
+an explicit capability error; handoff status reports zero local supervised runs
+and leases. Harness-enabled custom hosts without a supervisor still report
+unknown activity. Persisted recording checks remain conservative and available;
+feature disablement does not turn existing recording rows into proof of idle
+activity.
+
+The ACP route runtime moved byte-for-byte from `src/acp_runtime.rs` to
+`src/harness/acp/runtime.rs`, behind harness, with no root forwarding facade.
+Assembly and control wiring no longer construct it in gateway/core-only builds.
+`SessionContextHook` remains a required, unconditional gateway hook: its default
+normalizes request identity without a route-lease adapter. The full host still
+injects the shared principal-scoped runtime in the original hook order. Existing
+session-attributed metering and control reads remain usable without harness.
+
+The process fixture now seeds a malformed supervisor ledger at its persisted
+v1 path before starting a reduced gateway. It proves startup, real inference,
+status, unavailable IPC rejection and shutdown succeed without decoding or
+rewriting that file or creating its temporary replacement. This is a dormant
+resource-isolation test, not a historical schema compatibility claim.
+
+Independent review identified mixed identity tests whose initial harness gates
+also hid ordinary Claude/Codex lineage, turn and conflict assertions. Both tests
+now run without harness; only lease setup/assertions are conditional. A new
+unconditional case checks declared controller/native attribution without a lease
+adapter. All eight original identity cases remain, plus that ninth case. Core
+mode-change fencing and generic capture/session-spend tests remain ungated.
+Follow-up review confirmed the correction and unchanged runtime relocation with
+no remaining actionable finding.
+
+Validation uses debug-symbol-free, non-incremental builds, two build jobs and
+two test threads as in preceding stages:
+
+- Empty-feature and core-only application/all-target checks passed. Initial
+  fixture compilation exposed a private helper reference and one unused import;
+  the fixture now uses the documented persisted filename encoding, and the
+  import follows its runtime owner.
+- Before the final test-gate correction/runtime relocation, affected nextest
+  suites passed: minimum **33/33** in 2.068 seconds; all features **137/137** in
+  6.793 seconds; core-only **107/107** in 6.324 seconds; harness-only **40/40**
+  in 2.969 seconds. These include daemon, process ingress, identity, host,
+  handoff, configuration, supervisor and evolution cases as applicable.
+- On the final source, minimum **23/23** passed in 2.526 seconds (2,833 outside
+  the filter) and all features **31/31** passed in 3.490 seconds (3,389 outside).
+  The command selects `--lib --test feature_ingress --test daemon`, filtering
+  `test(session_identity::) | binary(feature_ingress) | binary(daemon)`; the
+  full profile additionally selects `test(harness::acp::runtime::)`. Thus both
+  mixed extraction tests run in minimum, and all four relocated lease-runtime
+  tests run in full. No process shared the user's existing daemon or storage.
+- Final strict Rust 1.97.0 Clippy passed for workspace/all-features/all-targets,
+  empty-feature application/all-targets and core-only application/all-targets.
+  Full-workspace and empty-feature strict Rustdoc passed.
+- Formatting and patch-whitespace checks passed. Source/manifests were frozen
+  during runtime sequences. Logs use `/tmp/bitrouter-p0-session-runtime-*`.
+  Existing stable linker and third-party future-compatibility warnings remain.
+
+All final A01–A16 gates remain open. The supervisor implementation still needs
+separation from shared local-command data/clients before its entire module can
+be harness-gated. Remaining harness/TUI dependencies, server-tool/database flags,
+capability-aware artifact identity, harness SDK delivery, historical/backend/
+packaged-process/performance evidence, whole-candidate validation and final
+independent review still precede the requested PR. P1 remains excluded.

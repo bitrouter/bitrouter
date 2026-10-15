@@ -58,6 +58,7 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         daemon::AcpControlPlane {
+            #[cfg(feature = "harness")]
             runtime: assembled.acp_runtime,
             metering: MeteringStore::new(assembled.db.clone()),
             inventory: Some(assembled.gateway_requests.inventory()),
@@ -382,6 +383,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     let _ = tokio::fs::remove_dir_all(&dir).await;
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
     let dir = tempdir("acp-route");
@@ -1044,6 +1046,7 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await.unwrap();
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    #[cfg(feature = "harness")]
     let runtime = assembled.acp_runtime.clone();
     let metering = MeteringStore::new(assembled.db.clone());
     let app = Arc::new(assembled.app);
@@ -1055,6 +1058,7 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         daemon::AcpControlPlane {
+            #[cfg(feature = "harness")]
             runtime: runtime.clone(),
             metering: metering.clone(),
             inventory: Some(assembled.gateway_requests.inventory()),

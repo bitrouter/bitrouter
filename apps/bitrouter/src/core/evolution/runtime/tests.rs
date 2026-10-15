@@ -311,9 +311,7 @@ async fn dependency_scope_ignores_unrelated_routes_but_dispatch_fences_aba_reloa
         .await?;
     let identity = session(&fixture, "reload", "fixture").await?;
     let mut ctx = PipelineContext::new(request(&identity, "reload-request", "coding")?);
-    SessionContextHook::new(fixture.assembled.acp_runtime.clone())
-        .check(&mut ctx)
-        .await?;
+    SessionContextHook::default().check(&mut ctx).await?;
     fixture.assembled.gateway_requests.check(&mut ctx).await?;
     block_hook(&fixture).check(&mut ctx).await?;
     binding_hook(&fixture).check(&mut ctx).await?;
@@ -379,9 +377,7 @@ async fn canonical_binding_requires_authenticated_scope_and_unambiguous_recorded
     let fixture = fixture(false).await?;
     let identity = session(&fixture, "scoped", "fixture").await?;
     let mut ctx = PipelineContext::new(request(&identity, "scope-request", "coding")?);
-    SessionContextHook::new(fixture.assembled.acp_runtime.clone())
-        .check(&mut ctx)
-        .await?;
+    SessionContextHook::default().check(&mut ctx).await?;
     let normalized = ctx
         .extension::<RequestSessionContext>()
         .context("normalized context missing")?;
@@ -399,9 +395,7 @@ async fn canonical_binding_requires_authenticated_scope_and_unambiguous_recorded
     foreign.emit(ApiPrincipalEstablished {
         route_scope_id: "different-credential".into(),
     });
-    SessionContextHook::new(fixture.assembled.acp_runtime.clone())
-        .check(&mut foreign)
-        .await?;
+    SessionContextHook::default().check(&mut foreign).await?;
     let normalized_foreign = foreign
         .extension::<RequestSessionContext>()
         .context("normalized context missing")?;

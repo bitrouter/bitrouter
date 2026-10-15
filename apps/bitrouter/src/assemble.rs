@@ -62,7 +62,6 @@ use crate::telemetry::config::{ContentCaptureMode, MetricsConfig, OtelConfig};
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 use crate::telemetry::exporter::{OtelExporter, OtelObserveHook};
 
-use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
 use crate::continuation::{ContinuationKeySource, ContinuationRegistry, ContinuationRuntime};
 #[cfg(feature = "core")]
@@ -79,6 +78,8 @@ use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
 use crate::gateway::observability::decision::PendingEvalDecisionStore;
 use crate::gateway::observability::prediction::PredictiveResponseObserver;
 use crate::gateway::observability::settlement::PolicySettlementRecorder;
+#[cfg(feature = "harness")]
+use crate::harness::acp::runtime::AcpRuntime;
 use crate::metering::tariff::CaptureTariffs;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
@@ -96,6 +97,7 @@ pub struct Assembled {
     /// The shared database connection.
     pub db: DatabaseConnection,
     /// In-memory API-principal-scoped ACP route leases.
+    #[cfg(feature = "harness")]
     pub acp_runtime: Arc<AcpRuntime>,
     /// The policy store wired into the language_model pipeline. Held by the
     /// caller (the daemon) so `bro reload` / SIGHUP can call
@@ -509,6 +511,7 @@ async fn assemble_app(
     crate::db::run_migrations(&db)
         .await
         .context("running database migrations")?;
+    #[cfg(feature = "harness")]
     let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
     // continuation route matching and the HTTP executor. This lets mapped
@@ -937,7 +940,10 @@ async fn assemble_app(
         as Arc<dyn crate::gateway::pipeline::settlement::SettlementRecorder>);
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
-    let acp_runtime_for_session = Arc::clone(&acp_runtime);
+    #[cfg(feature = "harness")]
+    let session_context = SessionContextHook::new(Arc::clone(&acp_runtime));
+    #[cfg(not(feature = "harness"))]
+    let session_context = SessionContextHook::default();
     let request_checks_for_pipeline = request_checks.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -1000,10 +1006,7 @@ async fn assemble_app(
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
             lm.pre_resolution_hook_for(AuthHook::new(db_for_hooks.clone()), OperationScope::Both);
-            lm.pre_resolution_hook_for(
-                SessionContextHook::new(acp_runtime_for_session),
-                OperationScope::Both,
-            );
+            lm.pre_resolution_hook_for(session_context, OperationScope::Both);
             lm.pre_resolution_hook(private_context);
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,
@@ -1095,6 +1098,7 @@ async fn assemble_app(
     Ok(Assembled {
         app,
         db,
+        #[cfg(feature = "harness")]
         acp_runtime,
         policy_store: policy_store_for_reload,
         policy_runtime,

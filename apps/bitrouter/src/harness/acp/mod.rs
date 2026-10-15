@@ -64,3 +64,6 @@ pub(crate) mod permission;
 pub mod telemetry;
 pub mod translate;
 pub mod up;
+
+#[cfg(feature = "harness")]
+pub mod runtime;
