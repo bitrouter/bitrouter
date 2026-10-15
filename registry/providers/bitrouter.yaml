@@ -449,6 +449,14 @@ models:
         cache_write: 0.125
       output_tokens:
         text: 0.5
+  - id: google/gemini-4-argon
+    provider_model_id: google/gemini-4-argon
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.1
+      output_tokens:
+        text: 10.0
 status: active
 weight: 1
 community: false
