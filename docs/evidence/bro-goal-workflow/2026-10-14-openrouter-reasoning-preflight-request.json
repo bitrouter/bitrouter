@@ -1,9 +1,0 @@
-{
-  "model": "openai/gpt-6.1-sol",
-  "max_tokens": 512,
-  "reasoning": {"effort":"low"},
-  "messages": [
-    {"role":"system","content":"This is an API connectivity preflight, not a Goal operation. Return only JSON with answer and control. A hypothetical question must not become an execution command."},
-    {"role":"user","content":"Current Goal is running. The user asks: 暂停会怎样？ Explain briefly in Chinese. control is null unless the user actually commands pause, run, or stop."}
-  ]
-}
