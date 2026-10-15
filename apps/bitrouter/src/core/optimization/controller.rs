@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::eval::compiler::EvalEvidenceSnapshot;
+use crate::core::eval::compiler::EvalEvidenceSnapshot;
+use crate::core::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
 use crate::gateway::routing::experiment_identity::{
     HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, canonical_digest, experiment_id,
     explore_compiler_config_digest, retreat_compiler_config_digest, treatment_context_digest,
@@ -14,7 +15,6 @@ use crate::gateway::routing::exploration::{
     RouteRejection,
 };
 use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
-use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
 use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, PolicyArtifact,
     PolicyCertificate, PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, validate_document,
@@ -310,7 +310,7 @@ pub fn select_opportunity(
 }
 
 pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep> {
-    crate::policy_compile::validate_eval_action_treatments(input.active_policy, input.eval)?;
+    crate::core::policy::validate_eval_action_treatments(input.active_policy, input.eval)?;
     let observed_subject_digest = observed_subject_digest(input.eval)?;
     let active_exploration = input
         .active_policy
@@ -763,7 +763,7 @@ pub async fn prepare_files(
     );
     let readonly_database_url = readonly_database_url(&database_url)?;
     let database = crate::db::connect(&readonly_database_url).await?;
-    let store = crate::eval::store::EvalStore::new(database);
+    let store = crate::core::eval::store::EvalStore::new(database);
     let frozen_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let manifest = store.materialize_snapshot(&frozen_at).await?;
     let eval = EvalEvidenceSnapshot::from_manifest(&store, manifest.clone()).await?;
@@ -902,7 +902,7 @@ where
         crate::config::parse(&config_after).context("validating optimization config activation")?;
     crate::policy_lock::validate_for_config(&candidate_config, &successor)?;
     let database = crate::db::connect(&database_url).await?;
-    let store = crate::eval::store::EvalStore::new(database);
+    let store = crate::core::eval::store::EvalStore::new(database);
     let persisted = store.persist_snapshot(&eval_snapshot).await?;
     if persisted.evidence_root != step.evidence.eval_snapshot_root {
         anyhow::bail!("persisted Eval snapshot does not match the prepared controller evidence");
@@ -1089,7 +1089,7 @@ mod tests {
     use anyhow::{Context, Result};
     use bitrouter_ai::routing::PolicyModelTarget;
 
-    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::gateway::routing::exploration::{
         OptimizationGate, PolicyOptimizationState, RouteRejection,
     };
@@ -2407,15 +2407,15 @@ mod file_tests {
     use bitrouter_ai::routing::PolicyModelTarget;
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-    use crate::eval::EvalService;
-    use crate::eval::admission::SubmissionPrincipal;
-    use crate::eval::store::EvalStore;
-    use crate::gateway::routing::exploration::{RouteExploration, RouteRejection};
-    use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
-    use crate::optimization::controller::{
+    use crate::core::eval::EvalService;
+    use crate::core::eval::admission::SubmissionPrincipal;
+    use crate::core::eval::store::EvalStore;
+    use crate::core::optimization::controller::{
         ControllerAction, OptimizationOptions, prepare_files, publish_prepared,
         publish_prepared_with_config_writer, read_status,
     };
+    use crate::gateway::routing::exploration::{RouteExploration, RouteRejection};
+    use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, default_history_dir, deterministic_yaml, load, publish_candidate,

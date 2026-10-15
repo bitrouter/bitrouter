@@ -16,12 +16,12 @@ use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::core::workflow_state::fixture::{WorkflowTraceFixture, parse_prompt};
+use crate::core::workflow_state::replay::extract_fixture_ir;
 use crate::gateway::routing::workflow::extractors::{
     ExtractorInput, detect_trace_adapter, parse_compatibility_harness,
 };
 use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
-use crate::workflow_state::fixture::{WorkflowTraceFixture, parse_prompt};
-use crate::workflow_state::replay::extract_fixture_ir;
 
 const MAX_CAPTURE_BODY_BYTES: usize = 16 * 1024 * 1024;
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
@@ -313,7 +313,7 @@ impl RealTraceCapture {
     }
 }
 
-pub const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
+use crate::config::WORKFLOW_TRACE_JSONL_ENV;
 pub const WORKFLOW_TRACE_HARNESS_ENV: &str = "BITROUTER_WORKFLOW_TRACE_HARNESS";
 
 pub fn capture_from_env() -> Result<Option<RealTraceCapture>> {

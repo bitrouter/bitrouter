@@ -192,7 +192,7 @@ jobs:
             targets: >-
               --test agent_trace_generalization --test observe_hierarchy
               --test workflow_state_real_agent_e2e
-              --test workflow_state_replay --test telemetry_ingress_log_target --test source_boundaries
+              --test workflow_state_replay --test gateway_workflow --test telemetry_ingress_log_target --test source_boundaries
           - shard: core-scheduling
             retries: "0"
             targets: --test core_contract --test core_execution
@@ -355,6 +355,14 @@ jobs:
                  echo '::error::profile without gRPC pulled tonic'; exit 1
                fi ;;
           esac
+
+      - name: verify gateway behavior without learning services
+        if: matrix.features == '' || matrix.features == 'harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test core_disabled --test trajectory_progress_control --test gateway_workflow
 
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})

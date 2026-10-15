@@ -3,9 +3,9 @@ use std::path::Path;
 
 use axum_test::TestServer;
 use bitrouter::config::EvalConfig;
-use bitrouter::eval::EvalService;
-use bitrouter::eval::api;
-use bitrouter::eval::store::EvalStore;
+use bitrouter::core::eval::EvalService;
+use bitrouter::core::eval::api;
+use bitrouter::core::eval::store::EvalStore;
 use {
     bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
     bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,

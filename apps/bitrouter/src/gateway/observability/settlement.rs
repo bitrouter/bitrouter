@@ -1,12 +1,13 @@
 //! Gateway-owned terminal evidence, with an optional untracked-request consumer.
 
+#[cfg(feature = "core")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::decision::{
-    CapturedEvalDecision, EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
-};
+#[cfg(feature = "core")]
+use super::decision::CapturedEvalDecision;
+use super::decision::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use crate::trajectory::settlement::{
@@ -16,6 +17,7 @@ use crate::trajectory::settlement::{
 pub(crate) struct PolicySettlementRecorder {
     pending: PendingEvalDecisionStore,
     trajectory: Option<TrajectorySettlementRecorder>,
+    #[cfg(feature = "core")]
     untracked: Option<Arc<dyn SettlementRecorder>>,
 }
 
@@ -23,11 +25,12 @@ impl PolicySettlementRecorder {
     pub(crate) fn new(
         pending: PendingEvalDecisionStore,
         trajectory: Option<TrajectorySettlementRecorder>,
-        untracked: Option<Arc<dyn SettlementRecorder>>,
+        #[cfg(feature = "core")] untracked: Option<Arc<dyn SettlementRecorder>>,
     ) -> Self {
         Self {
             pending,
             trajectory,
+            #[cfg(feature = "core")]
             untracked,
         }
     }
@@ -64,6 +67,7 @@ impl SettlementRecorder for PolicySettlementRecorder {
                 }
             }
         }
+        #[cfg(feature = "core")]
         if let Some(consumer) = &self.untracked {
             if let Some(invocation) = &invocation {
                 // Preserve this lookup even if its cache entry expires or is evicted
@@ -71,8 +75,9 @@ impl SettlementRecorder for PolicySettlementRecorder {
                 context.emit(CapturedEvalDecision::new(invocation.clone(), pending));
             }
             // Consumer failure retains pending evidence for the existing retry path.
-            consumer.record(context).await?;
-        } else if let Some(invocation) = &invocation {
+            return consumer.record(context).await;
+        }
+        if let Some(invocation) = &invocation {
             // No evaluation consumer was assembled. These are bounded process-local
             // observations; durable trajectory evidence was handled above.
             self.pending.remove(invocation, context.caller.user_id());

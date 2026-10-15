@@ -1215,30 +1215,41 @@ mod tests {
 
     use super::*;
     use crate::config::PolicyKeyStrategy;
-    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
-    use crate::eval::settlement::EvalSettlementRecorder;
-    use crate::eval::store::EvalStore;
+    #[cfg(feature = "core")]
+    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    #[cfg(feature = "core")]
+    use crate::core::eval::settlement::EvalSettlementRecorder;
+    #[cfg(feature = "core")]
+    use crate::core::eval::store::EvalStore;
+    #[cfg(feature = "core")]
+    use crate::core::policy::{CompileInput, compile_candidate};
+    #[cfg(feature = "core")]
     use crate::gateway::caller::CallerContext;
+    #[cfg(feature = "core")]
     use crate::gateway::observability::event::EventBus;
+    #[cfg(feature = "core")]
     use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
     use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
     use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
     use crate::gateway::routing::workflow::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::gateway::routing::workflow::online::OnlineWorkflowState;
-    use crate::policy_compile::{CompileInput, compile_candidate};
     use crate::policy_lock::{PolicyLock, semantic_digest};
     use crate::trajectory::canonical::CorrelationKey;
+    use bitrouter_ai::eval::ExperimentAssignmentUnit;
+    #[cfg(feature = "core")]
+    use bitrouter_ai::types::UsageOrigin;
     use bitrouter_ai::types::{
-        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput, UsageOrigin,
+        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
     };
     use http::HeaderMap;
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
+    #[cfg(feature = "core")]
     use {
         bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalVerdict,
         bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
-        bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::ExperimentAssignmentUnit,
+        bitrouter_ai::eval::EvaluatorKind,
     };
 
     use crate::gateway::routing::assessment::{Assessment, Judgment};
@@ -3001,133 +3012,137 @@ mod tests {
         assert_eq!(correlated.baseline_tier.as_deref(), Some("balanced"));
         assert_eq!(correlated.task_family_reason_codes, Vec::<String>::new());
 
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
-        let store = EvalStore::new(db);
-        let recorder = EvalSettlementRecorder::new(store.clone(), pending);
-        let mut settlement = SettlementContext {
-            operation: bitrouter_ai::types::ModelOperation::Generation,
-            request_id: "request-unified-v1".into(),
-            caller: CallerContext::local(),
-            target: None,
-            model_id: "gpt-5.6-sol".into(),
-            reasoning_effort: None,
-            provider_id: "openai-codex".into(),
-            account_label: None,
-            prompt_tokens: 10,
-            completion_tokens: 5,
-            reasoning_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            usage_origin: UsageOrigin::ProviderReported,
-            raw_usage: None,
-            web_search_count: 0,
-            media_input_count: 0,
-            media_output_count: 0,
-            server_tool_calls: Vec::new(),
-            streamed: false,
-            request_duration_ms: 100,
-            upstream_duration_ms: Some(90),
-            ttft_ms: None,
-            generation_duration_ms: None,
-            first_token_kind: None,
-            finish_reason: None,
-            error: None,
-            events: EventBus::default(),
-        };
-        settlement.emit(invocation);
-        recorder.record(&mut settlement).await?;
-        let subject = store
-            .subject("request:request-unified-v1")
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("settled unified-v1 subject missing"))?;
-        let settled = subject
-            .decisions
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("settled unified-v1 decision missing"))?;
-        assert_eq!(
-            settled.route_projection,
-            "semantic_route/v1|code:generation|implement|normal"
-        );
-        assert_eq!(
-            settled.request_key,
-            "semantic_route/v1|unknown|implement|normal"
-        );
-        assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
-        assert_eq!(
-            subject
-                .evidence
+        #[cfg(feature = "core")]
+        {
+            let db = crate::db::connect("sqlite::memory:").await?;
+            crate::db::run_migrations(&db).await?;
+            let store = EvalStore::new(db);
+            let recorder = EvalSettlementRecorder::new(store.clone(), pending);
+            let mut settlement = SettlementContext {
+                operation: bitrouter_ai::types::ModelOperation::Generation,
+                request_id: "request-unified-v1".into(),
+                caller: CallerContext::local(),
+                target: None,
+                model_id: "gpt-5.6-sol".into(),
+                reasoning_effort: None,
+                provider_id: "openai-codex".into(),
+                account_label: None,
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                reasoning_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                usage_origin: UsageOrigin::ProviderReported,
+                raw_usage: None,
+                web_search_count: 0,
+                media_input_count: 0,
+                media_output_count: 0,
+                server_tool_calls: Vec::new(),
+                streamed: false,
+                request_duration_ms: 100,
+                upstream_duration_ms: Some(90),
+                ttft_ms: None,
+                generation_duration_ms: None,
+                first_token_kind: None,
+                finish_reason: None,
+                error: None,
+                events: EventBus::default(),
+            };
+            settlement.emit(invocation);
+            recorder.record(&mut settlement).await?;
+            let subject = store
+                .subject("request:request-unified-v1")
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("settled unified-v1 subject missing"))?;
+            let settled = subject
+                .decisions
                 .first()
-                .ok_or_else(|| anyhow::anyhow!("settlement evidence missing"))?
-                .attributes
-                .get("task_family_reason_codes")
-                .map(String::as_str),
-            None
-        );
+                .ok_or_else(|| anyhow::anyhow!("settled unified-v1 decision missing"))?;
+            assert_eq!(
+                settled.route_projection,
+                "semantic_route/v1|code:generation|implement|normal"
+            );
+            assert_eq!(
+                settled.request_key,
+                "semantic_route/v1|unknown|implement|normal"
+            );
+            assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
+            assert_eq!(
+                subject
+                    .evidence
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("settlement evidence missing"))?
+                    .attributes
+                    .get("task_family_reason_codes")
+                    .map(String::as_str),
+                None
+            );
 
-        assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
-        // A task evaluator explicitly attributes its task result to this
-        // decision. Request completion alone cannot provide this quality.
-        let mut subject = subject;
-        subject.scope = bitrouter_ai::eval::EvalScope::Task;
-        subject.subject_id = "independently-evaluated-task".into();
-        subject.eval_id = "task:independently-evaluated-task".into();
-        let result = EvaluationResult {
-            schema_version: EVAL_SCHEMA_VERSION,
-            eval_id: subject.eval_id.clone(),
-            evidence_digest: subject.evidence_digest.clone(),
-            evaluator: EvaluatorIdentity {
-                authority_id: "task-native".into(),
-                evaluator_id: "unified-v1-regression".into(),
-                kind: EvaluatorKind::TaskNative,
-                version: "1".into(),
-                config_digest: policy_digest,
-            },
-            verdict: EvalVerdict::Pass,
-            metrics: BTreeMap::new(),
-            hard_violations: Vec::new(),
-            confidence_ppm: Some(1_000_000),
-            evidence_refs: Vec::new(),
-            decision_credit: BTreeMap::new(),
-            idempotency_key: "unified-v1-regression".into(),
-            submitted_at: "2026-08-15T00:00:01Z".into(),
-        };
-        let eval = EvalEvidenceSnapshot {
-            evidence_root:
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-            frozen_at: "2026-08-15T00:00:02Z".into(),
-            records: vec![EvalEvidenceRecord {
-                result_id: "unified-v1-result".into(),
-                content_digest:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-                subject,
-                result,
-            }],
-        };
-        let routes = eval.route_evidence()?;
-        let attributed = routes
-            .get(&(
-                "auto".to_owned(),
-                "semantic_route/v1|code:generation|implement|normal".to_owned(),
-            ))
-            .ok_or_else(|| anyhow::anyhow!("unified-v1 compiler attribution missing"))?;
-        assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
-        assert_eq!(
-            attributed.matched_request_keys,
-            BTreeSet::from(["semantic_route/v1|unknown|implement|normal".to_owned()])
-        );
-        let compiled = compile_candidate(CompileInput {
-            current: &active,
-            parent_digest: None,
-            snapshot_time_unix_ms: 0,
-            eval: Some(&eval),
-            proposed_progress_guards: None,
-        })?
-        .document;
-        let certificate = compiled
-            .certificate("auto", "semantic_route/v1|code:generation|implement|normal")
-            .ok_or_else(|| anyhow::anyhow!("compiled unified-v1 certificate missing"))?;
-        assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
+            assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
+            // A task evaluator explicitly attributes its task result to this
+            // decision. Request completion alone cannot provide this quality.
+            let mut subject = subject;
+            subject.scope = bitrouter_ai::eval::EvalScope::Task;
+            subject.subject_id = "independently-evaluated-task".into();
+            subject.eval_id = "task:independently-evaluated-task".into();
+            let result = EvaluationResult {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: subject.eval_id.clone(),
+                evidence_digest: subject.evidence_digest.clone(),
+                evaluator: EvaluatorIdentity {
+                    authority_id: "task-native".into(),
+                    evaluator_id: "unified-v1-regression".into(),
+                    kind: EvaluatorKind::TaskNative,
+                    version: "1".into(),
+                    config_digest: policy_digest,
+                },
+                verdict: EvalVerdict::Pass,
+                metrics: BTreeMap::new(),
+                hard_violations: Vec::new(),
+                confidence_ppm: Some(1_000_000),
+                evidence_refs: Vec::new(),
+                decision_credit: BTreeMap::new(),
+                idempotency_key: "unified-v1-regression".into(),
+                submitted_at: "2026-08-15T00:00:01Z".into(),
+            };
+            let eval = EvalEvidenceSnapshot {
+                evidence_root:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                frozen_at: "2026-08-15T00:00:02Z".into(),
+                records: vec![EvalEvidenceRecord {
+                    result_id: "unified-v1-result".into(),
+                    content_digest:
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            .into(),
+                    subject,
+                    result,
+                }],
+            };
+            let routes = eval.route_evidence()?;
+            let attributed = routes
+                .get(&(
+                    "auto".to_owned(),
+                    "semantic_route/v1|code:generation|implement|normal".to_owned(),
+                ))
+                .ok_or_else(|| anyhow::anyhow!("unified-v1 compiler attribution missing"))?;
+            assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
+            assert_eq!(
+                attributed.matched_request_keys,
+                BTreeSet::from(["semantic_route/v1|unknown|implement|normal".to_owned()])
+            );
+            let compiled = compile_candidate(CompileInput {
+                current: &active,
+                parent_digest: None,
+                snapshot_time_unix_ms: 0,
+                eval: Some(&eval),
+                proposed_progress_guards: None,
+            })?
+            .document;
+            let certificate = compiled
+                .certificate("auto", "semantic_route/v1|code:generation|implement|normal")
+                .ok_or_else(|| anyhow::anyhow!("compiled unified-v1 certificate missing"))?;
+            assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
+        }
         Ok(())
     }
 

@@ -20,7 +20,6 @@ pub mod acp_cli;
 pub mod acp_runtime;
 pub mod acp_trajectory;
 pub mod actions;
-pub mod adequacy;
 pub mod administration_target;
 pub mod agent_api;
 pub mod agent_local;
@@ -49,7 +48,6 @@ pub mod daemon_locator;
 pub mod dashboard;
 pub mod db;
 pub mod error_report;
-pub mod eval;
 pub mod evolution;
 pub mod gateway;
 pub mod gateways;
@@ -63,13 +61,11 @@ pub mod metering;
 pub mod native_acp;
 pub mod native_code;
 pub mod onboarding;
-pub mod optimization;
 #[cfg(feature = "core")]
 pub mod orchestrator_api;
 pub mod output;
 pub mod paths;
 pub mod policy;
-pub mod policy_compile;
 pub mod policy_lock;
 pub mod policy_table_router;
 mod prompt;
@@ -92,7 +88,6 @@ pub mod trajectory;
 pub mod update;
 pub mod upgrade;
 pub mod upgrade_preflight;
-pub mod workflow_state;
 
 pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
 

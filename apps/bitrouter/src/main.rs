@@ -38,11 +38,13 @@ use bitrouter::output::reports::agents::{
 };
 use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::DaemonActionReport;
+#[cfg(feature = "core")]
 use bitrouter::output::reports::eval::EvalReport;
 use bitrouter::output::reports::mcp::{
     McpAddReport, McpCheckReport, McpCheckRow, McpRegistryReport, McpRegistryRow,
 };
 use bitrouter::output::reports::observe::ObserveStatusReport;
+#[cfg(feature = "core")]
 use bitrouter::output::reports::optimization::{
     ArmReport, OptimizationControllerReport, TreatmentReport,
 };
@@ -2919,6 +2921,7 @@ async fn config_cmd(action: ConfigAction, output: &Output) -> Result<()> {
     }
 }
 
+#[cfg(any(feature = "core", test))]
 async fn settlement_api_key(
     explicit_api_key: Option<&str>,
     credentials_file: Option<&Path>,
@@ -2941,6 +2944,22 @@ async fn settlement_api_key(
         .map_err(anyhow::Error::from)
 }
 
+#[cfg(not(feature = "core"))]
+async fn workflow_state_cmd(_action: WorkflowStateAction) -> Result<()> {
+    anyhow::bail!("workflow-state requires the core feature")
+}
+
+#[cfg(not(feature = "core"))]
+async fn optimize(_action: OptimizeAction, _output: &Output) -> Result<()> {
+    anyhow::bail!("optimize requires the core feature")
+}
+
+#[cfg(not(feature = "core"))]
+async fn eval(_action: EvalAction, _output: &Output) -> Result<()> {
+    anyhow::bail!("eval requires the core feature")
+}
+
+#[cfg(feature = "core")]
 async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
     match action {
         WorkflowStateAction::ClassifierBakeoff {
@@ -2948,9 +2967,9 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             submission,
             output,
         } => {
-            use bitrouter::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
-            use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-            use bitrouter::workflow_state::shadow_classifier::ShadowClassifierSubmission;
+            use bitrouter::core::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
+            use bitrouter::core::workflow_state::fixture::WorkflowTraceFixture;
+            use bitrouter::core::workflow_state::shadow_classifier::ShadowClassifierSubmission;
 
             let fixtures = WorkflowTraceFixture::load_tree(&fixtures)
                 .with_context(|| format!("read classifier fixtures {}", fixtures.display()))?;
@@ -2976,12 +2995,12 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             policy_decisions,
             output_dir,
         } => {
-            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
-            use bitrouter::workflow_state::archive::{
+            use bitrouter::core::workflow_state::archive::{
                 CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
             };
-            use bitrouter::workflow_state::real_trace::TraceSanitizer;
-            use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
+            use bitrouter::core::workflow_state::real_trace::TraceSanitizer;
+            use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
+            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
 
             let traces = TraceArchive::read_jsonl(&traces)
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
@@ -3065,8 +3084,8 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             config,
             output,
         } => {
-            use bitrouter::adequacy::report::ReliabilityReport;
-            use bitrouter::adequacy::store::AdequacyStore;
+            use bitrouter::core::adequacy::report::ReliabilityReport;
+            use bitrouter::core::adequacy::store::AdequacyStore;
 
             let config_document = bitrouter::config::load(&config)
                 .await
@@ -3107,8 +3126,8 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             target_savings_ppm,
             output,
         } => {
-            use bitrouter::workflow_state::archive::{CloudUsageRecord, TraceArchive};
-            use bitrouter::workflow_state::counterfactual::analyze_policy_counterfactual;
+            use bitrouter::core::workflow_state::archive::{CloudUsageRecord, TraceArchive};
+            use bitrouter::core::workflow_state::counterfactual::analyze_policy_counterfactual;
 
             let traces = TraceArchive::read_jsonl(&traces)
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
@@ -3224,14 +3243,14 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             outcomes,
             policy_decisions,
         } => {
-            use bitrouter::eval::EvalService;
-            use bitrouter::eval::store::EvalStore;
-            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
-            use bitrouter::workflow_state::archive::{
+            use bitrouter::core::eval::EvalService;
+            use bitrouter::core::eval::store::EvalStore;
+            use bitrouter::core::workflow_state::archive::{
                 CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
             };
-            use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
-            use bitrouter::workflow_state::reward_feedback::import_semantic_reward_feedback;
+            use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
+            use bitrouter::core::workflow_state::reward_feedback::import_semantic_reward_feedback;
+            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
 
             let traces = TraceArchive::read_jsonl(&traces)
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
@@ -3275,6 +3294,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
     }
 }
 
+#[cfg(feature = "core")]
 fn parse_rfc3339_utc(value: &str, flag: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -3807,6 +3827,7 @@ async fn start(
     log_path: &Path,
     action: &'static str,
 ) -> Result<DaemonActionReport> {
+    bitrouter::host::validate_startup_features()?;
     // Make sure the bitrouter home exists *before* we open the log
     // file inside it. (Zero-config first-run lands here with the home
     // not yet created on disk.)
@@ -3999,6 +4020,7 @@ async fn restart(
     socket: &Path,
     log_path: &Path,
 ) -> Result<DaemonActionReport> {
+    bitrouter::host::validate_startup_features()?;
     bitrouter::paths::ensure_home_directory(source.home())?;
     let _lock = bitrouter::upgrade::lock(source).await?;
     if daemon::endpoint_in_use(socket) {
@@ -4325,6 +4347,13 @@ async fn administration_agents(
 
 async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
     match action {
+        #[cfg(not(feature = "core"))]
+        PolicyAction::Compile { .. }
+        | PolicyAction::Verify { .. }
+        | PolicyAction::Evolve { .. }
+        | PolicyAction::Publish { .. } => {
+            anyhow::bail!("policy evidence compilation and publication require the core feature");
+        }
         PolicyAction::Create { id, dir } => {
             let path = commands::create_policy(&dir, &id).await?;
             output.emit(&PolicyCreateReport {
@@ -4418,13 +4447,15 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 &routing_policy_report(config_path, "check", false, Vec::new(), None).await?,
             )?;
         }
+        #[cfg(feature = "core")]
         PolicyAction::Verify { evidence, config } => {
             if !evidence {
                 anyhow::bail!("policy verify currently requires `--evidence`");
             }
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
-            let verification = bitrouter::policy_lock::verify_evidence_files(config_path).await?;
+            let verification =
+                bitrouter::core::policy::files::verify_evidence_files(config_path).await?;
             output.emit(&PolicyReport {
                 action: "verify-evidence".into(),
                 path: Some(config_path.display().to_string()),
@@ -4462,6 +4493,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             output.emit(&reload(&socket).await?)?;
         }
+        #[cfg(feature = "core")]
         PolicyAction::Compile {
             output: candidate_path,
             snapshot_time,
@@ -4472,7 +4504,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let config_path = require_policy_config_path(&source)?;
             let snapshot_time =
                 snapshot_time.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-            let update = bitrouter::policy_lock::compile_files_with_eval(
+            let update = bitrouter::core::policy::files::compile_files_with_eval(
                 config_path,
                 snapshot_time,
                 eval_snapshot.as_deref(),
@@ -4518,6 +4550,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 config_activation: None,
             })?;
         }
+        #[cfg(feature = "core")]
         PolicyAction::Publish {
             candidate,
             config,
@@ -4526,7 +4559,8 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
             let update =
-                bitrouter::policy_lock::publish_candidate_file(config_path, &candidate).await?;
+                bitrouter::core::policy::files::publish_candidate_file(config_path, &candidate)
+                    .await?;
             reload_published_policy_or_restore(&source, &update, socket.as_deref()).await?;
             let changes = update.changes.clone();
             let mut report =
@@ -4535,6 +4569,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             report.digest = Some(update.digest);
             output.emit(&report)?;
         }
+        #[cfg(feature = "core")]
         PolicyAction::Evolve {
             apply,
             output: candidate_output,
@@ -4542,7 +4577,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
-            let update = bitrouter::policy_lock::evolve_files(config_path, apply).await?;
+            let update = bitrouter::core::policy::files::evolve_files(config_path, apply).await?;
             let action = if candidate_output.is_some() {
                 "evolve-export"
             } else if apply {
@@ -4626,6 +4661,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "core")]
 async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
     match action {
         OptimizeAction::Run {
@@ -4642,7 +4678,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(Some(&config))?;
             let config_path = require_policy_config_path(&source)?.to_path_buf();
-            let options = bitrouter::optimization::controller::OptimizationOptions {
+            let options = bitrouter::core::optimization::controller::OptimizationOptions {
                 policy: policy.clone(),
                 candidate_tier,
                 objective,
@@ -4653,10 +4689,11 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 evaluator_config_digest,
             };
             let prepared =
-                bitrouter::optimization::controller::prepare_files(&config_path, options).await?;
+                bitrouter::core::optimization::controller::prepare_files(&config_path, options)
+                    .await?;
             let mut report = optimization_run_report(&policy, &prepared);
             let publication =
-                bitrouter::optimization::controller::publish_prepared(prepared).await?;
+                bitrouter::core::optimization::controller::publish_prepared(prepared).await?;
             report.active_policy_digest = publication.active_policy_digest.clone();
             report.published = publication.published;
             if publication.update.is_some() {
@@ -4676,16 +4713,18 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             let source = bitrouter::paths::resolve_config(Some(&config))?;
             let config_path = require_policy_config_path(&source)?;
             let status =
-                bitrouter::optimization::controller::read_status(config_path, &policy).await?;
+                bitrouter::core::optimization::controller::read_status(config_path, &policy)
+                    .await?;
             output.emit(&optimization_status_report(status))?;
             Ok(())
         }
     }
 }
 
+#[cfg(feature = "core")]
 fn optimization_run_report(
     policy: &str,
-    prepared: &bitrouter::optimization::controller::PreparedOptimizationStep,
+    prepared: &bitrouter::core::optimization::controller::PreparedOptimizationStep,
 ) -> OptimizationControllerReport {
     let cohort = prepared.step.evidence.cohort.as_ref();
     OptimizationControllerReport {
@@ -4714,8 +4753,9 @@ fn optimization_run_report(
     }
 }
 
+#[cfg(feature = "core")]
 fn optimization_status_report(
-    status: bitrouter::optimization::controller::OptimizationStatus,
+    status: bitrouter::core::optimization::controller::OptimizationStatus,
 ) -> OptimizationControllerReport {
     let decision = if status.active_experiment.is_some() {
         "exploring"
@@ -4743,6 +4783,7 @@ fn optimization_status_report(
     }
 }
 
+#[cfg(feature = "core")]
 fn treatment_report(
     exploration: &bitrouter::gateway::routing::exploration::RouteExploration,
 ) -> TreatmentReport {
@@ -4758,7 +4799,8 @@ fn treatment_report(
     }
 }
 
-fn arm_report(assessment: &bitrouter::optimization::cohort::ArmAssessment) -> ArmReport {
+#[cfg(feature = "core")]
+fn arm_report(assessment: &bitrouter::core::optimization::cohort::ArmAssessment) -> ArmReport {
     ArmReport {
         observed: assessment.observed,
         eligible: assessment.eligible,
@@ -4773,20 +4815,22 @@ fn arm_report(assessment: &bitrouter::optimization::cohort::ArmAssessment) -> Ar
     }
 }
 
+#[cfg(feature = "core")]
 fn controller_action_name(
-    action: bitrouter::optimization::controller::ControllerAction,
+    action: bitrouter::core::optimization::controller::ControllerAction,
 ) -> &'static str {
     match action {
-        bitrouter::optimization::controller::ControllerAction::Explore => "explore",
-        bitrouter::optimization::controller::ControllerAction::Promote => "promote",
-        bitrouter::optimization::controller::ControllerAction::Retreat => "retreat",
-        bitrouter::optimization::controller::ControllerAction::Hold => "hold",
-        bitrouter::optimization::controller::ControllerAction::Converged => "converged",
+        bitrouter::core::optimization::controller::ControllerAction::Explore => "explore",
+        bitrouter::core::optimization::controller::ControllerAction::Promote => "promote",
+        bitrouter::core::optimization::controller::ControllerAction::Retreat => "retreat",
+        bitrouter::core::optimization::controller::ControllerAction::Hold => "hold",
+        bitrouter::core::optimization::controller::ControllerAction::Converged => "converged",
     }
 }
 
+#[cfg(feature = "core")]
 async fn eval(action: EvalAction, output: &Output) -> Result<()> {
-    use bitrouter::eval::admission::SubmissionPrincipal;
+    use bitrouter::core::eval::admission::SubmissionPrincipal;
     use {bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvaluationResult};
 
     let (action_name, data) = match action {
@@ -4943,17 +4987,21 @@ async fn local_trajectory_store(
     ))
 }
 
-async fn local_eval_service(config_path: Option<&Path>) -> Result<bitrouter::eval::EvalService> {
+#[cfg(feature = "core")]
+async fn local_eval_service(
+    config_path: Option<&Path>,
+) -> Result<bitrouter::core::eval::EvalService> {
     let source = bitrouter::paths::resolve_config(config_path)?;
     let config = bitrouter::paths::load_config(&source).await?;
     let db = bitrouter::db::connect(&config.database.url).await?;
     bitrouter::db::run_migrations(&db).await?;
-    Ok(bitrouter::eval::EvalService::new(
-        bitrouter::eval::store::EvalStore::new(db),
+    Ok(bitrouter::core::eval::EvalService::new(
+        bitrouter::core::eval::store::EvalStore::new(db),
         config.eval,
     ))
 }
 
+#[cfg(feature = "core")]
 fn read_eval_file<T>(path: &Path) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
@@ -4979,6 +5027,7 @@ async fn reload_policy_if_reachable(
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "core")]
 enum OptimizationRecoveryRevision {
     Parent,
     Child,
@@ -4987,11 +5036,13 @@ enum OptimizationRecoveryRevision {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "core")]
 struct OptimizationRecoveryPair {
     config: OptimizationRecoveryRevision,
     policy: OptimizationRecoveryRevision,
 }
 
+#[cfg(feature = "core")]
 impl OptimizationRecoveryPair {
     fn description(&self) -> String {
         format!(
@@ -5002,6 +5053,7 @@ impl OptimizationRecoveryPair {
     }
 }
 
+#[cfg(feature = "core")]
 impl OptimizationRecoveryRevision {
     fn description(&self) -> &str {
         match self {
@@ -5017,8 +5069,9 @@ impl OptimizationRecoveryRevision {
     }
 }
 
+#[cfg(feature = "core")]
 async fn observe_optimization_recovery_pair(
-    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
     update: &bitrouter::policy_lock::PolicyFileUpdate,
 ) -> Result<OptimizationRecoveryPair> {
     let config = std::fs::read_to_string(&publication.config_path)
@@ -5045,6 +5098,7 @@ async fn observe_optimization_recovery_pair(
     Ok(OptimizationRecoveryPair { config, policy })
 }
 
+#[cfg(feature = "core")]
 fn optimizer_recovery_failure(
     initial_error: &anyhow::Error,
     message: impl std::fmt::Display,
@@ -5061,6 +5115,7 @@ fn optimizer_recovery_failure(
     anyhow::anyhow!("{initial_error:#}").context(format!("{message}{recovery_detail}"))
 }
 
+#[cfg(feature = "core")]
 async fn reload_reconciled_optimization_pair<Reload, ReloadFuture>(
     reload: &Reload,
     initial_error: &anyhow::Error,
@@ -5095,6 +5150,7 @@ where
     }
 }
 
+#[cfg(feature = "core")]
 async fn reload_published_policy_or_restore(
     source: &bitrouter::paths::ConfigSource,
     update: &bitrouter::policy_lock::PolicyFileUpdate,
@@ -5139,9 +5195,10 @@ async fn reload_published_policy_or_restore(
     Ok(())
 }
 
+#[cfg(feature = "core")]
 async fn reload_optimization_publication_or_restore(
     source: &bitrouter::paths::ConfigSource,
-    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
     socket_override: Option<&Path>,
 ) -> Result<()> {
     reload_optimization_publication_or_restore_with(
@@ -5152,8 +5209,9 @@ async fn reload_optimization_publication_or_restore(
     .await
 }
 
+#[cfg(feature = "core")]
 async fn reload_optimization_publication_or_restore_with<Reload, ReloadFuture, BeforeRecovery>(
-    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
     reload: Reload,
     before_recovery: BeforeRecovery,
 ) -> Result<()>
@@ -5180,6 +5238,7 @@ where
     .await
 }
 
+#[cfg(feature = "core")]
 async fn reload_optimization_publication_or_restore_with_mutations<
     Reload,
     ReloadFuture,
@@ -5187,7 +5246,7 @@ async fn reload_optimization_publication_or_restore_with_mutations<
     MutatePolicy,
     MutateConfig,
 >(
-    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
     reload: Reload,
     before_recovery: BeforeRecovery,
     mutate_policy: MutatePolicy,
@@ -7745,6 +7804,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn eval_subject_seal_derives_a_digest_without_the_ledger() -> Result<()> {
         use clap::Parser;
 
@@ -8380,9 +8440,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "core")]
     fn optimize_status_without_active_exploration_is_idle() {
         let report = optimization_status_report(
-            bitrouter::optimization::controller::OptimizationStatus {
+            bitrouter::core::optimization::controller::OptimizationStatus {
                 policy: "auto".into(),
                 policy_mode: bitrouter::config::PolicyRuntimeMode::Adaptive,
                 active_policy_digest:
@@ -8399,9 +8460,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "core")]
     fn optimize_status_with_active_exploration_is_exploring() {
         let report = optimization_status_report(
-            bitrouter::optimization::controller::OptimizationStatus {
+            bitrouter::core::optimization::controller::OptimizationStatus {
                 policy: "auto".into(),
                 policy_mode: bitrouter::config::PolicyRuntimeMode::Adaptive,
                 active_policy_digest:
@@ -8433,12 +8495,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn optimize_explore_json_reports_the_explicit_evaluator_pin() -> anyhow::Result<()> {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use bitrouter::eval::EvalService;
-        use bitrouter::eval::admission::SubmissionPrincipal;
-        use bitrouter::eval::store::EvalStore;
+        use bitrouter::core::eval::EvalService;
+        use bitrouter::core::eval::admission::SubmissionPrincipal;
+        use bitrouter::core::eval::store::EvalStore;
         use {
             bitrouter::storage::evaluation::evidence_digest,
             bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
@@ -8543,9 +8606,9 @@ mod tests {
                 )
                 .await?;
         }
-        let prepared = bitrouter::optimization::controller::prepare_files(
+        let prepared = bitrouter::core::optimization::controller::prepare_files(
             &config_path,
-            bitrouter::optimization::controller::OptimizationOptions {
+            bitrouter::core::optimization::controller::OptimizationOptions {
                 evaluator_config_digest: Some(PIN.into()),
                 ..Default::default()
             },
@@ -8559,6 +8622,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     struct RecoveryFixture {
         _directory: tempfile::TempDir,
         config_path: PathBuf,
@@ -8567,9 +8631,10 @@ mod tests {
         config_after: String,
         parent_digest: String,
         child_document: bitrouter::policy_lock::PolicyLock,
-        publication: bitrouter::optimization::controller::OptimizationPublication,
+        publication: bitrouter::core::optimization::controller::OptimizationPublication,
     }
 
+    #[cfg(feature = "core")]
     fn recovery_fixture() -> anyhow::Result<RecoveryFixture> {
         let directory = tempfile::tempdir()?;
         let config_path = directory.path().join("bitrouter.yaml");
@@ -8606,8 +8671,8 @@ mod tests {
             changes: Vec::new(),
             conflicts: Vec::new(),
         };
-        let publication = bitrouter::optimization::controller::OptimizationPublication {
-            action: bitrouter::optimization::controller::ControllerAction::Explore,
+        let publication = bitrouter::core::optimization::controller::OptimizationPublication {
+            action: bitrouter::core::optimization::controller::ControllerAction::Explore,
             parent_policy_digest: parent_digest.clone(),
             active_policy_digest: record.child_digest,
             eval_snapshot_root:
@@ -8632,13 +8697,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn optimizer_reload_recovery_restores_an_adaptive_publication_with_identical_config()
     -> anyhow::Result<()> {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use bitrouter::eval::EvalService;
-        use bitrouter::eval::admission::SubmissionPrincipal;
-        use bitrouter::eval::store::EvalStore;
+        use bitrouter::core::eval::EvalService;
+        use bitrouter::core::eval::admission::SubmissionPrincipal;
+        use bitrouter::core::eval::store::EvalStore;
         use {
             bitrouter::storage::evaluation::evidence_digest,
             bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
@@ -8750,12 +8816,13 @@ mod tests {
                 )
                 .await?;
         }
-        let prepared = bitrouter::optimization::controller::prepare_files(
+        let prepared = bitrouter::core::optimization::controller::prepare_files(
             &config_path,
-            bitrouter::optimization::controller::OptimizationOptions::default(),
+            bitrouter::core::optimization::controller::OptimizationOptions::default(),
         )
         .await?;
-        let publication = bitrouter::optimization::controller::publish_prepared(prepared).await?;
+        let publication =
+            bitrouter::core::optimization::controller::publish_prepared(prepared).await?;
         let policy_path = publication
             .update
             .as_ref()
@@ -8826,6 +8893,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn optimizer_reload_recovery_restores_one_disk_and_live_parent_pair() -> anyhow::Result<()>
     {
         let fixture = recovery_fixture()?;
@@ -8891,6 +8959,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn optimizer_reload_recovery_reconciles_a_post_commit_policy_error() -> anyhow::Result<()>
     {
         let fixture = recovery_fixture()?;
@@ -9000,6 +9069,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn optimizer_reload_recovery_reconciles_a_post_rename_config_error() -> anyhow::Result<()>
     {
         let fixture = recovery_fixture()?;
@@ -9109,6 +9179,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn optimizer_reload_recovery_never_overwrites_a_concurrent_policy_winner()
     -> anyhow::Result<()> {
         let fixture = recovery_fixture()?;
@@ -9195,6 +9266,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "core")]
     async fn optimizer_reload_recovery_reports_rejection_and_recovery_failures()
     -> anyhow::Result<()> {
         let fixture = recovery_fixture()?;

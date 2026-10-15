@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::eval::compiler::{EvalEvidenceSnapshot, RouteEvalEvidence, TierEvalEvidence};
+use crate::core::eval::compiler::{EvalEvidenceSnapshot, RouteEvalEvidence, TierEvalEvidence};
 use crate::gateway::routing::signals::NextStepRole;
 use crate::gateway::routing::workflow::predictive::PredictiveRouteProjection;
 use crate::policy_lock::{
@@ -17,6 +17,8 @@ use crate::policy_lock::{
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
 use bitrouter_ai::eval::EvaluatorKind;
+
+pub mod files;
 
 const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
 
@@ -338,7 +340,7 @@ pub(crate) fn validate_eval_action_treatments(
             let Some(policy) = current.policies.get(&decision.policy) else {
                 continue;
             };
-            let assessed = crate::eval::compiler::classifier_cohorts(&record.subject)
+            let assessed = crate::core::eval::compiler::classifier_cohorts(&record.subject)
                 .iter()
                 .any(|cohort| cohort != "unassessed");
             if assessed && decision.route_measurement.is_none() {
@@ -574,7 +576,7 @@ mod tests {
     use bitrouter_ai::routing::PolicyModelTarget;
     use bitrouter_ai::types::ReasoningEffort;
 
-    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::policy_lock::{
         CertificateSource, PolicyDefinition, PolicyLock, PromotionVerdict, RouteOwner,
     };
@@ -617,10 +619,10 @@ mod tests {
         }
     }
 
-    fn regressed_route_evidence() -> crate::eval::compiler::RouteEvalEvidence {
-        use crate::eval::compiler::TierEvalEvidence;
+    fn regressed_route_evidence() -> crate::core::eval::compiler::RouteEvalEvidence {
+        use crate::core::eval::compiler::TierEvalEvidence;
 
-        crate::eval::compiler::RouteEvalEvidence {
+        crate::core::eval::compiler::RouteEvalEvidence {
             baseline_tier: Some("strong".into()),
             tiers: BTreeMap::from([
                 (

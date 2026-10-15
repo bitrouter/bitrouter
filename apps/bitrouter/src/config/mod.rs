@@ -19,6 +19,9 @@
 //! # let _ = routing; Ok(()) }
 //! ```
 
+/// Opt-in path for core workflow trace capture.
+pub(crate) const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
+
 use bitrouter_ai::control::ControlScope;
 #[cfg(doc)]
 use bitrouter_ai::routing::SortOrder;

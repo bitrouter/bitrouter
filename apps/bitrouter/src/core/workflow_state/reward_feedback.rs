@@ -4,12 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::eval::EvalService;
-use crate::eval::admission::SubmissionPrincipal;
-use crate::gateway::routing::workflow::predictive::PredictiveRouteProjection;
-use crate::workflow_state::archive::{
+use crate::core::eval::EvalService;
+use crate::core::eval::admission::SubmissionPrincipal;
+use crate::core::workflow_state::archive::{
     RequestTransportOutcome, SemanticPolicyTransitionCandidate, SemanticSettlementOutcome,
 };
+use crate::gateway::routing::workflow::predictive::PredictiveRouteProjection;
 use {
     crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
     bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
@@ -190,10 +190,10 @@ fn import_skip(summary: &mut RewardEvalImportSummary, reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adequacy::store::AdequacyStore;
+    use crate::core::adequacy::store::AdequacyStore;
+    use crate::core::eval::EvalService;
+    use crate::core::eval::store::EvalStore;
     use crate::db;
-    use crate::eval::EvalService;
-    use crate::eval::store::EvalStore;
 
     const IMPLEMENT_KEY: &str = "semantic_route/v1|unknown|implement|normal";
 

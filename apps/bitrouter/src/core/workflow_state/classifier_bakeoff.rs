@@ -661,7 +661,7 @@ fn ratio_ppm(numerator: u128, denominator: u128) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow_state::shadow_classifier::{
+    use crate::core::workflow_state::shadow_classifier::{
         ClassProbability, OodAssessment, PROGRESS_LABELS, RISK_LABELS, ROLE_LABELS,
         TASK_FAMILY_LABELS,
     };

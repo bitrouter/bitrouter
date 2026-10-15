@@ -8,16 +8,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::Router;
+use bitrouter::core::workflow_state::archive::TraceArchive;
+use bitrouter::core::workflow_state::fixture::WorkflowTraceFixture;
+use bitrouter::core::workflow_state::real_trace::{
+    RealTraceCapture, TraceCaptureOptions, TraceSanitizer,
+};
+use bitrouter::core::workflow_state::replay::ReplayEvaluator;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::RouterOptions;
 use bitrouter::gateway::http::build_router_with_options;
 use bitrouter::gateway::routing::workflow::ir::{HarnessId, SessionConfidence, WorkflowStateKind};
-use bitrouter::workflow_state::archive::TraceArchive;
-use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::real_trace::{
-    RealTraceCapture, TraceCaptureOptions, TraceSanitizer,
-};
-use bitrouter::workflow_state::replay::ReplayEvaluator;
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -810,11 +810,12 @@ fn assert_real_agent_session_confidence(
         .iter()
         .filter(|fixture| fixture.harness == harness)
         .filter(|fixture| {
-            let session = bitrouter::workflow_state::replay::extract_fixture_ir(fixture).session;
+            let session =
+                bitrouter::core::workflow_state::replay::extract_fixture_ir(fixture).session;
             session.confidence != expected || session.key.as_deref() != Some(expected_key)
         })
         .map(|fixture| {
-            let ir = bitrouter::workflow_state::replay::extract_fixture_ir(fixture);
+            let ir = bitrouter::core::workflow_state::replay::extract_fixture_ir(fixture);
             format!(
                 "{}:{:?}:{:?}:{:?}:{:?}",
                 fixture.id,
@@ -846,7 +847,7 @@ fn assert_real_agent_session_set(
     let mut counts = BTreeMap::new();
     let mut mismatches = Vec::new();
     for fixture in fixtures.iter().filter(|fixture| fixture.harness == harness) {
-        let ir = bitrouter::workflow_state::replay::extract_fixture_ir(fixture);
+        let ir = bitrouter::core::workflow_state::replay::extract_fixture_ir(fixture);
         if ir.session.confidence != expected || ir.session.key.is_none() {
             mismatches.push(format!(
                 "{}:{:?}:{:?}:{:?}:{:?}",

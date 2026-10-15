@@ -91,6 +91,20 @@ deliberately omits optional capabilities and reports its actual support.
 the full distribution; Rust import paths and package APIs change in an explicitly
 announced alpha breaking release.
 
+Use the following compatibility contract when reviewing a migration patch:
+
+| Surface | P0 compatibility requirement |
+| --- | --- |
+| Full-product commands and behavior | Preserve supported CLI/TUI actions, inference, scheduling, execution and approval semantics; moving an owner does not authorize a behavior change. |
+| Reduced builds | Preserve the selected capabilities and reject unavailable operations explicitly; compiling without a feature must not weaken checks on retained operations. |
+| HTTP, streams and stored data | Preserve supported wire representations, authentication boundaries, configuration, migration history and session/checkpoint formats. |
+| Telemetry | Preserve the observation schema, wire names and export behavior; package retirement does not rename the configuration or instrumentation scope. |
+| Rust library APIs | Announce the package retirements and changed imports as breaking changes; provide replacement examples for actual consumers rather than retaining forwarding packages. |
+
+The acceptance gates below test these promises separately. A breaking Rust import
+change can be intentional while a changed request, record or permission behavior
+remains a regression.
+
 A consumer of the official gateway configures the released executable, runs
 `bro serve`, then calls it over HTTP or through the new SDK. It does not implement `AppBuilder`,
 link the server library, share the server database, or compile a custom host.
@@ -179,16 +193,16 @@ P0 reduces the eight existing workspace packages to five: `bitrouter`,
 `bitrouter-ai`, the repurposed `bitrouter-sdk`, `bitrouter-guardrails` and the
 unpublished `dist-helper`.
 
-| Existing package | Current source | P0 disposition |
-| --- | --- | --- |
-| `bitrouter` | `apps/bitrouter` | Keep; absorb all product service, scheduling, harness, UI and telemetry implementations |
-| `bitrouter-ai` | `crates/bitrouter-ai` | Keep; narrow to public contracts and small contract helpers |
-| `bitrouter-sdk` | `crates/bitrouter-sdk` | Keep package name; replace server-framework API with the service client after consumer migration |
-| `bitrouter-orchestrator` | `crates/bitrouter-orchestrator` | Merge by ownership into application core/harness modules; remove package |
-| `bitrouter-tui` | `crates/bitrouter-tui` | Merge renderer into application TUI; extract shared command/presentation data first; remove package |
-| `bitrouter-telemetry` | `crates/bitrouter-telemetry` | Merge exporter into application telemetry; move its public contract to AI; remove package |
-| `bitrouter-guardrails` | `extensions/regex-checker/matcher` | Keep matcher and capability implementation; depend on AI instead of the old SDK; move legacy host adapters into the application |
-| `dist-helper` | `helpers/dist-helper` | Keep unpublished contributor tool; remove dependency on the old SDK's service configuration |
+| Existing package | Current source | P0 disposition | Target feature ownership |
+| --- | --- | --- | --- |
+| `bitrouter` | `apps/bitrouter` | Keep; absorb all product service, scheduling, harness, UI and telemetry implementations | Gateway and management CLI always present; optional application owners follow the feature plan |
+| `bitrouter-ai` | `crates/bitrouter-ai` | Keep; narrow to public contracts and small contract helpers | Empty default; optional `schema`/`testing` remain contract-only; application dependency is unconditional |
+| `bitrouter-sdk` | `crates/bitrouter-sdk` | Keep package name; replace server-framework API with the service client after consumer migration | HTTP client by default; optional client `core` for additional streaming transport dependencies, independent of application features |
+| `bitrouter-orchestrator` | `crates/bitrouter-orchestrator` | Merge by ownership into application core/harness modules; remove package | `core` and `harness` independently; local native execution connector requires both |
+| `bitrouter-tui` | `crates/bitrouter-tui` | Merge renderer into application TUI; extract shared command/presentation data first; remove package | Rendering under `tui`, which includes `harness`; shared commands and plain output follow their operation owner |
+| `bitrouter-telemetry` | `crates/bitrouter-telemetry` | Merge exporter into application telemetry; move its public contract to AI; remove package | Export under `otel-http`/`otel-grpc`; config and gateway facts stay available; ACP export also requires `harness` |
+| `bitrouter-guardrails` | `extensions/regex-checker/matcher` | Keep matcher and capability implementation; depend on AI instead of the old SDK; move legacy host adapters into the application | Application `guardrails` links the matcher and adapters; registration remains explicit |
+| `dist-helper` | `helpers/dist-helper` | Keep unpublished contributor tool; remove dependency on the old SDK's service configuration | Contributor tool, outside product capability selection |
 
 `bitrouter-providers` and `bitrouter-observe` are already absent at this baseline.
 Do not recreate them as migration facades. Published historical versions are not

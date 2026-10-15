@@ -172,7 +172,7 @@ mod tests {
     use super::{
         EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
     };
-    use crate::eval::store::EvalStore;
+    use crate::core::eval::store::EvalStore;
     use crate::gateway::observability::decision::tests::test_decision;
     use crate::gateway::observability::settlement::PolicySettlementRecorder;
     use crate::trajectory::canonical::CorrelationKey;

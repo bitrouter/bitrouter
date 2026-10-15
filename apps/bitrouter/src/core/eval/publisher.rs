@@ -9,11 +9,11 @@ use crate::config::EvalConfig;
 use anyhow::Result;
 
 use {
-    crate::eval::EvalService, crate::eval::admission::SubmissionPrincipal,
-    crate::eval::store::EvalStore, bitrouter_ai::eval::AdmissionStatus,
+    crate::core::eval::EvalService, crate::core::eval::admission::SubmissionPrincipal,
+    crate::core::eval::store::EvalStore, bitrouter_ai::eval::AdmissionStatus,
 };
 
-use super::{
+use crate::trajectory::{
     evaluation::TRAJECTORY_EVAL_TOPIC,
     store::{MAX_OUTBOX_BATCH_SIZE, OutboxBatchItem, TrajectoryStore},
 };

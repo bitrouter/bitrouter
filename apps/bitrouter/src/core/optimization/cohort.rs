@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
 use crate::gateway::routing::exploration::RouteExploration;
 use {
     bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalVerdict,
@@ -200,7 +200,7 @@ pub fn assess_cohort(
     let classifier_cohorts = groups
         .values()
         .flat_map(|group| &group.records)
-        .flat_map(|record| crate::eval::compiler::classifier_cohorts(&record.subject))
+        .flat_map(|record| crate::core::eval::compiler::classifier_cohorts(&record.subject))
         .collect::<BTreeSet<_>>();
     let ambiguous_classifier = classifier_cohorts.len() > 1;
 
@@ -527,7 +527,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
     use {
         bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,

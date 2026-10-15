@@ -323,9 +323,18 @@ Trajectory settlement always follows authoritative metering and persists its
 terminal fact and outbox envelope together. Without core, assembly does not
 construct an eval service/publisher or mount eval HTTP routes; outbox rows remain
 pending and retention protects them. Core-enabled assembly retains startup,
-request-triggered and shutdown drains. This does not finish the core feature
-boundary: evolution startup, learning commands and
-remaining mixed module imports still require separation. The progress ledger
+request-triggered and shutdown drains. Evaluation, outbox publication, policy
+compilation/publication, optimization, adequacy and workflow research now live
+under `core::{eval,policy,optimization,adequacy,workflow_state}`. The file-based
+policy producer is `core::policy::files`; gateway `policy_lock` retains published
+artifact loading, validation and operator configuration/rollback operations.
+`eval`, `optimize`, `workflow-state` and policy compilation/publication commands
+require core, as does `BITROUTER_WORKFLOW_TRACE_JSONL` capture. Unavailable work
+is rejected before its input files or execution stores are opened. Ordinary
+trajectory inspection/replay/pruning remains available without core.
+
+This does not finish the core feature boundary: evolution startup/commands and
+the remaining feature dependencies still require separation. The progress ledger
 records the remaining work before claiming a minimum gateway profile.
 
 Reserved judge request admission and attempt bookkeeping now belong to

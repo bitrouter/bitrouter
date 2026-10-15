@@ -347,9 +347,9 @@ mod tests {
     use crate::config::EvalConfig;
 
     use super::*;
-    use crate::eval::EvalService;
-    use crate::eval::admission::SubmissionPrincipal;
-    use crate::eval::store::EvalStore;
+    use crate::core::eval::EvalService;
+    use crate::core::eval::admission::SubmissionPrincipal;
+    use crate::core::eval::store::EvalStore;
     use crate::storage::evaluation::*;
     use bitrouter_ai::eval::{EvalDecisionRef, EvalScope, EvaluatorIdentity, MetricValue};
 

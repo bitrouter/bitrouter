@@ -45,11 +45,13 @@ pub(crate) fn route_decision_measurement(
     Ok(measurement)
 }
 
+#[cfg(any(feature = "core", test))]
 pub(crate) fn subject_digest(value: &EvalSubject) -> Result<String> {
     validate_subject(value)?;
     canonical_digest(value)
 }
 
+#[cfg(feature = "core")]
 pub(crate) fn result_digest(value: &EvaluationResult) -> Result<String> {
     validate_result(value)?;
     canonical_digest(value)

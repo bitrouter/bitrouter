@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::core::workflow_state::archive::CloudUsageRecord;
+use crate::core::workflow_state::fixture::WorkflowTraceFixture;
+use crate::core::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
+use crate::core::workflow_state::replay::extract_fixture_ir;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::routing::workflow::predictive::{PredictiveRouteProjection, predict_next_step};
 use crate::policy_lock::PolicyDefinition;
-use crate::workflow_state::archive::CloudUsageRecord;
-use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
-use crate::workflow_state::replay::extract_fixture_ir;
 
 const PPM: u64 = 1_000_000;
 
@@ -374,11 +374,11 @@ fn mul_div_ceil(value: u64, multiplier: u64, divisor: u64) -> u64 {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::core::workflow_state::archive::CloudUsageRecord;
+    use crate::core::workflow_state::real_trace::{CapturedIngressTrace, RealTraceOutcome};
     use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
     use crate::metering::{ChargeStatus, ReconciliationStatus};
     use crate::policy_lock::PolicyDefinition;
-    use crate::workflow_state::archive::CloudUsageRecord;
-    use crate::workflow_state::real_trace::{CapturedIngressTrace, RealTraceOutcome};
 
     use super::analyze_policy_counterfactual;
 

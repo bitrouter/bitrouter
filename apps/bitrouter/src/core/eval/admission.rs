@@ -329,7 +329,7 @@ mod tests {
         bitrouter_ai::eval::EvaluatorIdentity,
     };
 
-    async fn service() -> anyhow::Result<crate::eval::EvalService> {
+    async fn service() -> anyhow::Result<crate::core::eval::EvalService> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let store = EvalStore::new(db);
@@ -375,7 +375,7 @@ mod tests {
                 },
             ),
         ]);
-        Ok(crate::eval::EvalService::new(
+        Ok(crate::core::eval::EvalService::new(
             store,
             EvalConfig { authorities },
         ))
@@ -448,7 +448,7 @@ mod tests {
                 "owner-a",
             )
             .await?;
-        let service = crate::eval::EvalService::new(store, EvalConfig::default());
+        let service = crate::core::eval::EvalService::new(store, EvalConfig::default());
         let mut operational = result(
             "bitrouter.builtin",
             EvaluatorKind::Generic,
@@ -658,7 +658,7 @@ mod tests {
                 observed_at: "2026-07-30T00:00:00Z".into(),
             })
             .await?;
-        let service = crate::eval::EvalService::new(store.clone(), EvalConfig::default());
+        let service = crate::core::eval::EvalService::new(store.clone(), EvalConfig::default());
 
         let outcome = service
             .submit(

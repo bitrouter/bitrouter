@@ -1949,7 +1949,6 @@ mod tests {
         ))
     }
     use crate::gateway::routing::workflow::ir::{Evidence, HarnessId, ProtocolKind};
-    use crate::workflow_state::fixture::WorkflowTraceFixture;
 
     const OPENING_PLAN_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/workflow_state/predictive/opening-plan.json");
@@ -2038,16 +2037,36 @@ mod tests {
         crate::gateway::routing::workflow::ir::WorkflowStateIR,
         Prompt,
     )> {
-        let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
-        let fixture = WorkflowTraceFixture::from_value(value).ok()?;
+        use crate::gateway::model::protocol::InboundAdapter;
+        use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
+
+        let value: serde_json::Value = serde_json::from_str(text).ok()?;
+        let harness = serde_json::from_value(value.get("harness")?.clone()).ok()?;
+        let protocol = serde_json::from_value(value.get("protocol")?.clone()).ok()?;
+        // These predictive fixtures exercise the Chat ingress. Fail if a fixture
+        // changes protocol instead of accidentally decoding it as Chat.
+        if protocol != ProtocolKind::ChatCompletions {
+            return None;
+        }
+        let raw_body = value.get("raw_body")?.clone();
+        let prompt = ChatCompletionsAdapter
+            .parse_request(raw_body.clone())
+            .ok()?;
+        let mut headers = HeaderMap::new();
+        for (name, value) in value.get("headers")?.as_object()? {
+            headers.insert(
+                name.parse::<http::HeaderName>().ok()?,
+                value.as_str()?.parse::<http::HeaderValue>().ok()?,
+            );
+        }
         let ir = extract_workflow_state(&ExtractorInput {
-            harness_hint: Some(fixture.harness),
-            protocol_hint: fixture.protocol,
-            headers: &fixture.headers,
-            raw_body: &fixture.raw_body,
-            prompt: &fixture.prompt,
+            harness_hint: Some(harness),
+            protocol_hint: protocol,
+            headers: &headers,
+            raw_body: &raw_body,
+            prompt: &prompt,
         });
-        Some((ir, fixture.prompt))
+        Some((ir, prompt))
     }
 
     #[test]

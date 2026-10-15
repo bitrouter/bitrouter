@@ -255,8 +255,8 @@ mod tests {
 
     use super::router;
     use crate::auth::{db as auth_db, keys};
-    use crate::eval::EvalService;
-    use crate::eval::store::EvalStore;
+    use crate::core::eval::EvalService;
+    use crate::core::eval::store::EvalStore;
     use {
         crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
         bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,

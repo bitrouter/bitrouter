@@ -146,8 +146,10 @@ impl ReliabilityReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
-    use crate::adequacy::store::PersistedReliabilityEvent;
+    use crate::core::adequacy::reliability::{
+        ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
+    };
+    use crate::core::adequacy::store::PersistedReliabilityEvent;
 
     fn persisted_event(
         sequence: i64,

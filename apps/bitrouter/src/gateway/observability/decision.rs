@@ -65,6 +65,7 @@ impl PipelineEvent for EvalInvocation {
 
 /// Owner-bound settlement input captured before an awaited trajectory lookup.
 /// The event bus carries the data only in process; diagnostics expose no decision.
+#[cfg(feature = "core")]
 #[derive(Clone, Serialize)]
 pub(crate) struct CapturedEvalDecision {
     #[serde(skip)]
@@ -73,6 +74,7 @@ pub(crate) struct CapturedEvalDecision {
     decision: Option<PendingEvalDecision>,
 }
 
+#[cfg(feature = "core")]
 impl CapturedEvalDecision {
     pub(super) fn new(invocation: EvalInvocation, decision: Option<PendingEvalDecision>) -> Self {
         Self {
@@ -95,6 +97,7 @@ impl CapturedEvalDecision {
     }
 }
 
+#[cfg(feature = "core")]
 impl PipelineEvent for CapturedEvalDecision {
     fn event_name(&self) -> &'static str {
         "eval.settlement_snapshot"
@@ -611,6 +614,7 @@ pub(crate) mod tests {
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     use super::*;
 
+    #[cfg(feature = "core")]
     #[test]
     fn captured_settlement_decision_is_owner_bound_and_redacted() -> anyhow::Result<()> {
         let invocation = EvalInvocation::new("private-owner");

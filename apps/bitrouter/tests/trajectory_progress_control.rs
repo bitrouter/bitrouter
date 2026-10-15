@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex};
 use axum_test::TestServer;
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
 use bitrouter::config;
-use bitrouter::eval::store::EvalStore;
+#[cfg(feature = "core")]
+use bitrouter::core::eval::store::EvalStore;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::build_router;
 #[cfg(feature = "core")]
@@ -1119,12 +1120,7 @@ async fn core_disabled_outbox_survives_retries_restart_and_retention() -> anyhow
         ["failed"]
     );
     assert_eq!(trajectory_outbox_state(&assembled.db, owner).await?, (1, 0));
-    assert!(
-        EvalStore::new(assembled.db.clone())
-            .list_subjects_for_owner(owner)
-            .await?
-            .is_empty()
-    );
+    assert_eq!(table_row_count(&assembled.db, "eval_subjects").await?, 0);
     assert_eq!(table_row_count(&assembled.db, "eval_results").await?, 0);
     let usage = MeteringStore::new(assembled.db.clone())
         .export_usage(TimeWindow::ThisMonth)
@@ -1156,12 +1152,7 @@ async fn core_disabled_outbox_survives_retries_restart_and_retention() -> anyhow
             .len(),
         1
     );
-    assert!(
-        EvalStore::new(restarted.db.clone())
-            .list_subjects_for_owner(owner)
-            .await?
-            .is_empty()
-    );
+    assert_eq!(table_row_count(&restarted.db, "eval_subjects").await?, 0);
     assert_eq!(
         restarted_store
             .prune_before("2999-01-01T00:00:00Z", false, 10)

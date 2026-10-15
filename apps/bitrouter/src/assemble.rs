@@ -61,15 +61,17 @@ use crate::telemetry::exporter::{OtelExporter, OtelObserveHook};
 use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
 use crate::continuation::{ContinuationKeySource, ContinuationRegistry, ContinuationRuntime};
+#[cfg(feature = "core")]
+use crate::core::eval::EvalService;
+#[cfg(feature = "core")]
+use crate::core::eval::publisher::TrajectoryOutboxPublisher;
+#[cfg(feature = "core")]
+use crate::core::eval::settlement::EvalSettlementRecorder;
+#[cfg(feature = "core")]
+use crate::core::eval::store::EvalStore;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 use crate::daemon::ObserveStatusPayload;
 use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
-#[cfg(feature = "core")]
-use crate::eval::EvalService;
-#[cfg(feature = "core")]
-use crate::eval::settlement::EvalSettlementRecorder;
-#[cfg(feature = "core")]
-use crate::eval::store::EvalStore;
 use crate::gateway::observability::decision::PendingEvalDecisionStore;
 use crate::gateway::observability::prediction::PredictiveResponseObserver;
 use crate::gateway::observability::settlement::PolicySettlementRecorder;
@@ -77,8 +79,6 @@ use crate::metering::tariff::CaptureTariffs;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
-#[cfg(feature = "core")]
-use crate::trajectory::publisher::TrajectoryOutboxPublisher;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
 use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
@@ -903,22 +903,12 @@ async fn assemble_app(
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
-    let untracked_recorder = {
-        #[cfg(feature = "core")]
-        {
-            Some(Arc::new(EvalSettlementRecorder::new(
-                eval_service.store().clone(),
-                pending_eval_decisions.clone(),
-            ))
-                as Arc<
-                    dyn crate::gateway::pipeline::settlement::SettlementRecorder,
-                >)
-        }
-        #[cfg(not(feature = "core"))]
-        {
-            None
-        }
-    };
+    #[cfg(feature = "core")]
+    let untracked_recorder = Some(Arc::new(EvalSettlementRecorder::new(
+        eval_service.store().clone(),
+        pending_eval_decisions.clone(),
+    ))
+        as Arc<dyn crate::gateway::pipeline::settlement::SettlementRecorder>);
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     let acp_runtime_for_session = Arc::clone(&acp_runtime);
@@ -1020,6 +1010,7 @@ async fn assemble_app(
                 PolicySettlementRecorder::new(
                     pending_eval_decisions,
                     trajectory_for_settlement,
+                    #[cfg(feature = "core")]
                     untracked_recorder,
                 ),
                 OperationScope::Both,

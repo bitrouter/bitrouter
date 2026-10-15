@@ -454,7 +454,7 @@ policy:
     .await?;
     let assembled =
         bitrouter::build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml"))).await?;
-    let store = bitrouter::eval::store::EvalStore::new(assembled.db.clone());
+    let store = bitrouter::core::eval::store::EvalStore::new(assembled.db.clone());
     let publisher = assembled
         .trajectory_outbox_publisher
         .clone()

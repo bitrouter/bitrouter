@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::core::workflow_state::fixture::WorkflowTraceFixture;
 use crate::gateway::routing::workflow::extractors::{ExtractorInput, extract_workflow_state};
 use crate::gateway::routing::workflow::ir::{
     CapabilityConstraints, EvidenceLevel, HarnessId, RequirementLevel, RouteProjection,
@@ -10,7 +11,6 @@ use crate::gateway::routing::workflow::ir::{
 use crate::gateway::routing::workflow::predictive::{
     NextActionClass, PredictiveRouteProjection, is_predictive_reason_code, predict_next_step,
 };
-use crate::workflow_state::fixture::WorkflowTraceFixture;
 
 #[derive(Debug, Default)]
 pub struct ReplayEvaluator;
@@ -248,8 +248,8 @@ fn session_key(confidence: &SessionConfidence) -> String {
 mod tests {
     use serde_json::json;
 
-    use crate::workflow_state::fixture::WorkflowTraceFixture;
-    use crate::workflow_state::replay::ReplayEvaluator;
+    use crate::core::workflow_state::fixture::WorkflowTraceFixture;
+    use crate::core::workflow_state::replay::ReplayEvaluator;
 
     #[test]
     fn task_aware_replay_uses_unified_v1_and_compares_expected_family() {

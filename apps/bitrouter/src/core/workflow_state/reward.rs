@@ -8,7 +8,7 @@ use crate::gateway::error::Result;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::workflow_state::real_trace::CapturedIngressTrace;
+use crate::core::workflow_state::real_trace::CapturedIngressTrace;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkOutcomeRecord {

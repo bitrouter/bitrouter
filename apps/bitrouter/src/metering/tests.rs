@@ -438,12 +438,15 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
     let evidence = record.charge_evidence.as_ref().expect("charge evidence");
     assert_eq!(evidence.charge_micro_usd, Some(438));
     assert!(evidence.pricing_version.starts_with("sha256:"));
-    let cloud: crate::workflow_state::archive::CloudUsageRecord =
-        serde_json::from_value(serde_json::to_value(record).unwrap()).unwrap();
-    assert_eq!(cloud.cache_read_tokens, 40);
-    assert_eq!(cloud.cache_write_tokens, 20);
-    assert_eq!(cloud.charge_status, super::ChargeStatus::Computed);
-    assert_eq!(cloud.charge_evidence.unwrap().charge_micro_usd, Some(438));
+    #[cfg(feature = "core")]
+    {
+        let cloud: crate::core::workflow_state::archive::CloudUsageRecord =
+            serde_json::from_value(serde_json::to_value(record).unwrap()).unwrap();
+        assert_eq!(cloud.cache_read_tokens, 40);
+        assert_eq!(cloud.cache_write_tokens, 20);
+        assert_eq!(cloud.charge_status, super::ChargeStatus::Computed);
+        assert_eq!(cloud.charge_evidence.unwrap().charge_micro_usd, Some(438));
+    }
     Ok(())
 }
 
@@ -1341,14 +1344,17 @@ async fn usage_export_records_are_cloud_usage_compatible() -> Result<()> {
     assert_eq!(failed.final_charge_micro_usd, Some(50));
     assert_eq!(failed.status.as_deref(), Some("failed"));
 
-    let json = serde_json::to_value(first).unwrap();
-    serde_json::from_value::<crate::workflow_state::archive::CloudUsageRecord>(json)
-        .expect("metering usage export parses as CloudUsageRecord");
+    #[cfg(feature = "core")]
+    {
+        let json = serde_json::to_value(first).unwrap();
+        serde_json::from_value::<crate::core::workflow_state::archive::CloudUsageRecord>(json)
+            .expect("metering usage export parses as CloudUsageRecord");
+    }
     Ok(())
 }
 
 #[tokio::test]
-async fn usage_export_writes_cloud_usage_compatible_jsonl() -> Result<()> {
+async fn usage_export_writes_cloud_usage_compatible_jsonl() -> anyhow::Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
     let recorder = MeteringRecorder::new(store.clone(), pricing());
@@ -1361,7 +1367,21 @@ async fn usage_export_writes_cloud_usage_compatible_jsonl() -> Result<()> {
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
     super::MeteringUsageRecord::write_jsonl(&path, &records)?;
 
-    let parsed = crate::workflow_state::archive::CloudUsageRecord::load_snapshot_jsonl(&path)?;
+    let parsed: Vec<super::MeteringUsageRecord> = std::fs::read_to_string(&path)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?;
+    #[cfg(feature = "core")]
+    {
+        let imported =
+            crate::core::workflow_state::archive::CloudUsageRecord::load_snapshot_jsonl(&path)?;
+        assert_eq!(imported.len(), parsed.len());
+        assert_eq!(imported[0].request_id, parsed[0].request_id);
+        assert_eq!(
+            imported[0].final_charge_micro_usd,
+            parsed[0].final_charge_micro_usd
+        );
+    }
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].request_id.as_deref(), Some("r-k1-12-3"));
     assert_eq!(parsed[0].final_charge_micro_usd, Some(54));

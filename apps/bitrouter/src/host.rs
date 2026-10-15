@@ -150,11 +150,24 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
     serve_with_options(source, managed_child, |_| Ok(())).await
 }
 
+/// Reject unavailable environment-driven startup work before a launcher changes
+/// local files or stops a resident daemon. Foreground hosts use the same check.
+pub fn validate_startup_features() -> Result<()> {
+    #[cfg(not(feature = "core"))]
+    if std::env::var_os(crate::config::WORKFLOW_TRACE_JSONL_ENV)
+        .is_some_and(|value| !value.is_empty())
+    {
+        anyhow::bail!("BITROUTER_WORKFLOW_TRACE_JSONL requires the core feature");
+    }
+    Ok(())
+}
+
 async fn serve_with_options(
     source: &crate::paths::ConfigSource,
     cli_owned: bool,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
+    validate_startup_features()?;
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
         anyhow::bail!(
             "bitrouter is already running (pid {}); stop it before launching this executable again",
@@ -230,17 +243,19 @@ async fn serve_with_options(
         for msg in &assembled.ignored_config {
             tracing::warn!("{msg}");
         }
+        #[cfg(feature = "core")]
         let workflow_trace_capture =
-            crate::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
+            crate::core::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
+        #[cfg(feature = "core")]
         if workflow_trace_capture.is_some() {
             tracing::info!(
-                env = crate::workflow_state::real_trace::WORKFLOW_TRACE_JSONL_ENV,
+                env = crate::config::WORKFLOW_TRACE_JSONL_ENV,
                 "workflow trace capture enabled"
             );
         }
         let app = Arc::new(assembled.app);
         #[cfg(feature = "core")]
-        let eval_router = crate::eval::api::router(
+        let eval_router = crate::core::eval::api::router(
             assembled.eval_service.clone(),
             assembled.db.clone(),
             cfg.server.skip_auth,
@@ -379,32 +394,26 @@ async fn serve_with_options(
                     #[cfg(not(feature = "core"))]
                     { router }
                 };
-                match workflow_trace_capture {
-                    Some(capture) => {
-                        let workflow_wrapper = capture.router_wrapper();
-                        http_app
-                            .serve_listener_with_router_wrapper_and_shutdown(
-                                inference_listener,
-                                move |router| {
-                                    workflow_wrapper(otel_wrapper(
-                                        managed_wrapper(router),
-                                    ))
-                                },
-                                inference_shutdown,
-                            )
-                            .await
-                    }
-                    None => {
-                        http_app
-                            .serve_listener_with_router_wrapper_and_shutdown(
-                                inference_listener,
-                                move |router| otel_wrapper(managed_wrapper(router)),
-                                inference_shutdown,
-                            )
-                            .await
-                    }
+                #[cfg(feature = "core")]
+                if let Some(capture) = workflow_trace_capture {
+                    let workflow_wrapper = capture.router_wrapper();
+                    return http_app
+                        .serve_listener_with_router_wrapper_and_shutdown(
+                            inference_listener,
+                            move |router| workflow_wrapper(otel_wrapper(managed_wrapper(router))),
+                            inference_shutdown,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from);
                 }
-                .map_err(anyhow::Error::from)
+                http_app
+                    .serve_listener_with_router_wrapper_and_shutdown(
+                        inference_listener,
+                        move |router| otel_wrapper(managed_wrapper(router)),
+                        inference_shutdown,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
             };
             let remote = async move {
                 match remote_control {

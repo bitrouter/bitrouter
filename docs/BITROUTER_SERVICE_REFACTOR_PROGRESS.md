@@ -61,9 +61,9 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation now have a gateway owner; bound-record/fence separation, learning activation and final dependency matrix remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; evolution activation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/local native bridge, eval HTTP mounting and automatic outbox publication gated by core; core-disabled inspection and no-OTLP activation isolation verified; complete isolated dependency/startup matrix remains |
+| P0 5 Feature isolation | In progress | Scheduler/local native bridge, evaluation, policy production and workflow research gated by core; core-disabled inspection, pending outbox preservation and no-OTLP activation isolation verified; evolution and the complete isolated dependency/startup matrix remain |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -1533,3 +1533,57 @@ and commands still compile in the core-disabled profile. It does not establish
 the minimum-gateway closure. Learning feature gates, the remaining ownership and
 feature work, historical/backend/artifact/performance evidence, full validation,
 final review and PR remain required. P1 and package publication remain excluded.
+
+## Core learning, evaluation and policy production
+
+The application now owns adequacy analysis, evaluation, optimization, workflow
+research and policy production under `core`. Policy-file compilation, evidence
+verification, evolution and candidate publication moved from `policy_lock` to
+`core::policy::files`; published-policy loading, validation, inspection, reload
+and rollback remain usable by the gateway. Evaluation outbox consumption moved
+to `core::eval::publisher`. Gateway terminal facts, envelope construction,
+accounting and pending-outbox inspection remain unconditional.
+
+The optional pending-decision consumer and workflow-trace recorder are compiled
+only with core. The gateway settlement adapter still performs authoritative
+terminal handling and releases its bounded process-local pending state without
+that consumer. CLI learning operations reject unavailable core support before
+opening files or stores. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` is rejected
+by `serve`, `start` and `restart` before launcher mutations or resident shutdown.
+
+Independent review found two gaps: the original trace guard ran too late for
+`start`/`restart`, and gating the entire workflow-replay target hid four gateway
+regressions. The guard now runs at each entry point. A real isolated resident
+process test verifies a rejected restart leaves that resident running. The four
+unchanged gateway test bodies now live in ungated `gateway_workflow`, sharing
+fixtures with the 56 core replay tests. CI includes both targets. Follow-up
+review identified two unused imports, which were removed; final source review
+closed with no remaining finding.
+
+Validation on this stage:
+
+- The broad all-feature selection passed **886/886** in 68.311 seconds; 2,755
+  cases were outside its filter. Existing live external-agent cases remained
+  ignored; this does not establish live-provider evidence.
+- The corresponding core/OTLP-disabled selection (`--no-default-features
+  --features harness,tui,mcp`) passed 610 of 611 cases. The sole failure was a
+  new zero-config fixture selecting an explicit home without a config. After
+  correcting that fixture, both process cases passed; no production check or
+  assertion was relaxed.
+- After review fixes, the disabled selection passed **7/7** in 2.537 seconds
+  (three process cases and four gateway workflow cases). The affected full
+  selection passed **122/122** in 8.858 seconds, with 3,403 cases filtered out.
+- Strict Rust 1.97.0 workspace/all-feature/all-target Clippy passed after the
+  final unused-import removal. All-feature strict Rustdoc passed. Final
+  core/OTLP-disabled strict Clippy and Rustdoc also passed for the profile above.
+- Formatting and patch-whitespace checks passed. Source/manifests were frozen
+  during runtime tests and their nested executable builds. Logs use the
+  `/tmp/bitrouter-p0-learning-*` prefix.
+
+An actual `--no-default-features` probe failed before running tests with nine
+compiler errors in remaining MCP assembly/tool references and the harness native
+replay-close path. This is explicit incomplete feature-matrix evidence, not a
+passing minimum-gateway claim. Evolution startup/source, harness/TUI/MCP and
+remaining dependency isolation still require implementation. All final A01–A16
+gates remain open; historical/backend/artifact/performance evidence, complete
+validation, final independent review and PR remain required. P1 is excluded.

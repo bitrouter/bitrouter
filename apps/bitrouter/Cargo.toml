@@ -206,3 +206,23 @@ required-features = ["otel-grpc"]
 name = "observe_overhead"
 harness = false
 required-features = ["otel-http"]
+
+[[test]]
+name = "smithers_reward_loop"
+required-features = ["core"]
+
+[[test]]
+name = "workflow_state_replay"
+required-features = ["core"]
+
+[[test]]
+name = "eval_exchange_equivalence"
+required-features = ["core"]
+
+[[test]]
+name = "workflow_state_real_agent_e2e"
+required-features = ["core"]
+
+[[test]]
+name = "policy_eval_control_plane"
+required-features = ["core"]

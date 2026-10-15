@@ -13,3 +13,10 @@ pub mod reconstruction;
 pub mod routing;
 pub mod session;
 pub mod signals;
+
+pub mod adequacy;
+/// Evaluation and evidence-driven routing policy production.
+pub mod eval;
+pub mod optimization;
+pub mod policy;
+pub mod workflow_state;

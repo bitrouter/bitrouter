@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::workflow_state::fixture::WorkflowTraceFixture;
+use crate::core::workflow_state::replay::extract_fixture_ir;
 use crate::gateway::routing::workflow::ir::{
     HarnessId, RequirementLevel, ToolDensity, WorkflowStateKind,
 };
-use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::replay::extract_fixture_ir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

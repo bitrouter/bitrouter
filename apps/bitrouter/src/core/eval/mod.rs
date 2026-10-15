@@ -3,6 +3,7 @@
 pub mod admission;
 pub mod api;
 pub mod compiler;
+pub mod publisher;
 pub mod settlement;
 pub mod store;
 
