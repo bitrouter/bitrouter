@@ -2,11 +2,11 @@
 
 use super::*;
 use bitrouter::auth::{db, keys};
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::build_router;
 use bitrouter::orchestrator_api::ManagedCoreApi;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::protocol::{ToolExecute, ToolOutcome, ToolResult};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};

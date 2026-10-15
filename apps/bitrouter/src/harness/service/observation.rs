@@ -1,7 +1,7 @@
 //! Public Thread projections are published only after their execution
 //! transaction commits. They never supply SDK context or execution authority.
 
-use crate::core::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::CheckpointBatchExt;
 use std::collections::VecDeque;
 use std::time::Instant;
 

@@ -5,11 +5,11 @@
 mod collaboration;
 
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::gateway::pipeline::native_context::metadata;
 use bitrouter::gateway::pipeline::native_continuation::CONTINUATION_FIELD;
 use bitrouter::gateway::pipeline::native_continuation::REQUIRED_STATE_FIELD;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::evidence::FullHistoryReason;
 use bitrouter_ai::core::evidence::NativeContinuationInput;
 use bitrouter_ai::core::evidence::NativeContinuationOutput;

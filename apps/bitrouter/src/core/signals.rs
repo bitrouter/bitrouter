@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::checkpoint::sha256;
+use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::protocol::{
     CoreError, ErrorCode, HarnessManifest, MaterialRef, SignalUpdate, validate_id,
 };

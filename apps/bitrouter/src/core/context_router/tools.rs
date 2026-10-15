@@ -9,13 +9,6 @@ use super::FEATURE;
 use crate::core::session::SessionSnapshot;
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
-pub const NAMES: &[&str] = &[
-    "context_search",
-    "context_recall",
-    "context_publish",
-    "context_extract",
-];
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", deny_unknown_fields)]
 pub enum ContextAction {

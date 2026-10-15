@@ -1,8 +1,8 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::gateway::pipeline::hooks::DenyReason;
 use bitrouter::gateway::pipeline::hooks::HookDecision;
 use bitrouter::gateway::pipeline::hooks::PreRequestHook;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::core::evidence::InputTokenCounting;
 use bitrouter_ai::core::evidence::NativeInputCount;
 

@@ -32,7 +32,7 @@ pub(super) fn split(
         if encoded.len() > MAX_RECORD_BYTES || page_bytes <= 1024 {
             return Err("native checkpoint exceeds bounded record framing capacity".into());
         }
-        let digest = crate::core::checkpoint::sha256(&encoded);
+        let digest = crate::storage::checkpoint::sha256(&encoded);
         let chunk_bytes = (page_bytes - 1024) / 4 * 3;
         for (index, chunk) in encoded.chunks(chunk_bytes).enumerate() {
             result.push(ExecutionRecord::CoreCheckpointPart {
@@ -101,7 +101,7 @@ impl Reader {
         if body.len() as u64 != bytes {
             return Ok(None);
         }
-        if crate::core::checkpoint::sha256(body) != sha256 {
+        if crate::storage::checkpoint::sha256(body) != sha256 {
             return Err("native checkpoint part digest mismatch".into());
         }
         let decoded = serde_json::from_slice(body).map_err(|error| error.to_string())?;

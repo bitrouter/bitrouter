@@ -1,8 +1,8 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::ToolResultLimitsExt;
 use bitrouter::core::session::AgentStatus;
 use bitrouter::gateway::pipeline::hooks::HopOutcome;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[derive(Clone)]

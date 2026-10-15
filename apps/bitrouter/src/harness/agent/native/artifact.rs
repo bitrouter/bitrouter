@@ -1,6 +1,6 @@
 //! Task-scoped, lossless tool bodies with bounded UTF-8 page reads.
 
-use crate::core::protocol::ToolResultLimitsExt;
+use crate::storage::checkpoint::validation::ToolResultLimitsExt;
 use base64::Engine;
 use bitrouter_ai::types::ToolResultOutput;
 use serde::Deserialize;
@@ -95,7 +95,7 @@ pub(super) async fn offload(
     }
     let reference = ArtifactRef {
         artifact_id: format!("tool_body_{}", dispatch.invocation_id),
-        sha256: crate::core::checkpoint::sha256(bytes),
+        sha256: crate::storage::checkpoint::sha256(bytes),
         bytes: bytes.len() as u64,
         media_type: "application/vnd.bitrouter.tool-result+json".into(),
     };

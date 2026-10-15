@@ -358,7 +358,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
             .as_ref()
             .map(|outcome| {
                 serde_json::to_vec(outcome)
-                    .map(|bytes| crate::core::checkpoint::sha256(&bytes))
+                    .map(|bytes| crate::storage::checkpoint::sha256(&bytes))
                     .map_err(|_| {
                         CoreError::rejected(
                             ErrorCode::CheckpointConflict,
@@ -403,7 +403,7 @@ pub(crate) fn report_digest(
     report: &bitrouter_ai::core::evidence::NativeAttemptReport,
 ) -> Result<String, CoreError> {
     serde_json::to_vec(report)
-        .map(|bytes| crate::core::checkpoint::sha256(&bytes))
+        .map(|bytes| crate::storage::checkpoint::sha256(&bytes))
         .map_err(|_| {
             CoreError::rejected(
                 ErrorCode::CheckpointConflict,

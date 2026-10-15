@@ -6,8 +6,8 @@ use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeInputCount};
 use bitrouter_ai::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
 use serde::{Deserialize, Serialize};
 
-use super::checkpoint::sha256;
 use super::session::SessionSnapshot;
+use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode, MaterialRef, RoutingSettings};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

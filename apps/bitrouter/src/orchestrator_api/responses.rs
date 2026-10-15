@@ -272,7 +272,7 @@ async fn start(
 ) -> Result<watch::Receiver<Progress>, ApiError> {
     create.stream = false;
     let fingerprint =
-        crate::core::checkpoint::sha256(&serde_json::to_vec(&create).map_err(|_| {
+        crate::storage::checkpoint::sha256(&serde_json::to_vec(&create).map_err(|_| {
             ApiError::core(
                 ErrorCode::UnsupportedCapability,
                 "cannot encode managed request",

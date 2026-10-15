@@ -1,15 +1,15 @@
 //! The managed core exercised through the shipped App and its production hooks.
 
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::HarnessManifestExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bitrouter::core::checkpoint::sha256;
 use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus};
 use bitrouter::gateway::caller::CallerContext;
+use bitrouter::storage::checkpoint::sha256;
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
 use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, CoreError, DiscardableHistory, ErrorCode, HarnessManifest,

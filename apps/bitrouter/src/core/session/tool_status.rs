@@ -1,7 +1,7 @@
 //! Authenticated harness lifecycle evidence, separate from tool outcomes.
 
 use super::*;
-use crate::core::protocol::ToolResultLimitsExt;
+use crate::storage::checkpoint::validation::ToolResultLimitsExt;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 impl CoreSession {
@@ -14,8 +14,11 @@ impl CoreSession {
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
-        crate::core::protocol::tool_result_limits(self.shared.limits.input_bytes, u64::MAX)?
-            .validate_observation(&observation)?;
+        crate::storage::checkpoint::validation::tool_result_limits(
+            self.shared.limits.input_bytes,
+            u64::MAX,
+        )?
+        .validate_observation(&observation)?;
         let fingerprint = digest(&json!({"type":"tool.status","observation":observation}))?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);

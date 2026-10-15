@@ -4,7 +4,7 @@
 //! https://developers.openai.com/api/docs/guides/streaming-responses
 
 use super::*;
-use bitrouter::core::protocol::HarnessManifestExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 #[path = "stream_bridge/failures.rs"]
 mod failures;
 use bitrouter::continuation::{ContinuationKeySource, native_context::PrivateContextPolicy};

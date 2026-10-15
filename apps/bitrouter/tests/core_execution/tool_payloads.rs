@@ -1,7 +1,7 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::protocol::ClientMessageExt;
-use bitrouter::core::protocol::ToolResultLimitsExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
 use bitrouter_ai::core::protocol::{ClientMessage, Command, ToolObservation, ToolStatus};
 
 fn bounded_task() -> TaskInput {

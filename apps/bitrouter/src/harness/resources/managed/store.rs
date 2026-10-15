@@ -1,7 +1,7 @@
 //! Atomic native harness state. Backend CAS and the workspace OS fence together
 //! prevent two local owners from acknowledging or executing one managed session.
 
-use crate::core::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::CheckpointBatchExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::core::checkpoint::sha256;
 use crate::core::session::HarnessPort;
 use crate::harness::agent::ToolMode;
+use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
 use bitrouter_ai::core::protocol::{
     ArtifactRef, CoreError, ErrorCode, HarnessManifest, Limits, OwnershipGrant, ServerMessage,

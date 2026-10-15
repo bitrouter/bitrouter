@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 
 async fn reached(semaphore: &Semaphore) -> TestResult {
     tokio::time::timeout(Duration::from_secs(30), semaphore.acquire())

@@ -2,9 +2,9 @@
 //! occurs until the reconciled snapshot is acknowledged under the current grant.
 
 use super::*;
-use crate::core::checkpoint::CheckpointBatchExt;
-use crate::core::checkpoint::serialized_bytes;
-use crate::core::protocol::HarnessManifestExt;
+use crate::storage::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::serialized_bytes;
+use crate::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::protocol::{ArtifactRef, Restore, ToolObservation, ToolStatus};
 
 impl CoreSession {
@@ -279,7 +279,7 @@ async fn restore_snapshot(
                 "restore chain has a gap or conflicting ownership",
             ));
         }
-        head = Some(crate::core::checkpoint::ack_for_batch(batch, &payload).head());
+        head = Some(crate::storage::checkpoint::ack_for_batch(batch, &payload).head());
         owner = Some(batch.identity.core_instance_id.clone());
     }
     if head.as_ref() != Some(&binding.durable_head) {
@@ -322,7 +322,7 @@ async fn restore_snapshot(
         super::super::context_router::validation::validate_history(&payload, &mut context_history)?;
         recovery_time::validate_history(
             &payload,
-            crate::core::checkpoint::ack_for_batch(batch, &payload).head(),
+            crate::storage::checkpoint::ack_for_batch(batch, &payload).head(),
             &mut activity_history,
         )?;
         // Validators retain their own historical facts. Earlier hydrated

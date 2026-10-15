@@ -81,6 +81,7 @@ pub mod router_migration;
 pub mod session_identity;
 pub mod skills;
 pub mod spawn;
+pub mod storage;
 pub mod style;
 pub mod supervisor;
 pub mod tools;

@@ -1,13 +1,14 @@
 mod support;
 
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::protocol::ClientMessageExt;
-use bitrouter::core::protocol::HarnessManifestExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use std::collections::BTreeMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use bitrouter::core::checkpoint::{CommitGate, sha256};
+use bitrouter::core::checkpoint::CommitGate;
+use bitrouter::storage::checkpoint::sha256;
 use bitrouter_ai::core::checkpoint::{
     BatchIdentity, Checkpoint, CheckpointBatch, CheckpointPayload, DurableEvent, DurableHead,
     ToolStartFence,

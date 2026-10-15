@@ -79,13 +79,21 @@ Existing managed wire commands, responses, limits and HTTP error envelopes live
 in `bitrouter_ai::core::protocol`; durable checkpoint envelopes and ACK data live
 in `bitrouter_ai::core::checkpoint`. The application retains exact-byte encoding,
 digest verification, append admission and the commit barrier. Trusted host
-consumers import `CheckpointBatchExt` from `bitrouter::core::checkpoint` for
-the existing codec/admission methods, and `HarnessManifestExt`,
-`ClientMessageExt` and `ToolResultLimitsExt` from `bitrouter::core::protocol`
-for application validation. These traits add methods to the shared data; they
-do not provide a plugin interface or transfer persistence authority. Shared
-internal recovery codecs still need feature isolation, and the SDK's managed
-channel client remains a separate migration step.
+consumers import `CheckpointBatchExt` from `bitrouter::storage::checkpoint` for
+the existing codec/admission methods, and `HarnessManifestExt` and
+`ToolResultLimitsExt` from `bitrouter::storage::checkpoint::validation` for
+shared manifest and frozen tool-result validation. `ClientMessageExt` remains
+in `bitrouter::core::protocol` for live connection-grant checks; `CommitGate`
+remains in `bitrouter::core::checkpoint`. These traits add methods to the shared
+data; they do not provide a plugin interface or transfer persistence authority.
+The shared codecs do not depend on core execution. Full snapshot/history
+recovery and feature isolation remain in progress.
+
+The SDK provides the existing core capability HTTP method and, with its client
+`core` feature, the managed WebSocket channel. Clients explicitly persist and
+acknowledge checkpoints; the SDK neither executes tools nor replays commands
+after uncertain delivery. This preserves the existing service transports rather
+than establishing complete core HTTP coverage.
 
 Trusted application hosts that previously called
 `NativeEvidenceCommitment::capture` use

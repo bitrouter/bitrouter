@@ -2,7 +2,7 @@
 //! provider output and workspace effects retain their original attribution.
 
 use super::*;
-use crate::core::checkpoint::validate_tool_start_fences;
+use crate::storage::checkpoint::validate_tool_start_fences;
 use bitrouter_ai::core::checkpoint::ToolStartFence;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

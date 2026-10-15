@@ -827,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn v1_upgrade_rolls_back_corruption_and_preserves_bytes_after_reopen()
     -> anyhow::Result<()> {
-        use crate::core::checkpoint::sha256;
+        use crate::storage::checkpoint::sha256;
         use base64::{Engine, engine::general_purpose::STANDARD};
 
         let directory = tempfile::tempdir()?;

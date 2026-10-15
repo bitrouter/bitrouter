@@ -1,7 +1,7 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::core::session::AgentStatus;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::protocol::{
     Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
 };

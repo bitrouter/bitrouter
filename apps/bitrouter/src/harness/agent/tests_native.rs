@@ -1,11 +1,11 @@
 use super::*;
-use crate::core::checkpoint::CheckpointBatchExt;
 use crate::gateway::model::decision::DecisionRuntime;
 use crate::gateway::model::decision::policy::DecisionPolicy;
 use crate::gateway::model::decision::typesafe::TypeSafeExecutor;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::{Executor, StreamPartStream};
 use crate::gateway::pipeline::types::ExecutionResult;
+use crate::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::types::Prompt;
 use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
@@ -76,7 +76,7 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
         }
     }
     assert_eq!(body.len() as u64, reference.bytes);
-    assert_eq!(crate::core::checkpoint::sha256(&body), reference.sha256);
+    assert_eq!(crate::storage::checkpoint::sha256(&body), reference.sha256);
     assert!(String::from_utf8(body)?.contains("retained-evidence-tail"));
     // Reusing a verified decode must not turn replay into latest-state-only
     // recovery. Corrupt an early immutable fact, leaving later snapshots intact.

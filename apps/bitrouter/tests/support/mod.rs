@@ -1,7 +1,7 @@
-use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use std::collections::{BTreeMap, BTreeSet};
 
-use bitrouter::core::checkpoint::sha256;
+use bitrouter::storage::checkpoint::sha256;
 
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
 use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant};

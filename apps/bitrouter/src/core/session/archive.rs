@@ -2,7 +2,7 @@
 //! hydrates and validates the complete evidence before using any lifecycle fact.
 
 use super::*;
-use crate::core::checkpoint::serialized_bytes;
+use crate::storage::checkpoint::serialized_bytes;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitrouter_ai::core::protocol::{
     ArtifactRef, RunActivityReconciliation, ToolObservation, ToolResultLimits, ToolStatus,

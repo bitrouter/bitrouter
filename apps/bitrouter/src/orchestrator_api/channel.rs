@@ -3,7 +3,7 @@
 //! <https://docs.rs/axum/latest/axum/extract/ws/index.html>.
 
 use crate::core::protocol::ClientMessageExt;
-use crate::core::protocol::HarnessManifestExt;
+use crate::storage::checkpoint::validation::HarnessManifestExt;
 use std::sync::Arc;
 use std::time::Duration;
 

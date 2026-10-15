@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::core::checkpoint::ToolStartFence;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 

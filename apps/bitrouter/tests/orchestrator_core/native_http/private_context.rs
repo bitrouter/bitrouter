@@ -5,8 +5,8 @@
 //! https://developers.openai.com/api/docs/guides/reasoning
 
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::HarnessManifestExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 #[path = "private_context/continuation.rs"]
 mod continuation;
 #[path = "private_context/stream_bridge.rs"]

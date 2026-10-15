@@ -1,4 +1,4 @@
-use crate::core::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::CheckpointBatchExt;
 use std::sync::Arc;
 
 use async_trait::async_trait;

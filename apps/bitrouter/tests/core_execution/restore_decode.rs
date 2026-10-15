@@ -1,6 +1,6 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::restoration_activity::RestorationActivity;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::core::protocol::{Restore, ToolObservation, ToolStatus};
 
 struct ObservedPort {

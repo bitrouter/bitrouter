@@ -9,8 +9,8 @@ use crate::gateway::pipeline::native_projection::{ProjectionRecord, responses_re
 use bitrouter_ai::types::{Message, Prompt, Role};
 use serde::{Deserialize, Serialize};
 
-use super::checkpoint::sha256;
 use super::session::{ModelStep, SessionSnapshot, selected_materials};
+use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::protocol::{ContextMode, CoreError, ErrorCode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

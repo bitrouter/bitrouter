@@ -2,7 +2,7 @@
 
 use super::*;
 use bitrouter::auth::entities::api_keys;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
 #[tokio::test]

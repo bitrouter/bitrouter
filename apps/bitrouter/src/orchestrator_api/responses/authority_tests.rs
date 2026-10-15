@@ -79,7 +79,7 @@ async fn fixture() -> Result<(ManagedCoreApi, Principal, Create), Box<dyn std::e
             ready: true,
             job: Some(Job {
                 operation_id: "replay".into(),
-                fingerprint: crate::core::checkpoint::sha256(&serde_json::to_vec(&create)?),
+                fingerprint: crate::storage::checkpoint::sha256(&serde_json::to_vec(&create)?),
                 progress,
             }),
             recovery_evidence: Vec::new(),

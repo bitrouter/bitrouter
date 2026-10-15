@@ -1,6 +1,6 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::ResourceConstraint;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "capacity/tree_limits.rs"]

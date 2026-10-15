@@ -3,8 +3,8 @@
 //! dispatcher, response capture and canonical pairing implementation.
 
 use super::*;
-use crate::core::checkpoint::serialized_bytes;
 use crate::core::collaboration::{WaitState, WaitTarget};
+use crate::storage::checkpoint::serialized_bytes;
 
 pub(super) const VERSION: u32 = 1;
 

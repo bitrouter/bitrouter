@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::core::accounting::work::CostWorkState;
-use crate::core::checkpoint::serialized_bytes;
+use crate::storage::checkpoint::serialized_bytes;
 
 pub(super) const DELIVERY_VERSION: u32 = 2;
 pub(super) const CURRENT_VERSION: u32 = 3;

@@ -3,7 +3,7 @@
 //! Reference: <https://developers.openai.com/api/docs/guides/responses-multi-agent>
 
 use super::*;
-use crate::core::protocol::ToolResultLimitsExt;
+use crate::storage::checkpoint::validation::ToolResultLimitsExt;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -394,7 +394,7 @@ impl CoreSession {
         if !results.is_empty() {
             input["results"] = encode(&results)?;
         }
-        let input_bytes = super::super::checkpoint::serialized_bytes(&input)?;
+        let input_bytes = crate::storage::checkpoint::serialized_bytes(&input)?;
         if input_bytes > self.shared.limits.input_bytes {
             return Err(reject(
                 ErrorCode::LimitExceeded,
@@ -491,7 +491,7 @@ impl CoreSession {
                         "tool result has no dispatched invocation",
                     ));
                 }
-                crate::core::protocol::tool_result_limits(
+                crate::storage::checkpoint::validation::tool_result_limits(
                     self.shared.limits.input_bytes,
                     u64::MAX,
                 )?

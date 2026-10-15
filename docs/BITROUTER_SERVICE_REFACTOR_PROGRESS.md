@@ -60,7 +60,7 @@ the contract move must preserve its bytes.
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
-| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
+| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs detached from scheduler modules; private snapshot/history isolation and terminal-free transcript formatting remain |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
@@ -762,3 +762,57 @@ feature/startup matrix, remaining public harness consumer contracts, baseline
 payload fixtures, packaged gateway delivery, performance budgets, final whole-P0
 validation and PR. All final A01–A16 gates remain open until their complete
 candidate evidence is recorded. P1 remains outside this implementation.
+
+## Shared checkpoint codec extraction
+
+Changes against `41ccd98` move exact-byte checkpoint encoding/decoding, bounded
+wire-size checks, digest validation, verified-payload reuse and append validation
+to `bitrouter::storage::checkpoint`. Shared harness-manifest, artifact and frozen
+tool-result checks now live in `storage::checkpoint::validation`. Core retains
+`CommitGate` and its acknowledgement/dispatch state, and `core::protocol`
+retains checks against the live connection's authenticated grant. The existing
+reserved context-tool names move below the scheduler boundary with manifest
+validation; their values and dispatch interpretation are unchanged.
+
+Core, harness journal/recovery, managed storage, response adapters and tests
+import the actual owners without forwarding exports. Shared codecs do not
+depend on scheduler/harness implementations or network/executor libraries.
+They validate supplied facts without authenticating an owner, writing a journal
+or granting permission to dispatch. The harness still atomically persists the
+batch and fences before sending its ACK; only core's gate advances scheduling.
+No public AI types, serialized fields or schema versions changed.
+
+Validation evidence:
+
+- Full implementation-body comparisons against `41ccd98` passed for CommitGate,
+  all shared codecs/append checks, the retained ClientMessageExt implementation
+  and the moved manifest/tool-result checks. The only implementation reference
+  change is the declared owner of the identical reserved-name list.
+- Workspace all-feature/all-target `cargo check` passed. Strict workspace
+  all-feature/all-target Clippy and strict workspace Rustdoc passed on Rust
+  1.97.0. Formatting and whitespace checks passed.
+- Independent review found no code, cfg-attachment or commit-authority issues.
+  Its sole finding was stale trait-import guidance in `DEVELOPMENT.md`; the
+  paths and adjacent SDK status were corrected and independently confirmed.
+- The targeted nextest run passed **589 tests**, with five slow tests and
+  3,773 tests outside the filter, in 518.253 seconds. It exercised exact-byte
+  append/replay, duplicate/lost ACKs, bounded archive/tool payloads, durable
+  recovery, ownership and tool fences, managed HTTP/WebSocket, process crashes,
+  provider continuations and the SDK checkpoint exchange. The source and
+  manifests remained unchanged throughout the run, including nested Cargo
+  invocations from harness fixtures.
+
+The targeted runtime command was:
+
+```sh
+cargo nextest run -p bitrouter --all-features --build-jobs 2 --test-threads 2 \
+  -E 'binary(core_contract) | binary(core_execution) | binary(orchestrator_core) | binary(managed_native) | test(core::) | test(harness::agent::) | test(harness::resources::managed::) | test(harness::service::) | test(managed_store::) | test(agent_store::)'
+```
+
+Private `SessionSnapshot`, its persisted routing/collaboration/cost/context-view
+records and immutable-history validation still need separation from online
+scheduling. This codec move is not evidence that a harness-only build or the
+final feature matrix already works. The shared record graph must preserve its
+serde defaults and exact historical meanings; live planner, collaboration,
+accounting and session transition implementations remain core-owned. Full P0
+acceptance, packaged delivery and the PR remain open.

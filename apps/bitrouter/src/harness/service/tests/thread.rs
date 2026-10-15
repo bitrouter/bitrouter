@@ -1,4 +1,4 @@
-use crate::core::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::CheckpointBatchExt;
 #[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;

@@ -2,9 +2,9 @@
 //! work. Projections reserve bytes; they never become execution evidence.
 
 use super::*;
-use crate::core::checkpoint::serialized_bytes;
 use crate::gateway::pipeline::native::NativeInputCountRejection;
 use crate::gateway::pipeline::native::auxiliary_report_allowance;
+use crate::storage::checkpoint::serialized_bytes;
 use bitrouter_ai::core::evidence::NativeEvidenceCommitment;
 use bitrouter_ai::core::evidence::NativeInputCount;
 

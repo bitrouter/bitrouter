@@ -2,10 +2,10 @@
 
 use super::*;
 use bitrouter::core::allocation::ContextKind;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::collaboration::{Action, Work};
-use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::core::session::SessionSnapshot;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::evidence::ContinuationFailure;
 
 #[derive(Clone)]

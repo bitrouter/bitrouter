@@ -2,8 +2,8 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::session::SessionSnapshot;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 
 #[tokio::test]
 async fn unfinished_chunked_provider_body_is_rejected_without_waiting_for_eof() -> Result<()> {

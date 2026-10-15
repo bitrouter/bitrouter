@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 
 fn task(text: &str) -> TaskInput {
     TaskInput {

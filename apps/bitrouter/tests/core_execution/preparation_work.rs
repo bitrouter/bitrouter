@@ -1,6 +1,5 @@
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::gateway::pipeline::hooks::{HookDecision, PreRequestHook, RouteHook};
 use bitrouter::gateway::pipeline::native_accounting::{NativeCostObservation, NativeCostSource};
 use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind as Kind;
@@ -10,6 +9,7 @@ use bitrouter::gateway::pipeline::request_checks::{
 use bitrouter::gateway::pipeline::routing::{
     ModelResolution, ModelSelector, RoutingPrefs, RoutingTable,
 };
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::core::protocol::ModelMode;
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::routing::{ModelInfo, RouterRequestIdentity};

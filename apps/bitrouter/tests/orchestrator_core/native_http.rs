@@ -18,7 +18,7 @@ fn generation(
         .ok_or_else(|| anyhow::anyhow!("generation fixture returned another operation"))
 }
 
-use bitrouter::core::protocol::HarnessManifestExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};

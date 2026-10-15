@@ -1,8 +1,8 @@
 //! Managed session transitions. Provider calls and harness commits run outside
 //! the state lock. A separate commit serializer preserves the one-batch rule.
 
-use crate::core::protocol::HarnessManifestExt;
-use crate::core::protocol::ToolResultLimitsExt;
+use crate::storage::checkpoint::validation::HarnessManifestExt;
+use crate::storage::checkpoint::validation::ToolResultLimitsExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -26,12 +26,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::activity::Activity;
 use super::allocation::{ContextAllocation, ContextSource};
-use super::checkpoint::{CommitGate, sha256};
+use super::checkpoint::CommitGate;
 use super::collaboration::{self, Action, Applied, Assignment, Call, Mail, RuntimeWait};
 use super::routing::{
     ApplicationDisposition, ContextManifest, DecisionApplied, ExecutionReceipt, RoutingDecision,
 };
 use super::signals::{self, MaterialRequest, SignalState};
+use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::checkpoint::{
     BatchIdentity, Checkpoint, CheckpointAck, CheckpointBatch, CheckpointPayload, DurableEvent,
     DurableHead, ToolStartFence,
@@ -2830,8 +2831,11 @@ impl CoreSession {
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
-        crate::core::protocol::tool_result_limits(self.shared.limits.input_bytes, u64::MAX)?
-            .validate_result(&result)?;
+        crate::storage::checkpoint::validation::tool_result_limits(
+            self.shared.limits.input_bytes,
+            u64::MAX,
+        )?
+        .validate_result(&result)?;
         let fingerprint = digest(&result)?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);
@@ -2964,7 +2968,7 @@ impl CoreSession {
                             }
                     });
                     let core_owned = bitrouter_ai::core::protocol::COLLABORATION_TOOLS.contains(&name.as_str())
-                        || super::context_router::tools::NAMES.contains(&name.as_str());
+                        || crate::storage::checkpoint::validation::CONTEXT_TOOLS.contains(&name.as_str());
                     if *provider_executed || !planned || (!core_owned && !manifest.tools.iter().any(|tool| tool.name == *name)) {
                         return Err(reject(
                             ErrorCode::UnsupportedCapability,

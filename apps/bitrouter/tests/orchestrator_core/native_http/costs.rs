@@ -1,11 +1,11 @@
 //! Production settlement evidence imported into durable run ownership.
 use super::*;
 use bitrouter::cloud::settlement::{SettlementReceipt, SettlementState, SettlementUsage};
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::HarnessManifestExt;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostBasis;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostScope;
 use bitrouter::metering::store::MeteringStore;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use sea_orm::{ActiveModelTrait, Set};
 
 struct TimingHarness {

@@ -50,14 +50,13 @@ mod tool_payloads;
 #[path = "core_execution/tool_status.rs"]
 mod tool_status;
 
-use bitrouter::core::checkpoint::CheckpointBatchExt;
-use bitrouter::core::protocol::HarnessManifestExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bitrouter::core::checkpoint::sha256;
 use bitrouter::core::collaboration::{Action, Work};
 use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
 use bitrouter::gateway::assembly::App;
@@ -71,6 +70,7 @@ use bitrouter::gateway::pipeline::hooks::{ObserveHook, Phase, RequestOutcome};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
 use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use bitrouter::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
+use bitrouter::storage::checkpoint::sha256;
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
 use bitrouter_ai::core::protocol::{
     ArtifactRef, Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest,

@@ -8,8 +8,8 @@ mod projection;
 mod scheduling;
 mod tools;
 
-use crate::core::checkpoint::CheckpointBatchExt;
-use crate::core::protocol::HarnessManifestExt;
+use crate::storage::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::validation::HarnessManifestExt;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,9 +19,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{Agent, RunChannels, RunReport, RunStatus};
-use crate::core::checkpoint::VerifiedBatch;
 use crate::core::context_router::FEATURE;
 use crate::core::session::{CoreSession, RunStatus as CoreStatus, SessionSnapshot};
+use crate::storage::checkpoint::VerifiedBatch;
 use bitrouter_ai::core::checkpoint::{CheckpointBatch, DurableHead};
 use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
@@ -49,7 +49,7 @@ struct DecodedCheckpoint<'a> {
 impl<'a> DecodedCheckpoint<'a> {
     fn new(batch: &'a CheckpointBatch, limits: &'a Limits) -> Result<Self, String> {
         limits.validate().map_err(|error| error.message)?;
-        let verified = crate::core::checkpoint::verified_batch(batch, limits)
+        let verified = crate::storage::checkpoint::verified_batch(batch, limits)
             .map_err(|error| error.message)?;
         let snapshot: SessionSnapshot =
             serde_json::from_value(verified.payload().checkpoint.state.clone())
@@ -89,7 +89,7 @@ impl Saved {
                     | ExecutionRecord::ToolResult { .. }
             ) && !matches!(record, ExecutionRecord::ToolResult { item_id, .. } if saved.verification_calls.contains(item_id))
             {
-                let digest = crate::core::checkpoint::sha256(
+                let digest = crate::storage::checkpoint::sha256(
                     &serde_json::to_vec(record).map_err(|error| error.to_string())?,
                 );
                 if saved.projections.pop_front().as_ref() != Some(&digest) {
@@ -190,9 +190,11 @@ impl Saved {
                     .map_err(|error| error.message)?;
                 let projection = projection::project(snapshot, &journal.presented, &payload.events);
                 for record in &projection.records {
-                    saved.projections.push_back(crate::core::checkpoint::sha256(
-                        &serde_json::to_vec(record).map_err(|error| error.to_string())?,
-                    ));
+                    saved
+                        .projections
+                        .push_back(crate::storage::checkpoint::sha256(
+                            &serde_json::to_vec(record).map_err(|error| error.to_string())?,
+                        ));
                 }
                 journal.presented.extend(projection.keys);
                 journal
@@ -355,7 +357,7 @@ impl Agent {
             tool_manifest_digest: HarnessManifest::digest(&manifest_tools)
                 .map_err(|error| error.message)?,
             tools: manifest_tools,
-            workspace_id: crate::core::checkpoint::sha256(
+            workspace_id: crate::storage::checkpoint::sha256(
                 self.tools.root().to_string_lossy().as_bytes(),
             ),
             workspace_revision: None,

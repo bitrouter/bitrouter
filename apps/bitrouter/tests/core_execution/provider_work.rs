@@ -2,11 +2,11 @@
 
 use super::*;
 use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::gateway::model::client::HttpTimeouts;
 use bitrouter::gateway::pipeline::executor::HttpExecutor;
 use bitrouter::gateway::pipeline::native_work::NativeProviderWorkKind;
 use bitrouter::gateway::providers::auth::{AuthApplier, AuthAppliers};
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

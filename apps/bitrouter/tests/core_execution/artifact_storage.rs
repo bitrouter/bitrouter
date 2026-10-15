@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter::core::protocol::ToolResultLimitsExt;
+use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "artifact_storage/repeated_restore.rs"]

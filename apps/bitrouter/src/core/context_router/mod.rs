@@ -106,6 +106,6 @@ pub(super) fn invalid(message: impl Into<String>) -> CoreError {
 
 pub(super) fn digest(value: &impl Serialize) -> Result<String, CoreError> {
     serde_json::to_vec(value)
-        .map(|bytes| super::checkpoint::sha256(&bytes))
+        .map(|bytes| crate::storage::checkpoint::sha256(&bytes))
         .map_err(|error| invalid(error.to_string()))
 }

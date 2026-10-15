@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter::core::protocol::ToolResultLimitsExt;
+use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
 use bitrouter_ai::core::checkpoint::ToolStartFence;
 
 pub(super) async fn full_result(

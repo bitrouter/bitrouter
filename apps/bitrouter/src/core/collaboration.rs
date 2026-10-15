@@ -67,7 +67,7 @@ fn default_wait() -> u64 {
 
 impl Action {
     pub fn parse(name: &str, arguments: Value) -> Result<Self, CoreError> {
-        if super::context_router::tools::NAMES.contains(&name) {
+        if crate::storage::checkpoint::validation::CONTEXT_TOOLS.contains(&name) {
             return serde_json::from_value(json!({"name":name,"arguments":arguments}))
                 .map(Self::Context)
                 .map_err(|error| reject(ErrorCode::InvalidToolResult, error.to_string()));

@@ -2,9 +2,9 @@
 
 use super::*;
 use bitrouter::core::allocation::ContextKind;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
 use bitrouter::core::routing::ApplicationDisposition;
 use bitrouter::core::session::{AgentStatus, SessionSnapshot};
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;

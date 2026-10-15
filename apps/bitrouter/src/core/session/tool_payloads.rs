@@ -12,7 +12,8 @@ pub(super) fn admit(
     let input_bytes = state.run.as_ref().map_or(host.input_bytes, |run| {
         run.limits.input_bytes.min(host.input_bytes)
     });
-    let mut limits = crate::core::protocol::tool_result_limits(input_bytes, output_bytes)?;
+    let mut limits =
+        crate::storage::checkpoint::validation::tool_result_limits(input_bytes, output_bytes)?;
     if state
         .manifest
         .required_features
@@ -63,8 +64,11 @@ pub(super) fn limits(
     let input_bytes = retained.map_or(host.input_bytes, |limits| {
         limits.input_bytes.min(host.input_bytes)
     });
-    let ceiling = crate::core::protocol::tool_result_limits(input_bytes, call.result_limit_bytes)?;
-    let minimum = super::super::checkpoint::serialized_bytes(&ToolResult {
+    let ceiling = crate::storage::checkpoint::validation::tool_result_limits(
+        input_bytes,
+        call.result_limit_bytes,
+    )?;
+    let minimum = crate::storage::checkpoint::serialized_bytes(&ToolResult {
         invocation_id: call.dispatch.invocation_id.clone(),
         attempt_id: call.dispatch.attempt_id.clone(),
         status: ToolOutcome::EffectUnknown,

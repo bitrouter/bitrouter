@@ -1,7 +1,7 @@
-use crate::core::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::CheckpointBatchExt;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::core::checkpoint::{VerifiedBatch, sha256};
+use crate::storage::checkpoint::{VerifiedBatch, sha256};
 
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
 use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant};
@@ -241,7 +241,7 @@ impl Journal {
     }
 
     pub(super) fn prepare(&self, batch: &CheckpointBatch) -> Result<CheckpointAck, CoreError> {
-        self.prepare_verified(&crate::core::checkpoint::verified_batch(
+        self.prepare_verified(&crate::storage::checkpoint::verified_batch(
             batch,
             &self.limits,
         )?)
@@ -259,7 +259,7 @@ impl Journal {
             .map(|known| {
                 known
                     .decode(&self.limits)
-                    .map(|payload| crate::core::checkpoint::ack_for_batch(known, &payload))
+                    .map(|payload| crate::storage::checkpoint::ack_for_batch(known, &payload))
             })
             .transpose()?;
         let available = self

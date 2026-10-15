@@ -1,7 +1,7 @@
 //! Oversized complete output retains billing evidence without durable content.
 
 use super::*;
-use bitrouter::core::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::types::UsageOrigin;
 
 #[derive(Clone, Default)]
