@@ -12,6 +12,12 @@ use bitrouter::config;
 use bitrouter::eval::store::EvalStore;
 use bitrouter::gateway::model::protocol::inbound_adapter_for;
 use bitrouter::gateway::routing::signals::NextStepRole;
+use bitrouter::gateway::routing::workflow::decision::{
+    PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
+};
+use bitrouter::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
+use bitrouter::gateway::routing::workflow::online::OnlineWorkflowState;
+use bitrouter::gateway::routing::workflow::predictive::NextActionClass;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
@@ -22,13 +28,7 @@ use bitrouter::workflow_state::archive::{
 };
 use bitrouter::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
 use bitrouter::workflow_state::classifier_baseline::ClassifierBaselineManifest;
-use bitrouter::workflow_state::decision::{
-    PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
-};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
-use bitrouter::workflow_state::online::OnlineWorkflowState;
-use bitrouter::workflow_state::predictive::NextActionClass;
 use bitrouter::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };

@@ -8,11 +8,11 @@
 
 use bitrouter_ai::types::{Content, Prompt, Role};
 
-use crate::workflow_state::extractors::generic::{
+use crate::gateway::routing::workflow::extractors::generic::{
     GenericPromptExtractor, apply_trajectory_pressure, plain_output_reports_failure,
 };
-use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+use crate::gateway::routing::workflow::ir::{
     Evidence, EvidenceLevel, HarnessId, NormalizedActionHistory, NormalizedActionKind,
     RecoverySignal, RequirementLevel, ToolDensity, WorkflowStateIR, WorkflowStateKind,
 };
@@ -25,9 +25,9 @@ impl WorkflowStateExtractor for Terminus2Extractor {
     fn detect(
         &self,
         input: &ExtractorInput<'_>,
-    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+    ) -> Option<crate::gateway::routing::workflow::extractors::TraceAdapterMatch> {
         has_terminus_2_prompt_contract(input.prompt).then_some(
-            crate::workflow_state::extractors::TraceAdapterMatch {
+            crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
                 source: HarnessId::Terminus2,
                 confidence: 0.95,
                 evidence_kind: "terminus_2_prompt_contract",
@@ -143,7 +143,7 @@ impl ParsedAction {
 #[derive(Debug, Clone)]
 pub(crate) struct TerminusSessionIdentity {
     pub parent_session_id: String,
-    pub role: Option<crate::workflow_state::ir::AgentRole>,
+    pub role: Option<crate::gateway::routing::workflow::ir::AgentRole>,
     pub context_epoch: Option<u32>,
 }
 
@@ -167,7 +167,7 @@ pub(crate) fn session_id(input: &ExtractorInput<'_>) -> Option<String> {
 }
 
 pub(crate) fn parse_session_identity(session_id: &str) -> TerminusSessionIdentity {
-    use crate::workflow_state::ir::AgentRole;
+    use crate::gateway::routing::workflow::ir::AgentRole;
 
     if let Some(marker) = session_id.rfind("-summarization-") {
         let parent = &session_id[..marker];
@@ -211,8 +211,8 @@ pub(crate) fn parse_session_identity(session_id: &str) -> TerminusSessionIdentit
     }
 }
 
-pub(crate) fn infer_role(prompt: &Prompt) -> crate::workflow_state::ir::AgentRole {
-    use crate::workflow_state::ir::AgentRole;
+pub(crate) fn infer_role(prompt: &Prompt) -> crate::gateway::routing::workflow::ir::AgentRole {
+    use crate::gateway::routing::workflow::ir::AgentRole;
 
     let latest_user = prompt
         .messages

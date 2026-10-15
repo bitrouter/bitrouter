@@ -5,20 +5,20 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::eval::compiler::EvalEvidenceSnapshot;
-use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
-use crate::optimization::exploration::{
-    OptimizationGate, OptimizationObjective, PolicyOptimizationState, RouteExploration,
-    RouteRejection,
-};
-use crate::optimization::identity::{
+use crate::gateway::routing::experiment_identity::{
     HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, canonical_digest, experiment_id,
     explore_compiler_config_digest, retreat_compiler_config_digest, treatment_context_digest,
 };
+use crate::gateway::routing::exploration::{
+    OptimizationGate, OptimizationObjective, PolicyOptimizationState, RouteExploration,
+    RouteRejection,
+};
+use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
+use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
 use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, PolicyArtifact,
     PolicyCertificate, PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, validate_document,
 };
-use crate::workflow_state::predictive::compiled_predictor_contract;
 use bitrouter_ai::eval::EvalSnapshot;
 use {bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject};
 
@@ -1090,14 +1090,14 @@ mod tests {
     use bitrouter_ai::routing::PolicyModelTarget;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
-    use crate::optimization::exploration::{
+    use crate::gateway::routing::exploration::{
         OptimizationGate, PolicyOptimizationState, RouteRejection,
     };
+    use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, semantic_digest,
     };
-    use crate::workflow_state::predictive::compiled_predictor_contract;
     use {
         bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
         bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
@@ -1353,7 +1353,7 @@ mod tests {
         }
         lock.policies.get_mut("auto").and_then(|policy| {
             policy.optimization = Some(PolicyOptimizationState {
-                active: Some(crate::optimization::exploration::RouteExploration {
+                active: Some(crate::gateway::routing::exploration::RouteExploration {
                     experiment_id: EXPERIMENT_ID.into(),
                     target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     champion_tier: "strong".into(),
@@ -1954,7 +1954,7 @@ mod tests {
 
     #[test]
     fn latency_objective_requires_complete_measured_units_and_retains_quality_gate() -> Result<()> {
-        use crate::optimization::exploration::OptimizationObjective;
+        use crate::gateway::routing::exploration::OptimizationObjective;
 
         let mut lock = active_lock();
         lock.policies
@@ -2410,17 +2410,17 @@ mod file_tests {
     use crate::eval::EvalService;
     use crate::eval::admission::SubmissionPrincipal;
     use crate::eval::store::EvalStore;
+    use crate::gateway::routing::exploration::{RouteExploration, RouteRejection};
+    use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
     use crate::optimization::controller::{
         ControllerAction, OptimizationOptions, prepare_files, publish_prepared,
         publish_prepared_with_config_writer, read_status,
     };
-    use crate::optimization::exploration::{RouteExploration, RouteRejection};
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, default_history_dir, deterministic_yaml, load, publish_candidate,
         validate_document,
     };
-    use crate::workflow_state::predictive::compiled_predictor_contract;
     use {
         crate::eval::types::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
         bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalExperimentRef,

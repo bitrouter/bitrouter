@@ -336,6 +336,23 @@ transaction still violates this
 boundary. Keep intrinsic validation beside the contract; validation requiring
 credentials, policy evaluation or live ownership belongs to the service.
 
+Use these existing symbols as concrete split points during extraction:
+
+| Baseline symbol or API | P0 treatment |
+| --- | --- |
+| `ChatRequest`, `MessagesRequest`, `ResponsesRequest` and their public nested wire types | Keep the public representation and its serde behavior in AI; extract it from files that also contain adapters. Add client-side serialization where required without changing gateway admission. |
+| `InboundAdapter`, `OutboundAdapter`, `Transport`, `StreamEncoder`, `StreamDecoder`, `OutboundDispatch` | Move to the gateway with their implementations. These are conversion/execution interfaces, not lightweight public protocol data; `Transport` also exposes a concrete HTTP request and credential-bearing target. Trusted custom-provider hosts migrate to the application-owned interfaces. |
+| `ConversionReport`, `ConversionIssue` and reason/location/effect definitions | Keep the public report representation in AI; request inspection, `request_admission`, cross-protocol decisions and enforcement move to gateway conversion. Review methods and default bodies as well as type definitions. |
+| Request-check `Input`, `Decision`, `Callback` | Keep the bounded capability contract in AI. Input projection, registration storage, binding checks, concurrency permits and callback invocation remain gateway implementation. |
+| `observe::schema`, `SpanAttributes` and the committed span schema | Move the shared observation contract and pure conformance helpers to AI; the telemetry renderer, subscriber, exporter authentication and processing runtime stay in the application. |
+| Telemetry endpoint/opt-in configuration | Keep in application configuration, available without exporter dependencies; SDK or extension reuse is not established merely because this data can be serialized. |
+
+A trait is not automatically a public contract: its inputs, return types and
+default methods must fit the same boundary. Conversely, a callback signature
+does not require its registration or execution framework to live in AI. This
+allows capability authors to depend on a small library while keeping service
+composition and provider adaptation with their actual owner.
+
 Organize the final AI public surface by the contract a consumer imports:
 
 | AI namespace | Contents and boundary |
@@ -930,7 +947,7 @@ runtime behavior:
 | Package | Public feature policy |
 | --- | --- |
 | `bitrouter-ai` | Empty default; optional `schema` enables only schema derives and optional `testing` exposes existing pure conformance helpers. Every combination stays contract-only. |
-| `bitrouter-sdk` | Gateway/control HTTP client by default; an optional `core` feature is justified only by additional dependencies of supported core transports. It never enables server code. |
+| `bitrouter-sdk` | Gateway/control/harness HTTP client by default; an optional `core` feature is justified only by additional dependencies of supported core transports. It never enables server code. |
 | `bitrouter-guardrails` | Rules and native capability implementation by default; remove the old `sdk` feature once its adapters move into the application. |
 | `dist-helper` | No product capability flags; registry bootstrap stays independent of application compilation. |
 
@@ -1216,7 +1233,7 @@ requirement and a regression fixture or existing test family.
 
 - Move old SDK observation schema and capability definitions to AI, separating
   them from registration, pipeline contexts and execution errors.
-- Extract shared gateway/control/core DTOs only from existing interfaces; preserve
+- Extract shared gateway/control/core/harness DTOs only from existing interfaces; preserve
   their wire representation. Keep lifecycle definitions distinct from event
   dispatch and stream runtime.
 - Change matcher default to depend on AI contracts. Move legacy hook/plugin
@@ -1579,31 +1596,24 @@ billing, top-ups and ledger policy remain in the operator service.
 
 ### P1 acceptance
 
-- Two or more independent gateway processes enforce one configured shared quota
-  and provider-account concurrency limit under concurrent traffic.
-- Duplicate and conflicting idempotency submissions across instances do not
-  create unintended provider calls; ambiguous outcomes remain queryable.
-- Killing a worker before dispatch, during inference, during streaming and
-  around finalization produces correct durable status and bounded recovery.
-- Concurrent finalization/outbox retries do not duplicate usage records or
-  terminal effects; unknown provider execution is not represented as safely
-  cancelled.
-- Auth/config/credential changes and continuation access behave consistently
-  across instances, including stale cache and shared backend failure cases.
-- Alternating and concurrent requests for the same tenant-scoped trajectory
-  across instances retain one coherent episode history and equivalent guard
-  counters, cost thresholds, holds and routing decisions. Verify key-epoch
-  changes and tenant isolation; fresh local keys or stale caches cannot reset
-  the guard's effective history.
-- Slow clients, hot tenants and overload do not create unbounded queues or
-  monopolize a global lock.
-- Rolling shutdown drains supported work and reports interrupted streams
-  truthfully; it does not claim stream migration.
-- The single-instance SQLite profile starts without any shared infrastructure,
-  retains its feature/dependency footprint, and meets the measured local
-  performance budget.
-- Core/harness multi-instance scheduling, workspace ownership transfer and
-  transparent tool replay remain outside the delivered claim.
+These gates belong to P1 and do not substitute for or extend P0 A01–A16. Record
+multi-instance mode and the local SQLite profile separately, so shared-backend
+success cannot conceal a regression in lightweight local operation.
+
+| ID | Required evidence |
+| --- | --- |
+| P1-A01 Shared admission | Two or more independent gateway processes enforce one configured shared quota and provider-account concurrency limit under concurrent traffic. |
+| P1-A02 Idempotency | Duplicate and conflicting submissions across instances do not create unintended provider calls; ambiguous outcomes remain queryable. |
+| P1-A03 Crash recovery | Killing a worker before dispatch, during inference, during streaming and around finalization produces correct durable status and bounded recovery. |
+| P1-A04 Finalization | Concurrent finalization/outbox retries do not duplicate usage records or terminal effects; unknown provider execution is not represented as safely cancelled. |
+| P1-A05 Shared authority | Auth/config/credential changes and continuation access behave consistently across instances, including stale cache and shared backend failure cases. |
+| P1-A06 Trajectory guards | Alternating and concurrent requests for the same tenant-scoped trajectory retain one coherent episode history and equivalent guard counters, cost thresholds, holds and routing decisions. Key-epoch changes preserve tenant isolation; fresh local keys or stale caches cannot reset the guard's effective history. |
+| P1-A07 Bounded load | Slow clients, hot tenants and overload do not create unbounded queues or monopolize a global lock. |
+| P1-A08 Rolling shutdown | Shutdown drains supported work and reports interrupted streams truthfully; it does not claim stream migration. |
+| P1-A09 Local regression | The single-instance SQLite profile starts without shared infrastructure, retains its feature/dependency footprint, and meets the measured local performance budget. |
+
+Core/harness multi-instance scheduling, workspace ownership transfer and
+transparent tool replay remain outside the delivered claim.
 
 ## Architectural history and related contracts
 

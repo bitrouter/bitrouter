@@ -1,6 +1,6 @@
-use crate::workflow_state::extractors::generic::GenericPromptExtractor;
-use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::generic::GenericPromptExtractor;
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+use crate::gateway::routing::workflow::ir::{
     Evidence, EvidenceLevel, HarnessId, ProtocolKind, SessionConfidence, WorkflowStateIR,
 };
 
@@ -10,29 +10,33 @@ impl WorkflowStateExtractor for CodexResponsesExtractor {
     fn detect(
         &self,
         input: &ExtractorInput<'_>,
-    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+    ) -> Option<crate::gateway::routing::workflow::extractors::TraceAdapterMatch> {
         if input.protocol_hint != ProtocolKind::Responses {
             return None;
         }
         if header_contains(input.headers, "user-agent", "codex") {
-            return Some(crate::workflow_state::extractors::TraceAdapterMatch {
-                source: HarnessId::Codex,
-                confidence: 0.95,
-                evidence_kind: "responses_codex_user_agent",
-                native: true,
-            });
+            return Some(
+                crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
+                    source: HarnessId::Codex,
+                    confidence: 0.95,
+                    evidence_kind: "responses_codex_user_agent",
+                    native: true,
+                },
+            );
         }
         input
             .raw_body
             .get("previous_response_id")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|value| !value.trim().is_empty())
-            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
-                source: HarnessId::Codex,
-                confidence: 0.9,
-                evidence_kind: "responses_previous_response_id",
-                native: true,
-            })
+            .then_some(
+                crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
+                    source: HarnessId::Codex,
+                    confidence: 0.9,
+                    evidence_kind: "responses_previous_response_id",
+                    native: true,
+                },
+            )
     }
 
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
@@ -89,8 +93,8 @@ mod tests {
     use http::HeaderMap;
     use http::HeaderValue;
 
-    use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-    use crate::workflow_state::ir::{
+    use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+    use crate::gateway::routing::workflow::ir::{
         EvidenceLevel, HarnessId, ProtocolKind, SessionConfidence, WorkflowStateKind,
     };
 

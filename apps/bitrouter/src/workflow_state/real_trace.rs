@@ -16,11 +16,11 @@ use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::workflow_state::extractors::{
+use crate::gateway::routing::workflow::extractors::{
     ExtractorInput, detect_trace_adapter, parse_compatibility_harness,
 };
+use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
 use crate::workflow_state::fixture::{WorkflowTraceFixture, parse_prompt};
-use crate::workflow_state::ir::{HarnessId, ProtocolKind};
 use crate::workflow_state::replay::extract_fixture_ir;
 
 const MAX_CAPTURE_BODY_BYTES: usize = 16 * 1024 * 1024;

@@ -19,7 +19,7 @@ use super::types::{
     TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
-use crate::workflow_state::ir::RouteProjection;
+use crate::gateway::routing::workflow::ir::RouteProjection;
 use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
 
 mod episode_entity {
@@ -3152,11 +3152,11 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryTrait, RuntimeErr, Statement};
 
     use super::*;
+    use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
-    use crate::workflow_state::ir::RouteProjection;
     use {
         bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
         bitrouter_ai::eval::ExperimentAssignmentUnit,

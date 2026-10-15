@@ -279,6 +279,7 @@ mod tests {
         },
         store::EvalStore,
     };
+    use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::metering::MeteringSettlementEvent;
     use crate::output::reports::trajectory::{inspect_report, replay_report};
     use crate::output::{Format, Output};
@@ -288,7 +289,6 @@ mod tests {
     use crate::trajectory::publisher::TrajectoryOutboxPublisher;
     use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
     use crate::trajectory::types::{KeyedDigest, RequestStatus, canonical_digest};
-    use crate::workflow_state::ir::RouteProjection;
     use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
 
     const POLICY_DIGEST: &str =

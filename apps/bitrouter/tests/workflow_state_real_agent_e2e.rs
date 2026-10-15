@@ -11,9 +11,9 @@ use axum::Router;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::RouterOptions;
 use bitrouter::gateway::http::build_router_with_options;
+use bitrouter::gateway::routing::workflow::ir::{HarnessId, SessionConfidence, WorkflowStateKind};
 use bitrouter::workflow_state::archive::TraceArchive;
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::ir::{HarnessId, SessionConfidence, WorkflowStateKind};
 use bitrouter::workflow_state::real_trace::{
     RealTraceCapture, TraceCaptureOptions, TraceSanitizer,
 };

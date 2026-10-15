@@ -2,15 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::workflow_state::extractors::{ExtractorInput, extract_workflow_state};
-use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, extract_workflow_state};
+use crate::gateway::routing::workflow::ir::{
     CapabilityConstraints, EvidenceLevel, HarnessId, RequirementLevel, RouteProjection,
     SessionConfidence, WorkflowStateKind,
 };
-use crate::workflow_state::predictive::{
+use crate::gateway::routing::workflow::predictive::{
     NextActionClass, PredictiveRouteProjection, is_predictive_reason_code, predict_next_step,
 };
+use crate::workflow_state::fixture::WorkflowTraceFixture;
 
 #[derive(Debug, Default)]
 pub struct ReplayEvaluator;
@@ -209,7 +209,7 @@ impl ModelLadderConstraintSummary {
 
 pub fn extract_fixture_ir(
     fixture: &WorkflowTraceFixture,
-) -> crate::workflow_state::ir::WorkflowStateIR {
+) -> crate::gateway::routing::workflow::ir::WorkflowStateIR {
     let input = ExtractorInput {
         harness_hint: Some(fixture.harness.clone()),
         protocol_hint: fixture.protocol.clone(),

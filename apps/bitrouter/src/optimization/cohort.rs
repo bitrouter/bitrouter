@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 
 use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
-use crate::optimization::exploration::RouteExploration;
+use crate::gateway::routing::exploration::RouteExploration;
 use {
     bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalVerdict,
     bitrouter_ai::eval::ExperimentArm, bitrouter_ai::eval::ExperimentAssignmentUnit,
@@ -528,7 +528,7 @@ mod tests {
     use anyhow::Result;
 
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
-    use crate::optimization::exploration::{OptimizationGate, RouteExploration};
+    use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
     use {
         bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
         bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,

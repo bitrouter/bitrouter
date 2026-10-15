@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::config::parse_semantic_route_key;
 use bitrouter_ai::types::{Content, Prompt, Role};
 
-use crate::workflow_state::extractors::generic::tool_result_reports_failure;
-use crate::workflow_state::extractors::terminus_2::{
+use crate::gateway::routing::workflow::extractors::generic::tool_result_reports_failure;
+use crate::gateway::routing::workflow::extractors::terminus_2::{
     assistant_action_executes_commands, normalized_action_history_from,
 };
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::ir::{
     EvidenceLevel, NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection,
     RouteRisk, ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
 };
@@ -1936,9 +1936,9 @@ mod tests {
     use http::HeaderMap;
     use sha2::{Digest, Sha256};
 
-    use crate::workflow_state::extractors::generic::GenericPromptExtractor;
-    use crate::workflow_state::extractors::terminus_2::Terminus2Extractor;
-    use crate::workflow_state::extractors::{
+    use crate::gateway::routing::workflow::extractors::generic::GenericPromptExtractor;
+    use crate::gateway::routing::workflow::extractors::terminus_2::Terminus2Extractor;
+    use crate::gateway::routing::workflow::extractors::{
         ExtractorInput, WorkflowStateExtractor, extract_workflow_state,
     };
 
@@ -1948,19 +1948,22 @@ mod tests {
             hex::encode(Sha256::digest(serde_json::to_vec(behavior)?))
         ))
     }
+    use crate::gateway::routing::workflow::ir::{Evidence, HarnessId, ProtocolKind};
     use crate::workflow_state::fixture::WorkflowTraceFixture;
-    use crate::workflow_state::ir::{Evidence, HarnessId, ProtocolKind};
 
     const OPENING_PLAN_FIXTURE: &str =
-        include_str!("../../tests/fixtures/workflow_state/predictive/opening-plan.json");
-    const POST_READ_IMPLEMENT_FIXTURE: &str =
-        include_str!("../../tests/fixtures/workflow_state/predictive/post-read-implement.json");
+        include_str!("../../../../tests/fixtures/workflow_state/predictive/opening-plan.json");
+    const POST_READ_IMPLEMENT_FIXTURE: &str = include_str!(
+        "../../../../tests/fixtures/workflow_state/predictive/post-read-implement.json"
+    );
     const POST_EDIT_VERIFY_FIXTURE: &str =
-        include_str!("../../tests/fixtures/workflow_state/predictive/post-edit-verify.json");
-    const REPEATED_FAILURE_REPLAN_FIXTURE: &str =
-        include_str!("../../tests/fixtures/workflow_state/predictive/repeated-failure-replan.json");
-    const NEAR_DONE_FINALIZE_FIXTURE: &str =
-        include_str!("../../tests/fixtures/workflow_state/predictive/near-done-finalize.json");
+        include_str!("../../../../tests/fixtures/workflow_state/predictive/post-edit-verify.json");
+    const REPEATED_FAILURE_REPLAN_FIXTURE: &str = include_str!(
+        "../../../../tests/fixtures/workflow_state/predictive/repeated-failure-replan.json"
+    );
+    const NEAR_DONE_FINALIZE_FIXTURE: &str = include_str!(
+        "../../../../tests/fixtures/workflow_state/predictive/near-done-finalize.json"
+    );
 
     fn prompt(messages: Vec<Message>) -> Prompt {
         Prompt {
@@ -2003,7 +2006,7 @@ mod tests {
         }
     }
 
-    fn observed(prompt: &Prompt) -> crate::workflow_state::ir::WorkflowStateIR {
+    fn observed(prompt: &Prompt) -> crate::gateway::routing::workflow::ir::WorkflowStateIR {
         let headers = HeaderMap::new();
         let raw_body = serde_json::json!({});
         GenericPromptExtractor.extract(&ExtractorInput {
@@ -2015,7 +2018,9 @@ mod tests {
         })
     }
 
-    fn terminus_observed(prompt: &Prompt) -> crate::workflow_state::ir::WorkflowStateIR {
+    fn terminus_observed(
+        prompt: &Prompt,
+    ) -> crate::gateway::routing::workflow::ir::WorkflowStateIR {
         let headers = HeaderMap::new();
         let raw_body = serde_json::json!({});
         Terminus2Extractor.extract(&ExtractorInput {
@@ -2027,7 +2032,12 @@ mod tests {
         })
     }
 
-    fn fixture_input(text: &str) -> Option<(crate::workflow_state::ir::WorkflowStateIR, Prompt)> {
+    fn fixture_input(
+        text: &str,
+    ) -> Option<(
+        crate::gateway::routing::workflow::ir::WorkflowStateIR,
+        Prompt,
+    )> {
         let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
         let fixture = WorkflowTraceFixture::from_value(value).ok()?;
         let ir = extract_workflow_state(&ExtractorInput {
@@ -3032,13 +3042,15 @@ mod tests {
             Message::text(Role::User, "All parser tests passed."),
         ]);
         let mut ir = observed(&prompt);
-        ir.normalized_action_history = Some(crate::workflow_state::ir::NormalizedActionHistory {
-            last_action: Some(NormalizedActionKind::Test),
-            last_failed: false,
-            failure_count: 0,
-            mutation_count: 0,
-            complete: true,
-        });
+        ir.normalized_action_history = Some(
+            crate::gateway::routing::workflow::ir::NormalizedActionHistory {
+                last_action: Some(NormalizedActionKind::Test),
+                last_failed: false,
+                failure_count: 0,
+                mutation_count: 0,
+                complete: true,
+            },
+        );
 
         let prediction = predict_next_step(&ir, &prompt);
 
@@ -3325,13 +3337,15 @@ mod tests {
             Message::text(Role::User, "Summarize the parser findings."),
         ]);
         let mut ir = observed(&prompt);
-        ir.normalized_action_history = Some(crate::workflow_state::ir::NormalizedActionHistory {
-            last_action: Some(NormalizedActionKind::Read),
-            last_failed: false,
-            failure_count: 0,
-            mutation_count: 0,
-            complete: true,
-        });
+        ir.normalized_action_history = Some(
+            crate::gateway::routing::workflow::ir::NormalizedActionHistory {
+                last_action: Some(NormalizedActionKind::Read),
+                last_failed: false,
+                failure_count: 0,
+                mutation_count: 0,
+                complete: true,
+            },
+        );
 
         let normalized_pivot = predict_next_step(&ir, &prompt);
 

@@ -5,7 +5,7 @@ use crate::output::human::{Health, Human};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TreatmentReport {
-    pub objective: crate::optimization::exploration::OptimizationObjective,
+    pub objective: crate::gateway::routing::exploration::OptimizationObjective,
     pub target_request_key: String,
     pub champion_tier: String,
     pub challenger_tier: String,
@@ -77,8 +77,10 @@ impl CliReport for OptimizationControllerReport {
             human.field(
                 "objective",
                 match treatment.objective {
-                    crate::optimization::exploration::OptimizationObjective::Cost => "cost",
-                    crate::optimization::exploration::OptimizationObjective::Latency => "latency",
+                    crate::gateway::routing::exploration::OptimizationObjective::Cost => "cost",
+                    crate::gateway::routing::exploration::OptimizationObjective::Latency => {
+                        "latency"
+                    }
                 },
             )?;
             human.field("route", &treatment.target_request_key)?;

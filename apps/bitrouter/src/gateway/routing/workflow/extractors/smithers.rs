@@ -1,6 +1,6 @@
-use crate::workflow_state::extractors::generic::GenericPromptExtractor;
-use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-use crate::workflow_state::ir::{HarnessId, WorkflowStateIR};
+use crate::gateway::routing::workflow::extractors::generic::GenericPromptExtractor;
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+use crate::gateway::routing::workflow::ir::{HarnessId, WorkflowStateIR};
 
 pub struct SmithersExtractor;
 
@@ -8,16 +8,18 @@ impl WorkflowStateExtractor for SmithersExtractor {
     fn detect(
         &self,
         input: &ExtractorInput<'_>,
-    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+    ) -> Option<crate::gateway::routing::workflow::extractors::TraceAdapterMatch> {
         let has_native_metadata = ["x-smithers-workflow-id", "x-smithers-node-id"]
             .into_iter()
             .any(|name| non_empty_header(input, name).is_some());
-        has_native_metadata.then_some(crate::workflow_state::extractors::TraceAdapterMatch {
-            source: HarnessId::Smithers,
-            confidence: 0.9,
-            evidence_kind: "smithers_metadata",
-            native: true,
-        })
+        has_native_metadata.then_some(
+            crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
+                source: HarnessId::Smithers,
+                confidence: 0.9,
+                evidence_kind: "smithers_metadata",
+                native: true,
+            },
+        )
     }
 
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {

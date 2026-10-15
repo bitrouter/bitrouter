@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::routing::workflow::ir::{
+    HarnessId, RequirementLevel, ToolDensity, WorkflowStateKind,
+};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::ir::{HarnessId, RequirementLevel, ToolDensity, WorkflowStateKind};
 use crate::workflow_state::replay::extract_fixture_ir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -126,7 +128,7 @@ fn tier_for_baseline_key(key: &str) -> TierName {
 }
 
 fn tier_for_ir(
-    constraints: &crate::workflow_state::ir::CapabilityConstraints,
+    constraints: &crate::gateway::routing::workflow::ir::CapabilityConstraints,
     tool_density: &ToolDensity,
 ) -> TierName {
     if constraints.context_pressure == RequirementLevel::High {
@@ -156,7 +158,7 @@ fn tier_for_ir(
 }
 
 fn cheap_fast_compatible(
-    constraints: &crate::workflow_state::ir::CapabilityConstraints,
+    constraints: &crate::gateway::routing::workflow::ir::CapabilityConstraints,
     tool_density: &ToolDensity,
 ) -> bool {
     *tool_density == ToolDensity::None
@@ -201,7 +203,7 @@ fn harness_key(harness: &HarnessId) -> String {
 mod tests {
     use super::*;
 
-    use crate::workflow_state::ir::{CapabilityConstraints, RequirementLevel};
+    use crate::gateway::routing::workflow::ir::{CapabilityConstraints, RequirementLevel};
 
     fn constraints(
         tool_reliability: RequirementLevel,

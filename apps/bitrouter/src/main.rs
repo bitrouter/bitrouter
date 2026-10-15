@@ -1400,7 +1400,7 @@ enum OptimizeAction {
         candidate_tier: Option<String>,
         /// Complete-task resource to minimize while retaining the quality gate.
         #[arg(long, value_enum, default_value = "cost")]
-        objective: bitrouter::optimization::exploration::OptimizationObjective,
+        objective: bitrouter::gateway::routing::exploration::OptimizationObjective,
         #[arg(long, default_value_t = 100_000)]
         exploration_ppm: u32,
         #[arg(long, default_value_t = 3)]
@@ -2976,10 +2976,10 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             policy_decisions,
             output_dir,
         } => {
+            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::archive::{
                 CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
             };
-            use bitrouter::workflow_state::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::real_trace::TraceSanitizer;
             use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 
@@ -3226,10 +3226,10 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
         } => {
             use bitrouter::eval::EvalService;
             use bitrouter::eval::store::EvalStore;
+            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::archive::{
                 CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
             };
-            use bitrouter::workflow_state::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
             use bitrouter::workflow_state::reward_feedback::import_semantic_reward_feedback;
 
@@ -4744,7 +4744,7 @@ fn optimization_status_report(
 }
 
 fn treatment_report(
-    exploration: &bitrouter::optimization::exploration::RouteExploration,
+    exploration: &bitrouter::gateway::routing::exploration::RouteExploration,
 ) -> TreatmentReport {
     TreatmentReport {
         objective: exploration.gate.objective,
@@ -8351,7 +8351,8 @@ mod tests {
             latency.command,
             Some(Command::Optimize {
                 action: OptimizeAction::Run {
-                    objective: bitrouter::optimization::exploration::OptimizationObjective::Latency,
+                    objective:
+                        bitrouter::gateway::routing::exploration::OptimizationObjective::Latency,
                     ..
                 }
             })
@@ -8363,7 +8364,7 @@ mod tests {
                 action: OptimizeAction::Run {
                     policy,
                     candidate_tier: None,
-                    objective: bitrouter::optimization::exploration::OptimizationObjective::Cost,
+                    objective: bitrouter::gateway::routing::exploration::OptimizationObjective::Cost,
                     exploration_ppm: 100_000,
                     minimum_tasks: 3,
                     maximum_tasks: 20,
@@ -8408,20 +8409,22 @@ mod tests {
                 parent_policy_digest: None,
                 eval_snapshot_root: None,
                 observed_subject_digest: None,
-                active_experiment: Some(bitrouter::optimization::exploration::RouteExploration {
-                    experiment_id: "experiment-1".into(),
-                    target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
-                    champion_tier: "strong".into(),
-                    challenger_tier: "economy".into(),
-                    challenger_exposure_ppm: 100_000,
-                    gate: bitrouter::optimization::exploration::OptimizationGate {
-                        objective: Default::default(),
-                        minimum_tasks_per_arm: 3,
-                        maximum_challenger_tasks: 20,
-                        minimum_pass_rate_ppm: 900_000,
-                        evaluator_config_digest: None,
+                active_experiment: Some(
+                    bitrouter::gateway::routing::exploration::RouteExploration {
+                        experiment_id: "experiment-1".into(),
+                        target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
+                        champion_tier: "strong".into(),
+                        challenger_tier: "economy".into(),
+                        challenger_exposure_ppm: 100_000,
+                        gate: bitrouter::gateway::routing::exploration::OptimizationGate {
+                            objective: Default::default(),
+                            minimum_tasks_per_arm: 3,
+                            maximum_challenger_tasks: 20,
+                            minimum_pass_rate_ppm: 900_000,
+                            evaluator_config_digest: None,
+                        },
                     },
-                }),
+                ),
             },
         );
 

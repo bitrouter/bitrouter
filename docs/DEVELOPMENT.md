@@ -302,6 +302,19 @@ The generation pipeline retains its hooks, request checks, execution, stream
 processing and settlement; MCP has its own routing contract. ACP belongs to
 harness execution, not a gateway protocol pipeline.
 
+Serving-time workflow extraction, identity, predictor contracts and decision
+records live in `gateway::routing::workflow`. Published experiment state and
+stable assignment live in `gateway::routing::exploration`; certificate identity
+and compiler-digest helpers live in `gateway::routing::experiment_identity`.
+Learning and replay consumers import these owners rather than supplying a second
+projection or assignment algorithm. The existing model/provider wire formats,
+experiment digest domains and policy-decision records are unchanged.
+
+This ownership move does not finish the core feature boundary: the current
+policy router still uses the evaluation bridge, and trajectory settlement/outbox
+consumption and learning startup still require separation. The progress ledger
+records the remaining work before claiming a minimum gateway profile.
+
 `bitrouter-ai` contains no model execution or authentication implementation.
 Optional guardrails adapters and telemetry remain application modules; enabling
 a Cargo feature alone does not register a checker or opt into export.

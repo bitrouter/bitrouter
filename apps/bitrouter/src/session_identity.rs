@@ -11,9 +11,9 @@ use serde::Serialize;
 
 use crate::acp_runtime::AcpRuntime;
 use crate::auth::events::ApiPrincipalEstablished;
-use crate::workflow_state::extractors::{ExtractorInput, parse_compatibility_harness};
-use crate::workflow_state::ir::ProtocolKind;
-use crate::workflow_state::session::resolve_session_signal;
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, parse_compatibility_harness};
+use crate::gateway::routing::workflow::ir::ProtocolKind;
+use crate::gateway::routing::workflow::session::resolve_session_signal;
 
 const EVIDENCE_HEADERS: &[&str] = &[
     "x-bitrouter-request-id",

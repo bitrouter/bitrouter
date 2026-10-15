@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::eval::compiler::{EvalEvidenceSnapshot, RouteEvalEvidence, TierEvalEvidence};
 use crate::gateway::routing::signals::NextStepRole;
+use crate::gateway::routing::workflow::predictive::PredictiveRouteProjection;
 use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, POLICY_COMPILER_ID,
     POLICY_COMPILER_VERSION, POLICY_LOCKFILE_VERSION, PolicyArtifact, PolicyCertificate,
@@ -15,7 +16,6 @@ use crate::policy_lock::{
     validate_document,
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
-use crate::workflow_state::predictive::PredictiveRouteProjection;
 use bitrouter_ai::eval::EvaluatorKind;
 
 const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
@@ -307,8 +307,9 @@ pub fn compile_candidate_with_quality(
         if let Some(compiled) = document.policies.get_mut(policy_name) {
             compiled.routes = compiled_routes;
             if !compiled.routes.is_empty() {
-                compiled.predictor =
-                    Some(crate::workflow_state::predictive::compiled_predictor_contract());
+                compiled.predictor = Some(
+                    crate::gateway::routing::workflow::predictive::compiled_predictor_contract(),
+                );
             }
         }
         if !certificates.is_empty() {
@@ -835,7 +836,8 @@ mod tests {
         policy
             .routes
             .insert(TEMPLATE_ECONOMY_KEY.into(), "economy".into());
-        policy.predictor = Some(crate::workflow_state::predictive::compiled_predictor_contract());
+        policy.predictor =
+            Some(crate::gateway::routing::workflow::predictive::compiled_predictor_contract());
         let digest = format!("sha256:{}", "a".repeat(64));
         current.certificates.insert(
             "auto".into(),

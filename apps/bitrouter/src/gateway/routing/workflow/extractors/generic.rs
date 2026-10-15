@@ -1,11 +1,11 @@
 use bitrouter_ai::types::{Content, Prompt, Role, ToolResultContentPart, ToolResultOutput};
 
-use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+use crate::gateway::routing::workflow::ir::{
     CapabilityConstraints, ContextSizeBucket, Evidence, EvidenceLevel, HarnessId, RecoverySignal,
     RequirementLevel, ToolDensity, WorkflowStateIR, WorkflowStateKind,
 };
-use crate::workflow_state::session::resolve_session_signal;
+use crate::gateway::routing::workflow::session::resolve_session_signal;
 
 pub struct GenericPromptExtractor;
 
@@ -476,7 +476,7 @@ mod tests {
     };
     use http::HeaderMap;
 
-    use crate::workflow_state::ir::{
+    use crate::gateway::routing::workflow::ir::{
         ContextSizeBucket, ProtocolKind, RecoverySignal, RequirementLevel, ToolDensity,
         WorkflowStateKind,
     };
@@ -547,7 +547,7 @@ mod tests {
         }
     }
 
-    fn extract(prompt: &Prompt) -> crate::workflow_state::ir::WorkflowStateIR {
+    fn extract(prompt: &Prompt) -> crate::gateway::routing::workflow::ir::WorkflowStateIR {
         let headers = HeaderMap::new();
         let raw_body = serde_json::json!({});
         GenericPromptExtractor.extract(&ExtractorInput {

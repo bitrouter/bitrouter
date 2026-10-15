@@ -61,7 +61,7 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow projections and experiment assignment/identity moved to gateway; eval/outbox separation, remaining policy ownership and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
 | P0 5 Feature isolation | In progress | Scheduler/local native bridge gated by core; core-disabled inspection and no-OTLP activation isolation verified; complete isolated dependency/startup matrix remains |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
@@ -1072,3 +1072,82 @@ implementation status. All final A01–A16 gates remain open. Feature combinatio
 that omit harness/TUI/MCP, gateway serving-policy versus core-learning separation,
 public harness clients, historical/back-end evidence, packaged-service delivery,
 performance, full final verification and PR are still required. P1 is excluded.
+
+
+## Serving workflow and experiment ownership
+
+Changes against `2e46471` move request-time workflow projection into
+`gateway::routing::workflow`: `decision`, `extractors` and its seven adapters,
+`ir`, `online`, `predictive` and `session`. Published experiment data and stable
+assignment move from `optimization::exploration` to gateway routing;
+`optimization::identity` moves to `gateway::routing::experiment_identity`.
+Policy loading/routing, trajectory guards, session attribution, offline analysis,
+CLI reports and integration fixtures now import their actual gateway owner.
+There are no forwarding modules or duplicated conversion/projection algorithms.
+
+All 15 relocated source files, including their existing tests, match the parent
+revision exactly after the enumerated module-path and fixture-relative-path
+changes followed by the same formatter. This preserves scorecard constants,
+experiment digest domains, assignment behavior, serialized records and existing
+fixture contents. Mixed evaluation observers and research/replay remain in their
+current module until their consumer boundary is separated. The only references
+from the moved subtree to those owners are existing test helpers; production
+projections and experiment validation have no core, harness or eval import.
+
+This is an ownership step toward P0 3, not completed core feature isolation.
+`policy_table_router` still consumes pending evaluation decisions and measurement
+helpers. Policy compilation/evidence inspection, the gateway settlement adapter,
+reserved-request protections, durable outbox consumption and learning startup
+still need the planned split. The same applies to the live ACP adapter in session
+identity. No minimum-gateway runtime claim follows from this relocation.
+
+Validation evidence:
+
+- Stable application all-feature/all-target `cargo check` passed.
+- Full-feature focused runtime: **482 passed**, 3,001 outside the selected filter,
+  in 9.990 seconds across the library and four integration binaries.
+- Core/OTLP-disabled focused runtime: **482 passed**, 2,773 outside the filter,
+  in 8.197 seconds. This profile still enables `harness,tui,mcp`; learning
+  services are not yet gated, so it does not prove the final gateway-only build.
+- Both runs cover online projection, predictor contracts, deterministic experiment
+  assignment, policy/certificate validation, route decisions, session attribution,
+  trajectory guards/health, replay and reward/report consumers. The trajectory
+  process integration retains continuation authority and durable guard behavior.
+- Rust 1.97.0 strict workspace all-feature/all-target Clippy and application
+  core/OTLP-disabled all-target Clippy passed. Strict Rustdoc passed for both
+  the all-feature workspace and the disabled application profile.
+- Independent read-only review found no source correctness blockers. It found
+  three relative source links broken by relocation; the two extractor links now
+  point to their new owners, and the historical core audit link is pinned to its
+  documented baseline commit. Final link/fmt/whitespace checks are recorded with
+  the reviewed candidate.
+
+Runtime commands use the same filter in separate feature invocations:
+
+```sh
+serving_filter='test(gateway::routing::workflow::) | test(gateway::routing::exploration::) | test(policy_lock::) | test(policy_table_router::) | test(policy_compile::) | test(optimization::) | test(session_identity::) | test(workflow_state::) | test(trajectory::guard::) | test(trajectory::health::) | binary(workflow_state_replay) | binary(terminus_2_workflow_state) | binary(smithers_reward_loop) | binary(trajectory_progress_control)'
+
+cargo nextest run -p bitrouter --all-features --lib \
+  --test workflow_state_replay --test terminus_2_workflow_state \
+  --test smithers_reward_loop --test trajectory_progress_control \
+  --build-jobs 2 --test-threads 2 --no-fail-fast -E "$serving_filter"
+
+cargo nextest run -p bitrouter --no-default-features \
+  --features harness,tui,mcp --lib \
+  --test workflow_state_replay --test terminus_2_workflow_state \
+  --test smithers_reward_loop --test trajectory_progress_control \
+  --build-jobs 2 --test-threads 2 --no-fail-fast -E "$serving_filter"
+```
+
+The stable/strict toolchains, separate lint target and disabled debug/incremental
+settings remain as recorded above. Runtime processes unset ambient OTLP endpoint
+configuration. Source and manifests stayed frozen throughout both runs, including
+nested fixture builds. The plan's latest concrete contract/interface split points, harness HTTP
+DTO scope and separate P1 acceptance IDs are synchronized without changing the
+implementation status or reviewed legacy TUI retirements. P1 is not implemented.
+
+
+All final A01–A16 gates remain open. The next ownership work is the gateway's
+pending decision/settlement contract and published-policy services versus core
+learning/evaluation, followed by the remaining feature/startup and delivery gates.
+This stage has not created a PR or published an artifact.

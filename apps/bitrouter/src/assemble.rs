@@ -779,12 +779,12 @@ async fn assemble_app(
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
     let policy_decision_recorder =
-        crate::workflow_state::decision::PolicyDecisionJsonlRecorder::from_env()
+        crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
             .map(Arc::new);
     if policy_decision_recorder.is_some() {
         tracing::info!(
-            env = crate::workflow_state::decision::POLICY_DECISION_JSONL_ENV,
+            env = crate::gateway::routing::workflow::decision::POLICY_DECISION_JSONL_ENV,
             "policy decision JSONL recording enabled"
         );
     }
@@ -2570,12 +2570,12 @@ mod trajectory_assembly_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{Config, build_app_with_path};
+    use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, deterministic_yaml, semantic_digest,
     };
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
-    use crate::workflow_state::predictive::compiled_predictor_contract;
     use bitrouter_ai::eval::EvalScope;
 
     async fn assemble_named_policy(

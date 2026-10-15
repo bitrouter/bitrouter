@@ -1,15 +1,17 @@
 use bitrouter_ai::types::Prompt;
 use http::HeaderMap;
 
-use crate::policy_table_router::PolicyTable;
-use crate::workflow_state::extractors::{
+use crate::gateway::routing::workflow::extractors::{
     ExtractorInput, extract_workflow_state, parse_compatibility_harness,
 };
-use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
-use crate::workflow_state::predictive::{
+use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
+use crate::gateway::routing::workflow::predictive::{
     PredictiveRouteIR, PredictiveRouteProjection, predict_next_step,
 };
-use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
+use crate::gateway::routing::workflow::session::{
+    WorkflowIdentityTracker, resolve_workflow_identity,
+};
+use crate::policy_table_router::PolicyTable;
 
 pub struct OnlineWorkflowState {
     pub ir: WorkflowStateIR,
@@ -104,7 +106,7 @@ impl OnlineWorkflowState {
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
         use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
-        use crate::workflow_state::predictive::{
+        use crate::gateway::routing::workflow::predictive::{
             NextActionClass, PredictiveHistoryCompleteness, TaskComplexity,
         };
         let (harness_hint, protocol_hint) = infer_online_context(headers, prompt);
@@ -137,7 +139,7 @@ impl OnlineWorkflowState {
                 Some(value) if value.history_complete => PredictiveHistoryCompleteness::Complete,
                 _ => PredictiveHistoryCompleteness::Ambiguous,
             },
-            route_risk: crate::workflow_state::ir::RouteRisk::Guarded,
+            route_risk: crate::gateway::routing::workflow::ir::RouteRisk::Guarded,
             confidence: 0.0,
             evidence: Vec::new(),
             predictor_contract_digest: String::new(),
@@ -171,20 +173,22 @@ impl OnlineWorkflowState {
         self.predictive.progress_state =
             assessment.map_or(ProgressState::Unknown, |value| value.progress_state);
         self.predictive.route_risk = match assessment {
-            Some(value) if value.history_truncated => crate::workflow_state::ir::RouteRisk::Context,
+            Some(value) if value.history_truncated => {
+                crate::gateway::routing::workflow::ir::RouteRisk::Context
+            }
             Some(value)
                 if matches!(
                     value.progress_state,
                     ProgressState::Stalled | ProgressState::Recovering
                 ) =>
             {
-                crate::workflow_state::ir::RouteRisk::Guarded
+                crate::gateway::routing::workflow::ir::RouteRisk::Guarded
             }
-            Some(_) => crate::workflow_state::ir::RouteRisk::Normal,
-            None => crate::workflow_state::ir::RouteRisk::Guarded,
+            Some(_) => crate::gateway::routing::workflow::ir::RouteRisk::Normal,
+            None => crate::gateway::routing::workflow::ir::RouteRisk::Guarded,
         };
         self.predictive.next_action_class =
-            crate::workflow_state::predictive::NextActionClass::Unknown;
+            crate::gateway::routing::workflow::predictive::NextActionClass::Unknown;
         self.predictive.confidence = assessment
             .and_then(|value| {
                 value
@@ -268,8 +272,8 @@ mod tests {
     use http::HeaderMap;
     use http::HeaderValue;
 
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
-    use crate::workflow_state::online::OnlineWorkflowState;
+    use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
+    use crate::gateway::routing::workflow::online::OnlineWorkflowState;
 
     fn prompt_after_tool(tool: &str) -> Prompt {
         Prompt {
@@ -524,7 +528,7 @@ mod tests {
         let baseline = OnlineWorkflowState::from_headers(&HeaderMap::new(), &prompt);
         assert_eq!(
             baseline.ir.state_kind,
-            crate::workflow_state::ir::WorkflowStateKind::Planning
+            crate::gateway::routing::workflow::ir::WorkflowStateKind::Planning
         );
 
         for harness in [

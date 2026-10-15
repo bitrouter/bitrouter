@@ -1,6 +1,6 @@
-use crate::workflow_state::extractors::generic::GenericPromptExtractor;
-use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::generic::GenericPromptExtractor;
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+use crate::gateway::routing::workflow::ir::{
     Evidence, EvidenceLevel, HarnessId, ProtocolKind, SessionConfidence, WorkflowStateIR,
 };
 
@@ -10,9 +10,9 @@ impl WorkflowStateExtractor for ClaudeCodeExtractor {
     fn detect(
         &self,
         input: &ExtractorInput<'_>,
-    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+    ) -> Option<crate::gateway::routing::workflow::extractors::TraceAdapterMatch> {
         headers_indicate_claude_code(input.headers).then_some(
-            crate::workflow_state::extractors::TraceAdapterMatch {
+            crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
                 source: HarnessId::ClaudeCode,
                 confidence: 0.95,
                 evidence_kind: "anthropic_beta",
@@ -96,8 +96,8 @@ mod tests {
     use http::HeaderMap;
     use http::HeaderValue;
 
-    use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+    use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
 
     fn prompt() -> Prompt {
         Prompt {

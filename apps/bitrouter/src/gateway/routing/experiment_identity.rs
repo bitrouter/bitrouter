@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::optimization::exploration::{OptimizationGate, OptimizationObjective, RouteExploration};
+use crate::gateway::routing::exploration::{
+    OptimizationGate, OptimizationObjective, RouteExploration,
+};
 
 pub(crate) const HISTORY_OPTIMIZER_ID: &str = "bitrouter-history-optimizer";
 pub(crate) const HISTORY_OPTIMIZER_VERSION: u32 = 1;

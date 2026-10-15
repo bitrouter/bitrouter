@@ -12,8 +12,9 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 pub fn certify_routes(lock: &mut PolicyLock) {
     for (name, policy) in &mut lock.policies {
         if !policy.routes.is_empty() {
-            policy.predictor =
-                Some(bitrouter::workflow_state::predictive::compiled_predictor_contract());
+            policy.predictor = Some(
+                bitrouter::gateway::routing::workflow::predictive::compiled_predictor_contract(),
+            );
         }
         for (key, tier) in &policy.routes {
             lock.certificates.entry(name.clone()).or_default().insert(

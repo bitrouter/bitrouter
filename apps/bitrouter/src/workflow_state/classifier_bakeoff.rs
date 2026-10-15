@@ -10,7 +10,6 @@ use super::classifier_baseline::{
     ClassifierBaselineManifest, ClassifierEvaluationCase, selected_research_fixtures,
 };
 use super::fixture::WorkflowTraceFixture;
-use super::predictive::{compiled_predictor_contract, predict_next_step};
 use super::replay::extract_fixture_ir;
 use super::shadow_classifier::{
     CategoricalHead, ROUTE_CONTEXT_SCHEMA_VERSION, RiskAuthority, RouteContextV3,
@@ -19,6 +18,9 @@ use super::shadow_classifier::{
 };
 use crate::eval::types::canonical_digest;
 use crate::gateway::routing::signals::TaskFamily;
+use crate::gateway::routing::workflow::predictive::{
+    compiled_predictor_contract, predict_next_step,
+};
 
 pub const CLASSIFIER_BAKEOFF_SCHEMA_VERSION: u32 = 2;
 const CLASSIFICATION_WEIGHT_TASK: u32 = 4;

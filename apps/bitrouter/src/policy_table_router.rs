@@ -17,16 +17,18 @@ use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
+use crate::gateway::routing::exploration::RouteExploration;
 use crate::gateway::routing::signals::NextStepRole;
-use crate::optimization::exploration::RouteExploration;
-use crate::trajectory::guard::ProgressGuardPolicy;
-use crate::trajectory::types::HistoryCompleteness;
-use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
-use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
-use crate::workflow_state::online::OnlineWorkflowState;
-use crate::workflow_state::predictive::{
+use crate::gateway::routing::workflow::decision::{
+    PolicyDecisionJsonlRecorder, PolicyDecisionRecord,
+};
+use crate::gateway::routing::workflow::ir::{HarnessId, WorkflowIdentity};
+use crate::gateway::routing::workflow::online::OnlineWorkflowState;
+use crate::gateway::routing::workflow::predictive::{
     NextActionClass, PredictiveEvidence, is_predictive_reason_code, is_task_family_reason_code,
 };
+use crate::trajectory::guard::ProgressGuardPolicy;
+use crate::trajectory::types::HistoryCompleteness;
 use {
     bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
     bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
@@ -1017,7 +1019,7 @@ impl PolicyTableRouter {
                 captured_at: None,
                 request_id: request_id.map(ToString::to_string),
                 ingress_request_id_sha256: ingress_request_id
-                    .map(crate::workflow_state::decision::ingress_request_id_sha256),
+                    .map(crate::gateway::routing::workflow::decision::ingress_request_id_sha256),
                 input_model,
                 input_effort,
                 key_strategy: key_strategy_name().to_string(),
@@ -1219,13 +1221,13 @@ mod tests {
     use crate::gateway::caller::CallerContext;
     use crate::gateway::observability::event::EventBus;
     use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
-    use crate::optimization::exploration::{OptimizationGate, RouteExploration};
+    use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
+    use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
+    use crate::gateway::routing::workflow::ir::{AgentRole, HarnessId, ProtocolKind};
+    use crate::gateway::routing::workflow::online::OnlineWorkflowState;
     use crate::policy_compile::{CompileInput, compile_candidate};
     use crate::policy_lock::{PolicyLock, semantic_digest};
     use crate::trajectory::canonical::CorrelationKey;
-    use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-    use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
-    use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_ai::types::{
         GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput, UsageOrigin,
     };
@@ -1981,7 +1983,8 @@ mod tests {
         assert_eq!(p.model, "vendor/cheap");
 
         let records =
-            crate::workflow_state::decision::PolicyDecisionRecord::load_jsonl(&path).unwrap();
+            crate::gateway::routing::workflow::decision::PolicyDecisionRecord::load_jsonl(&path)
+                .unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].request_id.as_deref(), Some("req-001"));
         assert_eq!(records[0].input_model, "inbound");
@@ -2252,7 +2255,10 @@ mod tests {
         );
         assert_eq!(
             records[0].ingress_request_id_sha256.as_deref(),
-            Some(crate::workflow_state::decision::ingress_request_id_sha256("request-2").as_str())
+            Some(
+                crate::gateway::routing::workflow::decision::ingress_request_id_sha256("request-2")
+                    .as_str()
+            )
         );
         assert!(
             !serde_json::to_string(&records[0])
@@ -2889,7 +2895,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("auto missing"))?;
         configured.adequacy.min_semantic_successes_for_lock = 1;
         configured.predictor =
-            Some(crate::workflow_state::predictive::compiled_predictor_contract());
+            Some(crate::gateway::routing::workflow::predictive::compiled_predictor_contract());
         let key = "semantic_route/v1|unknown|implement|normal";
         configured.routes.insert(key.into(), "balanced".into());
         let digest = format!("sha256:{}", "a".repeat(64));

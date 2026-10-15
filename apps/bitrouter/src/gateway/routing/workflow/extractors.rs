@@ -1,7 +1,7 @@
 use bitrouter_ai::types::Prompt;
 use http::HeaderMap;
 
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::ir::{
     Evidence, EvidenceLevel, HarnessId, ProtocolKind, WorkflowStateIR,
 };
 
@@ -41,10 +41,10 @@ impl TraceAdapterMatch {
 
 pub(crate) struct AdapterSessionHints {
     pub session_key: Option<String>,
-    pub session_confidence: crate::workflow_state::ir::SessionConfidence,
+    pub session_confidence: crate::gateway::routing::workflow::ir::SessionConfidence,
     pub session_source: Option<&'static str>,
     pub parent_session_id: Option<String>,
-    pub inferred_role: Option<crate::workflow_state::ir::AgentRole>,
+    pub inferred_role: Option<crate::gateway::routing::workflow::ir::AgentRole>,
     pub observed_context_epoch: Option<u32>,
     pub tracks_context_epoch: bool,
 }
@@ -195,7 +195,7 @@ pub fn parse_compatibility_harness(value: &str) -> Option<HarnessId> {
 }
 
 pub(crate) fn adapter_session_hints(input: &ExtractorInput<'_>) -> AdapterSessionHints {
-    use crate::workflow_state::ir::SessionConfidence;
+    use crate::gateway::routing::workflow::ir::SessionConfidence;
 
     let adapter = detect_trace_adapter(input);
     if !adapter.native {
@@ -292,7 +292,7 @@ mod tests {
     use http::HeaderValue;
 
     use super::{ExtractorInput, detect_trace_adapter};
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
 
     fn prompt() -> Prompt {
         Prompt {

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::store::EvalStore;
 use crate::gateway::routing::signals::TaskFamily;
-use crate::workflow_state::predictive::is_task_family_reason_code;
+use crate::gateway::routing::workflow::predictive::is_task_family_reason_code;
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
 use {
     super::types::canonical_digest, super::types::evidence_digest,
@@ -799,11 +799,9 @@ mod tests {
 
         assert!(normalized.len() <= 8);
         assert!(normalized.join(",").len() <= 128);
-        assert!(
-            normalized
-                .iter()
-                .all(|code| crate::workflow_state::predictive::is_task_family_reason_code(code))
-        );
+        assert!(normalized.iter().all(|code| {
+            crate::gateway::routing::workflow::predictive::is_task_family_reason_code(code)
+        }));
     }
 
     #[tokio::test]

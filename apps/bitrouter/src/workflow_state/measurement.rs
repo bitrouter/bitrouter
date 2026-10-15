@@ -11,7 +11,9 @@ use {
     bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
 };
 
-use super::decision::{PolicyDecisionRecord, ingress_request_id_sha256};
+use crate::gateway::routing::workflow::decision::{
+    PolicyDecisionRecord, ingress_request_id_sha256,
+};
 
 pub const ROUTING_BASELINE_SCHEMA_VERSION: u32 = 2;
 

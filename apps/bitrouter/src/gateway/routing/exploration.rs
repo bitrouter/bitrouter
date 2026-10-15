@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::workflow_state::ir::WorkflowIdentity;
+use crate::gateway::routing::workflow::ir::WorkflowIdentity;
 use {
     bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
     bitrouter_ai::eval::ExperimentAssignmentUnit,
@@ -182,9 +182,10 @@ mod tests {
     fn objective_is_signed_and_legacy_cost_gate_keeps_its_wire_identity() -> Result<()> {
         let mut gate = experiment().gate;
         let legacy = serde_json::to_value(&gate)?;
-        let cost_config = crate::optimization::identity::explore_compiler_config_digest(
-            "auto", "economy", 100_000, &gate,
-        )?;
+        let cost_config =
+            crate::gateway::routing::experiment_identity::explore_compiler_config_digest(
+                "auto", "economy", 100_000, &gate,
+            )?;
         assert!(legacy.get("objective").is_none());
         assert_eq!(
             serde_json::from_value::<OptimizationGate>(legacy.clone())?,
@@ -193,7 +194,7 @@ mod tests {
         gate.objective = OptimizationObjective::Latency;
         assert_ne!(
             cost_config,
-            crate::optimization::identity::explore_compiler_config_digest(
+            crate::gateway::routing::experiment_identity::explore_compiler_config_digest(
                 "auto", "economy", 100_000, &gate,
             )?
         );

@@ -1257,9 +1257,9 @@ Before Phases 0–2, the relay had these limitations:
   one-session TUI but has the wrong protocol meaning and process-level scope
   for a native-session controller.
 - The legacy
-  [Claude extractor](../apps/bitrouter/src/workflow_state/extractors/claude_code.rs)
+  [Claude extractor](../apps/bitrouter/src/gateway/routing/workflow/extractors/claude_code.rs)
   does not consume `x-claude-code-*` identity headers, and the
-  [Codex extractor](../apps/bitrouter/src/workflow_state/extractors/codex.rs)
+  [Codex extractor](../apps/bitrouter/src/gateway/routing/workflow/extractors/codex.rs)
   does not consume current `session-id`, `thread-id`, or Codex turn metadata.
 - The legacy workflow resolver gives
   `x-bitrouter-workflow-session` precedence over adapter hints and then falls

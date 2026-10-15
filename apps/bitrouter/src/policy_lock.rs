@@ -28,24 +28,24 @@ use sha2::{Digest, Sha256};
 
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
-#[cfg(test)]
-use crate::optimization::exploration::RouteRejection;
-use crate::optimization::exploration::{
-    OptimizationGate, PolicyOptimizationState, RouteExploration,
-};
-use crate::optimization::identity::{
+use crate::gateway::routing::experiment_identity::{
     HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, experiment_id, explore_compiler_config_digest,
     retreat_compiler_config_digest, treatment_context_digest,
+};
+#[cfg(test)]
+use crate::gateway::routing::exploration::RouteRejection;
+use crate::gateway::routing::exploration::{
+    OptimizationGate, PolicyOptimizationState, RouteExploration,
+};
+use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
+use crate::gateway::routing::workflow::ir::RouteProjection;
+use crate::gateway::routing::workflow::predictive::{
+    PredictiveRouteProjection, PredictorContract, compiled_predictor_contract,
 };
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
 use crate::trajectory::store::GuardedRouteInput;
-use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-use crate::workflow_state::ir::RouteProjection;
-use crate::workflow_state::predictive::{
-    PredictiveRouteProjection, PredictorContract, compiled_predictor_contract,
-};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const DEFAULT_NATIVE_MODEL: &str = "bitrouter/auto";
@@ -4722,7 +4722,9 @@ presets:
             .extension::<CorrelatedRequest>()
             .ok_or_else(|| anyhow::anyhow!("missing baseline correlation"))?;
         let records =
-            crate::workflow_state::decision::PolicyDecisionRecord::load_jsonl(&decision_path)?;
+            crate::gateway::routing::workflow::decision::PolicyDecisionRecord::load_jsonl(
+                &decision_path,
+            )?;
         let guarded_record = records
             .last()
             .ok_or_else(|| anyhow::anyhow!("missing guarded decision record"))?;
@@ -4761,8 +4763,10 @@ presets:
         assert_eq!(
             guarded_record.ingress_request_id_sha256.as_deref(),
             Some(
-                crate::workflow_state::decision::ingress_request_id_sha256("request-stable")
-                    .as_str()
+                crate::gateway::routing::workflow::decision::ingress_request_id_sha256(
+                    "request-stable"
+                )
+                .as_str()
             )
         );
         assert!(!serde_json::to_string(guarded_record)?.contains("request-stable"));

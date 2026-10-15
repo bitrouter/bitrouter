@@ -4,10 +4,10 @@ use serde::Serialize;
 
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
+use crate::gateway::routing::workflow::predictive::{PredictiveRouteProjection, predict_next_step};
 use crate::policy_lock::PolicyDefinition;
 use crate::workflow_state::archive::CloudUsageRecord;
 use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::predictive::{PredictiveRouteProjection, predict_next_step};
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::extract_fixture_ir;
 
@@ -374,10 +374,10 @@ fn mul_div_ceil(value: u64, multiplier: u64, divisor: u64) -> u64 {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
     use crate::metering::{ChargeStatus, ReconciliationStatus};
     use crate::policy_lock::PolicyDefinition;
     use crate::workflow_state::archive::CloudUsageRecord;
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
     use crate::workflow_state::real_trace::{CapturedIngressTrace, RealTraceOutcome};
 
     use super::analyze_policy_counterfactual;

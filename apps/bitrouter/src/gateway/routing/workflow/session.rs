@@ -4,8 +4,8 @@ use std::sync::Mutex;
 use bitrouter_ai::types::{Content, Message, Role};
 use sha2::{Digest, Sha256};
 
-use crate::workflow_state::extractors::{ExtractorInput, adapter_session_hints};
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, adapter_session_hints};
+use crate::gateway::routing::workflow::ir::{
     AgentRole, ContextTransition, Evidence, EvidenceLevel, SessionConfidence, SessionSignal,
     WorkflowIdentity,
 };
@@ -350,11 +350,11 @@ mod tests {
     use http::HeaderMap;
     use http::HeaderValue;
 
-    use crate::workflow_state::extractors::ExtractorInput;
-    use crate::workflow_state::ir::{
+    use crate::gateway::routing::workflow::extractors::ExtractorInput;
+    use crate::gateway::routing::workflow::ir::{
         AgentRole, ContextTransition, HarnessId, ProtocolKind, SessionConfidence,
     };
-    use crate::workflow_state::session::{
+    use crate::gateway::routing::workflow::session::{
         MAX_TRACKED_PARENT_SESSIONS, WorkflowIdentityTracker, advance_epoch,
         resolve_session_signal, resolve_workflow_identity,
     };
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn pure_model_api_session_compatibility_matrix() -> anyhow::Result<()> {
         let cases: Vec<PureApiCase> = serde_json::from_str(include_str!(
-            "../../tests/fixtures/session_compatibility/pure_model_api_sessions.json"
+            "../../../../tests/fixtures/session_compatibility/pure_model_api_sessions.json"
         ))?;
 
         for case in cases {
@@ -599,7 +599,7 @@ mod tests {
             advance_epoch(
                 &tracker,
                 format!("run|trial|parent-{index}"),
-                crate::workflow_state::ir::AgentRole::Main,
+                crate::gateway::routing::workflow::ir::AgentRole::Main,
                 None,
             );
         }

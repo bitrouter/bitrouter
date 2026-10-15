@@ -1,6 +1,6 @@
-use crate::workflow_state::extractors::generic::GenericPromptExtractor;
-use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::generic::GenericPromptExtractor;
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+use crate::gateway::routing::workflow::ir::{
     Evidence, EvidenceLevel, HarnessId, ProtocolKind, WorkflowStateIR,
 };
 
@@ -10,18 +10,20 @@ impl WorkflowStateExtractor for OpenClawExtractor {
     fn detect(
         &self,
         input: &ExtractorInput<'_>,
-    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+    ) -> Option<crate::gateway::routing::workflow::extractors::TraceAdapterMatch> {
         input
             .raw_body
             .get("agentRuntime")
             .and_then(serde_json::Value::as_object)
             .is_some()
-            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
-                source: HarnessId::OpenClaw,
-                confidence: 0.9,
-                evidence_kind: "agent_runtime",
-                native: true,
-            })
+            .then_some(
+                crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
+                    source: HarnessId::OpenClaw,
+                    confidence: 0.9,
+                    evidence_kind: "agent_runtime",
+                    native: true,
+                },
+            )
     }
 
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
@@ -65,8 +67,8 @@ mod tests {
     use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
     use http::HeaderMap;
 
-    use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-    use crate::workflow_state::ir::{EvidenceLevel, HarnessId, ProtocolKind};
+    use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+    use crate::gateway::routing::workflow::ir::{EvidenceLevel, HarnessId, ProtocolKind};
 
     fn prompt() -> Prompt {
         Prompt {
@@ -121,7 +123,7 @@ mod tests {
             });
             assert_eq!(
                 ir.state_kind,
-                crate::workflow_state::ir::WorkflowStateKind::Opening,
+                crate::gateway::routing::workflow::ir::WorkflowStateKind::Opening,
                 "unverified {action} action must not change routing projection"
             );
         }

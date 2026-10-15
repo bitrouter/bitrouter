@@ -13,9 +13,11 @@ use http::HeaderMap;
 use http::{HeaderName, HeaderValue};
 
 use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+use crate::gateway::routing::workflow::ir::{
+    HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind,
+};
+use crate::gateway::routing::workflow::predictive::NextActionClass;
 use crate::policy_table_router::PolicyTable;
-use crate::workflow_state::ir::{HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind};
-use crate::workflow_state::predictive::NextActionClass;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowTraceFixture {

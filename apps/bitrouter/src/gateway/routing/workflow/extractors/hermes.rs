@@ -1,6 +1,6 @@
-use crate::workflow_state::extractors::generic::GenericPromptExtractor;
-use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-use crate::workflow_state::ir::{
+use crate::gateway::routing::workflow::extractors::generic::GenericPromptExtractor;
+use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+use crate::gateway::routing::workflow::ir::{
     Evidence, EvidenceLevel, HarnessId, ProtocolKind, SessionConfidence, WorkflowStateIR,
 };
 
@@ -10,7 +10,7 @@ impl WorkflowStateExtractor for HermesExtractor {
     fn detect(
         &self,
         input: &ExtractorInput<'_>,
-    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+    ) -> Option<crate::gateway::routing::workflow::extractors::TraceAdapterMatch> {
         let has_native_metadata = input
             .raw_body
             .get("metadata")
@@ -18,24 +18,28 @@ impl WorkflowStateExtractor for HermesExtractor {
             .and_then(serde_json::Value::as_str)
             .is_some_and(|value| !value.trim().is_empty());
         if has_native_metadata {
-            return Some(crate::workflow_state::extractors::TraceAdapterMatch {
-                source: HarnessId::Hermes,
-                confidence: 0.9,
-                evidence_kind: "hermes_metadata",
-                native: true,
-            });
+            return Some(
+                crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
+                    source: HarnessId::Hermes,
+                    confidence: 0.9,
+                    evidence_kind: "hermes_metadata",
+                    native: true,
+                },
+            );
         }
         input
             .headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.to_ascii_lowercase().contains("hermes"))
-            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
-                source: HarnessId::Hermes,
-                confidence: 0.9,
-                evidence_kind: "hermes_user_agent",
-                native: true,
-            })
+            .then_some(
+                crate::gateway::routing::workflow::extractors::TraceAdapterMatch {
+                    source: HarnessId::Hermes,
+                    confidence: 0.9,
+                    evidence_kind: "hermes_user_agent",
+                    native: true,
+                },
+            )
     }
 
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
@@ -87,8 +91,8 @@ mod tests {
     use http::HeaderMap;
     use http::HeaderValue;
 
-    use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind, SessionConfidence};
+    use crate::gateway::routing::workflow::extractors::{ExtractorInput, WorkflowStateExtractor};
+    use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind, SessionConfidence};
 
     fn prompt() -> Prompt {
         Prompt {

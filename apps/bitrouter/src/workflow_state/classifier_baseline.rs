@@ -35,8 +35,8 @@ pub struct ClassifierBaselineManifest {
 
 #[derive(Serialize)]
 struct FrozenInferenceInput<'a> {
-    harness: &'a super::ir::HarnessId,
-    protocol: &'a super::ir::ProtocolKind,
+    harness: &'a crate::gateway::routing::workflow::ir::HarnessId,
+    protocol: &'a crate::gateway::routing::workflow::ir::ProtocolKind,
     headers: Vec<(String, String)>,
     raw_body: &'a serde_json::Value,
     canonical_prompt: &'a Option<serde_json::Value>,
