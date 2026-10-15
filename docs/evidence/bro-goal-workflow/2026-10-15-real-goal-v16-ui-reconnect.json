@@ -1,0 +1,20 @@
+{
+  "goal_id": "3e9f3906-c069-4e4f-9145-97b064e12713",
+  "requirements_revision": 2,
+  "checks": {
+    "same_goal": true,
+    "same_requirements": true,
+    "same_completed_attempt": true,
+    "same_input": true,
+    "same_executions": true,
+    "same_work_started": true,
+    "no_pending_input": true,
+    "no_in_flight": true
+  },
+  "ui_observed": [
+    "New actual bro code process reconnected to the existing completed Goal.",
+    "Enter opened that Goal; Ctrl-Right displayed its three checked handoffs; Ctrl-Q detached cleanly."
+  ],
+  "private_tty_sha256": "91989becb28c460d47210979a07564525d33926ec589415e10fb90965453fac4",
+  "scope": "Read-only observation and reconnection; revision may advance for coordinator/elapsed metadata, so unchanged execution/input/work identities are checked rather than equating revision counters."
+}
