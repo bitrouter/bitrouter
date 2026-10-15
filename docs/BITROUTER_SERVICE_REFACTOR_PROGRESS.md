@@ -2025,3 +2025,79 @@ historical-payload, complete feature-isolation, packaged-client or final-suite
 acceptance gates. A01–A16 and publication remain open. This work does not claim
 multi-instance semantics. The next implementation stage separates shared plain
 transcript formatting from terminal rendering before gating TUI dependencies.
+
+## P0 2/P0 5 shared transcript formatting (2026-10-16)
+
+The plain transcript now consumes terminal-independent rows from
+`presentation::transcript`. Tool content, diff hunks, plans, reasoning, formatted
+messages and the logical revision/extent cache moved together. `output::plain`
+serializes the same rows at the existing 80-by-24 extent; ACP text presentation
+and piped chat keep their existing settlement timing. The TUI converts semantic
+annotations to terminal styles. Source-reading anchors, interactive layout,
+compact cards, sanitization and physical terminal writing remain TUI-owned.
+
+The shared formatter adapts the used parser, inline formatting, wrapping and
+table rendering from the locked `ratatui-markdown` 0.3.6 release, retaining its
+Apache-2.0 license and exact package/source provenance in the new Markdown
+directory. Unused widget, image-loading and hook machinery is omitted. The
+production `ratatui-markdown` dependency is removed; no replacement dependency
+is added. BitRouter's existing table fallback and literal code frames remain in
+the one shared implementation. Quote depth saturates instead of overflowing its
+existing byte-sized representation.
+
+Cost wording/provenance and its tests now live with the shared cost value. The
+only live terminal consumers previously converted the styled cost line back to
+text, so they now consume the same label directly. Their surrounding terminal
+styling remains unchanged. Plain transcript output still has no cost footer.
+
+Retained baseline evidence is under `tests/fixtures/transcript`: five case
+families generated from unchanged revision
+`9956a427bd5d4316b3bf2359f88e293b158781d5`, a standalone Rust authoring tool,
+pinned dependency/source records and per-checkpoint byte hashes. The authoring
+run reproduced all cases twice; 36 ranges include 11 empty ranges. Golden
+replay checks each range and complete output. Fixed POSIX diff paths make that
+case Unix-only; ordinary native-path diff tests remain portable. Failure-tail
+fixtures exercise the baseline helper composition, not an entire failing CLI
+process. Constructor fixtures preserve the distinction between row constructors
+that remove line separators and explicit runs that retain them.
+
+Initial verification: a separate differential harness passed 39 tests, including
+1,575 formatted Markdown comparisons and 328 literal-code comparisons with the
+committed pre-extraction adapter. Comparisons include row/run boundaries, text
+and effective style. The parent reran it with the current shared sources;
+`/tmp/bitrouter-p0-transcript-differential.log` records that result. The retained
+baseline fixture checksums also pass.
+
+Validation on the final extraction sources:
+
+- All-feature targeted regression: **323/323 passed**, 180.048s, covering
+  shared presentation/plain output, ACP text settlement and synchronous/async
+  closed sinks, existing ACP protocol/headless permissions, source boundaries,
+  Code PTY and native-agent TUI behavior. The selection skipped 3,208 unrelated
+  cases; it is not the final whole-workspace suite.
+- Strict Rust 1.97 full-workspace/all-targets Clippy and minimum-application
+  Clippy passed (1m28s and 42.04s). Strict full-workspace/all-feature Rustdoc and
+  minimum-application Rustdoc passed (32.99s and 24.80s). Rustdoc initially
+  rejected a bare attribution URL; it was changed to a link without changing
+  executable behavior.
+- The initial regression exposed one incorrect new test expectation: an inline
+  text run overrides the Markdown heading tone in the baseline, so its effective
+  terminal foreground is Reset. The assertion now preserves that baseline;
+  production formatting was not changed to satisfy the test.
+- Formatting and whitespace checks pass. All 24 retained fixture checksum
+  entries pass. The source/lock provenance and differential results remain
+  separate from application/process evidence.
+- Logs: `/tmp/bitrouter-p0-transcript-tests-fixed.log`,
+  `transcript-clippy.log`, `transcript-clippy-min.log`,
+  `transcript-doc-fixed.log` and `transcript-doc-min-fixed.log`, all with the
+  `/tmp/bitrouter-p0-` prefix. Runtime tests use stable Rust, two build workers,
+  two test threads and disabled debug symbols/incremental compilation. Existing
+  linker/future-compatibility warnings remain.
+
+The latest documentation-only ownership corrections are integrated here without
+replacing this worktree's more detailed transcript requirements. Independent
+stage review is being finalized before the extraction commit.
+
+This extraction is a prerequisite for the remaining TUI feature gate, not proof
+that all headless application dependencies are already isolated. A05/A11 and the
+other final P0 gates remain open until the complete profiles and candidate pass.

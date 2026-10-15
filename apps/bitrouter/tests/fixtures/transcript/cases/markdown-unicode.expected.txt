@@ -1,0 +1,58 @@
+
+> Review **literal input**.  
+> Keep the second line.
+
+Workspace review
+
+Parser and writer share config.rs . Read the guide before changing settings;
+this deliberately long sentence crosses the eighty-column boundary with 中文,
+café, é, and 👩‍💻 intact in the recorded baseline.
+
+• Inspect files
+• Preserve output
+• Keep nested notes
+☑ Read config
+☐ Review changes
+
+│ A quoted observation with emphasis.
+
+┌───────────────────────────────────────────────────────────────┬──────────┐
+│  Repository                                                   │  Role    │
+├───────────────────────────────────────────────────────────────┼──────────┤
+│  bitrouter                                                    │  Routes  │
+│                                                               │  requests│
+├───────────────────────────────────────────────────────────────┼──────────┤
+│  writer                                                       │  Writes  │
+│                                                               │  output  │
+└───────────────────────────────────────────────────────────────┴──────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│     echo '**literal** 你好👩‍💻'                                                │
+│   printf '%s\n' 'a literal command whose whitespace, quotes, and very long a │
+│ rgument must survive wrapping unchanged'                                     │
+│   echo '中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中 │
+│ 文👩‍💻'                                                                        │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+> Show the long table and an unfinished command.
+
+Repository: bitrouter
+Detail:
+oversized-table-token-oversized-table-token-oversized-table-token-oversized-tabl
+e-token-oversized-table-token-oversized-table-token-
+
+Repository: writer
+Detail: Keep every field
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ printf '**unfinished** 你好'                                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+> Finish the review.
+
+All done.
+
+Nothing else changed.

@@ -3208,7 +3208,7 @@ enum Presenter<'a, W> {
     /// Boxed: a journal and a render cache are a lot larger than a writer.
     Text {
         out: &'a mut W,
-        transcript: Box<crate::tui::plain::Transcript>,
+        transcript: Box<crate::output::plain::Transcript>,
     },
 }
 
@@ -3375,7 +3375,7 @@ where
     async fn turn_settled(&mut self) -> Result<()> {
         if let Presenter::Text { out, transcript } = self {
             let mut rendered = Vec::new();
-            crate::tui::plain::write(&mut rendered, &transcript.unwritten())
+            crate::output::plain::write(&mut rendered, &transcript.unwritten())
                 .context("rendering the transcript")?;
             out.write_all(&rendered)
                 .await
@@ -3437,6 +3437,70 @@ where
             Presenter::Quiet { .. } => Ok(()),
             Presenter::Text { out, .. } => write_line(out, "[submitted]").await,
         }
+    }
+}
+
+#[cfg(test)]
+mod text_presenter_tests {
+    use super::{Presenter, PromptFormat};
+    use agent_client_protocol_schema::v1::{
+        ContentBlock, ContentChunk, MessageId, SessionUpdate, TextContent,
+    };
+
+    fn chunk(id: &str, text: &str) -> SessionUpdate {
+        let mut chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(text)));
+        chunk.message_id = Some(MessageId::from(id.to_string()));
+        SessionUpdate::AgentMessageChunk(chunk)
+    }
+
+    #[tokio::test]
+    async fn text_is_buffered_until_settlement_and_each_turn_is_written_once() -> anyhow::Result<()>
+    {
+        let mut output = Vec::new();
+        let mut presenter = Presenter::new(PromptFormat::Text, false, &mut output);
+        let mut reply = String::new();
+        presenter
+            .update(chunk("first", "**First"), false, &mut reply)
+            .await?;
+        presenter
+            .update(chunk("first", " turn**"), false, &mut reply)
+            .await?;
+        if let Presenter::Text { out, .. } = &presenter {
+            assert!(out.is_empty(), "incomplete updates must remain buffered");
+        }
+        presenter.turn_settled().await?;
+        presenter.turn_settled().await?;
+        presenter
+            .update(chunk("second", "Second turn"), false, &mut reply)
+            .await?;
+        presenter.turn_settled().await?;
+        presenter.turn_settled().await?;
+        drop(presenter);
+        assert_eq!(output, b"First turn\nSecond turn\n");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_closed_async_pipe_preserves_the_write_error() -> anyhow::Result<()> {
+        let (mut output, receiver) = tokio::io::duplex(64);
+        drop(receiver);
+        let mut presenter = Presenter::new(PromptFormat::Text, false, &mut output);
+        presenter
+            .update(chunk("first", "Finished"), false, &mut String::new())
+            .await?;
+        let error = presenter
+            .turn_settled()
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("a closed output must fail"))?;
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::BrokenPipe),
+        );
+        assert!(error.to_string().contains("writing the transcript"));
+        Ok(())
     }
 }
 

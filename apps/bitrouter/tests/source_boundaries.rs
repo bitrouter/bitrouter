@@ -66,11 +66,13 @@ fn shared_presentation_and_policy_are_terminal_independent()
         root.join("commands/chat.rs"),
         root.join("commands/agents.rs"),
         root.join("harness/permission.rs"),
+        root.join("output/plain.rs"),
     ]);
     for path in files {
         let source = std::fs::read_to_string(&path)?;
         for forbidden in [
             "ratatui::",
+            "ratatui_markdown::",
             "crossterm::",
             "crate::tui::",
             "sea_orm::",

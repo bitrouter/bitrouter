@@ -619,13 +619,13 @@ crate-root module declarations at the inventory baseline.
 | `acp_cli` | `cli::acp` command adapter; execution/acceptance helpers under `harness::acp`; evolution operations delegate to core |
 | `acp_runtime` | `harness::acp` product runtime assembly; startup registration through host |
 | `acp_trajectory` | `harness::trajectory` capture, conversation projection and durable checkpoints; move `SessionIdentity` and the ORM-only `entities` definitions to application storage for existing gateway readers; learning/analysis consumers remain in core; shared records do not grant gateway conversation-write authority |
-| `actions` | `commands` shared operations/reports; `administration/models/requests/route/status` delegate to gateway/control, `code/session/supervised` to harness, skills to their existing resource owner |
+| `actions` | `commands` shared operations/reports; `administration/models/requests/route/status` delegate to gateway/control, session/supervised operations to harness. Code UI adapters belong to TUI; `code::evolution::{candidate,manual}` additionally requires core, while evolution mutations remain core-owned. Skills delegate to their existing resource owner. |
 | `adequacy` | `core::adequacy` existing evidence/read/report behavior; do not reactivate legacy learning merely by moving it |
 | `administration_target` | `client` endpoint/transport selection; portable remote HTTP implementation in SDK |
 | `agent_api` | `harness::api` handlers; public wire DTOs to AI, portable supported HTTP client methods to SDK |
 | `agent_local` | `client::agent_local` OS-local client and IPC; shared wire DTOs to AI; do not claim arbitrary remote access |
 | `agent_registry` | `harness::registry` program metadata and selection |
-| `agent_sessions` | `harness::sessions` session-facing adapters and listings |
+| `agent_sessions` | Local session client under `client`, shared operations/acknowledgements under `commands`, snapshot/history projection under `presentation`; interactive deck loops and terminal event handling under TUI; execution remains in harness |
 | `agent_store` | `harness::storage` existing codecs and durable execution repositories |
 | `agents` | `commands::agents` and `harness` service operations; menu rendering to TUI |
 | `assemble` | `host::assemble`; compose only enabled runtimes and install built-in gateway behavior |
@@ -658,7 +658,7 @@ crate-root module declarations at the inventory baseline.
 | `mcp_registry` | `gateway::mcp` gateway discovery/proxy support and `commands::mcp` diagnostics; workspace MCP use remains harness-owned |
 | `metering` | `gateway::metering` usage, pricing/tariff evidence, persistence and reconciliation; native execution adapters gated with their consumers |
 | `native_acp` | `harness::acp::native` local endpoint/stdio bridge; CLI dispatch separated |
-| `native_code` | Split headless/native driver to harness/CLI, drawing/editor loop to TUI, `presentation` data to shared presentation |
+| `native_code` | TUI interactive ThreadService client, including its editor/event loop; extract presentation helpers only where another supported caller needs them. Existing native headless execution is owned by `managed_task`, not a second driver extracted from this UI. |
 | `onboarding` | `cli::onboarding` noninteractive validation/setup; terminal interaction under TUI |
 | `optimization` | Controller, cohort analysis and learning to `core::optimization`; published exploration policy types, deterministic assignment and certificate identity/digest validation from `exploration/identity` to gateway policy/routing; shared application helpers remain available without core |
 | `orchestrator_api` | `core::api` authenticated handlers, channels and Responses managed opt-in; public messages in AI, remote clients in SDK |
@@ -678,9 +678,9 @@ crate-root module declarations at the inventory baseline.
 | `router_migration` | `config::router_migration` explicit compatibility parse/write operations |
 | `session_identity` | `gateway::session_identity` request correlation and pure extraction; move its ACP runtime/route-lease lookup adapter behind harness and its workflow-analysis integration behind core; no ownership of harness session history |
 | `skills` | Harness workspace material discovery; gateway Skills-over-MCP relay remains gateway; shared CLI entry delegates to the correct owner |
-| `spawn` | `cli::spawn` plus `harness::spawn` process execution/cleanup |
-| `style` | TUI styling; CLI output uses plain presentation values and optional color without a Ratatui dependency |
-| `supervisor` | `harness::supervisor` agent process/session lifecycle |
+| `spawn` | `cli::spawn` plus `harness::spawn` agent launch/execution/cleanup; extract binary discovery/installation used by provider login and its required metadata to base provider/integration support, without a harness runtime dependency |
+| `style` | Keep the existing ANSI palette and TTY/`NO_COLOR` checks with shared CLI presentation; this module uses `std`, not Ratatui, and remains available without TUI |
+| `supervisor` | `harness::supervisor` agent process/session lifecycle; separate local IPC message definitions and client-facing data from the live supervisor so host protocol decoding does not pull in execution. Local-only IPC is not automatically a public AI API. |
 | `tools` | `commands::tools` existing gateway/MCP diagnostics; do not confuse this module with orchestrator workspace tools |
 | `tracing_filter` | `host::logging` basic logs independent of optional OTLP |
 | `trajectory` | Gateway request evidence/correlation/settlement, operational evaluation-envelope construction, durable outbox persistence, request-time progress guards and required health/state validation; core owns evaluation admission/outbox consumption, offline analysis/replay and policy publishing; preserve pending outbox rows without core |
@@ -974,6 +974,110 @@ Moving Ratatui-backed `Line`, `Size` or a renderer cache into a module named
 `presentation` does not satisfy headless isolation; shared formatting must have
 terminal-independent data and dependencies.
 
+Resolve these mixed paths before making terminal dependencies optional:
+
+| Existing coupling | Required split |
+| --- | --- |
+| `plain -> writer::Cache -> render` | Extract the logical transcript, formatting and cache into presentation. Keep terminal painting, physical-row diffing and viewport state in TUI. Plain and terminal output consume the same content formatting. |
+| `render::markdown` and its Ratatui Markdown dependency | Retain Markdown/code/table behavior using terminal-independent rows and text annotations; map those annotations to Ratatui styles only in TUI. Replacing `Line` while retaining a transitive Ratatui renderer does not isolate the dependency graph. |
+| `agent_sessions::AgentResult::Action(AgentAction)` | Separate operation acknowledgements from keyboard events and UI state-machine actions. Background/session clients must not depend on a terminal event type through a nested enum. |
+| `select::Item` used by commands, onboarding and prompt code | Keep reusable choice data in presentation and interactive selection under TUI. Preserve explicit noninteractive provider/setup paths. |
+| `dashboard`, `native_code` and interactive agent decks | Keep request/options data where actual CLI callers need it; gate terminal loops and reject unavailable interactive operations before opening services, acquiring leases or writing setup state. |
+
+Provider login is a separate consumer of process helpers: the baseline
+`commands::run_claude_code_session` calls `spawn::ensure_agent_installed` before
+handing login to the vendor CLI. Keep that supported path available without
+harness or BitRouter's TUI. Extract the shared installer/discovery helper and
+the small provider-facing metadata it needs before gating the generated harness
+catalog. Do not create another source of installer facts or require an ACP
+controller merely to obtain provider credentials. Test this path with a stub
+vendor executable, separately from agent execution and terminal drawing.
+
+#### Headless transcript extraction
+
+The next transcript stage must preserve one content formatter shared by plain
+output and terminal consumers. It must not introduce independent Markdown,
+tool or diff renderers, or retain terminal dependencies behind a presentation
+facade. The following paths refer to the merged application source under
+`apps/bitrouter/src`; they refine the target ownership above.
+
+| Source | Extraction boundary |
+| --- | --- |
+| `tui/render/mod.rs` | Move `ToolContext`, `ToolRenderer`, `ToolKey`, `Registry`, `Generic`, `Execute`, `Reasoning`, formatted messages, command extraction and tool-content dispatch to `presentation::transcript`. Keep source-preserving interactive message rendering in TUI. |
+| `tui/render/content.rs`, `diff.rs`, `session.rs` | Share content descriptions, caps and counts, diff paths/hunks, and plan text/glyphs through terminal-independent rows. |
+| `tui/render/markdown.rs` | Share formatted Markdown, oversized-table fallback and literal code frames. Keep `source_lines` and its source-preserving helpers in TUI for Code's reading anchors. |
+| `tui/writer.rs` | Extract only logical `Cache`/`Cached` document assembly into neutral transcript code, retaining entry identity, revision, both dimensions and eviction. Keep `Writer`, `SyncSink`, buffers, painting and the separate active `code::DocumentCache` in TUI. |
+| `tui/plain.rs` | Move `Transcript`, `PIPED`, `unwritten` and fallible serialization to `output::plain`, consuming shared transcript rows. |
+| `presentation/journal.rs`, `cost.rs`, `log_tail.rs` | Retain journal semantics and existing shared values. Move remaining cost wording/provenance assertions out of TUI; leave terminal styling there. Keep log-tail formatting supplied with caller-owned text and path. |
+
+The shared representation contains text rows and runs, semantic annotations
+such as emphasis, code, thought, tool status and diff insertion/deletion, and
+plain width/height values. Shared formatting owns every character, prefix,
+space, row break, truncation count and ordering decision. TUI maps annotations
+to Ratatui styles and spans; plain output concatenates run text and writes one
+newline per row. Preserve annotation precedence, including thought styling
+over formatted Markdown. No shared type or dependency may require Ratatui,
+Crossterm or `ratatui-markdown`.
+
+The locked `ratatui-markdown` 0.3.6 depends on Ratatui even with only its
+`markdown` feature enabled. Removing local `Line` and `Size` imports is therefore
+insufficient. Extract the currently used parser/block types, inline formatting,
+text wrapping, table/block formatting and required constants into the one shared
+implementation, retaining upstream notices and BitRouter's code-frame override.
+Preserve existing run boundaries and width arithmetic: Markdown prose wrapping
+and code-frame grapheme wrapping are distinct. Switch both consumers before
+removing the production dependency; do not keep a separate plain implementation.
+
+The compatibility contract is the actual baseline output:
+
+- Plain uses an 80-column, 24-row extent, but its document cache does not apply a
+  universal final wrap. User lines, tool output, plans and diffs may exceed 80
+  columns. Preserve this behavior, literal whitespace and blank rows.
+- Keep the 40-source-line content cap, three-line diff context, diff cap of
+  `max(height, 4)`, absolute diff paths and counted omissions.
+- Preserve buffered-update draining and settlement timing in
+  `acp_cli::Presenter::Text`/`turn_settled` and `chat::session::chat_plain`.
+  Preserve the existing row cursor on patches and document shrinkage; adding
+  `Journal::finish_stream` calls is not part of this extraction.
+- Plain supplies no cost footer. Usage/provenance updates must not introduce one.
+  Cost attribution, unknown-provenance handling and the distinction between an
+  absent figure and measured zero remain covered separately by shared cost tests.
+- Preserve fallible synchronous/asynchronous writes and propagated closed-pipe
+  errors, without a printing panic or a new silent-success policy. Preserve
+  failure-log output and caller-owned teardown sequencing.
+- Keep Code's source-reading anchors, compact-card limits, sanitization and
+  `tui::wrap` local. The native-agent formatted Markdown consumer uses the shared
+  formatter through the terminal style adapter.
+
+Migration and evidence order:
+
+1. Capture byte-exact plain output from baseline
+   `9956a427bd5d4316b3bf2359f88e293b158781d5` before replacing its renderer. Retain
+   bounded serialized ACP event sequences with explicit `Transcript::unwritten`
+   checkpoints, including empty repeated reads and usage-only updates. Cover
+   multiple settled turns, Markdown prose/lists/tables/incomplete fences,
+   Unicode/code frames, tool patches/results/diffs/reasoning and cost omission.
+   Capture failure tails through the baseline `log_tail::render` followed by
+   `plain::write`, as used by piped chat; do not invent a footer. Record generator
+   source, resolved lock, baseline source/lock hashes, output hashes and byte
+   ranges. Use fixed paths and record platform assumptions. Temporary captures
+   alone are not retained acceptance evidence.
+2. Introduce shared rows and formatting, then migrate plain and terminal
+   consumers together. Preserve journal keying, patch/order tests, formatted
+   Markdown/content/diff/plan tests, once-only output tests, cache revision/resize
+   tests, and cost/log-tail tests. Retain both exact byte comparisons and terminal
+   style assertions; substring checks alone do not establish transcript parity.
+3. Integrate replay coverage and retain `acp.rs` text, piped-chat, quiet/NDJSON and
+   permission-policy tests. Add closed-pipe coverage for both synchronous and
+   asynchronous sinks. Pure helper fixtures do not prove process teardown,
+   outer CLI framing or error-path behavior.
+4. Gate terminal dependencies and interactive callers under `tui`, including
+   chat dispatch and native/session/selector paths. Keep headless adapters usable
+   under harness without TUI. Verify normal/build closures for minimum, core,
+   harness and core+harness without dev-dependency feature unification, and
+   extend source-boundary checks to reject `ratatui_markdown` in shared code.
+   Formatter extraction alone does not close the feature-isolation gate.
+
 ### Current telemetry, matcher and helper modules
 
 | Package and module | Target owner |
@@ -999,7 +1103,7 @@ terminal-independent data and dependencies.
 | --- | --- |
 | Package `lib.rs` files | Update module declarations/docs and intentional visibility; delete removed package roots; no public forwarding facades |
 | Application `main.rs` | Keep `bro`; thin feature-aware command dispatch; TUI and CLI share commands |
-| Application `build.rs` | Gate agent/runtime catalog generation by harness; preserve handoff/migration fingerprint inputs needed by gateway and include compiled capability identity so same-revision profiles are distinguishable |
+| Application `build.rs` | Separate provider-login installer metadata from harness catalogs before gating agent/runtime generation by harness; preserve handoff/migration fingerprint inputs needed by gateway and include compiled capability identity so same-revision profiles are distinguishable |
 | `apps/bitrouter/tests` | Keep real-process/HTTP/PTY integration role; gate suites by the features they exercise, not wholesale; update explicit CI test shards when a suite changes packages so its supported platform coverage is retained |
 | AI and old SDK `tests` | Move provider/auth/codec/runtime suites to application; keep independent contract/serde tests with AI and client tests with SDK |
 | Orchestrator tests/examples | Move scheduling tests to core, runtime/tools/store tests to harness, public contract tests to AI or application integration as appropriate |
@@ -1078,6 +1182,11 @@ runtime behavior:
 | `db-mysql` | MySQL driver in ORM and migration dependencies | Multi-instance semantics |
 
 Target default feature set:
+
+This excerpt shows capability implications, not a complete replacement manifest.
+Each implementation dependency must also be optional and activated by its owning
+feature; a Rust `cfg` alone does not remove a Cargo dependency.
+
 
 ```toml
 default = [
@@ -1393,6 +1502,8 @@ pass. AI becomes fully lightweight after its runtime moves in P0 3.
 - Absorb TUI after extracting command vocabulary, approval policy and presentation
   data. Remove Ratatui types from headless output and compare the retained
   transcript/failure-output fixtures before removing the old renderer path.
+  Follow the [headless transcript extraction](#headless-transcript-extraction)
+  boundary and evidence order; preserve the baseline formatter's exact bytes.
 - Move the telemetry implementation into the application, keeping schema
   conformance tests, independent HTTP/gRPC transport tests and frozen names
   intact. Separate application export configuration from exporter runtime, and
@@ -1485,6 +1596,9 @@ over harness persistence or execution.
 
 - Add the feature graph above and gate dependency activation, modules,
   commands/routes, workers, examples, tests and build-script assets.
+- Preserve provider-login binary discovery/install helpers without harness;
+  gate Code evolution UI adapters on both core and TUI, rather than making
+  either feature imply the other.
 - Gate local task/ACP listeners and ThreadService with harness separately from
   the existing `agent_api.enabled` HTTP opt-in. Preserve full-product local
   endpoints and their feature-aware inspection/execution capabilities.
@@ -1576,7 +1690,7 @@ refactor has already been implemented or tested.
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees; daemon compatibility distinguishes same-revision feature profiles, with no silent capability removal and safe preflight for explicit transitions |
 | A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; reserved request-ID rejection preserves earlier accounting; trajectory terminal facts/outbox survive feature changes without duplicate settlement/publication; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
-| A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui |
+| A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui; retained baseline transcript/failure-tail fixtures verify exact bytes at explicit settled-turn checkpoints, and separate sink/process tests preserve closed-pipe and teardown behavior; every non-TUI normal/build closure excludes terminal libraries, and TUI style/layout/PTY evidence remains separate |
 | A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves configuration readability, essential facts, basic logs and harness-local capture, and rejects unavailable export before related side effects; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
 | A13 Extensions | Matcher needs only contracts; real plugin installation preserves legacy global/output behavior and rule isolation; native checker fail-closed, revision/binding and permit lifetime tests pass; default activation is unchanged |
 | A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct; full-product and minimum-gateway candidate artifacts identify their features/revision, and the packaged gateway passes the independent SDK consumer scenario; updates preserve the installed profile or leave it unchanged with a profile-specific manual path |
@@ -1604,6 +1718,11 @@ agent runtimes; minimum additionally excludes optional MCP, OTel and non-SQLite
 drivers. Plain CLI setup and management remain available. Tests can depend on
 fixtures without changing the production closure.
 
+All supported profiles without `tui`, including harness and core+harness, must
+also exclude Ratatui, Crossterm and `ratatui-markdown` from their normal/build
+closures. The transcript extraction and interactive feature gates must both be
+complete before this requirement is considered satisfied.
+
 Pair the isolated builds with these behavioral gates. Record the selected and
 executed test identities, so a broad feature gate cannot silently remove the
 coverage that justifies a profile.
@@ -1617,7 +1736,8 @@ coverage that justifies a profile.
 | Harness HTTP SDK | SDK-only consumer uses the explicit loopback execution endpoint and credential; verify instance changes, workspace authorization, stored-session reads/observation, native mutations with core, and capability rejection without core; inference/control credentials are not interchangeable with execution credentials |
 | Harness only | Stored-session inspection, historical native snapshot decoding and corruption rejection, and existing external ACP/headless paths without production core or terminal drawing; native start/resume rejects before resource discovery, owner acquisition or durable mutation, with no automatic queue execution |
 | Core and harness | Existing managed execution, ThreadService ownership/queue/approval transitions, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
-| TUI | Existing PTY actions and terminal restoration; shared command results agree with the corresponding headless paths |
+| Headless presentation | Replay baseline-produced transcript fixtures without terminal dependencies; preserve Markdown/code/diff/reasoning text, cost provenance and failure tails, once-per-settled-turn emission and closed-pipe behavior. Noninteractive setup and piped chat work; unavailable interactive operations fail before service/setup side effects. |
+| TUI | Existing style/layout and PTY actions, source anchors and terminal restoration; shared command results agree with the corresponding headless paths |
 | Daemon profile compatibility | Same-revision full and minimum artifacts report distinct capabilities; common reads remain usable, unsupported operations are explicit, and neither profile silently replaces the other; explicit transitions validate configuration/state before shutdown and retain active-work, ownership, rollback and no-start protections |
 | Packaged updates | Full and minimum installations select their corresponding release artifacts or provide accurate profile-specific manual/delegated instructions; missing artifacts and custom feature selections do not fall back to the full product; verify the resulting binary's capability identity |
 | Guardrails | Real `GuardrailsPlugin::install` path plus native checker host tests; denied input makes zero upstream calls, output block/redact works, dynamic rules do not leak between requests |

@@ -1,37 +1,36 @@
-//! The same document, for a sink that is not a terminal.
+//! Shared transcript rows written to a non-terminal sink.
 //!
 //! Deliberately not a second renderer: it is the same journal and the same
-//! [`render`](crate::tui::render) implementations, written without a backend. The
-//! styles are the whole difference between the two paths — a [`Line`] is only
-//! escape sequences once a backend writes it, and written this way it never
-//! becomes any.
+//! [`render`](crate::presentation::transcript) implementations, written without a backend. The
+//! terminal consumer alone maps annotations to escape sequences. This serializer
+//! writes only the shared text, including its original spacing and row boundaries.
 
 use std::io::{self, Write};
 
 use agent_client_protocol_schema::v1::SessionUpdate;
-use ratatui::layout::Size;
-use ratatui::text::Line;
 
 use crate::presentation::journal::Journal;
-use crate::tui::render::Registry;
-use crate::tui::writer::Cache;
+use crate::presentation::transcript::Registry;
+use crate::presentation::transcript::cache::Cache;
+use crate::presentation::transcript::text::{Extent, Row};
+
+#[cfg(test)]
+mod baseline;
 
 /// The terminal a pipe does not have.
 ///
 /// Eighty columns is the convention every tool that has had to guess has
-/// guessed. It matters because the document is wrapped before it is written,
-/// so a pipe still gets rows a reader can follow rather than one long line.
-pub const PIPED: Size = Size {
+/// guessed. Shared Markdown and code formatting use this extent. Tool output,
+/// plans and literal user text retain their existing wrapping rules; there is
+/// no additional whole-document wrap before serialization.
+pub const PIPED: Extent = Extent {
     width: 80,
     height: 24,
 };
 
 /// A rendered line as plain text: the spans concatenated, every style dropped.
-pub fn text(line: &Line<'static>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect()
+pub fn text(line: &Row) -> String {
+    line.runs.iter().map(|span| span.content.as_str()).collect()
 }
 
 /// The session as a pipe receives it: the journal, rendered once per turn,
@@ -58,7 +57,7 @@ impl Transcript {
     }
 
     /// The rows added since the last call, rendered at [`PIPED`] width.
-    pub fn unwritten(&mut self) -> Vec<Line<'static>> {
+    pub fn unwritten(&mut self) -> Vec<Row> {
         let document = self
             .cache
             .document(&self.journal, &self.registry, PIPED, &[]);
@@ -72,7 +71,7 @@ impl Transcript {
 ///
 /// `writeln!` rather than `println!`: a closed pipe makes `println!` panic,
 /// and piping a session into `head` closes the pipe as a matter of course.
-pub fn write(out: &mut impl Write, lines: &[Line<'static>]) -> io::Result<()> {
+pub fn write(out: &mut impl Write, lines: &[Row]) -> io::Result<()> {
     for line in lines {
         writeln!(out, "{}", text(line))?;
     }
@@ -82,10 +81,39 @@ pub fn write(out: &mut impl Write, lines: &[Line<'static>]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::transcript::text::{Format, Run, Tone};
     use agent_client_protocol_schema::v1::{ContentBlock, ContentChunk, TextContent};
-    use ratatui::style::{Color, Modifier, Style};
-    use ratatui::text::Span;
 
+    #[test]
+    fn annotations_do_not_reach_a_pipe() -> io::Result<()> {
+        let row = Row::from(vec![
+            Run::annotated("all callers ", Format::default().tone(Tone::Pending)),
+            Run::annotated("USD 1.3200", Format::default().bold()),
+        ]);
+        let mut output = Vec::new();
+        write(&mut output, &[row])?;
+        assert_eq!(output, b"all callers USD 1.3200\n");
+        Ok(())
+    }
+
+    #[test]
+    fn a_closed_pipe_is_a_write_error() {
+        struct Closed;
+        impl Write for Closed {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let result = write(&mut Closed, &[Row::from("settled turn")]);
+        assert_eq!(
+            result.err().map(|error| error.kind()),
+            Some(io::ErrorKind::BrokenPipe)
+        );
+    }
     /// A transcript hands out each row once: what a pipe already has is never
     /// written again, and what arrived since is everything it gets.
     ///
@@ -124,24 +152,6 @@ mod tests {
         assert!(
             rows.iter().all(|row| !text(row).contains("first")),
             "and the first's are not written again: {rows:?}"
-        );
-    }
-
-    /// Styling is dropped, not encoded: a piped transcript that carried escape
-    /// sequences would corrupt the file it was redirected into.
-    #[test]
-    fn styles_never_reach_a_pipe() {
-        let line = Line::from(vec![
-            Span::styled("all callers ", Style::default().fg(Color::Yellow)),
-            Span::styled("USD 1.3200", Style::default().add_modifier(Modifier::BOLD)),
-        ]);
-        assert_eq!(text(&line), "all callers USD 1.3200");
-
-        let mut out = Vec::new();
-        write(&mut out, std::slice::from_ref(&line)).expect("writing to a vec");
-        assert_eq!(
-            String::from_utf8(out).expect("utf-8"),
-            "all callers USD 1.3200\n"
         );
     }
 }

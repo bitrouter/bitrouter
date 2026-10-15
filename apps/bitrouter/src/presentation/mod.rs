@@ -5,3 +5,5 @@ pub mod cost;
 pub mod journal;
 pub mod log_tail;
 pub mod native_agent;
+
+pub(crate) mod transcript;

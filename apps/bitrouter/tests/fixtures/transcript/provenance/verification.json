@@ -1,0 +1,38 @@
+{
+  "format_version": 1,
+  "baseline_source_and_git_blob_matches": 29,
+  "registry_pin_checksum_matches": 152,
+  "cached_crate_archive_checksum_matches": 152,
+  "capture_files_compared_per_run": 11,
+  "original_final_capture_reproduced": true,
+  "retained_capture_repeated_byte_for_byte": true,
+  "checkpoint_ranges_verified": 36,
+  "empty_checkpoint_ranges_verified": 11,
+  "output_rows": 234,
+  "utf8_valid": true,
+  "output_has_no_ansi": true,
+  "transcript_and_tail_output_has_no_crlf": true,
+  "constructor_output_preserves_span_crlf": true,
+  "checks": {
+    "clippy_all_features_deny_warnings": "passed",
+    "cargo_test_all_features": "passed; authoring binary has zero unit tests; verification is the byte replay and checkpoint audit",
+    "cargo_fmt_check": "passed"
+  },
+  "coverage_checks": [
+    "All checkpoint ranges are consecutive, end at EOF, and match recorded SHA-256, row counts, input IDs and step indices.",
+    "Six of eight cost checkpoints are empty. The two settled turns emit only transcript text, with no cost footer.",
+    "Completed tool patches replace partial content before emission; terminal handles and embedded resource bodies are omitted.",
+    "Tool output stops at 40 source lines; the new-file diff stops at 22 lines at the fixed height; omitted-line counts match.",
+    "Long CRLF log drops the first five lines and keeps the final twenty; short log and empty log retain their path lines.",
+    "Fifteen constructor cases were captured directly through pinned ratatui and baseline plain::write. Line constructors remove LF/CRLF separators; span constructors preserve them. Logical row count differs from LF byte count in those span cases."
+  ],
+  "limits": [
+    "Baseline library helper capture, not a full CLI subprocess, transport, permission, or lifecycle test.",
+    "Failure tails use the exact render -> plain::write composition called by chat/session.rs, but do not execute the private file-reading wrapper or trigger a failing agent.",
+    "The CLI stop-reason line, turn-failed prefix, result envelope, unreadable-file OS error and stderr routing are outside these expected bytes.",
+    "No integration with the rewritten formatter or test harness has been performed.",
+    "Crate archive checksums and the two ratatui constructor source files were verified; remaining extracted registry source files were not individually hashed."
+  ],
+  "constructor_source_files_verified_against_archive": 2,
+  "resolved_registry_features_unchanged_from_original_generator": true
+}

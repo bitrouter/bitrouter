@@ -30,12 +30,12 @@
 
 use std::path::Path;
 
+use super::text::{Format, Row, Run, Tone};
+
 use agent_client_protocol_schema::v1::Diff;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
 use similar::{ChangeTag, TextDiff};
 
-use crate::tui::render::content::{more, thousands};
+use crate::presentation::transcript::content::{more, thousands};
 
 /// Lines of unchanged context either side of a change.
 ///
@@ -53,12 +53,12 @@ const MIN_ROWS: usize = 4;
 /// `height` is the terminal's, not the diff's: a single edit must never occupy
 /// more than a screen, because the screen is what the reader is holding the
 /// rest of the session in.
-pub fn render(diff: &Diff, height: u16) -> Vec<Line<'static>> {
+pub fn render(diff: &Diff, height: u16) -> Vec<Row> {
     let mut lines = vec![path_line(&diff.path)];
     let old = diff.old_text.as_deref().unwrap_or("");
     let text = TextDiff::from_lines(old, &diff.new_text);
 
-    let mut body: Vec<Line<'static>> = Vec::new();
+    let mut body: Vec<Row> = Vec::new();
     let mut previous_end = 0_usize;
     for group in text.grouped_ops(CONTEXT) {
         let Some(first) = group.first() else {
@@ -102,33 +102,33 @@ pub fn render(diff: &Diff, height: u16) -> Vec<Line<'static>> {
 /// touching the filesystem, so this stays a pure renderer. A path that cannot
 /// be made absolute is shown as the agent sent it, because a relative path
 /// still beats no path.
-fn path_line(path: &Path) -> Line<'static> {
+fn path_line(path: &Path) -> Row {
     let shown = match std::path::absolute(path) {
         Ok(absolute) => absolute.display().to_string(),
         Err(_) => path.display().to_string(),
     };
-    Line::from(Span::styled(
+    Row::from(Run::annotated(
         format!("  {shown}"),
-        Style::default().add_modifier(Modifier::BOLD),
+        Format::default().bold(),
     ))
 }
 
 /// One line of the diff, marked by what happened to it.
-fn change_line(tag: ChangeTag, value: &str) -> Line<'static> {
+fn change_line(tag: ChangeTag, value: &str) -> Row {
     let value = value.trim_end_matches(['\n', '\r']).to_string();
     let (marker, style) = match tag {
-        ChangeTag::Delete => ("-", Style::default().fg(Color::Red)),
-        ChangeTag::Insert => ("+", Style::default().fg(Color::Green)),
-        ChangeTag::Equal => (" ", Style::default().fg(Color::DarkGray)),
+        ChangeTag::Delete => ("-", Format::default().tone(Tone::Error)),
+        ChangeTag::Insert => ("+", Format::default().tone(Tone::Success)),
+        ChangeTag::Equal => (" ", Format::default().tone(Tone::Muted)),
     };
-    Line::from(Span::styled(format!("  {marker}{value}"), style))
+    Row::from(Run::annotated(format!("  {marker}{value}"), style))
 }
 
 /// The rows between two hunks, as a count.
-fn unchanged(count: usize) -> Line<'static> {
-    Line::from(Span::styled(
+fn unchanged(count: usize) -> Row {
+    Row::from(Run::annotated(
         format!("  … {} unchanged lines", thousands(count)),
-        Style::default().fg(Color::DarkGray),
+        Format::default().tone(Tone::Muted),
     ))
 }
 
@@ -142,13 +142,13 @@ mod tests {
     // thing everywhere — and `the_path_is_absolute` is the one place holding
     // absoluteness itself, via `Path`, not via string shape.
 
-    fn text_of(lines: &[Line<'static>]) -> String {
+    fn text_of(lines: &[Row]) -> String {
         lines
             .iter()
             .map(|line| {
-                line.spans
+                line.runs
                     .iter()
-                    .map(|span| span.content.as_ref())
+                    .map(|span| span.content.as_str())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()

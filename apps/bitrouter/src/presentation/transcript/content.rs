@@ -12,9 +12,9 @@
 //! `… 1,240 more lines` is a fact the reader can act on; forty rows that stop
 //! for no stated reason are not.
 
+use super::text::{Format, Row, Run, Tone};
+
 use agent_client_protocol_schema::v1::{ContentBlock, EmbeddedResourceResource};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
 
 /// How many rows one `Content` block may occupy.
 ///
@@ -31,20 +31,20 @@ const INDENT: &str = "  ";
 ///
 /// Blocks that are not text have no honest multi-line spelling, so they get a
 /// single descriptive row instead — see [`describe`].
-pub fn render(block: &ContentBlock) -> Vec<Line<'static>> {
+pub fn render(block: &ContentBlock) -> Vec<Row> {
     let ContentBlock::Text(text) = block else {
-        return vec![Line::from(Span::styled(
+        return vec![Row::from(Run::annotated(
             format!("{INDENT}{}", describe(block)),
-            Style::default().fg(Color::DarkGray),
+            Format::default().tone(Tone::Muted),
         ))];
     };
 
     let total = text.text.lines().count();
-    let mut lines: Vec<Line<'static>> = text
+    let mut lines: Vec<Row> = text
         .text
         .lines()
         .take(MAX_ROWS)
-        .map(|line| Line::from(format!("{INDENT}{line}")))
+        .map(|line| Row::from(format!("{INDENT}{line}")))
         .collect();
     if total > MAX_ROWS {
         lines.push(more(total.saturating_sub(MAX_ROWS)));
@@ -55,10 +55,10 @@ pub fn render(block: &ContentBlock) -> Vec<Line<'static>> {
 /// The `… N more lines` tail. Public because the diff renderer's own cap ends
 /// the same way, and two spellings of the same fact would read as two
 /// different facts.
-pub fn more(remaining: usize) -> Line<'static> {
-    Line::from(Span::styled(
+pub fn more(remaining: usize) -> Row {
+    Row::from(Run::annotated(
         format!("{INDENT}… {} more lines", thousands(remaining)),
-        Style::default().fg(Color::DarkGray),
+        Format::default().tone(Tone::Muted),
     ))
 }
 
@@ -139,13 +139,13 @@ mod tests {
 
     use super::*;
 
-    fn text_of(lines: &[Line<'static>]) -> String {
+    fn text_of(lines: &[Row]) -> String {
         lines
             .iter()
             .map(|line| {
-                line.spans
+                line.runs
                     .iter()
-                    .map(|span| span.content.as_ref())
+                    .map(|span| span.content.as_str())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()

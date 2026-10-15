@@ -119,7 +119,7 @@ pub(crate) async fn chat_plain(
     } = surface;
 
     let mut out = std::io::stdout();
-    let mut transcript = crate::tui::plain::Transcript::default();
+    let mut transcript = crate::output::plain::Transcript::default();
     let policy = crate::harness::permission::Policy::default();
     let mut prompts = 0_usize;
     let mut updates = client.subscribe_raw_updates();
@@ -199,7 +199,7 @@ pub(crate) async fn chat_plain(
         while let Some(Some(update)) = updates.next().now_or_never() {
             transcript.apply(update);
         }
-        crate::tui::plain::write(&mut out, &transcript.unwritten())
+        crate::output::plain::write(&mut out, &transcript.unwritten())
             .context("writing the session to stdout")?;
         match outcome {
             Ok(response) => {

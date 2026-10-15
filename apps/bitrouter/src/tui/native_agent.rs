@@ -359,7 +359,9 @@ fn assistant_lines(lines: &mut Vec<Line<'static>>, text: &str, width: u16, trunc
             Style::default().fg(Color::DarkGray),
         ));
     }
-    lines.extend(crate::tui::render::markdown::render(text, width));
+    lines.extend(crate::tui::render::rows(
+        crate::presentation::transcript::markdown::render(text, width),
+    ));
 }
 
 fn composer_rows(editor: &Editor, width: u16) -> (Vec<Line<'static>>, Position) {

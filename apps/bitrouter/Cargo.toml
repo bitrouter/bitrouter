@@ -128,7 +128,6 @@ axoupdater = { version = "0.10", default-features = false, features = ["github_r
 semver = "1"
 # Terminal implementations now live under the application tui module.
 ratatui.workspace = true
-ratatui-markdown.workspace = true
 shell-words.workspace = true
 unicode-width.workspace = true
 unicode-segmentation.workspace = true

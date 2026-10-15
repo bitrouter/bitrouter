@@ -17,33 +17,33 @@
 //! enable, so they do not exist in the compiled schema. `Plan` itself is
 //! unconditional in v1.
 
+use super::text::{Format, Row, Run, Tone};
+
 use agent_client_protocol_schema::v1::{Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
 
 /// The agent's plan, as a block in document order.
 ///
 /// A plan is patched far more often than it is created — an agent ticks its
 /// way down one — which is exactly what the journal makes cheap: the block
 /// keeps the place it first took and is repainted where it stands.
-pub fn plan(plan: &Plan) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(Span::styled(
+pub fn plan(plan: &Plan) -> Vec<Row> {
+    let mut lines = vec![Row::from(Run::annotated(
         format!("plan · {} steps", plan.entries.len()),
-        Style::default().add_modifier(Modifier::BOLD),
+        Format::default().bold(),
     ))];
     lines.extend(plan.entries.iter().map(entry));
     lines
 }
 
 /// One step: what it is, how it is going, and how much it matters.
-fn entry(entry: &PlanEntry) -> Line<'static> {
+fn entry(entry: &PlanEntry) -> Row {
     let (glyph, style) = match entry.status {
-        PlanEntryStatus::Completed => ("✓", Style::default().fg(Color::Green)),
-        PlanEntryStatus::InProgress => ("◍", Style::default().fg(Color::Yellow)),
-        PlanEntryStatus::Pending => ("·", Style::default().fg(Color::DarkGray)),
+        PlanEntryStatus::Completed => ("✓", Format::default().tone(Tone::Success)),
+        PlanEntryStatus::InProgress => ("◍", Format::default().tone(Tone::Pending)),
+        PlanEntryStatus::Pending => ("·", Format::default().tone(Tone::Muted)),
         // `PlanEntryStatus` is `#[non_exhaustive]`; an unknown state is
         // reported as unknown rather than shown as one of the three.
-        _ => ("?", Style::default().fg(Color::Magenta)),
+        _ => ("?", Format::default().tone(Tone::Unknown)),
     };
     // Priority is only worth a mark when it is not the middle of three:
     // labelling everything "medium" is noise that hides the two that matter.
@@ -52,9 +52,9 @@ fn entry(entry: &PlanEntry) -> Line<'static> {
         PlanEntryPriority::Low => " (low)",
         _ => "",
     };
-    Line::from(vec![
-        Span::styled(format!("  {glyph} "), style),
-        Span::raw(format!("{}{priority}", entry.content)),
+    Row::from(vec![
+        Run::annotated(format!("  {glyph} "), style),
+        Run::raw(format!("{}{priority}", entry.content)),
     ])
 }
 
@@ -62,13 +62,13 @@ fn entry(entry: &PlanEntry) -> Line<'static> {
 mod tests {
     use super::*;
 
-    fn text(lines: &[Line<'static>]) -> String {
+    fn text(lines: &[Row]) -> String {
         lines
             .iter()
             .map(|line| {
-                line.spans
+                line.runs
                     .iter()
-                    .map(|span| span.content.as_ref())
+                    .map(|span| span.content.as_str())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()

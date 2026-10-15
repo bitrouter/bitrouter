@@ -31,12 +31,13 @@ use crate::presentation::agents::AgentHistorySnapshot;
 use crate::presentation::agents::NewAgentRunChoices;
 use crate::presentation::cost;
 use crate::presentation::journal::{Entry, EntryId, Journal, Voice};
+use crate::presentation::transcript::{Registry, ToolContext, text::Extent};
 use crate::tui::agents::AgentAction;
 use crate::tui::agents::AgentDeckState;
 use crate::tui::agents_menu::AgentsMenu;
 use crate::tui::composer::layout as composer_layout;
 use crate::tui::editor::{Edit, Editor};
-use crate::tui::render::{self, Registry, ToolContext};
+use crate::tui::render;
 use crate::tui::wrap::wrap;
 use crate::tui::writer::{Writer, buffer_lines};
 
@@ -3909,7 +3910,7 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
             "Choose an agent with /agent or send a draft".to_string()
         };
         if let Some(cost) = state.journal.usage().and_then(cost::from_usage) {
-            context.push_str(&format!(" · {}", line_text(&cost.render())));
+            context.push_str(&format!(" · {}", cost.label()));
         }
         let agents_hint = if state.can_open_agents() {
             " · ← agents"
@@ -4343,8 +4344,8 @@ fn render_surface(frame: &mut Frame<'_>, state: &CodeState) {
 
 fn render_status(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
     let full_cost = match state.journal.usage().and_then(cost::from_usage) {
-        Some(cost) => line_text(&cost.render()),
-        None => line_text(&crate::tui::cost::unreported()),
+        Some(cost) => cost.label(),
+        None => crate::presentation::cost::UNREPORTED.to_string(),
     };
     let width = usize::from(area.width);
     let activity = state.effective_activity();
@@ -4463,7 +4464,7 @@ fn document_rows_for_entry(
         }
         Entry::Message(message) => render::source_message(message),
         Entry::Tool(call) => compact_tool_lines(call, width, height, registry),
-        Entry::Plan(plan) => render::session::plan(plan),
+        Entry::Plan(plan) => render::rows(crate::presentation::transcript::session::plan(plan)),
     };
     for line in lines {
         for line in wrap(&sanitize_line(&line), width.max(1)) {
@@ -4479,10 +4480,8 @@ fn compact_tool_lines(
     height: u16,
     registry: &Registry,
 ) -> Vec<Line<'static>> {
-    let mut lines = registry.render(&ToolContext::new(
-        call,
-        ratatui::layout::Size::new(width, height),
-    ));
+    let mut lines =
+        render::rows(registry.render(&ToolContext::new(call, Extent { width, height })));
     let limit = match call.status {
         ToolCallStatus::Completed => 4,
         ToolCallStatus::Failed => 8,
@@ -5184,13 +5183,6 @@ fn one_line(text: &str) -> String {
 
 fn safe_one_line(text: &str) -> String {
     one_line(&sanitize(text))
-}
-
-fn line_text(line: &Line<'_>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>()
 }
 
 fn first_match_line(content: &str, query: &str) -> Option<usize> {
@@ -6950,7 +6942,11 @@ mod tests {
             return;
         };
         let compact = compact_tool_lines(call, 80, 24, &Registry::default());
-        let compact_text = compact.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        let compact_text = compact
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(compact_text.contains("/ Inspect detail"));
         assert!(!compact_text.contains("command output line 12"));
 
