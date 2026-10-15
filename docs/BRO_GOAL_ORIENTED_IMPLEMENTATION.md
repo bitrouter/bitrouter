@@ -8,18 +8,18 @@
 - 本地分支：`codex/bro-goal-workflow-mvp`；用户在 2026-10-14 明确请求 PR to main，授权本次 commit/push/创建PR；未授权 merge、release 或部署。
 - 初始修改：`docs/README.md` 索引，以及未跟踪的 PRD 和 implementation spec，均为本次产品讨论的文档。没有初始源码修改。
 - Implementation spec 已补至 v0.2；文档进展不计为 MVP 完成。
-- 当前阶段：PR #981 head 仍a316e745，本地后续修改未commit/push。source944 全仓4663通过；source947 输入54+18记录通过。默认栈修复已在真实R10五个worker/生产PTY验证；R10实际语义修复到三次上限，未交付。source949历史证据28项/严格Clippy/build/格式摘要通过。R11因搜索缺少路径而等待权限，未提交编辑；正在验证显式工作区/路径上下文，见D253。历史失败保留；开发Goal active，完整最终门槛未满足。
+- 当前阶段：本地MVP验收完成。d65c631a 已整合 origin/main eafa8383；代码之后未再改动。R16真实ACP/provider并行、运行中Enter、版本化依赖、检查、八条件评估与自主交付通过；5个原始输入在源项目和交付中摘要不变，实际重连未新增输入/执行/work。最终1023文件source的13个检查阶段全部通过：全仓4675pass/24既有opt-in跳过，doc6pass/1既有ignore，严格Clippy、格式/diff/摘要和registry检查通过。交付入口为PR981（base main）；远端head/hosted CI单独核对，见D259和[最终验收对账](evidence/bro-goal-workflow/2026-10-15-final-acceptance.md)。
 
 | 阶段 | 状态 | 已取得证据 / 剩余工作 |
 | --- | --- | --- |
-| S0 | 持续记录 | checkout、AGENTS、spec、native/ACP 装配和入口 review 已核对；最终逐项审计未完成 |
-| S1 | 数据库/IPC 切片已验证 | 现 Goal 协议 v4；CAS、事务、原身份/去重、权限版本与旧 outbox 保留拒绝有证据。归档 v6 的 77 个 Goal 数据库测试通过，最终故障矩阵仍待审计 |
-| S2 | fixture 闭环已验证，未完成 | 实际 GoalRuntime、Supervisor、两条同时运行的 ACP、依赖文件合并和交付已验证；MCP/skill/context选择与版本冻结、BRO model_route首prompt前controller确认以及运行中资源新版本替换已接入。独立分支保持、旧执行stop与新材料ACP传输有fixture证据。模型/typed判断固定，不是实际选择质量或credentialed harness证明；私有harness热改和一般外部效果恢复未证明 |
-| S3 | 部分验证，未完成 | 运行中询问实际走 typed/reasoning HTTP、持久保存回答且不修改要求/控制；数据库版本/权限/暂停编辑用例已通过。实际 pause/edit/resume、新版 worker prompt、未结束工具拒绝恢复、active edit 保持独立分支与权限版本更新已有 fixture 证据；活动 TUI Enter 与直接 permission card 传输通过。一般 steering/NL 权限传输、输入质量评测及未知外部效果恢复仍待完成 |
-| S4 | fixture 完成闭环已验证，未完成 | 实际文件检查、版本化交接、集成交付和完成条件有 fixture 证据；共享计量/预算数据库用例已通过。真实语义判定、费用/验证资源协调、长期恢复与完整阻塞策略仍待完成 |
-| S5 | 活动 Goal PTY 已验证，未完成 | bare/code 的无工作目录、多行/Unicode/独立草稿、resize、suspend/signal/fullscreen cleanup 已验证；活动 branches 的 Enter、只读/权限/detach 后交付通过。Ctrl-G 在 New/current Goal 接既有 VISUAL/EDITOR，原文/成功替换/失败恢复/Enter 持久提交/等待期间退出回收已验证。固定 model judgments 不计质量，复杂控制/故障/人体工学与最终矩阵仍待验证 |
-| S6 | 默认入口已接，测试迁移未完成 | bare/code、retired flags/aliases与保留入口、skill/三 manifests 已同步。root旧UI均已有实际替代证据。旧status hint失败已修并在当前完整workspace验证，actual Goal PTY保持通过。22原opt-in未执行，native/evolution旧路径迁移与真实闭环仍未完成 |
-| S7 | 未完成 | 最终 G01–G13、A01–A37、F01–F12、输入评测、真实服务与 workspace gates 未全部满足 |
+| S0 | 本地MVP审计完成 | checkout/AGENTS/spec/入口review及全部62个G/A/F条目有对应来源和证据范围，历史中点结论由最终对账替代。 |
+| S1 | 本地MVP已验证 | Goal协议v4、事务/CAS、原身份、权限版本、旧outbox拒绝、冷历史和receipt归档由最终全仓检查覆盖。 |
+| S2 | 真实闭环已验证 | R16两条实际并行ACP分支、独立执行保持、版本替换、实际检查依赖传入、集成和交付；资源/能力反例有确定性进程测试。外部未知效果不自动恢复。 |
+| S3 | 本地MVP已验证 | 实际中间Enter和54+18输入记录、持久控制/修改/澄清与暂停编辑测试；typed原判定错误单列，当前全部升级推理。 |
+| S4 | 本地MVP已验证 | R16实际检查、8条件语义评估和默认自主完成；预算、未知费用预留、完成竞态与有界恢复有最终检查及失败案例证据。未声称完整外部费用硬上限。 |
+| S5 | 本地MVP已验证 | 实际PTY覆盖草稿/输入/编辑器/导航/resize/suspend/权限/只读/detach；R16实际完成后重连保持身份且不新增工作。非人体工学研究或全平台认证。 |
+| S6 | 本地MVP迁移已验证 | bare/code默认Goals、移除agent参数、保留native/ACP入口；CLI/skill/manifests一致，最终native/session回归通过。既有opt-in跳过和vendor timeout保留。 |
+| S7 | 本地验收完成 | 真实服务、输入评测、62项对账和全部最终本地检查通过；交付PR981，hosted CI、生产及全部品牌认证不冒充已完成。 |
 
 
 ## 决定
@@ -742,3 +742,23 @@ Permission-stream-v1 passed45/45 related tests, including the Unicode pre-permis
 Fetched origin/main eafa8383 (catalog sync #980/#982). The only merge conflict was the old Conversation Code PTY menu/signal framework already retired under G01/G02. Retained current code_tui_pty remote/native tests; did not reintroduce removed menu code into an unrelated remote test. The actual replacement Goal PTY suspend_resize_resume waits for kernel stopped state before CONT, verifies terminal modes, and redraw_and_wait requires complete frames after resizing. Upstream catalog, policy-lock example model and gated-worker test synchronization changes are retained. Final build/checks must run on this integrated source; registry validate/build/check are included.
 
 Staging exposed whitespace in previously untracked raw SSE and diagnostics. Raw SSE is retained byte-for-byte with binary Git attributes, as with existing VT captures, because keepalive spaces and terminal empty records are wire data. Seventy-three public diagnostic copies only lose trailing whitespace/extra final blank lines; exact originals are retained privately and the original/normalized digests are recorded in log-format-normalization.json. Test outcomes, assertions and diagnostic words are unchanged. No code-check suppression was introduced. The remaining active validation logs will be finalized the same way before final diff checks.
+
+### D258 — Real final-source ACP workflow autonomously completes; whole-workspace gates pending
+
+R16 Goal `3e9f3906-c069-4e4f-9145-97b064e12713` used production bro from integrated main-goal-final-v1/source1023, default stack, maintained Claude ACP0.75.1 and configured OpenRouter native Messages. Actual concurrent public activity preceded actual TUI Enter input4a51d9cd; requirements2/control=null persisted. Numbers original task1/execution stayed; text1 stopped/reconciled/archived, text2 adopted the marker and its additive persisted check. Both checked handoffs and exact actual check bytes were frozen before the integration prompt. All three current reviews approved, combined checks passed, and real reasoning assessment met all8 original conditions. Runtime autonomously committed requirements2 without human acceptance or manual permission selection.
+
+Independent host export hash-verified artifact refs, original patch, actual outputs and exact final verdict; compared all5 original inputs against both unchanged source project and delivery, including both original test files. Final npm output is2pass/0fail/0cancelled/0skipped/0TODO, untruncated, exit0. Four original run histories and527 operations were exported; subsequent coordinator/elapsed metadata can advance revision without new execution. Public R16 summary and delivery-proof contain the original patch and checks, no private authorization/model transcripts. Actual new UI90346 opened the existing complete Goal, displayed three checked handoffs and detached0. Before/after comparison confirms same Goal/requirements/completed attempt/input/executions/work-started, no pending input or in-flight work. Original UI72246 detached0; observer71459 terminal0. R1–R15 outcomes remain unchanged.
+
+Current actual input evaluation has54 corpus and18 sequence records,0 prohibited effects; separate semantic audit does not count guards as classification correctness. Native defined control selection16/23; query precision10/11, recall10/12; modification precision4/8, recall4/5 against mostly draft labels. Both reasoning lanes' concrete control proposals23/23 in this sample; query-intent precision unavailable because Interpretation does not return that label. All typed inputs still upgrade, so no threshold calibration or speed/cost benefit claim. All27 paired semantic initial states match after excluding only updated timestamp/coordinator metadata. Sixteen input-code/label paths match final source exactly; permission-only execution changes and upstream test/catalog merge are separately validated. This does not relabel the earlier binary or rerun.
+
+Final full source1023 checks are still running. Production build, strict all-target Clippy, fmt/diff/hash checks passed; full workspace nextest/doctests/registry/final hashes are not yet complete. No hosted-CI or production success is claimed. The final-acceptance matrix separates local process/fixture guard evidence, actual credentialed workflow, model semantics and external unknowns; it supersedes the old midpoint table only after final gates pass.
+
+### D259 — Final local acceptance gates pass
+
+Owned runner60343 ended0. All13 main-goal-final-v1 stages passed: production bro build, strict workspace/all-feature/all-target Clippy, initial/final fmt/diff/hash checks, full workspace nextest4675pass/24existing opt-in skips (8slow, no fail/timeout/leak), doctests6pass/1existing ignored, registry validate/build and dist check. Final1023 frozen inputs all match. Main catalog regeneration leaves no source/catalog drift. No Rust/config/skill/compiler input changed after this validation; subsequent edits are evidence and ledger only. Added Rust diff against current main contains no allow/unwrap/expect/panic/public-reexport pattern; main skill is199lines and shipped plugin JSON parses.
+
+The final62-ID acceptance audit now replaces the historical midpoint table within the explicit controlled-local scope. Actual R16 and UI reconnect pass; input classification mistakes, earlier failures, unknown external effects/fees/provider identity, existing opt-in skips and unverified production/all-vendor scope remain disclosed. No calibrated typed direct-control or speed/cost improvement claim is made.
+
+Ten owned temporary harness-v2–v12 services (v5 had already exited) were shut down only after actual snapshots confirmed each Goal paused/stopped or completed with no in-flight work or pending input; data and original histories were preserved. Current R14/R15/R16 owned process handles ended0. Original harness-v1 service carrying separate native-history evidence remains intact. No user profile or system service was changed.
+
+Delivery is the current branch through existing PR981, base main, under the explicit PR authorization. Remote head and hosted CI must be read separately from the successful local gates; no PR merge/release/deployment is authorized or performed. Source1023 remains unchanged by final evidence-only commits. Reproduce local checks using spec10; the actual R16 summary contains the original acceptance objective, configured harness/model route and actual immutable outputs, with credentials supplied only through private environment.

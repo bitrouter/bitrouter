@@ -1,0 +1,537 @@
+{
+  "binary": {
+    "binary_sha256": "25074e8f99308d7cb32997d5849b884321a084d3a67ac8d045b80262192b9529",
+    "source_manifest": "2026-10-15-main-goal-final-v1-source.sha256",
+    "source_files": 1023,
+    "stack_setting": "default; RUST_MIN_STACK absent",
+    "worker_configured_model": "anthropic/claude-opus-5.5"
+  },
+  "goal_id": "3e9f3906-c069-4e4f-9145-97b064e12713",
+  "requirements_revision": 2,
+  "run_intent": "run",
+  "input": {
+    "input_id": "4a51d9cd-547d-43c8-9bc4-76f45adde01c",
+    "effective_requirements_revision": 2,
+    "requirements_saved": true,
+    "affected_tasks": [
+      "integration-docs",
+      "text"
+    ],
+    "control_saved": null
+  },
+  "attempts": [
+    {
+      "task": "numbers",
+      "execution": "85ec2d15-7532-4557-9943-13a729b88fe0",
+      "archived": false,
+      "run": "91074308-dfe3-48ff-88d1-59c7d1fa0d8b",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 76,
+      "marker_in_prompt": false,
+      "checks": [
+        {
+          "id": "numbers-npm-tests",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/a71023a20e06f73889673c3051eca447ba2bf7692d2a954c26ed31cd0df0beff.blob",
+              "sha256": "a71023a20e06f73889673c3051eca447ba2bf7692d2a954c26ed31cd0df0beff",
+              "bytes": 1033
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 1
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "c887d0ce-863c-488e-916b-62b8941feea6",
+        "requirements_revision": 2,
+        "task_revision": 1
+      },
+      "handoff": {
+        "attempt_id": "c887d0ce-863c-488e-916b-62b8941feea6",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/6e3afb64f49dd805caf36c5872bb5b91177b07a1b826b2ed127ae2cbcd98f9a7.blob",
+          "sha256": "6e3afb64f49dd805caf36c5872bb5b91177b07a1b826b2ed127ae2cbcd98f9a7",
+          "bytes": 707
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/fb5bcca349d8825661a34fea6ed0ff614f399f22fe4dbf15cdfa3776f005e299.blob",
+          "sha256": "fb5bcca349d8825661a34fea6ed0ff614f399f22fe4dbf15cdfa3776f005e299",
+          "bytes": 916
+        },
+        "review_request_id": "bdd79bc0-94e1-4855-a595-faf66cb97e44",
+        "candidate_sha256": "4f86e3d6ac54c2711d42c3105e965927cf8033309adf46100dd3012ab8dce091",
+        "requirements_revision": 2,
+        "task_revision": 1
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "5badbecc-09fc-4483-bc0f-6b4bda2e1001",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "69a81895-9c2f-4d2b-a393-387c72f3ec29",
+      "archived": false,
+      "run": "fdc584f7-db57-4f02-aeb0-90ebb993dd44",
+      "task_revision": 2,
+      "source_requirements": 2,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 190,
+      "marker_in_prompt": true,
+      "checks": [
+        {
+          "id": "text-npm-tests",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/140611cbb0b9206c23e9234bc19c22fc6649c0f96f6676ebbe0e6d4b5d3db55a.blob",
+              "sha256": "140611cbb0b9206c23e9234bc19c22fc6649c0f96f6676ebbe0e6d4b5d3db55a",
+              "bytes": 1035
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        },
+        {
+          "id": "text-change-adopted-r16-marker",
+          "recipe": "file_contains",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/ccfcd5a1ed19979609ed1b9c0dc33d1b0aedbb6f7790c5699a9db358f8608668.blob",
+              "sha256": "ccfcd5a1ed19979609ed1b9c0dc33d1b0aedbb6f7790c5699a9db358f8608668",
+              "bytes": 525
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "309960bd-964a-4982-afc0-911b8eb129a5",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "handoff": {
+        "attempt_id": "309960bd-964a-4982-afc0-911b8eb129a5",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/da68ce48b574f7e961d765ddb60a565af801dca4479d5d8f9d59cadc8d5b0b1a.blob",
+          "sha256": "da68ce48b574f7e961d765ddb60a565af801dca4479d5d8f9d59cadc8d5b0b1a",
+          "bytes": 703
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/ad4b993e4d32bd2084f4271259fe90214f89b6cf6bc93f1d647023ab0267ecdd.blob",
+          "sha256": "ad4b993e4d32bd2084f4271259fe90214f89b6cf6bc93f1d647023ab0267ecdd",
+          "bytes": 882
+        },
+        "review_request_id": "0467bfc5-dab8-4717-a6ea-c0895162467d",
+        "candidate_sha256": "3d0f10668d369a3d03e4766e1ba57b3a3bb4a7dc228ef4614e316d62d4c5dcbc",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "d4ee5e69-e298-45c1-a564-a4fee42120b9",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "c51cc114-36a2-4ff5-8313-372c052869e4",
+      "archived": true,
+      "run": "5d740e43-00be-47aa-9b67-071b421fbd3e",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 66,
+      "marker_in_prompt": false,
+      "checks": [
+
+      ],
+      "review": null,
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "c077b2ed-3819-40c6-95f4-aba99205e8b2",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": {
+        "state": "verified",
+        "task_revision": 2,
+        "control_source_revision": 1,
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/a6c30e66f85ececb13325296eec55c60ff109431c60ed3ecbfdf25f7e6135fa1.blob",
+          "sha256": "a6c30e66f85ececb13325296eec55c60ff109431c60ed3ecbfdf25f7e6135fa1",
+          "bytes": 365
+        },
+        "transcript": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/f20c478dc99cf15c929117673195c4a159a96841f8719f943bf9860e432c75da.blob",
+          "sha256": "f20c478dc99cf15c929117673195c4a159a96841f8719f943bf9860e432c75da",
+          "bytes": 69930
+        }
+      }
+    },
+    {
+      "task": "integration-docs",
+      "execution": "61c1e7bf-c5dc-4d74-9430-1994a1214b26",
+      "archived": false,
+      "run": "5cb8a75a-da78-478a-8326-f6ec44aeac16",
+      "task_revision": 2,
+      "source_requirements": 2,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 390,
+      "marker_in_prompt": true,
+      "checks": [
+        {
+          "id": "combined-task-npm-tests",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/06e8029d1fab75e5f88bcc195858bfeb3ff1437237997b9b87fd003167b08cbf.blob",
+              "sha256": "06e8029d1fab75e5f88bcc195858bfeb3ff1437237997b9b87fd003167b08cbf",
+              "bytes": 1000
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        },
+        {
+          "id": "readme-present",
+          "recipe": "file_exists",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/636a32e2a0e4ecc87e39b7a8732588391081702e6e1c372a92ccca73991bc493.blob",
+              "sha256": "636a32e2a0e4ecc87e39b7a8732588391081702e6e1c372a92ccca73991bc493",
+              "bytes": 489
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "0d224c6b-4993-45df-b867-f97fe5255ecf",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "handoff": {
+        "attempt_id": "0d224c6b-4993-45df-b867-f97fe5255ecf",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/377dad1d1a590513e00b4fd59d51025167b0222a2b777fe2f71f723a1d3d4b6b.blob",
+          "sha256": "377dad1d1a590513e00b4fd59d51025167b0222a2b777fe2f71f723a1d3d4b6b",
+          "bytes": 708
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/e4ae1c87d0c1d065267eec0fb84f882f51df02d531822950280744c68fbb4a69.blob",
+          "sha256": "e4ae1c87d0c1d065267eec0fb84f882f51df02d531822950280744c68fbb4a69",
+          "bytes": 898
+        },
+        "review_request_id": "82b90ef2-0267-41ba-8250-f052d785ff99",
+        "candidate_sha256": "0c52cc1b3d9f19e52fcec2476667741a9191faf386adaa157584544bb1b42911",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "f83313ee-77ce-4c02-ac93-92a4eccac5a4",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    }
+  ],
+  "operations_exported": 527,
+  "final_delivery": {
+    "attempt_id": "6ab11d91-c470-45b9-ae92-28010da2166c",
+    "requirements_revision": 2,
+    "delivery": {
+      "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/9a0fa78e71929100234ebc721f9a5f39ed3e22db7955acd8bc1e6edc1da43f48.blob",
+      "sha256": "9a0fa78e71929100234ebc721f9a5f39ed3e22db7955acd8bc1e6edc1da43f48",
+      "bytes": 368
+    },
+    "assessment": {
+      "report": {
+        "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/02ec8d920c5ff66d17068df0a25be5d4e687568248c7ce0913ed044f007f66b7.blob",
+        "sha256": "02ec8d920c5ff66d17068df0a25be5d4e687568248c7ce0913ed044f007f66b7",
+        "bytes": 4520
+      },
+      "request_id": "379505c2-e72a-4a6a-a387-d523be6d1c11",
+      "verdict": {
+        "conditions": [
+          {
+            "id": "numbers-contract",
+            "status": "met",
+            "reason": "The delivered sumIntegers export trims comma-separated tokens, validates signed decimal integers and safe values, rejects empty or invalid tokens, and checks every running sum for safety. Its unchanged original contract passes in both branch and combined checks.",
+            "evidence": [
+              "integrated_material",
+              "task:numbers",
+              "check:integrated-delivery-npm-tests"
+            ]
+          },
+          {
+            "id": "text-contract",
+            "status": "met",
+            "reason": "The delivered normalizeWhitespace export collapses JavaScript Unicode whitespace runs to ASCII spaces and trims the result without altering letters or case. The original contract, including non-ASCII letters and Unicode spaces, passes. README accurately identifies the whitespace class and its exclusions.",
+            "evidence": [
+              "integrated_material",
+              "task:text",
+              "check:integrated-delivery-npm-tests"
+            ]
+          },
+          {
+            "id": "actual-parallel-execution",
+            "status": "met",
+            "reason": "Complete, ordered current execution boundaries show numbers activity from 11:17:08.320945Z through settlement at 11:17:35.153081Z and text activity from 11:17:30.209057Z through settlement at 11:17:53.723897Z, overlapping by approximately 4.944 seconds in separate assigned workspaces. The earlier text execution lacks a settled boundary and is not used as overlap evidence.",
+            "evidence": [
+              "task:numbers",
+              "task:text"
+            ]
+          },
+          {
+            "id": "checked-dependency-handoff",
+            "status": "met",
+            "reason": "Both current branch artifacts have matching checked handoffs and persisted BRO npm output: each applicable contract passes with only the intentionally absent sibling marked TODO. The dependent integration task consumes both delivered modules unchanged, includes both checked dependencies, and produces a checked combined artifact.",
+            "evidence": [
+              "task:numbers",
+              "task:text",
+              "task:integration-docs"
+            ]
+          },
+          {
+            "id": "original-contracts-and-final-tests",
+            "status": "met",
+            "reason": "Task and integrated materials add only the two modules and README; the supplied original contract assertions and package test command remain unchanged. Both the integration task check and the final BRO npm test complete with exit status 0, reporting 2 passed, 0 failed, 0 skipped, and 0 TODO, with untruncated output.",
+            "evidence": [
+              "integrated_material",
+              "task:integration-docs",
+              "check:integrated-delivery-npm-tests"
+            ]
+          },
+          {
+            "id": "documentation-and-delivery",
+            "status": "met",
+            "reason": "The reviewable combined patch contains numbers.mjs, text.mjs, and README.md with accurate imports, examples, expected results, rejection rules, whitespace semantics, and testing instructions. Persisted combined verification accompanies delivery. The read-only source comparison reports no Git-visible differences from the frozen input; no merge or deployment is evidenced.",
+            "evidence": [
+              "integrated_material",
+              "task:integration-docs",
+              "check:integrated-delivery-npm-tests"
+            ]
+          },
+          {
+            "id": "execution-restrictions",
+            "status": "met",
+            "reason": "Bound worker executions use claude-live and distinct assigned isolated workspaces. Declared local-effect audits validate structured workspace read/edit/search activity within their protocol scope; delivered code uses only built-ins and adds no dependencies. BRO, rather than worker shell activity, runs the persisted npm checks. These audits are not global sandbox attestations: ambient or undeclared effects remain outside their scope, and the failed integration local call is not treated as proof of no effects.",
+            "evidence": [
+              "task:numbers",
+              "task:text",
+              "task:integration-docs",
+              "check:integrated-delivery-npm-tests"
+            ]
+          },
+          {
+            "id": "route-controller-evidence",
+            "status": "met",
+            "reason": "Every supplied current and historical executable worker observation records requested, controller-confirmed, and supervisor-confirmed claude-worker routing under claude-live. Actual worker provider-model identity is explicitly unreported; neither the route name, worker identity claims, nor separate managed-review accounting establishes it.",
+            "evidence": [
+              "task:numbers",
+              "task:text",
+              "task:integration-docs"
+            ]
+          }
+        ],
+        "unmet_original_requirements": [
+
+        ],
+        "constraints_preserved": true,
+        "human_acceptance_required": false,
+        "summary": "The integrated delivery satisfies the Goal: both implementations and documentation are reviewable, checked dependency handoffs are present, actual worker execution overlaps, original assertions remain unchanged, and final BRO npm evidence reports all contracts passing with zero TODO or skipped tests. Worker provider identity and effects outside the declared audit and Git-visible source-comparison scopes remain unreported; neither is represented as verified."
+      }
+    },
+    "sources": [
+      {
+        "task_id": "numbers",
+        "task_revision": 1,
+        "execution_id": "85ec2d15-7532-4557-9943-13a729b88fe0",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/6e3afb64f49dd805caf36c5872bb5b91177b07a1b826b2ed127ae2cbcd98f9a7.blob",
+          "sha256": "6e3afb64f49dd805caf36c5872bb5b91177b07a1b826b2ed127ae2cbcd98f9a7",
+          "bytes": 707
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/fb5bcca349d8825661a34fea6ed0ff614f399f22fe4dbf15cdfa3776f005e299.blob",
+          "sha256": "fb5bcca349d8825661a34fea6ed0ff614f399f22fe4dbf15cdfa3776f005e299",
+          "bytes": 916
+        }
+      },
+      {
+        "task_id": "text",
+        "task_revision": 2,
+        "execution_id": "69a81895-9c2f-4d2b-a393-387c72f3ec29",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/da68ce48b574f7e961d765ddb60a565af801dca4479d5d8f9d59cadc8d5b0b1a.blob",
+          "sha256": "da68ce48b574f7e961d765ddb60a565af801dca4479d5d8f9d59cadc8d5b0b1a",
+          "bytes": 703
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/ad4b993e4d32bd2084f4271259fe90214f89b6cf6bc93f1d647023ab0267ecdd.blob",
+          "sha256": "ad4b993e4d32bd2084f4271259fe90214f89b6cf6bc93f1d647023ab0267ecdd",
+          "bytes": 882
+        }
+      },
+      {
+        "task_id": "integration-docs",
+        "task_revision": 2,
+        "execution_id": "61c1e7bf-c5dc-4d74-9430-1994a1214b26",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/377dad1d1a590513e00b4fd59d51025167b0222a2b777fe2f71f723a1d3d4b6b.blob",
+          "sha256": "377dad1d1a590513e00b4fd59d51025167b0222a2b777fe2f71f723a1d3d4b6b",
+          "bytes": 708
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/e4ae1c87d0c1d065267eec0fb84f882f51df02d531822950280744c68fbb4a69.blob",
+          "sha256": "e4ae1c87d0c1d065267eec0fb84f882f51df02d531822950280744c68fbb4a69",
+          "bytes": 898
+        }
+      }
+    ],
+    "checks": [
+      {
+        "id": "87de6036-ce7b-4ff1-8f0d-329d52103b73",
+        "spec": {
+          "id": "integrated-delivery-npm-tests",
+          "description": "BRO executes npm tests on the final combined delivery after branch handoff and persists actual output. All unchanged original contracts must pass with zero TODO and zero skipped tests; review the output to confirm these totals.",
+          "recipe": {
+            "kind": "npm_test"
+          },
+          "timeout_seconds": 1200
+        },
+        "requirements_revision": 2,
+        "task_revision": 2,
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/9a0fa78e71929100234ebc721f9a5f39ed3e22db7955acd8bc1e6edc1da43f48.blob",
+          "sha256": "9a0fa78e71929100234ebc721f9a5f39ed3e22db7955acd8bc1e6edc1da43f48",
+          "bytes": 368
+        },
+        "state": {
+          "state": "observed",
+          "report": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/f52e0a45a35a0cdcfeb279b807379a673247d87447ce85e441539c71ddb205ac.blob",
+            "sha256": "f52e0a45a35a0cdcfeb279b807379a673247d87447ce85e441539c71ddb205ac",
+            "bytes": 1012
+          },
+          "passed": true,
+          "completed": true
+        }
+      }
+    ],
+    "human_accepted": false
+  },
+  "acceptance_passed": true,
+  "original_input_hashes": {
+    "AGENTS.md": "833f0b2d296aae474db094af26daa4803bc371f4b30b898cb61c91191738e49d",
+    "info.md": "316819e3e1e51481025e7de77027b615eb02421e6e936020e55fd8de63544b80",
+    "package.json": "64e69c343acb6ff91055c20752b26083257fdc689376fe147c16133261e90c88",
+    "tests/numbers.test.mjs": "4dc666e2ca2d3b02a55d86523efa8334343aa7b62e71760816f14fcb9d503a15",
+    "tests/text.test.mjs": "14b5783788dc82b3386e3904a568c7e4d6e6dbc3c5ba2beecb9a576b030a78ce"
+  },
+  "source_project_git_clean": true,
+  "original_inputs_unchanged_in_source_and_delivery": true,
+  "delivered_marker_verified": true,
+  "checked_dependencies_supplied_before_dispatch": true,
+  "actual_checks": [
+    {
+      "specification": {
+        "id": "integrated-delivery-npm-tests",
+        "description": "BRO executes npm tests on the final combined delivery after branch handoff and persists actual output. All unchanged original contracts must pass with zero TODO and zero skipped tests; review the output to confirm these totals.",
+        "recipe": {
+          "kind": "npm_test"
+        },
+        "timeout_seconds": 1200
+      },
+      "report": {
+        "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/artifacts/f52e0a45a35a0cdcfeb279b807379a673247d87447ce85e441539c71ddb205ac.blob",
+        "sha256": "f52e0a45a35a0cdcfeb279b807379a673247d87447ce85e441539c71ddb205ac",
+        "bytes": 1012
+      },
+      "actual_output": {
+        "completed": true,
+        "passed": true,
+        "exit_status": 0,
+        "timed_out": false,
+        "environment": {
+          "host": {
+            "source": "local_bro_check",
+            "os": "macos",
+            "arch": "aarch64",
+            "workspace": "/private/tmp/bro-goal-live-eval-20261014/harness-v12/home/goal-workspaces/3e9f3906-c069-4e4f-9145-97b064e12713/delivery-6ab11d91-c470-45b9-ae92-28010da2166c",
+            "recipe": {
+              "kind": "npm_test"
+            }
+          },
+          "command": "npm test",
+          "interpreter": {
+            "executable": "/bin/bash",
+            "dialect": "bash"
+          }
+        },
+        "output": {
+          "type": "json",
+          "value": {
+            "interpreter": {
+              "executable": "/bin/bash",
+              "dialect": "bash"
+            },
+            "exit_status": 0,
+            "stdout": "\n> test\n> node --test tests/*.test.mjs\n\nTAP version 13\n# Subtest: numbers contract\nok 1 - numbers contract\n  ---\n  duration_ms: 2.578125\n  type: 'test'\n  ...\n# Subtest: text contract\nok 2 - text contract\n  ---\n  duration_ms: 1.312625\n  type: 'test'\n  ...\n1..2\n# tests 2\n# suites 0\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 83.858709\n",
+            "stderr": "",
+            "stdout_truncated": false,
+            "stderr_truncated": false,
+            "timed_out": false
+          }
+        }
+      }
+    }
+  ],
+  "observed": [
+    "Actual completed public tool activity in both independent Working branches preceded actual middle Enter.",
+    "Enter saved requirements2/marker check with control=null; numbers original task1/execution retained, text2 and dependents updated.",
+    "Old text1 was stopped/reconciled/archived; text2 actual prompt and delivered bytes adopted the marker and actual persisted marker check passed.",
+    "Both checked handoffs and exact actual report bytes were supplied before dependent dispatch.",
+    "Dependent integration and final combined npm checks passed original assertions with zero failures/cancelled/skipped/TODO; real semantic assessment met all8 original conditions.",
+    "Default autonomous completion committed requirements2 without human acceptance or manual permission selection."
+  ],
+  "limitations": [
+    "Local controlled MVP with one maintained Claude ACP adapter and configured OpenRouter native Messages worker route; all brands/platforms/production are not certified.",
+    "Controller-confirmed route is not evidence of actual physical worker provider/model identity.",
+    "Declared tool effect audit is not global OS sandbox attestation; separate failed local tools may have partial effects and are not consent/no-effect facts.",
+    "Managed estimates do not include all unknown external fees.",
+    "Earlier failures R1-R15 remain recorded; this successful run does not establish reliability or calibrated model quality."
+  ],
+  "original_goal": "Streamed tools / verified delivery\n\nImplement two independent JavaScript modules in this project and deliver a verified, reviewable result. Create numbers.mjs exporting sumIntegers(input): sum comma-separated signed safe integers, trim token whitespace, reject empty input/tokens, fractions, nonnumbers and unsafe integers, and reject unsafe sums. Create text.mjs exporting normalizeWhitespace(input): trim/collapse Unicode whitespace to one ASCII space, preserve letter case and non-ASCII letters. The original tests under tests/ are the contracts; do not weaken or alter those assertions. Split the two modules into independent parallel branches so actual executions overlap; a dependent integration/documentation task must consume both checked artifacts and write README.md with examples. For each branch run the applicable npm tests; the missing sibling contract TODO is intentional only before handoff. Final delivery must contain both modules, README.md, all original contracts passing with zero TODO/skipped tests, and actual combined npm test evidence. Use the configured ACP harness and available BRO model route. Work only in assigned isolated workspaces, use Node/npm built-ins, do not install dependencies, use Python, access credentials, merge or deploy. Preserve this source project; deliver the combined patch/workspace for review. Human acceptance is not required.\n\nFor this isolated acceptance attempt, use only claude-live ACP for executable tasks. Use structured workspace read/edit/search tools; do not run shell commands, including git status. BRO must run the applicable npm tests as persisted task checks and integrated delivery checks; this does not remove any original verification requirement. Preserve all original contract assertions unchanged. Select the advertised BRO model_route claude-worker for every executable task; runtime must confirm that route before each worker prompt. Record any actual provider identity the runtime reports without inventing unreported identity."
+}

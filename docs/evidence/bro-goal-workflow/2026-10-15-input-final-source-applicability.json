@@ -1,0 +1,33 @@
+{
+  "evaluated_manifest": "2026-10-15-dependency-proof-v1-source.sha256",
+  "final_manifest": "2026-10-15-main-goal-final-v1-source.sha256",
+  "unchanged_input_paths": [
+    "apps/bitrouter/src/goal_runtime.rs",
+    "apps/bitrouter/src/goal_runtime/input_scope.rs",
+    "apps/bitrouter/src/goal_runtime/model_control.rs",
+    "apps/bitrouter/src/goal_runtime/model_control/tests.rs",
+    "apps/bitrouter/src/goal_runtime/tests/live_input.rs",
+    "apps/bitrouter/src/goal_runtime/tests/live_input/corpus.rs",
+    "apps/bitrouter/src/goal_runtime/tests/live_input/sequences.rs",
+    "apps/bitrouter/src/goal_store.rs",
+    "crates/bitrouter-orchestrator/src/goal/input.rs",
+    "crates/bitrouter-orchestrator/src/goal/input/scope.rs",
+    "crates/bitrouter-sdk/src/decision_model/mod.rs",
+    "crates/bitrouter-sdk/src/decision_model/policy.rs",
+    "crates/bitrouter-sdk/src/decision_model/types.rs",
+    "crates/bitrouter-sdk/src/decision_model/typesafe.rs",
+    "docs/evidence/bro-goal-workflow/input-eval-cases.jsonl",
+    "docs/evidence/bro-goal-workflow/input-eval-sequences.jsonl"
+  ],
+  "changed_paths": [
+    "apps/bitrouter/src/goal_permission_material.rs",
+    "apps/bitrouter/src/goal_runtime/permissions.rs",
+    "apps/bitrouter/src/goal_runtime/permissions/tests.rs",
+    "apps/bitrouter/src/policy_lock.rs",
+    "crates/bitrouter-orchestrator/src/agent/tests.rs",
+    "docs/BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md",
+    "docs/CLI.md",
+    "skills/bitrouter/references/cli.md"
+  ],
+  "scope": "Input semantic code and labels are unchanged. Later permission dispatch policy is not exercised by input-domain evaluation, and is covered by fresh permission regressions/full tests and actual R16 harness workflow. Upstream policy_lock/agent changes are test-only; catalog inputs have final validation. This is applicability evidence, not a claim that the old evaluated binary was rebuilt or rerun."
+}
