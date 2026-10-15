@@ -8,7 +8,7 @@
 - 本地分支：`codex/bro-goal-workflow-mvp`；用户在 2026-10-14 明确请求 PR to main，授权本次 commit/push/创建PR；未授权 merge、release 或部署。
 - 初始修改：`docs/README.md` 索引，以及未跟踪的 PRD 和 implementation spec，均为本次产品讨论的文档。没有初始源码修改。
 - Implementation spec 已补至 v0.2；文档进展不计为 MVP 完成。
-- 当前阶段：本地MVP验收完成。d65c631a 已整合 origin/main eafa8383；代码之后未再改动。R16真实ACP/provider并行、运行中Enter、版本化依赖、检查、八条件评估与自主交付通过；5个原始输入在源项目和交付中摘要不变，实际重连未新增输入/执行/work。最终1023文件source的13个检查阶段全部通过：全仓4675pass/24既有opt-in跳过，doc6pass/1既有ignore，严格Clippy、格式/diff/摘要和registry检查通过。交付入口为PR981（base main）；远端head/hosted CI单独核对，见D259和[最终验收对账](evidence/bro-goal-workflow/2026-10-15-final-acceptance.md)。
+- 当前阶段：本地MVP验收通过；跨平台交付以PR981当前head的CI结果为准。bfc50f68 Windows CI暴露两个Unix测试helper的编译条件不一致，D260记录两行test-only cfg修正及完成状态纠正。R16实际闭环与4675项本地全仓检查证据保持原版本，不冒充修正后重跑；生产行为未改变，仍需核对修正后的实际CI。见[最终验收对账](evidence/bro-goal-workflow/2026-10-15-final-acceptance.md)。
 
 | 阶段 | 状态 | 已取得证据 / 剩余工作 |
 | --- | --- | --- |
@@ -762,3 +762,11 @@ The final62-ID acceptance audit now replaces the historical midpoint table withi
 Ten owned temporary harness-v2–v12 services (v5 had already exited) were shut down only after actual snapshots confirmed each Goal paused/stopped or completed with no in-flight work or pending input; data and original histories were preserved. Current R14/R15/R16 owned process handles ended0. Original harness-v1 service carrying separate native-history evidence remains intact. No user profile or system service was changed.
 
 Delivery is the current branch through existing PR981, base main, under the explicit PR authorization. Remote head and hosted CI must be read separately from the successful local gates; no PR merge/release/deployment is authorized or performed. Source1023 remains unchanged by final evidence-only commits. Reproduce local checks using spec10; the actual R16 summary contains the original acceptance objective, configured harness/model route and actual immutable outputs, with credentials supplied only through private environment.
+
+### D260 — Windows CI exposes unused Unix-only test helpers; correct premature completion
+
+The last bfc50f68 CI read returned failures for Windows Clippy/test compilation immediately before the same tool script incorrectly marked the Goal complete without inspecting that returned result. This was acknowledged to the user and the same authorized work restored as active; it is not a CI or implementation success. Prior Goal usage20633112tokens/190257seconds remains recorded rather than reset as proof of progress.
+
+Code Review backend diagnostics bind both failures to bfc50f68: read_archive_fixture (goal_code.rs46) and input_feedback_fixture (line66) are cfg(test), but their only consumers are inside goal_runtime::tests, already cfg(all(test, unix)). Windows -D warnings therefore rejects dead_code before running tests. Definitions now use the exact existing consumer condition. No tests/consumer body, assertion, ignore, production code path, CLI or config changes; no lint suppression. The prior Mac full suite/R16 remain valid production evidence, with original hashes preserved, not relabeled as a rerun of this change.
+
+Fresh local consumer tests/strict Clippy/fmt/diff/source hashes are running; the same PR receives the narrow fix so actual Windows CI can validate it. Current-head CI must be inspected before any final completion status. SDK API, feature isolation, MSRV, docs, doctests and plugin checks passed on the previous head; remaining platform results are not inferred from those successes.
