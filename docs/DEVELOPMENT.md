@@ -348,9 +348,12 @@ records, not new SDK contracts or authority to execute a session.
 identification, duplicate rejection and admission inventory, plus hop, terminal
 and settlement observation. The host gives its inventory handle directly to
 capture-registration consumers so they share the serving epoch. The tracker runs
-before learning selection; `EvolutionRuntime` consumes its observation and keeps
-the existing routing/control fences. Gateway bookkeeping does not construct the
-learning service or mutate canonical conversation content. Optional learning
+before learning selection. `CanonicalRequestBinding` then creates the bound
+execution record and validates routing/policy generations and the recorded
+session before dispatch or context revalidation. `EvolutionRuntime` supplies an
+optional selection and retains live learning-control validation. Gateway
+bookkeeping does not construct the learning service or mutate canonical
+conversation content. Optional learning
 startup, source and command gates remain unfinished; this move alone does not
 establish the complete minimum-gateway dependency closure.
 

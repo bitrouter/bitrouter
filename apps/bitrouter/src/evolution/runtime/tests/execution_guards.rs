@@ -1,6 +1,68 @@
 use super::*;
 
 #[tokio::test]
+async fn binding_retains_the_learning_snapshot_when_reload_precedes_record_creation() -> Result<()>
+{
+    for reload_policy in [false, true] {
+        let fixture = fixture(false).await?;
+        let runtime = &fixture.assembled.evolution;
+        runtime
+            .register("local", definition("coding", "candidate"))
+            .await?;
+        runtime
+            .service("local")?
+            .set_mode(EvolutionMode::Manual, None)
+            .await?;
+        let identity = session(&fixture, "handoff", "fixture").await?;
+        let mut ctx = PipelineContext::new(request(&identity, "handoff-request", "coding")?);
+        SessionContextHook::new(fixture.assembled.acp_runtime.clone())
+            .check(&mut ctx)
+            .await?;
+        fixture.assembled.gateway_requests.check(&mut ctx).await?;
+        runtime.check(&mut ctx).await?;
+        assert!(
+            ctx.extension::<CanonicalSelection>()
+                .context("selection missing")?
+                .intent
+                .is_some()
+        );
+        let config = fixture.assembled.routing_table.snapshot_config();
+        if reload_policy {
+            fixture
+                .assembled
+                .policy_runtime
+                .reload_for_config(&config, None)
+                .await?;
+        } else {
+            fixture
+                .assembled
+                .routing_table
+                .replace_prepared_config(config)
+                .await?;
+        }
+        let binding = binding_hook(&fixture);
+        binding.check(&mut ctx).await?;
+        assert!(binding.resolve(&mut Vec::new(), &mut ctx).await.is_err());
+        let execution = runtime
+            .executions(&identity)
+            .await?
+            .pop()
+            .context("execution missing")?;
+        assert!(execution.intent.is_some());
+        assert!(execution.settlement.is_none());
+        assert!(
+            fixture
+                .upstream
+                .received_requests()
+                .await
+                .context("requests missing")?
+                .is_empty()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn request_capability_guard_records_the_original_intent_and_actual_fallback() -> Result<()> {
     let fixture = fixture(false).await?;
     let mut config = fixture.assembled.routing_table.snapshot_config();
@@ -80,6 +142,7 @@ async fn mode_changes_fence_a_prepared_request_and_session_overrides_keep_preced
         .await?;
     fixture.assembled.gateway_requests.check(&mut ctx).await?;
     runtime.check(&mut ctx).await?;
+    binding_hook(&fixture).check(&mut ctx).await?;
     service.set_mode(EvolutionMode::Off, None).await?;
     assert!(runtime.resolve(&mut Vec::new(), &mut ctx).await.is_err());
     service.set_mode(EvolutionMode::Manual, None).await?;

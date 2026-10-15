@@ -9,3 +9,5 @@ pub mod settlement;
 pub mod inventory;
 
 pub mod requests;
+
+pub(crate) mod binding;

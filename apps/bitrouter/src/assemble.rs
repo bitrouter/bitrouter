@@ -889,6 +889,11 @@ async fn assemble_app(
         policy_runtime.clone(),
     );
     let evolution_for_hooks = evolution.clone();
+    let canonical_binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
+        db.clone(),
+        routing_table.clone(),
+        policy_runtime.clone(),
+    );
     let gateway_requests =
         crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
     let gateway_requests_for_hooks = gateway_requests.clone();
@@ -952,6 +957,7 @@ async fn assemble_app(
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
+            lm.route_hook(canonical_binding.clone());
             lm.route_hook(evolution_for_hooks.clone());
             let metering_recorder =
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
@@ -988,6 +994,7 @@ async fn assemble_app(
             // but cannot replace the ingress router's frozen checker bindings.
             lm.router_preparation_hook(gateway_requests_for_hooks.clone());
             lm.router_preparation_hook(evolution_for_hooks);
+            lm.router_preparation_hook(canonical_binding);
             lm.pre_request_hook_for(
                 PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
                 OperationScope::Both,

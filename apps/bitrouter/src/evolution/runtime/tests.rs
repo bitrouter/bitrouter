@@ -545,6 +545,7 @@ async fn dependency_scope_ignores_unrelated_routes_but_dispatch_fences_aba_reloa
         .await?;
     fixture.assembled.gateway_requests.check(&mut ctx).await?;
     runtime.check(&mut ctx).await?;
+    binding_hook(&fixture).check(&mut ctx).await?;
     let original = fixture.assembled.routing_table.snapshot_config();
     let policies = fixture.assembled.policy_runtime.routing_snapshot();
     let before = block_digest(&original, &policies, &definition).await?;
@@ -584,7 +585,12 @@ async fn dependency_scope_ignores_unrelated_routes_but_dispatch_fences_aba_reloa
         .replace_prepared_config(original)
         .await?;
     assert_eq!(fixture.assembled.routing_table.generation(), generation + 2);
-    assert!(runtime.resolve(&mut Vec::new(), &mut ctx).await.is_err());
+    assert!(
+        binding_hook(&fixture)
+            .resolve(&mut Vec::new(), &mut ctx)
+            .await
+            .is_err()
+    );
     assert!(
         fixture
             .upstream
@@ -646,4 +652,14 @@ async fn canonical_binding_requires_authenticated_scope_and_unambiguous_recorded
             .is_none()
     );
     Ok(())
+}
+
+fn binding_hook(
+    fixture: &Fixture,
+) -> crate::gateway::observability::binding::CanonicalRequestBinding {
+    crate::gateway::observability::binding::CanonicalRequestBinding::new(
+        fixture.assembled.db.clone(),
+        fixture.assembled.routing_table.clone(),
+        fixture.assembled.policy_runtime.clone(),
+    )
 }

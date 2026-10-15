@@ -186,7 +186,7 @@ impl GatewayRequestTracker {
     }
 }
 
-fn internal(error: anyhow::Error) -> BitrouterError {
+pub(super) fn internal(error: anyhow::Error) -> BitrouterError {
     tracing::warn!(%error, "canonical evolution operation failed");
     BitrouterError::internal("canonical evolution state could not be verified")
 }

@@ -1443,3 +1443,93 @@ source/startup/commands are still present in the core-disabled profile; passing
 bookkeeping tests do not establish minimum-gateway isolation. Remaining work includes learning feature gates, the other package/module
 and feature boundaries, historical/backend/artifact/performance evidence, full
 validation, final review and PR. P1 and package publication remain excluded.
+
+## Gateway execution binding and dispatch fences
+
+This stage follows `0e62fbd`. The gateway now owns bound execution initialization
+and the routing/policy-generation and captured-session checks that previously
+remained in `EvolutionRuntime`. `gateway::observability::binding` contains the
+internal `CanonicalRequestBinding`; it runs after the optional learning selection
+at router preparation and before the learning control fence during route
+resolution. It also explicitly revalidates managed context changes without
+re-admitting or rewriting the request.
+
+`CanonicalSelection` carries the exact routing generation and policy snapshot
+used by the learner, together with its optional persisted intent and effective
+route. It is internal application context, without a live core handle or a new
+AI contract. With no learner installed, binding uses the current gateway selector
+and snapshots, creates the same execution representation with no intent, and
+retains coverage diagnostics. Learning still owns route selection and live
+control-generation checks. The bound event name, persisted representation,
+owner-scoped initialization, conflicting-attempt marker, comparison order and
+ordinary finalization semantics are retained.
+
+The standalone request fixture now uses the real configurable routing table,
+policy runtime, HTTP executor, metering recorder, tracker and binding. It never
+constructs `EvolutionRuntime`, a learning scheduler, a capture recorder or a
+harness session service. A bound request creates one execution record whose
+attempt and settlement agree with inventory; an unresolved request retains
+inventory only. The fixture checks that no control, enrollment or route-intent
+records appear.
+
+Additional regression coverage exercises:
+
+- a second authenticated-controller fixture scope reusing an owner-scoped
+  execution ID after completion, with one upstream dispatch and the original
+  charge/record preserved;
+- two inventory admissions completing before either initializes the execution,
+  deterministically exercising the competing-attempt window without relying on
+  task timing; only the first attempt acquires the bound record;
+- routing reload, policy reload and session deletion after admission, rejecting
+  dispatch with the existing failed pre-dispatch settlement;
+- the same three changes after authorized history removal, with both preparation
+  and route revalidation rejecting and leaving execution/inventory unchanged;
+- routing or policy reload between learning selection and bound-record creation,
+  proving that binding retains the earlier selection snapshots rather than
+  refreshing the fence to admit stale work.
+
+The first focused runtime run passed six of eight tests. Both failures were in
+new second-controller fixture setup: its event reused the existing unique
+session sequence. The fixture now appends sequence 2 and advances the shared
+session head, preserving the actual schema constraint. No production check or
+asserted behavior was relaxed. The final focused run passed **10/10** in
+0.291 seconds, including nine independent gateway cases and the learning-to-
+binding snapshot case.
+
+Independent review found no implementation defect and identified two missing
+regressions: stale context revalidation and reload during the selection/binding
+handoff. The added cases above address both. Review is read-only and is separate
+from runtime evidence. Independent follow-up confirmed both gaps are resolved,
+with no remaining source-review finding or documentation overclaim for this stage.
+
+Validation already completed on the changed source:
+
+- All-feature/all-target application compilation passed.
+- Rust 1.97.0 strict all-feature/all-target workspace Clippy and core/OTLP-disabled
+  application all-target Clippy passed after the final test additions.
+- Strict Rustdoc passed with all features and with `--no-default-features
+  --features harness,tui,mcp`. Subsequent changes only added or repaired test code.
+- Formatting and patch-whitespace checks passed.
+
+Broader runtime validation completed with **286/286** passing in 65.294 seconds
+for the all-feature profile and **218/218** passing in 9.016 seconds for
+`--no-default-features --features harness,tui,mcp`. Respectively, 3,186 and 2,956
+tests were outside the selected filter. Test-identity comparison found exactly
+66 core integration cases and two OTLP full-stack cases present only in the full
+run, with no unexplained gap. All nine independent gateway regressions and the
+learning snapshot-handoff case ran in both profiles. Source/manifests remained
+frozen during these tests and their nested executable builds. The runtime
+commands and filter are the same as the preceding stage; the new cases are
+included by their owning module paths. Logs use the
+`/tmp/bitrouter-p0-binding-*` prefix.
+
+The stable runtime build retained the previously recorded large unwind-section
+linker warning; the strict Rust 1.97.0 checks passed. The third-party
+`proc-macro-error2` future-compatibility notice remains unchanged.
+
+All final A01–A16 gates remain open. This extraction removes the remaining generic
+canonical record/fence dependency on the learner, but evolution source, startup
+and commands still compile in the core-disabled profile. It does not establish
+the minimum-gateway closure. Learning feature gates, the remaining ownership and
+feature work, historical/backend/artifact/performance evidence, full validation,
+final review and PR remain required. P1 and package publication remain excluded.

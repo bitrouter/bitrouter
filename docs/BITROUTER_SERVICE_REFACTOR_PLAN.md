@@ -571,10 +571,10 @@ split is stated explicitly. `lib.rs`, `main.rs`, build scripts, integration test
 and non-source assets have separate entries. New source added during execution
 must be assigned before its migration patch is accepted.
 
-The inventory was checked against all eight package manifests and their source
-entry points at the pinned baseline. Every declared module in the following
-entry points has a migration-table owner, including private and conditionally
-compiled modules:
+The inventory covers all eight packages, their 141 root module declarations and
+all 11 telemetry child modules at the pinned baseline. Every declared module in
+the following entry points has a migration-table owner, including private and
+conditionally compiled modules:
 
 | Package | Audited entry point | Declared modules covered |
 | --- | --- | --- |
@@ -734,6 +734,16 @@ unresolved-binding behavior, ordering and metering protections. Ordinary
 uncaptured traffic remains untracked by this inventory. P0 does not require
 starting an ACP recorder in the minimum gateway or turn this scoped protection
 into general request idempotency.
+
+The bound `ExecutionRecord` initialization and generic routing/session checks
+also belong to gateway admission. Preserve their existing identity scope,
+attempt conflict checks and routing/policy-generation validation when learning
+is disabled. Inventory admission alone cannot replace the persisted execution
+check: its binding scope differs from the execution record's scope. Core may
+provide the learned route intent and validate live learning control; it must
+not be required to create the gateway record or protect an earlier attempt's
+accounting. Test repeated and competing admissions as well as context
+revalidation before dispatch, without starting the learning runtime.
 
 Gateway readers of shared record definitions must not start a capture service,
 reconstruct the full conversation or take over harness checkpoint commits.
@@ -989,6 +999,29 @@ These are target features to implement in P0, not existing manifest behavior.
 There is no optional `gateway` or `cli` feature: gateway and essential command
 parsing/configuration/management are always present.
 
+### Feature ownership of migrated modules
+
+Apply these gates to the destination owners in the migration inventory. For a
+split row, gate each resulting implementation by its own owner; do not gate the
+old directory as a unit. Shared data definitions do not activate their producers.
+
+| Destination owner | Compilation and activation rule |
+| --- | --- |
+| Gateway HTTP, model/conversion, providers, catalog, auth, routing, policy, metering and observation | Always compiled; configuration selects existing runtime behavior |
+| Gateway MCP, server tools and guardrails adapters | `mcp`, `server-tools` and `guardrails` respectively; registration/configuration still controls activation |
+| Core scheduling, learning, evaluation and policy production | `core`; loading and enforcing already published policies stays in gateway |
+| Harness execution, ACP, resources and session authority | `harness`; the local native execution connector additionally requires `core` |
+| TUI input, layout, rendering and terminal lifecycle | `tui`, which includes `harness`; shared command and presentation data remain independent of terminal libraries |
+| CLI, commands, presentation and local/remote client adapters | Base gateway operations always compiled; owner-specific operations and adapters follow `core`, `harness` or `tui` without starting those services for a remote read |
+| Host and integrations | Base lifecycle and provider/account integrations always compiled; cross-owner wiring uses the intersection of the participating features |
+| Configuration and historical migration ledger | Always readable/available; effective activation checks require the appropriate compiled capability |
+| Shared request/capture/identity records in storage | Available to gateway without core or harness; repositories and mutation authority remain with their owning service |
+| Internal native checkpoint codecs | Available with either `core` or `harness`; no execution, scheduler restoration or conversation commits in the codec |
+| Telemetry configuration | Always readable without exporter types; effective export opt-in requires an OTLP transport |
+| Telemetry exporter and ACP export adapter | `otel-http` or `otel-grpc`; the ACP adapter additionally requires `harness` |
+
+### Public library features
+
 The public libraries have separate feature namespaces; none selects application
 runtime behavior:
 
@@ -998,6 +1031,8 @@ runtime behavior:
 | `bitrouter-sdk` | Gateway/control/harness HTTP client by default; an optional `core` feature is justified only by additional dependencies of supported core transports. It never enables server code. |
 | `bitrouter-guardrails` | Rules and native capability implementation by default; remove the old `sdk` feature once its adapters move into the application. |
 | `dist-helper` | No product capability flags; registry bootstrap stays independent of application compilation. |
+
+### Application features
 
 | Application feature | Enables | Must not imply |
 | --- | --- | --- |
@@ -1239,6 +1274,9 @@ after the final ownership and feature graph are in place.
 Keep a migration ledger alongside the implementation. For each completed stage,
 record the source revision, moved modules and destination owners, affected
 features, consumer changes, and the test/fixture families that moved with them.
+For each mixed inventory row, list the actual destination paths and feature
+conditions of its split descendants. Public AI entries also name their concrete
+SDK or extension consumer; internal reuse alone does not justify publishing them.
 Record validation commands with their exact feature selection and results;
 distinguish a successful build from an exercised runtime path. Link unresolved
 items to the acceptance IDs below rather than declaring the stage complete by

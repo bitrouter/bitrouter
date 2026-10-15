@@ -1,6 +1,6 @@
 use super::*;
 use anyhow::Context;
-use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
+use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use sea_orm::{ActiveModelTrait, PaginatorTrait, Set};
 use serde_json::json;
 use wiremock::{
@@ -8,16 +8,20 @@ use wiremock::{
     matchers::{method, path},
 };
 
+use crate::config::routing_table::ConfigRoutingTable;
 use crate::gateway::caller::CallerContext;
+use crate::gateway::observability::binding::CanonicalRequestBinding;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::executor::HttpExecutor;
 use crate::gateway::pipeline::hooks::RouteHook;
-use crate::gateway::pipeline::routing::StaticRoutingTable;
 use crate::gateway::pipeline::types::PipelineRequest;
 use crate::metering::{MeteringRecorder, MeteringStore, PricingTable};
+use crate::policy_lock::PolicyRuntime;
 use crate::session_identity::{NativeSessionIdentity, RequestOrigin};
 use crate::storage::evolution::records;
+
+mod binding;
 
 /// The tracker consumes an authenticated, normalized scope from earlier hooks.
 /// Full assembly tests exercise the actual auth and session extraction paths.
@@ -35,7 +39,13 @@ impl PreRequestHook for NormalizedScope {
         ctx.insert_extension(Arc::new(RequestSessionContext {
             origin: RequestOrigin::AcpHarnessRequest,
             api_principal_id: "scope".into(),
-            claimed_controller_instance_id: Some("controller".into()),
+            claimed_controller_instance_id: Some(
+                ctx.headers()
+                    .get("x-bitrouter-controller-instance-id")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("controller")
+                    .to_owned(),
+            ),
             acp_session_id: ctx
                 .headers()
                 .get("x-bitrouter-acp-session-id")
@@ -79,11 +89,15 @@ enum Failure {
     None,
     Preparation,
     Route,
+    Change(binding::Change),
 }
 
 struct Fixture {
     db: DatabaseConnection,
     tracker: GatewayRequestTracker,
+    binding: CanonicalRequestBinding,
+    routing: Arc<ConfigRoutingTable>,
+    policies: Arc<PolicyRuntime>,
     upstream: MockServer,
     pipeline: Pipeline,
     identity: SessionIdentity,
@@ -157,34 +171,41 @@ async fn fixture(failure: Failure) -> Result<Fixture> {
             "choices":[{"index":0,"message":{"role":"assistant","content":"response"},"finish_reason":"stop"}],
             "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}
         }))).mount(&upstream).await;
-    let routing = Arc::new(StaticRoutingTable::new());
-    routing.insert(
-        "model",
-        vec![RoutingTarget {
-            provider_name: "fixture".into(),
-            service_id: "fixture-model".into(),
-            api_base: upstream.uri(),
-            api_key: "fixture-key".into(),
-            api_protocol: ApiProtocol::ChatCompletions,
-            chat_token_limit_field: None,
-            chat_supports_store: None,
-            chat_supports_stream_options: None,
-            chat_google_extensions: false,
-            reasoning_effort: None,
-            model_constraints: Default::default(),
-            account_label: None,
-            api_key_override: None,
-            api_base_override: None,
-            auth_scheme: Default::default(),
-            headers: Vec::new(),
-        }],
-    );
+    let config = crate::config::parse_with(
+        &format!(
+            r#"
+inherit_defaults: false
+registry:
+  enabled: false
+providers:
+  fixture:
+    api_base: "{}"
+    api_key: fixture-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: fixture-model
+models:
+  model:
+    endpoints:
+      - provider: fixture
+        service_id: fixture-model
+"#,
+            upstream.uri()
+        ),
+        |_| None,
+    )?;
+    let routing = Arc::new(ConfigRoutingTable::from_config(config.clone()));
+    let policies = PolicyRuntime::new(&config, None, None, Default::default(), None).await?;
+    let binding = CanonicalRequestBinding::new(db.clone(), routing.clone(), policies.clone());
     let mut builder = PipelineBuilder::new();
     builder
-        .routing_table(routing)
+        .routing_table(routing.clone())
         .executor(Arc::new(HttpExecutor::with_defaults()?))
         .pre_resolution_hook(NormalizedScope)
         .router_preparation_hook(tracker.clone())
+        .router_preparation_hook(binding.clone())
+        .route_hook(binding.clone())
         .observe_hook(tracker.clone())
         .settlement_recorder(MeteringRecorder::new(
             MeteringStore::new(db.clone()),
@@ -199,10 +220,22 @@ async fn fixture(failure: Failure) -> Result<Fixture> {
         Failure::Route => {
             builder.route_hook(RejectRequest);
         }
+        Failure::Change(change) => {
+            builder.pre_request_hook(binding::ChangeAfterAdmission {
+                change,
+                db: db.clone(),
+                identity: identity.clone(),
+                routing: routing.clone(),
+                policies: policies.clone(),
+            });
+        }
     }
     Ok(Fixture {
         db,
         tracker,
+        binding,
+        routing,
+        policies,
         upstream,
         pipeline: builder.build()?,
         identity,
@@ -242,6 +275,16 @@ async fn saved(fixture: &Fixture, id: &str) -> Result<GatewayRequest> {
         .1)
 }
 
+async fn execution(fixture: &Fixture, id: &str) -> Result<ExecutionRecord> {
+    Ok(
+        EvolutionStore::new(fixture.db.clone(), &fixture.identity.owner)?
+            .get::<ExecutionRecord>(EXECUTION_KIND, id)
+            .await?
+            .context("execution missing")?
+            .1,
+    )
+}
+
 #[tokio::test]
 async fn tracked_requests_settle_and_reject_replay_without_learning() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
@@ -259,6 +302,14 @@ async fn tracked_requests_settle_and_reject_replay_without_learning() -> Result<
         assert_eq!(settlement.hops[0].status, "completed");
         assert_eq!(settlement.final_metered_cost_micro_usd, None);
         assert_eq!(settlement.total_cost_micro_usd, None);
+        if bound {
+            let execution = execution(&fixture, id).await?;
+            assert_eq!(execution.attempt_id, before.attempt_id);
+            assert_eq!(execution.identity, fixture.identity);
+            assert_eq!(execution.settlement, before.settlement);
+            assert!(execution.intent.is_none());
+            assert_eq!(execution.dispatch_route, "model");
+        }
         let charge_before = crate::metering::entities::requests::Entity::find_by_id(id)
             .one(&fixture.db)
             .await?;
@@ -286,15 +337,17 @@ async fn tracked_requests_settle_and_reject_replay_without_learning() -> Result<
     );
     assert_eq!(
         records::Entity::find()
-            .filter(records::Column::Kind.is_in([
-                "control",
-                "enrollment",
-                "route_intent",
-                EXECUTION_KIND
-            ]))
+            .filter(records::Column::Kind.is_in(["control", "enrollment", "route_intent"]))
             .count(&fixture.db)
             .await?,
         0
+    );
+    assert_eq!(
+        records::Entity::find()
+            .filter(records::Column::Kind.eq(EXECUTION_KIND))
+            .count(&fixture.db)
+            .await?,
+        1
     );
     Ok(())
 }
@@ -454,7 +507,9 @@ async fn context_revalidation_retains_the_original_request_and_attempt() -> Resu
     ctx.apply_routing_prompt(initial)?;
     NormalizedScope.check(&mut ctx).await?;
     fixture.tracker.check(&mut ctx).await?;
+    fixture.binding.check(&mut ctx).await?;
     let before = saved(&fixture, "rebuild").await?;
+    let execution_before = serde_json::to_value(execution(&fixture, "rebuild").await?)?;
     let observation = serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?;
 
     ctx.replace_managed_messages(retained)?;
@@ -463,6 +518,11 @@ async fn context_revalidation_retains_the_original_request_and_attempt() -> Resu
             fixture.tracker.revalidate_context(&ctx).await?,
             HookDecision::Allow
         ));
+        assert!(matches!(
+            PreRequestHook::revalidate_context(&fixture.binding, &ctx).await?,
+            HookDecision::Allow
+        ));
+        RouteHook::revalidate_context(&fixture.binding, &[], &ctx).await?;
     }
     assert_eq!(
         serde_json::to_value(saved(&fixture, "rebuild").await?)?,
@@ -471,6 +531,10 @@ async fn context_revalidation_retains_the_original_request_and_attempt() -> Resu
     assert_eq!(
         serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?,
         observation
+    );
+    assert_eq!(
+        serde_json::to_value(execution(&fixture, "rebuild").await?)?,
+        execution_before
     );
     assert_eq!(
         records::Entity::find()

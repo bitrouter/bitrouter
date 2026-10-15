@@ -11,39 +11,23 @@ use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use bitrouter_ai::event::PipelineEvent;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
-use serde::Serialize;
 
 use super::catalog::{block_digest, request_compatible};
 use super::control::{BlockDefinition, ControlState};
 use super::service::{EvolutionService, RoutingDependencies};
+use crate::gateway::observability::binding::CanonicalSelection;
 use crate::gateway::observability::requests::GatewayRequestObserved;
-use crate::policy_lock::{PolicyRoutingSnapshot, PolicyRuntime};
+use crate::policy_lock::PolicyRuntime;
 use crate::session_identity::RequestSessionContext;
-use crate::storage::capture::sessions;
 use crate::storage::evolution::EvolutionStore;
 use crate::storage::session_identity::SessionIdentity;
 
-use crate::gateway::metering::replay::CanonicalRequestReplayRejected;
 use crate::storage::execution::{DecisionContext, EXECUTION_KIND, ExecutionRecord};
 
 pub mod candidates;
 
-#[derive(Debug, Serialize)]
-struct CanonicalRequestBound {
-    request: ExecutionRecord,
-}
-
-impl PipelineEvent for CanonicalRequestBound {
-    fn event_name(&self) -> &'static str {
-        "evolution.canonical_request_bound"
-    }
-}
-
 struct AdmissionFence {
-    routing_generation: u64,
-    policies: PolicyRoutingSnapshot,
     identity: SessionIdentity,
     control: Option<(u64, u64)>,
 }
@@ -281,52 +265,19 @@ impl EvolutionRuntime {
             dispatch_route = ctx.model().to_owned();
             route_guard_reason = Some("candidate_request_capability_unverified".into());
         }
-        let request = ExecutionRecord {
-            request_id: ctx.request_id().into(),
-            attempt_id: observed.attempt_id,
-            identity: identity.clone(),
-            connection_id: binding.connection_id.clone(),
-            captured_watermark: binding.watermark,
-            started_at: observed.admitted_at,
-            intent: intent.clone(),
-            dispatch_route: dispatch_route.clone(),
-            route_guard_reason,
-            settlement: None,
-        };
-        let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
-        let (_, persisted): (_, ExecutionRecord) = store
-            .initialize(
-                EXECUTION_KIND,
-                ctx.request_id(),
-                Some(identity.key()?),
-                &request,
-            )
-            .await?;
-        if persisted.attempt_id != request.attempt_id {
-            ctx.emit(CanonicalRequestReplayRejected);
-        }
-        ensure!(
-            persisted.identity == identity
-                && persisted.intent.as_ref().map(|i| &i.context)
-                    == intent.as_ref().map(|i| &i.context),
-            "request ID was reused outside its canonical execution"
-        );
-        // A replay may inspect its existing intent, but must not perform a
-        // second upstream execution under one cost/accounting identity.
-        ensure!(
-            persisted.attempt_id == request.attempt_id,
-            "canonical request ID has already been dispatched or interrupted"
-        );
         ctx.insert_extension(Arc::new(AdmissionFence {
-            routing_generation,
-            policies,
             identity,
             control: intent
                 .as_ref()
                 .map(|i| (i.control_generation, i.mode_epoch)),
         }));
-        ctx.emit(CanonicalRequestBound { request });
-        ctx.set_model(dispatch_route);
+        ctx.insert_extension(Arc::new(CanonicalSelection {
+            routing_generation,
+            policies,
+            intent,
+            dispatch_route,
+            route_guard_reason,
+        }));
         Ok(())
     }
 }
@@ -365,19 +316,6 @@ impl EvolutionRuntime {
             return Ok(());
         };
         let check = async {
-            ensure!(
-                self.routing.generation() == fence.routing_generation
-                    && self.policies.matches_routing_snapshot(&fence.policies),
-                "routing reloaded after canonical admission"
-            );
-            let session = sessions::Entity::find_by_id(fence.identity.key()?)
-                .one(&self.db)
-                .await?
-                .context("canonical session disappeared")?;
-            ensure!(
-                !session.deleted,
-                "canonical session was deleted before dispatch"
-            );
             if let Some(expected) = fence.control {
                 let state = self.service(&fence.identity.owner)?.state().await?;
                 ensure!(
