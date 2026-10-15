@@ -74,20 +74,6 @@ models:
         cache_write: 3.75
       output_tokens:
         text: 15
-  - id: deepseek/deepseek-v4-flash
-    provider_model_id: deepseek-v4-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.19
-      output_tokens:
-        text: 0.51
-  - id: deepseek/deepseek-v4-pro
-    provider_model_id: deepseek-v4-pro
-    pricing:
-      input_tokens:
-        no_cache: 1.74
-      output_tokens:
-        text: 3.48
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
     pricing:

@@ -99,14 +99,6 @@ models:
             no_cache: 2
           output_tokens:
             text: 6
-  - id: deepseek/deepseek-v4-flash-0731
-    provider_model_id: deepseek-v4-flash-0731
-    pricing:
-      input_tokens:
-        no_cache: 0.2
-        cache_read: 0.04
-      output_tokens:
-        text: 0.4
   - id: z-ai/glm-5.2
     provider_model_id: glm-5.2
     pricing:

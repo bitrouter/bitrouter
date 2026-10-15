@@ -208,27 +208,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.04,
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash-0731",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
@@ -573,69 +552,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.0028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash-0731",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.003625,
-              "no_cache": 0.435
-            },
-            "output_tokens": {
-              "text": 0.87
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
@@ -905,42 +821,6 @@
             }
           },
           "provider_model_id": "z-ai/glm-5.2",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "cache_write": 0.0,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "cache_write": 0.0,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash-0731",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -1365,62 +1245,6 @@
             }
           },
           "provider_model_id": "qwen/qwen3.7-plus"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.13,
-              "no_cache": 1.68
-            },
-            "output_tokens": {
-              "text": 3.38
-            }
-          },
-          "provider_model_id": "deepseek-ai/deepseek-v4-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.132,
-              "no_cache": 1.32
-            },
-            "output_tokens": {
-              "text": 3.96
-            }
-          },
-          "provider_model_id": "deepseek-ai/deepseek-v4-pro-0813"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-ai/deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.44
-            },
-            "output_tokens": {
-              "text": 1.32
-            }
-          },
-          "provider_model_id": "deepseek-ai/deepseek-v4-flash-0731"
         },
         {
           "api_protocol": "openai",
@@ -2087,44 +1911,6 @@
             "openai",
             "responses"
           ],
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.19
-            },
-            "output_tokens": {
-              "text": 0.51
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.74
-            },
-            "output_tokens": {
-              "text": 3.48
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
           "id": "anthropic/claude-sonnet-5",
           "pricing": {
             "input_tokens": {
@@ -2593,34 +2379,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.09
-            },
-            "output_tokens": {
-              "text": 0.18
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.003625,
-              "no_cache": 0.435
-            },
-            "output_tokens": {
-              "text": 0.87
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro"
-        },
-        {
-          "api_protocol": "openai",
           "id": "minimax/minimax-m2.7",
           "pricing": {
             "input_tokens": {
@@ -2934,24 +2692,6 @@
         {
           "api_protocol": "openai",
           "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
             "tools"
           ],
           "id": "qwen/qwen3.8-max",
@@ -2966,20 +2706,6 @@
             }
           },
           "provider_model_id": "qwen/qwen3.8-max"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.003625,
-              "no_cache": 0.435
-            },
-            "output_tokens": {
-              "text": 0.87
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
         },
         {
           "api_protocol": "openai",
@@ -3329,6 +3055,20 @@
             }
           },
           "provider_model_id": "anthropic/claude-haiku-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-4-argon",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "google/gemini-4-argon"
         }
       ],
       "name": "bitrouter",
@@ -3650,6 +3390,14 @@
     {
       "access": "api_key",
       "api_base": "https://api.deepseek.com",
+      "api_protocol": [
+        {
+          "*": [
+            "openai",
+            "anthropic"
+          ]
+        }
+      ],
       "auth_scheme": "x-api-key",
       "billing": "usage_token",
       "byok": true,
@@ -3665,62 +3413,18 @@
         "slug": "deepseek",
         "terms_of_service_url": "https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html"
       },
-      "models": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.003625,
-              "no_cache": 0.435
-            },
-            "output_tokens": {
-              "text": 0.87
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.0028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
+      "models": [],
       "name": "deepseek",
       "protocol_endpoints": {
         "messages": "https://api.deepseek.com/anthropic"
       },
+      "rate_limits": [
+        {
+          "*": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "required_config": [
         "api_key"
       ],
@@ -3882,6 +3586,11 @@
           "api_protocol": "openai",
           "id": "anthropic/claude-haiku-5.5",
           "provider_model_id": "claude-haiku-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-4-argon",
+          "provider_model_id": "gemini-4-argon"
         }
       ],
       "name": "github-copilot",
@@ -3922,62 +3631,6 @@
             }
           },
           "provider_model_id": "Qwen/Qwen3.7-Max"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.116,
-              "no_cache": 1.392
-            },
-            "output_tokens": {
-              "text": 2.784
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.044,
-              "no_cache": 1.32
-            },
-            "output_tokens": {
-              "text": 3.96
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro-0813"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.022,
-              "no_cache": 0.112
-            },
-            "output_tokens": {
-              "text": 0.224
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.014,
-              "no_cache": 0.44
-            },
-            "output_tokens": {
-              "text": 1.32
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash-0731"
         },
         {
           "api_protocol": "openai",
@@ -4185,6 +3838,23 @@
               "medium",
               "high"
             ]
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-4-argon",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gemini-4-argon",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
@@ -4487,52 +4157,6 @@
       "models": [
         {
           "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.135,
-              "no_cache": 1.6
-            },
-            "output_tokens": {
-              "text": 3.2
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
-        },
-        {
-          "api_protocol": "openai",
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
@@ -4614,20 +4238,6 @@
             }
           },
           "provider_model_id": "moonshotai/kimi-k3"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.044,
-              "no_cache": 1.32
-            },
-            "output_tokens": {
-              "text": 3.96
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
         },
         {
           "api_protocol": "openai",
@@ -5212,11 +4822,6 @@
       "models": [
         {
           "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "provider_model_id": "deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
           "id": "qwen/qwen3.7-plus",
           "provider_model_id": "qwen3.7-plus"
         },
@@ -5234,11 +4839,6 @@
           "api_protocol": "openai",
           "id": "moonshotai/kimi-k2.7-code",
           "provider_model_id": "kimi-k2.7-code"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "provider_model_id": "deepseek-v4-pro"
         },
         {
           "api_protocol": "openai",
@@ -5376,34 +4976,6 @@
         "terms_of_service_url": "https://opencode.ai/legal/terms-of-service"
       },
       "models": [
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.145,
-              "no_cache": 1.74
-            },
-            "output_tokens": {
-              "text": 3.84
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro"
-        },
         {
           "api_protocol": "openai",
           "id": "anthropic/claude-sonnet-4.5",
@@ -5914,6 +5486,20 @@
             }
           },
           "provider_model_id": "gemini-3.8-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-4-argon",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gemini-4-argon"
         }
       ],
       "name": "opencode-zen",
@@ -6375,60 +5961,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.018,
-              "no_cache": 0.09
-            },
-            "output_tokens": {
-              "text": 0.18
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.003625,
-              "no_cache": 0.435
-            },
-            "output_tokens": {
-              "text": 0.87
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "minimax/minimax-m3",
           "pricing": {
             "input_tokens": {
@@ -6644,24 +6176,6 @@
             }
           },
           "provider_model_id": "anthropic/claude-opus-5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.022,
-              "no_cache": 0.66
-            },
-            "output_tokens": {
-              "text": 1.98
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
         },
         {
           "api_protocol": [
@@ -7222,6 +6736,25 @@
             }
           },
           "provider_model_id": "anthropic/claude-haiku-5.5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "google/gemini-4-argon",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 0.1875,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "google/gemini-4-argon"
         }
       ],
       "name": "openrouter",
@@ -7253,54 +6786,6 @@
         "terms_of_service_url": "https://phala.network/terms"
       },
       "models": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 5.25
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.44
-            },
-            "output_tokens": {
-              "text": 1.32
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
-        },
         {
           "api_protocol": "openai",
           "capabilities": [
@@ -7368,48 +6853,6 @@
       "models": [
         {
           "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.14,
-              "no_cache": 1.69
-            },
-            "output_tokens": {
-              "text": 3.38
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash-0731"
-        },
-        {
-          "api_protocol": "openai",
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
@@ -7434,6 +6877,11 @@
     {
       "access": "api_key",
       "api_base": "https://qianfan.baidubce.com/v2",
+      "api_protocol": [
+        {
+          "*": "openai"
+        }
+      ],
       "auth_scheme": "bearer",
       "billing": "usage_token",
       "byok": true,
@@ -7452,39 +6900,13 @@
         "status_page_url": "https://cloud.baidu.com/status.html",
         "terms_of_service_url": "https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en"
       },
-      "models": [
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.67
-            },
-            "output_tokens": {
-              "text": 3.33
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash"
-        }
-      ],
+      "models": [],
       "name": "qianfan_cn",
+      "rate_limits": [],
       "required_config": [
         "api_key"
       ],
-      "status": "active",
+      "status": "suspended",
       "submitted_at": "2026-07-07",
       "weight": 1.0
     },
@@ -7507,68 +6929,6 @@
         "terms_of_service_url": "https://redpill.ai/terms"
       },
       "models": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 5.25
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.45
-            },
-            "output_tokens": {
-              "text": 4.36
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.44
-            },
-            "output_tokens": {
-              "text": 1.32
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
-        },
         {
           "api_protocol": "openai",
           "capabilities": [
@@ -7632,62 +6992,6 @@
         "slug": "siliconflow"
       },
       "models": [
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.145,
-              "no_cache": 1.74
-            },
-            "output_tokens": {
-              "text": 3.48
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.44,
-              "no_cache": 1.32
-            },
-            "output_tokens": {
-              "text": 3.96
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro-0813"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash-0731"
-        },
         {
           "api_protocol": "openai",
           "id": "z-ai/glm-5.2",
@@ -7784,34 +7088,6 @@
         "slug": "siliconflow"
       },
       "models": [
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.145,
-              "no_cache": 1.74
-            },
-            "output_tokens": {
-              "text": 3.48
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.003,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash"
-        },
         {
           "api_protocol": "openai",
           "id": "z-ai/glm-5.2",
@@ -7976,102 +7252,6 @@
             "reasoning",
             "tools"
           ],
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.145,
-              "no_cache": 1.74
-            },
-            "output_tokens": {
-              "text": 3.48
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-flash-0731",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.014,
-              "no_cache": 0.44
-            },
-            "output_tokens": {
-              "text": 1.32
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash-0731",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-pro-0813",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.044,
-              "no_cache": 1.32
-            },
-            "output_tokens": {
-              "text": 3.96
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro-0813",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
@@ -8186,54 +7366,6 @@
             "reasoning",
             "tools"
           ],
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.145,
-              "no_cache": 1.74
-            },
-            "output_tokens": {
-              "text": 3.48
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
@@ -8338,27 +7470,6 @@
       "models": [
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "id": "deepseek/deepseek-v4-pro",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 5.25
-            }
-          },
-          "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
@@ -8386,23 +7497,6 @@
             }
           },
           "provider_model_id": "kimi-k3",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v4-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.125,
-              "no_cache": 0.7
-            },
-            "output_tokens": {
-              "text": 1.9
-            }
-          },
-          "provider_model_id": "deepseek-v4-flash",
           "rate_limits": {
             "requests_per_minute": 60
           }
