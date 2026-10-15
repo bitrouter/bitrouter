@@ -71,9 +71,9 @@ supply additional overrides. Contract scope and acceptance scope are separate.
 
 | Subject | Document |
 | --- | --- |
-| Goal-oriented product design, default entry, input semantics, completion and stopping; implementation in progress | [BRO_GOAL_ORIENTED_PRD.md](BRO_GOAL_ORIENTED_PRD.md) |
-| Codex Goal implementation contract, stages, fault matrix and evidence gates; implementation in progress | [BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md](BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md) |
-| Goal implementation stages, decisions, source-specific validation and remaining gates | [BRO_GOAL_ORIENTED_IMPLEMENTATION.md](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) |
+| Goal-oriented product design, default entry, input semantics, completion and stopping | [BRO_GOAL_ORIENTED_PRD.md](BRO_GOAL_ORIENTED_PRD.md) |
+| Codex Goal implementation contract, stages, fault matrix and evidence gates | [BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md](BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md) |
+| Goal implementation and final acceptance summary, reproduction and pinned evidence archive | [BRO_GOAL_ORIENTED_IMPLEMENTATION.md](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) |
 | Runtime identities, scheduling, context, durable commits, recovery and transport | [BRO_AGENT_RUNTIME_SPEC.md](BRO_AGENT_RUNTIME_SPEC.md) |
 | Six tool interfaces, filesystem bounds and interpreter rules | [BRO_BASE_TOOLS_SPEC.md](BRO_BASE_TOOLS_SPEC.md) |
 | AGENTS.md scopes and snapshots, native MCP and skills discovery | [BRO_HARNESS_RESOURCES.md](BRO_HARNESS_RESOURCES.md) |

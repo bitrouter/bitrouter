@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "source_commit": "4772d9e09deb9c69f539e97d2b24dda9ca770e0c",
+  "original_goal_id": "3e9f3906-c069-4e4f-9145-97b064e12713",
+  "scope": "Exact five original R16 project inputs; no delivered implementation or private harness profile.",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "833f0b2d296aae474db094af26daa4803bc371f4b30b898cb61c91191738e49d",
+      "utf8": "Work only in this assigned workspace. Do not inspect credentials or directories outside it. Do not install dependencies or use Python. Keep existing contracts and assertions unchanged. Missing sibling module produces an intentional branch-phase TODO; final delivery requires both modules and zero TODO, skipped or failing original contracts. Use node/npm built-ins only. Report actual checks and limits.\n\nUse structured read/edit/search tools only. Do not run shell commands (including git status). BRO runs the actual persisted npm test checks for branch handoff and combined delivery; keep all original test assertions unchanged.\n"
+    },
+    {
+      "path": "info.md",
+      "sha256": "316819e3e1e51481025e7de77027b615eb02421e6e936020e55fd8de63544b80",
+      "utf8": "BRO real harness preflight. Marker: BRO_REAL_HARNESS_20261014.\n"
+    },
+    {
+      "path": "package.json",
+      "sha256": "64e69c343acb6ff91055c20752b26083257fdc689376fe147c16133261e90c88",
+      "utf8": "{\n  \"name\": \"bro-real-goal-validation\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test tests/*.test.mjs\"\n  }\n}\n"
+    },
+    {
+      "path": "tests/numbers.test.mjs",
+      "sha256": "4dc666e2ca2d3b02a55d86523efa8334343aa7b62e71760816f14fcb9d503a15",
+      "utf8": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { existsSync } from 'node:fs';\nconst available = existsSync(new URL('../numbers.mjs', import.meta.url));\ntest('numbers contract', { todo: available ? false : 'numbers branch not delivered' }, async () => {\n  if (!available) return;\n  const { sumIntegers } = await import('../numbers.mjs');\n  assert.equal(sumIntegers('2,-5,1'), -2);\n  assert.equal(sumIntegers(' 10 , -2 , 3 '), 11);\n  for (const input of ['', '1,,2', '1.5', 'oops', '9007199254740992']) assert.throws(() => sumIntegers(input));\n});\n"
+    },
+    {
+      "path": "tests/text.test.mjs",
+      "sha256": "14b5783788dc82b3386e3904a568c7e4d6e6dbc3c5ba2beecb9a576b030a78ce",
+      "utf8": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { existsSync } from 'node:fs';\nconst available = existsSync(new URL('../text.mjs', import.meta.url));\ntest('text contract', { todo: available ? false : 'text branch not delivered' }, async () => {\n  if (!available) return;\n  const { normalizeWhitespace } = await import('../text.mjs');\n  assert.equal(normalizeWhitespace('  A\\tB\\nC  '), 'A B C');\n  assert.equal(normalizeWhitespace('\\u00a0Straße\\u2003東京\\u00a0'), 'Straße 東京');\n  assert.equal(normalizeWhitespace(''), '');\n  assert.equal(normalizeWhitespace(' \\t\\n '), '');\n});\n"
+    }
+  ]
+}
