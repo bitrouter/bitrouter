@@ -145,6 +145,7 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+bitrouter-sdk = { workspace = true, features = ["core"] }
 bitrouter-ai = { workspace = true, features = ["testing"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
 tonic = { workspace = true, features = ["server", "router"] }

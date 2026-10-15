@@ -1,8 +1,8 @@
 # BitRouter SDK
 
 HTTP access to an independently running BitRouter gateway. Import request and
-response contracts from `bitrouter-ai`; the SDK supplies transport and bounded
-SSE consumption. It does not discover configuration, start a daemon, select
+response contracts from `bitrouter-ai`; the SDK supplies transport, bounded
+SSE consumption and optional managed WebSocket access. It does not discover configuration, start a daemon, select
 provider accounts or access server storage.
 
 ```rust,no_run
@@ -110,8 +110,56 @@ An interrupted mutation remains uncertain; the SDK never repeats it implicitly.
 Existing subject/result identities and the server's idempotency rules determine
 whether an explicit later submission is a duplicate.
 
+`GatewayClient::core_capabilities()` reads the existing core HTTP capability
+endpoint. Core requires an active virtual service key even when ordinary
+inference uses `skip_auth`. `Error::Core` retains its typed error envelope,
+HTTP status and headers, including failed WebSocket handshakes.
+
+Enable the SDK's `core` feature for `core_channel(ChannelOptions)`. This adds
+client WebSocket framing only. It does not compile or start the server scheduler.
+The channel uses a dedicated HTTP/1 connection pool with the same service
+endpoint/prefix, credentials, TLS, explicit proxy policy and handshake deadlines
+as `GatewayClient`, with redirects and retries disabled. Ordinary HTTP calls
+retain their existing protocol selection. After upgrade, callers control operation deadlines.
+
+```rust,no_run
+# #[cfg(feature = "core")]
+async fn begin_core_bind(
+    endpoint: &str,
+    key: &str,
+    binding: &bitrouter_ai::core::protocol::ClientMessage,
+) -> bitrouter_sdk::error::Result<bitrouter_sdk::core::CoreChannel> {
+    let client = bitrouter_sdk::gateway::GatewayClient::new(endpoint, Some(key))?;
+    let mut channel = client
+        .core_channel(bitrouter_sdk::core::ChannelOptions::default())
+        .await?;
+    channel.send(binding).await?;
+    Ok(channel)
+}
+```
+
+The caller sends bind/restore before the service's initial-message deadline
+(currently 20 seconds) and completes the checkpoint acknowledgement protocol.
+`receive()` returns AI `ServerMessage` data. Validate and durably persist a
+checkpoint under the harness's ownership rules before explicitly sending its
+ACK. The SDK never persists sessions, executes tools or acknowledges messages
+automatically. Use `split()` to send while receiving events. Messages, including
+fragmented input, are bounded by `ChannelOptions::max_message_bytes` (16 MiB by
+default); outbound JSON is bounded during serialization.
+
+`close()` initiates the transport closing handshake; continue receiving until
+it completes. A peer that drops the connection without acknowledging closure
+produces a transport error. A receive error ends the reader and later reads
+return `None`. Cancelling a pending send or close invalidates both halves and
+drops their shared connection so later operations cannot flush retained commands.
+Bytes already dispatched before cancellation may still execute. A local
+serialization/size rejection happens before sending and leaves the channel usable.
+Neither EOF nor dropping/closing a channel completes or cancels a run. The SDK
+does not reconnect or replay commands after uncertain delivery. Use the core's
+existing operation inspection and recovery protocol to resolve that state.
+
 This package replaces the former server-framework SDK in an alpha breaking
 migration. Server assembly and advanced trusted host adapters have moved to the
-`bitrouter` application. Existing core streaming clients remain pending migration
-in P0; the gateway/control/evaluation methods do not establish complete core HTTP
-coverage.
+`bitrouter` application. The managed channel preserves the existing WebSocket
+surface; it does not establish complete core HTTP coverage or remote access to
+local-only harness operations.

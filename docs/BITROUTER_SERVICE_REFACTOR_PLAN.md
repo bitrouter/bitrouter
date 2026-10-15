@@ -215,6 +215,28 @@ new boundary through restricted visibility and import checks: drawing code
 receives presentation data and emits commands, without directly accessing
 database repositories, provider credentials or service execution.
 
+### Internal dependency rules
+
+Consolidating packages does not make every application module a shared library.
+Keep implementations private to their owner or expose a narrow `pub(crate)`
+interface where another owner actually needs it. Retain only the intentional
+trusted-host entry points as application public API. Shared application code
+does not belong in AI unless an SDK or extension consumer needs its contract.
+
+| Owner | Allowed collaboration | Boundary to enforce |
+| --- | --- | --- |
+| Gateway | AI contracts, application configuration/storage and explicitly enabled gateway capabilities | Ordinary inference and finalization cannot require core, harness, ACP or TUI. Optional consumers receive gateway events through host wiring. |
+| Core | AI contracts, gateway resource access and internal scheduling/checkpoint storage | No harness tool execution, authoritative conversation commits or terminal implementation. |
+| Harness | AI contracts, its execution/storage services, shared model-history helpers and supported SDK clients | No unconditional dependency on live core implementation. The local core connector is host-owned and requires both features. |
+| TUI | Shared commands, presentation data and supported harness/client operations | No direct database repositories, provider credentials or independent scheduling/execution logic. |
+| Telemetry | AI observation contracts, application observation hooks and the selected OTel transport | Exporting is optional. Its absence cannot disable request facts, accounting or lifecycle finalization. ACP-specific integration additionally requires harness. |
+| Host | Enabled owners and their concrete adapters | Own startup, cross-owner wiring and shutdown; do not move composition or service initialization into AI or SDK. |
+
+Use the existing concrete interfaces when moving code; these rules do not call
+for a new trait layer for every module. Check forbidden imports as well as
+isolated builds. A feature-gated reference can still put execution or session
+authority in the wrong owner even when the minimum build compiles.
+
 ## Public contract and client boundaries
 
 ### What belongs in bitrouter-ai
@@ -1164,7 +1186,8 @@ consumer requires the old SDK server API.
   separate inference, control and execution credentials and listener exposure;
   never route an unsupported managed request into ordinary inference.
 - Provide a standalone example consumer with only SDK/contract dependencies,
-  service endpoint and credential. Use the official gateway executable plus
+  explicit inference endpoint/credential and, for control calls, a separate
+  control endpoint/scoped credential. Use the official gateway executable plus
   ordinary configuration as its server.
 - Keep local command/IPC adapters in the application and move portable remote
   clients into SDK.
@@ -1305,11 +1328,13 @@ that migrations or reads have been exercised against that backend.
 The independent process test starts the packaged official gateway with a Rust mock
 provider and a private temporary server configuration/database directory.
 A separate SDK consumer uses a different working directory and receives only
-the endpoint and credential. Verify stream/nonstream generation, supported
-Decisions, model listing, invalid credentials, public errors, disconnect,
-supported control/capabilities and graceful shutdown. Count upstream calls to
-detect accidental replay. No Python fixture or in-process server import is
-needed in the consumer.
+the inference endpoint/credential and the separately configured control
+endpoint/scoped credential. Keep the control listener loopback-only and verify
+that the two credential domains are not interchangeable. Verify stream/nonstream
+generation, supported Decisions, model listing, invalid credentials, public
+errors, disconnect, supported control/capabilities and graceful shutdown. Count
+upstream calls to detect accidental replay. No Python fixture or in-process
+server import is needed in the consumer.
 
 Retain the existing test families for request-check hosts, protocol/history,
 provider/auth, continuations, metering/finalization, telemetry hierarchy,
@@ -1317,6 +1342,21 @@ configuration state, daemon/handoff, managed core, native/ACP harness, durable
 recovery and PTY interactions. Run the repository's required formatting, strict
 lint, test and rustdoc gates at implementation time, including Linux/macOS/Windows
 coverage where existing CI promises it.
+
+### Completion record
+
+The final implementation report must map every source-inventory row to its
+destination or an explicitly reviewed retirement, and record a result for every
+A01–A16 gate. Include the source revision, exact build profile, exercised test or
+artifact, result and remaining limitation. Check the internal dependency rules
+alongside package dependencies; fewer crates alone does not establish the new
+ownership boundaries.
+
+A successful filtered test run, a moved directory or a compiled database driver
+is evidence only for the paths it covers. Keep an unexercised acceptance gate
+open. P0 is complete when all its gates pass together on the final candidate;
+P1 work, package publication and external consumers' release status remain
+separate from that result.
 
 ## P1 Native gateway multi-instance operation
 

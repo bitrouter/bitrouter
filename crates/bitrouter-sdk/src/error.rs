@@ -39,6 +39,11 @@ pub enum Error {
     Control(Box<ServiceFailure<bitrouter_ai::control::error::ErrorEnvelope>>),
     #[error("evaluation service returned HTTP status {}", .0.status)]
     Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
+    #[error("core service returned HTTP status {}", .0.status)]
+    Core(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
+    #[cfg(feature = "core")]
+    #[error("core channel failed: {0}; execution may still be running")]
+    CoreChannel(&'static str),
     #[error(
         "remote control protocol version {server} is incompatible with client version {client}"
     )]

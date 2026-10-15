@@ -62,7 +62,7 @@ the contract move must preserve its bytes.
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; terminal-free transcript formatting remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
-| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control and eval clients verified; core streaming client extraction and independent official-service process consumer remain |
+| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
@@ -682,3 +682,83 @@ client, remaining public-consumer migration, isolated feature/runtime profiles,
 historical payload fixtures, packaged independent-process delivery, performance
 comparison, full P0 validation and PR remain open. A01–A16 retain their final
 milestone status; this stage does not substitute for those complete gates.
+
+## Managed core SDK transport
+
+Changes against `33c6e9d` add the existing core capability HTTP endpoint to the
+base SDK and its managed WebSocket channel behind the SDK's optional `core`
+feature. The client uses AI commands, events and errors directly. It does not
+start a service, load credentials, persist or acknowledge checkpoints, execute
+tools, reconnect or replay mutations. Split send/receive halves let an external
+harness acknowledge durable work while receiving service events.
+
+The channel has a dedicated HTTP/1.1 connection pool with the gateway client's
+explicit authentication, proxy, TLS and handshake timeout policy. This prevents
+HTTP/2 feature unification or a previously pooled HTTP/2 connection from changing
+the upgrade protocol. Ordinary gateway HTTP uses its existing pool. Handshake
+validation rejects unsolicited extensions/protocols, duplicate acceptance
+headers and redirects; HTTP failures retain bounded typed error bodies, status
+and headers. WebSocket frame/message input and outbound JSON serialization have
+explicit limits. Public APIs do not expose tungstenite types.
+
+Independent review found that cancelling a pending sink send could retain a
+command that a later send, close or receiver-driven pong would flush. A real
+Hyper HTTP upgrade over a bounded duplex transport reproduced this failure
+before the fix. Both halves now share a concrete I/O wrapper: cancellation or
+failure of a pending write drops the actual connection synchronously and wakes
+pending readers/writers. Regression tests verify both cancelled sends and
+cancelled close handshakes, reader wakeup, rejected subsequent operations and
+the maximum prefix that reached the peer. Already dispatched bytes remain an
+unknown execution outcome; connection invalidation does not prove cancellation.
+A local serialization/size rejection happens before dispatch and does not
+invalidate an otherwise usable channel.
+
+The application integration uses its real managed API and authentication. It
+receives an initial checkpoint without an automatic ACK, validates and persists
+that batch in a separate harness directory, explicitly acknowledges it and
+observes the resulting durable head. The existing service drops its WebSocket
+after a client close without flushing the close acknowledgement; the test
+preserves this behavior and expects an explicit incomplete-handshake error.
+A separate controlled TCP peer verifies the client's successful close handshake.
+No service execution or session ownership behavior changed.
+
+Validation on the local platform recorded above:
+
+- SDK all-feature tests passed **45 tests**, including two deterministic
+  backpressure tests, 12 TCP channel tests, nine control tests, 19 gateway/eval/
+  capability HTTP tests and three doctests. The no-default-feature SDK run
+  passed **31 tests**, with channel-only tests correctly absent.
+- The real application's `orchestrator_core` managed API filter passed
+  **28 tests**, with 38 tests outside the filter. Coverage includes credential
+  revocation, bounded provider output, ACK/reconnect recovery, process crashes
+  and the new SDK checkpoint exchange. This is a targeted result, not the full
+  P0 regression suite or the packaged independent-process consumer gate.
+- Workspace all-feature/all-target `cargo check` passed. Strict workspace
+  all-feature/all-target Clippy and strict workspace Rustdoc passed on Rust
+  1.97.0. Formatting and patch whitespace checks passed.
+- Isolated SDK normal/build dependency scans with and without `core` contain
+  no application, server, database, terminal, ACP/MCP or OTel implementation.
+  The default SDK excludes WebSocket dependencies. The pinned public-API guard
+  passed with channel/capability sentinels and rejection of raw transport types;
+  the public foreign-dependency manifests remain unchanged.
+- Independent follow-up review found no remaining actionable issues after the
+  cancellation and close-handshake corrections.
+
+The targeted runtime command was:
+
+```sh
+cargo nextest run -p bitrouter --all-features --test orchestrator_core \
+  --build-jobs 2 --test-threads 2 -E 'test(managed_api::)'
+```
+
+The implementation plan also incorporates the reviewed internal dependency
+rules and final completion-record requirements. Independent-process acceptance
+now explicitly supplies separate inference and control endpoints/credentials,
+retains loopback-only control and checks that credentials are not interchangeable.
+
+Remaining P0 work includes shared internal checkpoint/history decoding for
+core-only and harness-only profiles, terminal-free headless rendering, the full
+feature/startup matrix, remaining public harness consumer contracts, baseline
+payload fixtures, packaged gateway delivery, performance budgets, final whole-P0
+validation and PR. All final A01–A16 gates remain open until their complete
+candidate evidence is recorded. P1 remains outside this implementation.

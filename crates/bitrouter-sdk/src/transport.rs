@@ -34,6 +34,13 @@ pub(crate) async fn successful_as<Body: serde::de::DeserializeOwned>(
     if response.status().is_success() {
         return Ok(response);
     }
+    Err(failure(service_failure(response, limit).await))
+}
+
+pub(crate) async fn service_failure<Body: serde::de::DeserializeOwned>(
+    response: Response,
+    limit: usize,
+) -> Box<ServiceFailure<Body>> {
     let status = response.status().as_u16();
     let headers = response.headers().clone();
     let (body, body_error) = match body(response, limit).await {
@@ -46,12 +53,12 @@ pub(crate) async fn successful_as<Body: serde::de::DeserializeOwned>(
         },
         Err(error) => (None, Some(error)),
     };
-    Err(failure(Box::new(ServiceFailure {
+    Box::new(ServiceFailure {
         status,
         headers,
         body,
         body_error,
-    })))
+    })
 }
 
 pub(crate) fn has_content_type(response: &Response, expected: &str) -> bool {

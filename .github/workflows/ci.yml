@@ -440,8 +440,13 @@ jobs:
                 'bitrouter_sdk::control::ControlClient::operation'
                 'bitrouter_sdk::gateway::GatewayClient::submit_eval_result'
                 'bitrouter_sdk::gateway::GatewayClient::eval_snapshot'
+                'bitrouter_sdk::gateway::GatewayClient::core_capabilities'
+                'bitrouter_sdk::gateway::GatewayClient::core_channel'
+                'pub struct bitrouter_sdk::core::CoreChannel'
+                'pub struct bitrouter_sdk::core::CoreSender'
+                'pub struct bitrouter_sdk::core::CoreReceiver'
               )
-              forbidden='bitrouter::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+              forbidden='bitrouter::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::|tokio_tungstenite|tungstenite::'
             fi
             for sentinel in "${sentinels[@]}"; do
               if ! grep -qF "$sentinel" "$listing"; then

@@ -657,3 +657,48 @@ async fn nullable_native_data_and_diagnostics_remain_distinct() -> TestResult {
     assert_eq!(serde_json::to_value(typed)?, error);
     Ok(())
 }
+
+#[tokio::test]
+async fn core_capability_http_uses_public_types_and_preserves_error_metadata() -> TestResult {
+    use bitrouter_ai::core::protocol::{Capabilities, Limits};
+    let capabilities = Capabilities {
+        version: 1,
+        core_instance_id: "fixture-core".into(),
+        operations: vec!["session.bind".into()],
+        transports: vec!["websocket".into()],
+        unsupported_features: vec![],
+        limits: Limits::default(),
+        max_sessions: 8,
+        max_host_model_attempts: 4,
+    };
+    let mut denied = Reply::json(
+        json!({"error":{"code":"unauthorized_scope","message":"denied","commit_status":"not_committed"}}),
+    );
+    denied.status = 401;
+    denied.headers.push(("www-authenticate", "Bearer".into()));
+    let server = serve(vec![
+        Reply::json(serde_json::to_value(&capabilities)?),
+        denied,
+    ])
+    .await?;
+    let client = GatewayClient::new(&format!("{}/proxy/v1", server.url), Some("core-key"))?;
+    assert_eq!(client.core_capabilities().await?, capabilities);
+    let error = client
+        .core_capabilities()
+        .await
+        .err()
+        .ok_or("missing authorization error")?;
+    let Error::Core(failure) = error else {
+        return Err("wrong error family".into());
+    };
+    assert_eq!(failure.status, 401);
+    assert_eq!(failure.headers["www-authenticate"], "Bearer");
+    assert!(failure.body.is_some());
+    let records = server.records.lock().await;
+    assert_eq!(records.len(), 2);
+    for record in records.iter() {
+        assert_eq!(record.path, "/proxy/v1/orchestrator/capabilities");
+        assert_eq!(record.credential.as_deref(), Some("Bearer core-key"));
+    }
+    Ok(())
+}
