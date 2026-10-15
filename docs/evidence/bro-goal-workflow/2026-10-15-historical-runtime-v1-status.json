@@ -1,0 +1,33 @@
+{
+  "source_files": 949,
+  "bro-build": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 77.673
+  },
+  "app": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 366.279
+  },
+  "clippy": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 120.273
+  },
+  "fmt": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 5.436
+  },
+  "diff": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.09
+  },
+  "hashes": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.126
+  }
+}

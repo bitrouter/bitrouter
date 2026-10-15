@@ -1,0 +1,146 @@
+{
+  "run_id": "48d18c14-04a3-4f2b-8d69-4e776212ad0c",
+  "exit_code": 0,
+  "duration_seconds": 26.565,
+  "cases": [
+    "q01",
+    "q02",
+    "q25"
+  ],
+  "lanes": 6,
+  "scope": "actual reasoning and typed; domain fixtures, no harness adoption",
+  "production_source": "2026-10-14-named-scope-v1-source.sha256",
+  "annotation_authority": "q25 remains proposed, not human gold",
+  "recorded_cases": [
+    {
+      "case": "q01",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "drive_error": null
+    },
+    {
+      "case": "q01",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "drive_error": null
+    },
+    {
+      "case": "q02",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "drive_error": null
+    },
+    {
+      "case": "q02",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "drive_error": null
+    },
+    {
+      "case": "q25",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "drive_error": null,
+      "scope_binding": {
+        "input_id": "live-input-q25",
+        "requirements_revision": 1,
+        "request_id": "ca7e68e5-0451-44a8-a30f-85edb8355d2f",
+        "evidence": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/named-scope-v1/q25-shared-workspaces/603566fc-75c4-4a8c-927d-df6c3877fcca/artifacts/ee1c0303e2c1cb6455ef3c89f017d68df5912cee6d49ad3bf9791c5edcb2312e.blob",
+          "sha256": "ee1c0303e2c1cb6455ef3c89f017d68df5912cee6d49ad3bf9791c5edcb2312e",
+          "bytes": 39
+        },
+        "selection": {
+          "scope": "tasks",
+          "task_ids": [
+            "safari"
+          ]
+        }
+      },
+      "scope_evidence": {
+        "scope": "tasks",
+        "task_ids": [
+          "safari"
+        ]
+      },
+      "plan_request_ids": [
+        "ca7e68e5-0451-44a8-a30f-85edb8355d2f",
+        "f3c981c6-82f5-4e1f-8a61-543bdbff1c1c"
+      ],
+      "task_versions": [
+        [
+          "safari",
+          2
+        ],
+        [
+          "chrome",
+          1
+        ],
+        [
+          "join",
+          2
+        ]
+      ],
+      "objective_unchanged": true
+    },
+    {
+      "case": "q25",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "drive_error": null,
+      "scope_binding": {
+        "input_id": "live-input-q25",
+        "requirements_revision": 1,
+        "request_id": "fc688d0d-520e-4496-b7f9-10b417d99a74",
+        "evidence": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/named-scope-v1/q25-shared-workspaces/603566fc-75c4-4a8c-927d-df6c3877fcca/artifacts/ee1c0303e2c1cb6455ef3c89f017d68df5912cee6d49ad3bf9791c5edcb2312e.blob",
+          "sha256": "ee1c0303e2c1cb6455ef3c89f017d68df5912cee6d49ad3bf9791c5edcb2312e",
+          "bytes": 39
+        },
+        "selection": {
+          "scope": "tasks",
+          "task_ids": [
+            "safari"
+          ]
+        }
+      },
+      "scope_evidence": {
+        "scope": "tasks",
+        "task_ids": [
+          "safari"
+        ]
+      },
+      "plan_request_ids": [
+        "fc688d0d-520e-4496-b7f9-10b417d99a74",
+        "fac2c6c6-0c57-4ea6-b857-ed19bc4314b4"
+      ],
+      "task_versions": [
+        [
+          "safari",
+          2
+        ],
+        [
+          "chrome",
+          1
+        ],
+        [
+          "join",
+          2
+        ]
+      ],
+      "objective_unchanged": true
+    }
+  ]
+}

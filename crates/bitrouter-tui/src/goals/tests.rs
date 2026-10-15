@@ -137,6 +137,89 @@ fn state() -> State {
 }
 
 #[test]
+fn archived_records_stay_read_only_pinned_and_return_to_the_original_task() {
+    let mut state = state();
+    state.event(&Event::Paste("keep current Goal draft".into()));
+    if let Some(goal) = state.goals.get_mut("a") {
+        goal.tasks[0].artifacts.push(Artifact {
+            id: "archive-2".into(),
+            label: "Older record".into(),
+        });
+    }
+    state.event(&key(KeyCode::Right, KeyModifiers::CONTROL));
+    state.event(&key(KeyCode::Enter, KeyModifiers::NONE));
+    state.event(&key(KeyCode::Down, KeyModifiers::NONE));
+    let archived = |id: &str, previous: &str| Task {
+        id: "branch".into(),
+        title: id.into(),
+        details: vec!["Original permissions and evidence".into()],
+        artifacts: vec![Artifact {
+            id: previous.into(),
+            label: "Even older record".into(),
+        }],
+        ..Default::default()
+    };
+    assert!(!state.receive_archive("b", "archive-2", archived("wrong Goal", "old")));
+    assert!(state.receive_archive(
+        "a",
+        "archive-2",
+        archived("Original execution 2", "archive-1")
+    ));
+    let mut newer = goal("a");
+    newer.revision = 2;
+    state.receive(newer);
+    assert_eq!(
+        state.detail.as_ref().map(|task| task.title.as_str()),
+        Some("Original execution 2")
+    );
+    assert!(state.detail_updated);
+    for code in ['p', 'x', 'r', 'a', 'b', 'g'] {
+        assert!(
+            state
+                .event(&key(KeyCode::Char(code), KeyModifiers::CONTROL))
+                .is_empty()
+        );
+    }
+    state.event(&Event::Paste("do not edit the hidden draft".into()));
+    assert_eq!(
+        state.event(&key(KeyCode::Enter, KeyModifiers::NONE)),
+        vec![Effect::Inspect {
+            goal_id: "a".into(),
+            artifact_id: "archive-1".into(),
+        }]
+    );
+    assert!(state.receive_archive(
+        "a",
+        "archive-1",
+        archived("Original execution 1", "old-evidence")
+    ));
+    state.event(&key(KeyCode::Enter, KeyModifiers::NONE));
+    state.receive_evidence(
+        "a",
+        "old-evidence",
+        Ok("Original read-only tool evidence".into()),
+    );
+    state.event(&key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(state.artifact_preview.is_none());
+    state.event(&key(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(
+        state.detail.as_ref().map(|task| task.title.as_str()),
+        Some("Independent work")
+    );
+    assert_eq!(state.notebook().map(|book| book.detail_offset), Some(1));
+    assert!(!state.receive_archive("a", "archive-1", archived("late obsolete read", "old")));
+    state.event(&key(KeyCode::Esc, KeyModifiers::NONE));
+    state.event(&key(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(
+        state.event(&key(KeyCode::Enter, KeyModifiers::NONE)),
+        vec![Effect::Submit {
+            goal_id: "a".into(),
+            text: "keep current Goal draft".into(),
+        }]
+    );
+}
+
+#[test]
 fn busy_enter_targets_the_current_goal_and_preserves_the_draft_until_acceptance() {
     let mut state = state();
     state.event(&Event::Paste(
@@ -835,4 +918,85 @@ fn rendering_names_readonly_scope_and_neutralizes_terminal_control_data() {
             .event(&key(KeyCode::Char('x'), KeyModifiers::CONTROL))
             .is_empty()
     );
+}
+
+#[test]
+fn long_history_is_bounded_and_browsing_retains_the_goal_draft()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut state = State::new("/project".into());
+    state.receive(goal("g"));
+    state.observe("g".into());
+    if let Some(book) = state.notebooks.get_mut("g") {
+        book.editor.set_text("keep this draft 中文");
+    }
+    for index in 0..10_000 {
+        state.event_line(
+            "g",
+            format!("persisted event {index}: {}", "中".repeat(200)),
+        );
+    }
+    let book = &state.notebooks["g"];
+    assert!(book.events.len() <= 128);
+    assert!(book.events.iter().map(String::len).sum::<usize>() <= 256 * 1024);
+    assert!(book.omitted_events > 0);
+    let effects = state.event(&key(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let [Effect::ReadHistory { goal_id, epoch, .. }] = effects.as_slice() else {
+        return Err("history read effect missing".into());
+    };
+    let epoch = *epoch;
+    assert_eq!(goal_id, "g");
+    state.receive_history(
+        "g",
+        epoch,
+        Ok((vec!["old persistent event".into()], 99, Some(16))),
+    );
+    assert!(
+        state
+            .event(&key(KeyCode::Enter, KeyModifiers::NONE))
+            .is_empty()
+    );
+    assert!(
+        state
+            .event(&Event::Paste("must not edit".into()))
+            .is_empty()
+    );
+    assert_eq!(state.notebooks["g"].editor.text(), "keep this draft 中文");
+    assert_eq!(state.screen, Screen::History);
+    let next = state.event(&key(KeyCode::PageDown, KeyModifiers::NONE));
+    assert!(matches!(
+        next.as_slice(),
+        [Effect::ReadHistory {
+            after: 16,
+            cutoff: Some(99),
+            ..
+        }]
+    ));
+    state.receive_history("g", epoch, Ok((vec!["stale page".into()], 999, None)));
+    assert_eq!(
+        state.history.as_ref().map(|page| page.cutoff),
+        Some(Some(99))
+    );
+    state.event(&key(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(state.screen, Screen::Goal);
+    assert_eq!(state.notebooks["g"].editor.text(), "keep this draft 中文");
+    Ok(())
+}
+
+#[test]
+fn directory_pages_release_idle_cache_and_keep_unsubmitted_drafts() {
+    let mut state = State::new("/project".into());
+    state.receive(goal("draft"));
+    state.observe("draft".into());
+    if let Some(book) = state.notebooks.get_mut("draft") {
+        book.editor.set_text("unfinished");
+    }
+    for index in 0..1000 {
+        let id = format!("page-{index}");
+        state.receive_directory(vec![goal(&id)], true, true);
+        state.observe(id);
+    }
+    state.receive_directory(vec![goal("latest")], false, true);
+    assert!(state.goals.len() <= 3);
+    assert!(state.notebooks.len() <= 3);
+    assert_eq!(state.notebooks["draft"].editor.text(), "unfinished");
 }

@@ -113,6 +113,8 @@ pub struct Prepared {
     pub selection: Selection,
     pub prompt: ArtifactRef,
     pub materials: Vec<Material>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_dependencies: Option<ArtifactRef>,
     /// Private descriptor digest: credentials are never included in the head.
     pub mcp_configuration_sha256: String,
 }
@@ -121,6 +123,12 @@ impl Prepared {
     pub fn validate(&self) -> Result<(), GoalError> {
         self.selection.validate()?;
         self.prompt.validate()?;
+        if let Some(reference) = &self.checked_dependencies {
+            reference.validate()?;
+            if reference.bytes > 128 * 1024 {
+                return Err(invalid("checked dependency context exceeds 128 KiB"));
+            }
+        }
         if self.prompt.bytes > super::MAX_RECORD_BYTES as u64
             || self.mcp_configuration_sha256.len() != 64
             || !self

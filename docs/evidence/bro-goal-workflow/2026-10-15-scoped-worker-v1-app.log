@@ -1,0 +1,69 @@
+   Compiling tokio-rustls v0.26.4
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sqlx v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling axoupdater v0.10.0
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 17s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 0c2a0fe1-1172-4ead-8a7a-52574e5d9584 with nextest profile: default
+    Starting 28 tests across 2 binaries (1853 tests skipped)
+        PASS [   0.027s] ( 1/28) bitrouter goal_archive::tests::historical_content_needs_the_exact_goal_task_and_archive_receipt
+        PASS [   0.047s] ( 2/28) bitrouter goal_code::tests::actual_database_receipt_must_match_the_original_client_payload
+        PASS [   0.039s] ( 3/28) bitrouter goal_code::tests::changed_protocol_outbox_is_preserved_without_reinterpreting_or_replaying
+        PASS [   0.124s] ( 4/28) bitrouter goal_code::evidence::tests::archive_inspector_reads_committed_chain_and_rejects_uncommitted_or_foreign_material
+        PASS [   0.012s] ( 5/28) bitrouter goal_code::tests::old_receipt_with_identical_text_cannot_clear_a_different_pending_draft
+        PASS [   0.021s] ( 6/28) bitrouter goal_code::tests::outbox_retains_exact_identity_scope_and_text_without_replaying
+        PASS [   0.017s] ( 7/28) bitrouter goal_code::tests::permission_preview_separates_earlier_declarations_from_original_rpc
+        PASS [   0.067s] ( 8/28) bitrouter goal_code::tests::exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt
+        PASS [   0.018s] ( 9/28) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.043s] (10/28) bitrouter goal_code::tests::projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer
+        PASS [   0.045s] (11/28) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        PASS [   0.012s] (12/28) bitrouter goal_code::tests::receipt_recovery_rotates_lanes_without_replaying_or_replacing_identity
+        PASS [   0.012s] (13/28) bitrouter goal_code::tests::unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop
+        PASS [   0.012s] (14/28) bitrouter goal_runtime::repair::tests::current_known_failure_does_not_grant_retry_to_unknown_or_stale_review
+        PASS [   0.057s] (15/28) bitrouter goal_code::tests::real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates
+        PASS [   0.012s] (16/28) bitrouter goal_runtime::runtime_evidence::tests::actual_worker_updates_are_private_and_coalesced_only_within_their_turn
+        PASS [   0.014s] (17/28) bitrouter goal_runtime::runtime_evidence::tests::missing_omitted_unordered_or_bounded_history_is_never_complete_timing_proof
+        PASS [   0.015s] (18/28) bitrouter goal_runtime::runtime_evidence::tests::runtime_metadata_binds_identity_and_never_copies_private_content
+        PASS [   0.012s] (19/28) bitrouter goal_runtime::stop_boundary::tests::an_announced_write_without_its_permission_defers_cancellation
+        PASS [   0.090s] (20/28) bitrouter goal_runtime::review_inputs::tests::baseline_verifier_bytes_survive_worker_test_changes_and_mark_omissions
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        PASS [ 146.631s] (21/28) bitrouter goal_runtime::tests::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        PASS [ 146.958s] (22/28) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [  11.633s] (23/28) bitrouter goal_runtime::tests::known_check_failure_repairs_with_actual_evidence_and_same_requirements
+        PASS [  12.303s] (24/28) bitrouter goal_runtime::tests::independent_review_recovers_from_goal_revision_without_worker_replay
+        PASS [  11.108s] (25/28) bitrouter goal_runtime::tests::known_review_failure_repairs_without_restarting_independent_work
+        PASS [  11.241s] (26/28) bitrouter goal_runtime::tests::repeated_review_failure_stops_at_three_executions_per_version
+        PASS [   0.103s] (27/28) bitrouter::goals recovery_tests::superseded_stop_wait_is_durable_bounded_and_not_stop_or_retry_authority
+        PASS [   4.966s] (28/28) bitrouter goal_runtime::tests::unknown_review_outcome_never_authorizes_a_repair
+────────────
+     Summary [ 175.017s] 28 tests run: 28 passed (2 slow), 1853 skipped

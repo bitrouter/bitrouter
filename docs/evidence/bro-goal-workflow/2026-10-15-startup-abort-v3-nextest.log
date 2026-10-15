@@ -1,0 +1,60 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 50s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 1fb58192-3943-4bf2-a1b8-10b1ed29e123 with nextest profile: default
+    Starting 14 tests across 1 binary (1769 tests skipped)
+        PASS [   0.037s] ( 1/14) bitrouter acp_cli::lifecycle_receipt_tests::typed_lifecycle_receipts_survive_context_without_error_text_matching
+        PASS [   0.075s] ( 2/14) bitrouter acp_cli::session_host_tests::cancelled_initialize_reaps_the_owned_controller
+        PASS [   0.025s] ( 3/14) bitrouter goal_runtime::recovery::tests::unopened_startup_rejects_prompt_updates_gaps_and_missing_history
+        PASS [   0.117s] ( 4/14) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [>180.000s] (─────) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        SLOW [>180.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [ 220.064s] ( 5/14) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [ 222.846s] ( 6/14) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        PASS [   0.666s] ( 7/14) bitrouter goal_runtime::tests::start_recovery::initialize_failure_retains_actual_phase_and_reaped_process_receipt
+        PASS [   0.760s] ( 8/14) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   4.727s] ( 9/14) bitrouter goal_runtime::tests::user_pause_prevents_pre_session_recovery_from_admitting_new_work
+        PASS [   0.021s] (10/14) bitrouter supervisor::tests::startup_abort_requires_a_positive_receipt_and_preserves_failed_history
+        PASS [   0.020s] (11/14) bitrouter supervisor::tests::stopped_history_is_hash_bound_and_cannot_cross_run_or_live_state
+        PASS [   0.019s] (12/14) bitrouter supervisor::tests::stopping_startup_releases_completion_lock_before_waiting
+        PASS [   0.014s] (13/14) bitrouter supervisor::tests::unconfirmed_startup_cannot_stop_cleanly_or_be_removed
+        PASS [  11.545s] (14/14) bitrouter goal_runtime::tests::pre_session_recovery_exhausts_its_bound_without_prompt_or_delivery
+────────────
+     Summary [ 231.783s] 14 tests run: 14 passed (2 slow), 1769 skipped

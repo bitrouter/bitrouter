@@ -1,0 +1,3429 @@
+{
+  "label_authority": "q03/q07 have explicit human decisions; other annotations are Codex proposals, including q05/q25 inferred from approved PRD/spec. No calibrated accuracy claim.",
+  "rows_sha256": "ea13ab72e226dd842bcb73d093bc15d8762b6d3884c467ed617a7448aac7582d",
+  "labels_sha256": "d758d68dc33699bc6f31373d4f84207fd0f98a5d7eac516f80a8ade99f5f3c75",
+  "lane_count": 52,
+  "model_input_pairs": 25,
+  "trusted_state_mismatches": [
+
+  ],
+  "native_binary_classifications": {
+    "query": {
+      "tp": 11,
+      "fp": 1,
+      "fn": 1,
+      "tn": 12,
+      "abstain": 0,
+      "precision": 0.9166666666666666,
+      "recall_on_non_abstained": 0.9166666666666666
+    },
+    "modify": {
+      "tp": 3,
+      "fp": 6,
+      "fn": 1,
+      "tn": 15,
+      "abstain": 0,
+      "precision": 0.3333333333333333,
+      "recall_on_non_abstained": 0.75
+    },
+    "permission_response": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "tn": 22,
+      "abstain": 0,
+      "precision": 1.0,
+      "recall_on_non_abstained": 1.0
+    }
+  },
+  "typed_upgrades": 25,
+  "lane_metrics": [
+    {
+      "case": "q01",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5207,
+      "configured_estimate_micro_usd": 11648,
+      "reasoning_provider_reported_cost_usd": 0.0116476,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "如果暂停整个目标，左右两个分支都会被要求暂停，后续汇总也不会继续推进；已有的部分结果会保留，要求不变，之后可以恢复。暂停不代表正在执行的操作已立即停止，实际生效需以执行记录为准。你现在只是询问暂停的影响，我没有发出暂停指令。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q01",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5194,
+      "configured_estimate_micro_usd": 12561,
+      "reasoning_provider_reported_cost_usd": 0.0122651,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "如果暂停当前 Goal，暂停范围会包括 left、right 两个分支以及后续的 join 汇总任务；已有部分结果和任务要求会保留，之后可以恢复。暂停不代表正在运行的操作会立即停止，实际停下的时间需要执行状态确认。你现在只是询问暂停的影响，我没有提交暂停请求。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.4,
+          "probabilities": {
+            "none": 0.24,
+            "pause": 0.52,
+            "run": 0.18,
+            "stop": 0.01,
+            "unknown": 0.05
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.82,
+          "probabilities": {
+            "absent": 0.88,
+            "present": 0.11,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.98,
+          "probabilities": {
+            "absent": 0.99,
+            "present": 0.0,
+            "unknown": 0.01
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.41,
+          "probabilities": {
+            "absent": 0.37,
+            "present": 0.61,
+            "unknown": 0.02
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.7,
+          "probabilities": {
+            "goal": 0.76,
+            "task:join": 0.0,
+            "task:left": 0.01,
+            "task:right": 0.0,
+            "unknown": 0.23
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q02",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3248,
+      "configured_estimate_micro_usd": 10963,
+      "reasoning_provider_reported_cost_usd": 0.0109626,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q02",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2988,
+      "configured_estimate_micro_usd": 11896,
+      "reasoning_provider_reported_cost_usd": 0.0116001,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 1.0,
+          "probabilities": {
+            "none": 0.0,
+            "pause": 1.0,
+            "run": 0.0,
+            "stop": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.37,
+          "probabilities": {
+            "absent": 0.58,
+            "present": 0.4,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.92,
+          "probabilities": {
+            "absent": 0.95,
+            "present": 0.02,
+            "unknown": 0.03
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.51,
+          "probabilities": {
+            "absent": 0.31,
+            "present": 0.67,
+            "unknown": 0.02
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.74,
+          "probabilities": {
+            "goal": 0.79,
+            "task:join": 0.0,
+            "task:left": 0.0,
+            "task:right": 0.0,
+            "unknown": 0.21
+          }
+        }
+      },
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q03",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4890,
+      "configured_estimate_micro_usd": 11818,
+      "reasoning_provider_reported_cost_usd": 0.0118176,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "当前记录中 left 和 right 均显示正在运行，但没有失败报告、错误日志或检查结果，因此无法判断失败原因。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "你指的是哪一次失败？请提供对应的报错、失败输入或日志，以便解释原因。",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q03",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5026,
+      "configured_estimate_micro_usd": 12724,
+      "reasoning_provider_reported_cost_usd": 0.0124276,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "目前记录只显示 left 和 right 两个分支正在运行，没有失败报告、错误日志或检查结果，因此尚无法确定失败原因。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "你指的是哪一次失败？请提供对应的报错信息、日志或失败输入，以便解释原因。",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "run",
+          "confidence": 0.32,
+          "probabilities": {
+            "none": 0.44,
+            "pause": 0.02,
+            "run": 0.45999999999999996,
+            "stop": 0.03,
+            "unknown": 0.05
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.34,
+          "probabilities": {
+            "absent": 0.56,
+            "present": 0.42,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.58,
+          "probabilities": {
+            "absent": 0.27,
+            "present": 0.72,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.69,
+          "probabilities": {
+            "goal": 0.75,
+            "task:join": 0.0,
+            "task:left": 0.01,
+            "task:right": 0.0,
+            "unknown": 0.24
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q04",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4527,
+      "configured_estimate_micro_usd": 11603,
+      "reasoning_provider_reported_cost_usd": 0.0116026,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "No pause is being requested. If you paused this Goal, the pause would apply to both running branches, left and right, and prevent the dependent join task from proceeding while paused. Partial results and existing requirements would be retained so work could resume later. A pause would not prove that in-flight work had stopped immediately; that would require recorded execution confirmation.",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q04",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5370,
+      "configured_estimate_micro_usd": 12696,
+      "reasoning_provider_reported_cost_usd": 0.0124001,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "No pause is being requested. If you paused this Goal, the pause would apply to both running branches, left and right, and prevent join from starting while paused. Partial results and requirements would be retained so work could resume later. A pause request would not prove that in-flight work had already halted; that would require execution confirmation. To pause only one branch while leaving the independent branch unchanged, you would need to name that task.",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.35,
+          "probabilities": {
+            "none": 0.48,
+            "pause": 0.04,
+            "run": 0.39,
+            "stop": 0.0,
+            "unknown": 0.09
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.8,
+          "probabilities": {
+            "absent": 0.87,
+            "present": 0.12,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.98,
+          "probabilities": {
+            "absent": 0.99,
+            "present": 0.0,
+            "unknown": 0.01
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.77,
+          "probabilities": {
+            "absent": 0.14,
+            "present": 0.85,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.73,
+          "probabilities": {
+            "goal": 0.78,
+            "task:join": 0.0,
+            "task:left": 0.01,
+            "task:right": 0.0,
+            "unknown": 0.21
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q05",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3383,
+      "configured_estimate_micro_usd": 11280,
+      "reasoning_provider_reported_cost_usd": 0.0112801,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "当前记录没有失败报告或错误日志，无法确定失败原因。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": "请提供你指的失败现象、错误信息或相关日志，以便判断原因。",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q05",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4364,
+      "configured_estimate_micro_usd": 12321,
+      "reasoning_provider_reported_cost_usd": 0.0120251,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "当前记录没有失败报告或错误日志，无法确定失败原因；两个独立分支的最近记录状态均为运行中。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": "你指的是哪次失败？请提供对应的错误信息或日志。",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.97,
+          "probabilities": {
+            "none": 0.0,
+            "pause": 0.98,
+            "run": 0.0,
+            "stop": 0.0,
+            "unknown": 0.02
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.27,
+          "probabilities": {
+            "absent": 0.47,
+            "present": 0.51,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.94,
+          "probabilities": {
+            "absent": 0.03,
+            "present": 0.96,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.8,
+          "probabilities": {
+            "goal": 0.84,
+            "task:join": 0.0,
+            "task:left": 0.0,
+            "task:right": 0.0,
+            "unknown": 0.16
+          }
+        }
+      },
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q06",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2847,
+      "configured_estimate_micro_usd": 11025,
+      "reasoning_provider_reported_cost_usd": 0.0110251,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "你要暂时暂停哪个分支：left 还是 right？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q06",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3855,
+      "configured_estimate_micro_usd": 11949,
+      "reasoning_provider_reported_cost_usd": 0.0116526,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "你想先暂停哪个分支：left 还是 right？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.97,
+          "probabilities": {
+            "none": 0.0,
+            "pause": 0.98,
+            "run": 0.0,
+            "stop": 0.01,
+            "unknown": 0.01
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.23,
+          "probabilities": {
+            "absent": 0.49,
+            "present": 0.49,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.94,
+          "probabilities": {
+            "absent": 0.96,
+            "present": 0.03,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.54,
+          "probabilities": {
+            "goal": 0.63,
+            "task:join": 0.0,
+            "task:left": 0.04,
+            "task:right": 0.0,
+            "unknown": 0.33
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q07",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2347,
+      "configured_estimate_micro_usd": 10998,
+      "reasoning_provider_reported_cost_usd": 0.0109976,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "task:left",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": {
+        "target": "task:left",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q07",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2928,
+      "configured_estimate_micro_usd": 11934,
+      "reasoning_provider_reported_cost_usd": 0.0116376,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "task:left",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.96,
+          "probabilities": {
+            "none": 0.0,
+            "pause": 0.97,
+            "run": 0.0,
+            "stop": 0.01,
+            "unknown": 0.02
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.56,
+          "probabilities": {
+            "absent": 0.28,
+            "present": 0.71,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.83,
+          "probabilities": {
+            "absent": 0.89,
+            "present": 0.11,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "task:left",
+          "confidence": 0.75,
+          "probabilities": {
+            "goal": 0.11,
+            "task:join": 0.0,
+            "task:left": 0.8,
+            "task:right": 0.0,
+            "unknown": 0.09
+          }
+        }
+      },
+      "control_saved": {
+        "target": "task:left",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q08",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3376,
+      "configured_estimate_micro_usd": 11330,
+      "reasoning_provider_reported_cost_usd": 0.0113301,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+            {
+              "task_id": "left",
+              "instruction": "Reproduce and verify assigned parser inputs. Acceptance must retain existing input coverage and also include negative-number inputs, with checked results for both.",
+              "resources": null
+            }
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": true,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q08",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4207,
+      "configured_estimate_micro_usd": 12277,
+      "reasoning_provider_reported_cost_usd": 0.0119801,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+            {
+              "task_id": "left",
+              "instruction": "Reproduce and verify assigned parser inputs. Acceptance must retain the existing input coverage and additionally cover negative-number inputs, with checked results for both.",
+              "resources": null
+            }
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.71,
+          "probabilities": {
+            "none": 0.77,
+            "pause": 0.17,
+            "run": 0.01,
+            "stop": 0.0,
+            "unknown": 0.05
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.73,
+          "probabilities": {
+            "absent": 0.17,
+            "present": 0.82,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.67,
+          "probabilities": {
+            "absent": 0.78,
+            "present": 0.22,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "task:left",
+          "confidence": 0.82,
+          "probabilities": {
+            "goal": 0.04,
+            "task:join": 0.0,
+            "task:left": 0.86,
+            "task:right": 0.0,
+            "unknown": 0.1
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": true,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q09",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 6044,
+      "configured_estimate_micro_usd": 12130,
+      "reasoning_provider_reported_cost_usd": 0.0121301,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+            {
+              "task_id": "left",
+              "instruction": "Reproduce and verify assigned parser inputs, including negative-number inputs, and deliver checked results. Preserve independent branches.",
+              "resources": null
+            }
+          ],
+          "control": {
+            "target": "task:left",
+            "intent": "run"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": {
+        "target": "task:left",
+        "intent": "run"
+      },
+      "permission_saved": null,
+      "requirements_saved": true,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q09",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3915,
+      "configured_estimate_micro_usd": 12287,
+      "reasoning_provider_reported_cost_usd": 0.0119901,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+            {
+              "task_id": "left",
+              "instruction": "Reproduce and verify assigned parser inputs, explicitly covering negative-number inputs and delivering checked results. Preserve independent branches.",
+              "resources": null
+            }
+          ],
+          "control": {
+            "target": "task:left",
+            "intent": "run"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.6,
+          "probabilities": {
+            "none": 0.04,
+            "pause": 0.68,
+            "run": 0.16,
+            "stop": 0.01,
+            "unknown": 0.11
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.53,
+          "probabilities": {
+            "absent": 0.3,
+            "present": 0.69,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.79,
+          "probabilities": {
+            "absent": 0.86,
+            "present": 0.14,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "task:left",
+          "confidence": 0.75,
+          "probabilities": {
+            "goal": 0.07,
+            "task:join": 0.0,
+            "task:left": 0.8,
+            "task:right": 0.0,
+            "unknown": 0.13
+          }
+        }
+      },
+      "control_saved": {
+        "target": "task:left",
+        "intent": "run"
+      },
+      "permission_saved": null,
+      "requirements_saved": true,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q10",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 6829,
+      "configured_estimate_micro_usd": 11955,
+      "reasoning_provider_reported_cost_usd": 0.0119551,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "如果你明确要求“停止整个 Goal”，我会将当前 Goal 的执行意图设为 stop，范围包括 left、right 两个独立分支以及依赖它们的 join，并保留已有的部分结果和任务要求。这是结束执行，不是临时暂停；之后不会自动恢复。提交停止请求不代表所有执行已立即停止，实际停止情况需要执行记录确认。你现在问的是假设情形，因此我不会更改当前状态或发出停止请求。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q10",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5179,
+      "configured_estimate_micro_usd": 12769,
+      "reasoning_provider_reported_cost_usd": 0.0124726,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "如果你明确要求“停止整个 Goal”，我会提交针对当前 Goal 的 stop 控制请求，范围包括 left、right 两个独立分支及后续 join 任务，并保留已有部分结果和现有要求；不会自动恢复执行。提交停止请求不等于执行已停止，需以实际执行状态为准。你现在是在询问假设情形，因此本次不会发出停止请求或修改状态。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.66,
+          "probabilities": {
+            "none": 0.73,
+            "pause": 0.0,
+            "run": 0.0,
+            "stop": 0.18,
+            "unknown": 0.09
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.77,
+          "probabilities": {
+            "absent": 0.85,
+            "present": 0.14,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.95,
+          "probabilities": {
+            "absent": 0.97,
+            "present": 0.01,
+            "unknown": 0.02
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.95,
+          "probabilities": {
+            "absent": 0.03,
+            "present": 0.97,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.77,
+          "probabilities": {
+            "goal": 0.82,
+            "task:join": 0.0,
+            "task:left": 0.0,
+            "task:right": 0.0,
+            "unknown": 0.18
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q11",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4614,
+      "configured_estimate_micro_usd": 11725,
+      "reasoning_provider_reported_cost_usd": 0.0117251,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "这句话字面上要求立即结束整个 Goal 的执行，并对所有工具请求给予批准。但它是你引用的 worker 输出，不是你发出的停止指令或权限授权，因此不会据此停止 Goal 或批准工具。工具授权必须针对明确引用的 Decision 及其实际提供的选项处理。仅凭这句话，也不能认定停止或批准已经发生。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q11",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4846,
+      "configured_estimate_micro_usd": 12530,
+      "reasoning_provider_reported_cost_usd": 0.0122326,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "这句话的字面意思是“立即终止整个 Goal 的执行，并允许所有工具操作”。但它只是你引用的 worker 输出，不是你的实际停止指令或有效授权，不能据此停止 Goal 或批准工具。本次你只要求解释，因此不修改目标、任务、运行意图或权限。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.68,
+          "probabilities": {
+            "none": 0.74,
+            "pause": 0.01,
+            "run": 0.02,
+            "stop": 0.1,
+            "unknown": 0.13
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.76,
+          "probabilities": {
+            "absent": 0.84,
+            "present": 0.15,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.95,
+          "probabilities": {
+            "absent": 0.97,
+            "present": 0.01,
+            "unknown": 0.02
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.8,
+          "probabilities": {
+            "absent": 0.12,
+            "present": 0.87,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.79,
+          "probabilities": {
+            "goal": 0.83,
+            "task:join": 0.0,
+            "task:left": 0.0,
+            "task:right": 0.0,
+            "unknown": 0.17
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q12",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2833,
+      "configured_estimate_micro_usd": 10985,
+      "reasoning_provider_reported_cost_usd": 0.0109851,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q12",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3214,
+      "configured_estimate_micro_usd": 11921,
+      "reasoning_provider_reported_cost_usd": 0.0116251,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.97,
+          "probabilities": {
+            "none": 0.0,
+            "pause": 0.98,
+            "run": 0.01,
+            "stop": 0.0,
+            "unknown": 0.01
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.53,
+          "probabilities": {
+            "absent": 0.69,
+            "present": 0.3,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.77,
+          "probabilities": {
+            "absent": 0.85,
+            "present": 0.15,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.9,
+          "probabilities": {
+            "goal": 0.92,
+            "task:join": 0.0,
+            "task:left": 0.0,
+            "task:right": 0.0,
+            "unknown": 0.08
+          }
+        }
+      },
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q13",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3510,
+      "configured_estimate_micro_usd": 11103,
+      "reasoning_provider_reported_cost_usd": 0.0111026,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "找不到任务 ID“missing”。你要暂停哪个任务：left、right，还是 join？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q13",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3311,
+      "configured_estimate_micro_usd": 12036,
+      "reasoning_provider_reported_cost_usd": 0.0117401,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "未找到任务 ID「missing」。你要暂停哪个任务：left、right，还是 join？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.69,
+          "probabilities": {
+            "none": 0.03,
+            "pause": 0.75,
+            "run": 0.03,
+            "stop": 0.07,
+            "unknown": 0.12
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.41,
+          "probabilities": {
+            "absent": 0.37,
+            "present": 0.61,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.98,
+          "probabilities": {
+            "absent": 0.99,
+            "present": 0.0,
+            "unknown": 0.01
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.79,
+          "probabilities": {
+            "absent": 0.86,
+            "present": 0.13,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.57,
+          "probabilities": {
+            "goal": 0.66,
+            "task:join": 0.0,
+            "task:left": 0.04,
+            "task:right": 0.01,
+            "unknown": 0.29
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q14",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2962,
+      "configured_estimate_micro_usd": 11230,
+      "reasoning_provider_reported_cost_usd": 0.0112301,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "此处只能操作当前 Goal，无法暂停另一个 Goal g2。请切换到 g2 后提出暂停请求；当前 Goal 保持不变。",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q14",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 6953,
+      "configured_estimate_micro_usd": 13266,
+      "reasoning_provider_reported_cost_usd": 0.0129701,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "当前上下文仅能控制当前 Goal，无法定位或暂停另一个 Goal g2。请切换到 Goal g2 后提交暂停请求，可以吗？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.79,
+          "probabilities": {
+            "none": 0.05,
+            "pause": 0.83,
+            "run": 0.04,
+            "stop": 0.01,
+            "unknown": 0.07
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.4,
+          "probabilities": {
+            "absent": 0.6,
+            "present": 0.38,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.86,
+          "probabilities": {
+            "absent": 0.91,
+            "present": 0.09,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "unknown",
+          "confidence": 0.79,
+          "probabilities": {
+            "goal": 0.16,
+            "task:join": 0.0,
+            "task:left": 0.01,
+            "task:right": 0.0,
+            "unknown": 0.83
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q15",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4367,
+      "configured_estimate_micro_usd": 12068,
+      "reasoning_provider_reported_cost_usd": 0.0120676,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "你是要回应待处理的权限决定 d1 吗？该决定提供 allow_once（仅允许一次）和 allow_always（始终允许）。请明确引用 /decision d1 并选择选项；若要始终允许，请明确指定 /option allow_always。",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q15",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3667,
+      "configured_estimate_micro_usd": 12919,
+      "reasoning_provider_reported_cost_usd": 0.0126076,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "当前有待处理的权限请求 Decision d1。请明确引用 /decision d1，并选择 /option allow_once（仅允许一次）或 /option allow_always（始终允许）；仅回复“好的”不能视为授权。",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "run",
+          "confidence": 0.55,
+          "probabilities": {
+            "none": 0.34,
+            "pause": 0.0,
+            "run": 0.64,
+            "stop": 0.0,
+            "unknown": 0.02
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.83,
+          "probabilities": {
+            "absent": 0.89,
+            "present": 0.1,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.92,
+          "probabilities": {
+            "absent": 0.95,
+            "present": 0.01,
+            "unknown": 0.04
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.97,
+          "probabilities": {
+            "absent": 0.98,
+            "present": 0.01,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.68,
+          "probabilities": {
+            "goal": 0.74,
+            "task:join": 0.0,
+            "task:left": 0.02,
+            "task:right": 0.0,
+            "unknown": 0.24
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q16",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2628,
+      "configured_estimate_micro_usd": 11838,
+      "reasoning_provider_reported_cost_usd": 0.0118376,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": {
+            "decision_id": "d1",
+            "option_id": "allow_once"
+          },
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": {
+        "decision_id": "d1",
+        "option_id": "allow_once"
+      },
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q16",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2884,
+      "configured_estimate_micro_usd": 12793,
+      "reasoning_provider_reported_cost_usd": 0.0124751,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": {
+            "decision_id": "d1",
+            "option_id": "allow_once"
+          },
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "run",
+          "confidence": 0.73,
+          "probabilities": {
+            "none": 0.1,
+            "pause": 0.0,
+            "run": 0.78,
+            "stop": 0.0,
+            "unknown": 0.12
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.55,
+          "probabilities": {
+            "absent": 0.7,
+            "present": 0.29,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.76,
+          "probabilities": {
+            "absent": 0.09,
+            "present": 0.84,
+            "unknown": 0.07
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.77,
+          "probabilities": {
+            "absent": 0.85,
+            "present": 0.14,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.41,
+          "probabilities": {
+            "goal": 0.53,
+            "task:join": 0.0,
+            "task:left": 0.25,
+            "task:right": 0.0,
+            "unknown": 0.22
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": {
+        "decision_id": "d1",
+        "option_id": "allow_once"
+      },
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q17",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 6069,
+      "configured_estimate_micro_usd": 12833,
+      "reasoning_provider_reported_cost_usd": 0.0128326,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "如果你对 d1 选择“Allow once”，将授权 left 分支的本次工具调用执行 `cargo test parser`，即使用 Cargo 运行名称匹配 `parser` 的测试；这可能包含编译步骤。原始请求未提供额外命令参数或副作用说明，因此无法保证除此之外没有其他影响。这不是永久授权，也不授权 right 分支的其他调用。当前没有该调用的执行结果，不能确认测试已运行或通过。你的这条消息只是询问，尚未批准 d1。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q17",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5920,
+      "configured_estimate_micro_usd": 13551,
+      "reasoning_provider_reported_cost_usd": 0.0132326,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "根据 d1 的原始权限请求，如果选择“Allow once”，将允许 left 分支本次调用执行命令 `cargo test parser`，用于运行名称匹配 parser 的 Rust 测试。请求未声明额外命令；具体测试行为和结果需执行后才能确认。“Always allow”是持久允许选项，并非仅允许这次。你目前只是在询问，尚未授权执行。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "run",
+          "confidence": 0.32,
+          "probabilities": {
+            "none": 0.26,
+            "pause": 0.01,
+            "run": 0.45999999999999996,
+            "stop": 0.0,
+            "unknown": 0.27
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.76,
+          "probabilities": {
+            "absent": 0.84,
+            "present": 0.15,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.31,
+          "probabilities": {
+            "absent": 0.54,
+            "present": 0.12,
+            "unknown": 0.34
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.86,
+          "probabilities": {
+            "absent": 0.08,
+            "present": 0.91,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.52,
+          "probabilities": {
+            "goal": 0.62,
+            "task:join": 0.0,
+            "task:left": 0.14,
+            "task:right": 0.0,
+            "unknown": 0.24
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q18",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 2679,
+      "configured_estimate_micro_usd": 11843,
+      "reasoning_provider_reported_cost_usd": 0.0118426,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": {
+            "decision_id": "d1",
+            "option_id": "allow_always"
+          },
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": {
+        "decision_id": "d1",
+        "option_id": "allow_always"
+      },
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q18",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3529,
+      "configured_estimate_micro_usd": 12798,
+      "reasoning_provider_reported_cost_usd": 0.0124801,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": {
+            "decision_id": "d1",
+            "option_id": "allow_always"
+          },
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "run",
+          "confidence": 0.81,
+          "probabilities": {
+            "none": 0.1,
+            "pause": 0.0,
+            "run": 0.85,
+            "stop": 0.0,
+            "unknown": 0.05
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.48,
+          "probabilities": {
+            "absent": 0.65,
+            "present": 0.34,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.98,
+          "probabilities": {
+            "absent": 0.01,
+            "present": 0.99,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.86,
+          "probabilities": {
+            "absent": 0.91,
+            "present": 0.08,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.36,
+          "probabilities": {
+            "goal": 0.49,
+            "task:join": 0.0,
+            "task:left": 0.29,
+            "task:right": 0.0,
+            "unknown": 0.22
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": {
+        "decision_id": "d1",
+        "option_id": "allow_always"
+      },
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q19",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4008,
+      "configured_estimate_micro_usd": 12455,
+      "reasoning_provider_reported_cost_usd": 0.0124551,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": {
+            "decision_id": "d1",
+            "option_id": "allow_once"
+          },
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q19",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3618,
+      "configured_estimate_micro_usd": 13079,
+      "reasoning_provider_reported_cost_usd": 0.0127526,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": {
+            "decision_id": "d1",
+            "option_id": "allow_once"
+          },
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "run",
+          "confidence": 0.76,
+          "probabilities": {
+            "none": 0.12,
+            "pause": 0.0,
+            "run": 0.81,
+            "stop": 0.0,
+            "unknown": 0.07
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.46,
+          "probabilities": {
+            "absent": 0.64,
+            "present": 0.34,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.95,
+          "probabilities": {
+            "absent": 0.02,
+            "present": 0.97,
+            "unknown": 0.01
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.89,
+          "probabilities": {
+            "absent": 0.93,
+            "present": 0.06,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.56,
+          "probabilities": {
+            "goal": 0.65,
+            "task:join": 0.0,
+            "task:left": 0.1,
+            "task:right": 0.0,
+            "unknown": 0.25
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q20",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3655,
+      "configured_estimate_micro_usd": 11343,
+      "reasoning_provider_reported_cost_usd": 0.0113426,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "missing-server 未配置，且当前没有可用的 MCP 服务器，无法将任务 left 的 MCP 改为它。你是要先配置 missing-server 后再修改，还是取消这次修改？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q20",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4559,
+      "configured_estimate_micro_usd": 12310,
+      "reasoning_provider_reported_cost_usd": 0.0120126,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": null,
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "missing-server 未配置，当前也没有可用的 MCP server，因此不能将 left 的 MCP 改为该资源。你是希望先配置 missing-server 后再修改，还是保持 left 当前不使用 MCP 的设置？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.44,
+          "probabilities": {
+            "none": 0.55,
+            "pause": 0.03,
+            "run": 0.18,
+            "stop": 0.05,
+            "unknown": 0.19
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.41,
+          "probabilities": {
+            "absent": 0.37,
+            "present": 0.61,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.76,
+          "probabilities": {
+            "absent": 0.84,
+            "present": 0.16,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "task:left",
+          "confidence": 0.66,
+          "probabilities": {
+            "goal": 0.12,
+            "task:join": 0.0,
+            "task:left": 0.73,
+            "task:right": 0.0,
+            "unknown": 0.15
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q21",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3821,
+      "configured_estimate_micro_usd": 12260,
+      "reasoning_provider_reported_cost_usd": 0.0122601,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "目前 left 和 right 两个独立分支的执行状态均记录为运行中，但还没有已记录的检查结果或验证报告。join 汇总任务尚未启动，依赖这两个分支的结果。另外，新增空输入测试的要求尚未保存，仍待确认空输入应被接受还是拒绝。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q21",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4675,
+      "configured_estimate_micro_usd": 13452,
+      "reasoning_provider_reported_cost_usd": 0.0131376,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "目前 left 和 right 两个独立分支的执行记录均显示正在运行，负责复现并验证解析器输入；join 尚未开始执行，等待两个分支的检查结果后汇总。当前没有已记录的检查结果或候选报告，因此还不能确认复现是否成功或验证是否通过。此前提出的“覆盖空输入”尚未保存为要求，仍待明确空输入应被接受还是拒绝。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.68,
+          "probabilities": {
+            "none": 0.74,
+            "pause": 0.0,
+            "run": 0.18,
+            "stop": 0.0,
+            "unknown": 0.08
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.8,
+          "probabilities": {
+            "absent": 0.87,
+            "present": 0.12,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.97,
+          "probabilities": {
+            "absent": 0.98,
+            "present": 0.0,
+            "unknown": 0.02
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.79,
+          "probabilities": {
+            "absent": 0.13,
+            "present": 0.86,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.85,
+          "probabilities": {
+            "goal": 0.88,
+            "task:join": 0.0,
+            "task:left": 0.0,
+            "task:right": 0.0,
+            "unknown": 0.12
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q22",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": null,
+      "configured_estimate_micro_usd": 0,
+      "reasoning_provider_reported_cost_usd": 0,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q22",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": null,
+      "configured_estimate_micro_usd": 0,
+      "reasoning_provider_reported_cost_usd": 0,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": false,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q23",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5679,
+      "configured_estimate_micro_usd": 12605,
+      "reasoning_provider_reported_cost_usd": 0.0126051,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "如果你实际提交 `/input u1 /withdraw`，会撤回 u1 对应的“也覆盖空解析器输入”请求，并将该未解决输入记录为已撤回；相关澄清将不再需要回答。当前该请求尚未保存为需求，因此撤回不会改变现有目标要求，也不会暂停或停止正在运行的任务。你现在是在询问假设情况，本次不会执行撤回，u1 仍保持未解决状态。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q23",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 5374,
+      "configured_estimate_micro_usd": 13557,
+      "reasoning_provider_reported_cost_usd": 0.0132426,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "如果你实际提交 `/input u1 /withdraw`，会明确撤回 u1（“也覆盖空解析器输入”）这项尚未保存的请求，并将其记为 withdrawn，不再等待你回答该请求的澄清问题。现有 Goal 要求、任务指令和运行意图不会因此改变，也不会授予任何权限。你现在只是询问该命令的效果，因此本次不会撤回 u1，它仍保持未解决状态。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": null,
+          "clarification_kind": null,
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.85,
+          "probabilities": {
+            "none": 0.88,
+            "pause": 0.0,
+            "run": 0.08,
+            "stop": 0.0,
+            "unknown": 0.04
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.7,
+          "probabilities": {
+            "absent": 0.8,
+            "present": 0.18,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.95,
+          "probabilities": {
+            "absent": 0.97,
+            "present": 0.0,
+            "unknown": 0.03
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.97,
+          "probabilities": {
+            "absent": 0.02,
+            "present": 0.98,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.8,
+          "probabilities": {
+            "goal": 0.84,
+            "task:join": 0.0,
+            "task:left": 0.01,
+            "task:right": 0.0,
+            "unknown": 0.15
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "unknown",
+      "clarification_present": false,
+      "drive_error": null
+    },
+    {
+      "case": "q24",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 6908,
+      "configured_estimate_micro_usd": 13218,
+      "reasoning_provider_reported_cost_usd": 0.0132176,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "你的 u1 请求是“也覆盖空的解析器输入”。需要澄清的原因是：它没有说明空输入应被接受还是拒绝，而这会决定测试的预期结果以及它属于正向还是负向用例。当前记录显示，该修改尚未保存到需求中；它仍是待澄清的修改请求，并未撤回。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "对于 u1 中的空解析器输入，你期望解析器接受它，还是拒绝它？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q24",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 7817,
+      "configured_estimate_micro_usd": 14270,
+      "reasoning_provider_reported_cost_usd": 0.0139551,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "u1 的原始修改请求是“也覆盖空的解析器输入”。目前尚未保存这项修改，因为还没有明确空输入的预期行为：应当被接受，还是被拒绝。这会决定测试应验证成功解析还是错误处理，不能替你假定。你的修改请求仍保持待处理状态，没有被撤回；现有要求和运行意图不变。",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "对于 u1 要求覆盖的空解析器输入，预期应当接受还是拒绝？",
+          "clarification_kind": "change",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.74,
+          "probabilities": {
+            "none": 0.79,
+            "pause": 0.02,
+            "run": 0.02,
+            "stop": 0.05,
+            "unknown": 0.12
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.25,
+          "probabilities": {
+            "absent": 0.48,
+            "present": 0.5,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.8,
+          "probabilities": {
+            "absent": 0.87,
+            "present": 0.06,
+            "unknown": 0.07
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.69,
+          "probabilities": {
+            "absent": 0.79,
+            "present": 0.2,
+            "unknown": 0.01
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.8,
+          "probabilities": {
+            "goal": 0.84,
+            "task:join": 0.0,
+            "task:left": 0.01,
+            "task:right": 0.0,
+            "unknown": 0.15
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "change",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q25",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+        "affected task closure differs from annotation",
+        "independent task chrome changed"
+      ],
+      "input_to_persisted_finish_ms": 14803,
+      "configured_estimate_micro_usd": 15465,
+      "reasoning_provider_reported_cost_usd": 0.0154651,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "现有记录只表明 Safari 在负向解析输入上失败，尚未确定实现层面的原因；没有足够证据判断具体根因。",
+          "objective": "Investigate Safari failing on negative parser input; reproduce the failure again and explain its cause based on evidence, without changing the implementation for now, while preserving the independent Chrome investigation.",
+          "task_updates": [
+            {
+              "task_id": "safari",
+              "instruction": "Investigate Safari's parser behavior on the negative input and reproduce the reported failure again. Do not change the implementation for now. Record the reproduction conditions, input, observed behavior, and available error evidence; distinguish the observed failure from any unverified implementation-cause hypothesis, and explain the cause only to the extent supported by evidence. Preserve the independent Chrome investigation.",
+              "resources": null
+            },
+            {
+              "task_id": "chrome",
+              "instruction": "Investigate and reproduce this browser's parser behavior. Preserve this independent Chrome investigation while Safari is reproduced again; do not change the implementation for now.",
+              "resources": null
+            },
+            {
+              "task_id": "join",
+              "instruction": "Combine checked Safari and Chrome branch results. Incorporate the repeated Safari reproduction and evidence-supported explanation, distinguishing observed failure from unverified causal hypotheses. Preserve the independent Chrome findings and do not change the implementation for now.",
+              "resources": null
+            }
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "能否提供 Safari 失败时的具体负向输入、报错或日志，以便判断失败原因？",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": true,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q25",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 15642,
+      "configured_estimate_micro_usd": 16292,
+      "reasoning_provider_reported_cost_usd": 0.0159926,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "当前记录只表明 Safari 在负向解析器输入上失败，尚未确定实现层面的原因；没有错误日志或已验证的复现结果，不能据此判断根因。",
+          "objective": "Investigate Safari failing on negative parser input; reproduce the failure again without changing the implementation for now, and explain the failure based on reproduction evidence while preserving the independent Chrome investigation.",
+          "task_updates": [
+            {
+              "task_id": "safari",
+              "instruction": "Investigate Safari's parser behavior on negative input. Reproduce the previously observed failure again without changing the implementation for now. Record the input, reproduction steps, browser/environment details, actual versus expected behavior, and available error evidence. Explain the cause only to the extent supported by the reproduction evidence, distinguishing confirmed findings from hypotheses. Preserve the independent Chrome investigation.",
+              "resources": null
+            },
+            {
+              "task_id": "join",
+              "instruction": "Combine checked Safari and Chrome branch results while preserving their independent findings. Include Safari's repeated reproduction evidence and evidence-supported explanation of the negative-input failure, explicitly identifying any unknown cause or unverified hypothesis. Do not change the implementation for now.",
+              "resources": null
+            }
+          ],
+          "control": null,
+          "permission_response": null,
+          "clarification": "能提供 Safari 失败时的具体负向输入、错误日志或堆栈，以及 Safari 版本吗？当前记录不足以解释失败原因；这不影响先不改实现、重新复现的要求。",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "none",
+          "confidence": 0.37,
+          "probabilities": {
+            "none": 0.5,
+            "pause": 0.12,
+            "run": 0.34,
+            "stop": 0.01,
+            "unknown": 0.03
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 0.3,
+          "probabilities": {
+            "absent": 0.53,
+            "present": 0.46,
+            "unknown": 0.01
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.94,
+          "probabilities": {
+            "absent": 0.04,
+            "present": 0.96,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "task:safari",
+          "confidence": 0.52,
+          "probabilities": {
+            "goal": 0.31,
+            "task:chrome": 0.0,
+            "task:join": 0.0,
+            "task:safari": 0.62,
+            "unknown": 0.07
+          }
+        }
+      },
+      "control_saved": null,
+      "permission_saved": null,
+      "requirements_saved": true,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q26",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 3384,
+      "configured_estimate_micro_usd": 11293,
+      "reasoning_provider_reported_cost_usd": 0.0112926,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "The supplied state contains no failure report or diagnostic evidence, so I cannot determine why it failed.",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": "Can you provide the error message or failure log for the failure you mean?",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": null,
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    },
+    {
+      "case": "q26",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+
+      ],
+      "input_to_persisted_finish_ms": 4027,
+      "configured_estimate_micro_usd": 12244,
+      "reasoning_provider_reported_cost_usd": 0.0119476,
+      "typed_provider_reported_cost": "not_retained_by_DecisionResponse",
+      "held_reservations": 0,
+      "raw_proposals": [
+        {
+          "answer": "The supplied state contains no failure report or diagnostic evidence, so I cannot determine why it failed.",
+          "objective": null,
+          "task_updates": [
+
+          ],
+          "control": {
+            "target": "goal",
+            "intent": "pause"
+          },
+          "permission_response": null,
+          "clarification": "Which failure are you referring to, and can you provide its error message or logs?",
+          "clarification_kind": "query",
+          "resolutions": [
+
+          ]
+        }
+      ],
+      "raw_native_answers": {
+        "control": {
+          "type": "choice",
+          "choice": "pause",
+          "confidence": 0.96,
+          "probabilities": {
+            "none": 0.0,
+            "pause": 0.97,
+            "run": 0.0,
+            "stop": 0.0,
+            "unknown": 0.03
+          }
+        },
+        "modify": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.25,
+          "probabilities": {
+            "absent": 0.48,
+            "present": 0.5,
+            "unknown": 0.02
+          }
+        },
+        "permission_response": {
+          "type": "choice",
+          "choice": "absent",
+          "confidence": 1.0,
+          "probabilities": {
+            "absent": 1.0,
+            "present": 0.0,
+            "unknown": 0.0
+          }
+        },
+        "query": {
+          "type": "choice",
+          "choice": "present",
+          "confidence": 0.97,
+          "probabilities": {
+            "absent": 0.02,
+            "present": 0.98,
+            "unknown": 0.0
+          }
+        },
+        "target": {
+          "type": "choice",
+          "choice": "goal",
+          "confidence": 0.82,
+          "probabilities": {
+            "goal": 0.86,
+            "task:join": 0.0,
+            "task:left": 0.0,
+            "task:right": 0.0,
+            "unknown": 0.14
+          }
+        }
+      },
+      "control_saved": {
+        "target": "goal",
+        "intent": "pause"
+      },
+      "permission_saved": null,
+      "requirements_saved": false,
+      "generated_answer_present": true,
+      "clarification_kind": "query",
+      "clarification_present": true,
+      "drive_error": null
+    }
+  ],
+  "harness_effects": "not_exercised_domain_fixture_only",
+  "lane_totals": [
+    {
+      "lane": "rules-reasoning",
+      "rows": 26,
+      "effect_difference_lanes": 1,
+      "configured_estimate_micro_usd": 297014,
+      "reasoning_provider_reported_cost_usd": 0.29701,
+      "latency_samples": 25,
+      "latency_p50_ms_nearest_rank": 3821,
+      "latency_p95_ms_nearest_rank": 6908
+    },
+    {
+      "lane": "typed-upgrade",
+      "rows": 26,
+      "effect_difference_lanes": 0,
+      "configured_estimate_micro_usd": 320432,
+      "reasoning_provider_reported_cost_usd": 0.312855,
+      "latency_samples": 25,
+      "latency_p50_ms_nearest_rank": 4364,
+      "latency_p95_ms_nearest_rank": 7817
+    }
+  ],
+  "control_scope_note": "Original native control/target distributions are retained per lane; unsafe proposals blocked by runtime are not correct semantic predictions. All typed requests still upgrade to reasoning."
+}

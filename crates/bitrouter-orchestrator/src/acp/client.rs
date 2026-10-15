@@ -345,7 +345,7 @@ struct RawNotificationSubscribers {
 
 #[derive(Default)]
 struct RawNotificationState {
-    subscribers: Vec<mpsc::UnboundedSender<SequencedSessionNotification>>,
+    subscribers: Vec<(mpsc::UnboundedSender<SequencedSessionNotification>, bool)>,
     last_sequence: u64,
     closed: bool,
 }
@@ -353,7 +353,17 @@ struct RawNotificationState {
 #[derive(Clone)]
 struct SequencedSessionNotification {
     sequence: u64,
-    notification: SessionNotification,
+    activity: RawSessionActivity,
+}
+
+#[derive(Clone)]
+enum RawSessionActivity {
+    Notification(SessionNotification),
+    Permission {
+        session_id: String,
+        permission: PendingPermission,
+    },
+    Boundary,
 }
 
 /// One lossless lifecycle-stream position for an opened native session.
@@ -368,6 +378,9 @@ pub struct SequencedSessionUpdate {
     /// Update for the selected native session, or `None` for a boundary-only
     /// position that still advances ordering.
     pub update: Option<SessionUpdate>,
+    /// Permission on an explicitly owned ordered controller subscription.
+    /// Ordinary notification subscriptions never receive this resolver.
+    pub permission: Option<PendingPermission>,
 }
 
 /// A prompt response paired with the last notification position processed
@@ -443,6 +456,7 @@ impl LifecycleNotifications {
                         SequencedSessionUpdate {
                             sequence: state.response_boundary,
                             update: Some(update),
+                            permission: None,
                         },
                         state,
                     ));
@@ -453,6 +467,7 @@ impl LifecycleNotifications {
                         SequencedSessionUpdate {
                             sequence: state.response_boundary,
                             update: None,
+                            permission: None,
                         },
                         state,
                     ));
@@ -483,25 +498,23 @@ impl LifecycleNotifications {
                     if entry.sequence == state.response_boundary {
                         state.replay_complete = true;
                     }
-                    let update = (entry.notification.session_id.0.as_ref()
-                        == state.session_id.as_str())
-                    .then_some(entry.notification.update);
+                    let (update, permission) = session_activity(entry.activity, &state.session_id);
                     return Some((
                         SequencedSessionUpdate {
                             sequence: entry.sequence,
                             update,
+                            permission,
                         },
                         state,
                     ));
                 }
 
-                let update = (entry.notification.session_id.0.as_ref()
-                    == state.session_id.as_str())
-                .then_some(entry.notification.update);
+                let (update, permission) = session_activity(entry.activity, &state.session_id);
                 return Some((
                     SequencedSessionUpdate {
                         sequence: entry.sequence,
                         update,
+                        permission,
                     },
                     state,
                 ));
@@ -510,20 +523,45 @@ impl LifecycleNotifications {
     }
 }
 
+fn session_activity(
+    activity: RawSessionActivity,
+    session_id: &str,
+) -> (Option<SessionUpdate>, Option<PendingPermission>) {
+    match activity {
+        RawSessionActivity::Notification(notification)
+            if notification.session_id.0.as_ref() == session_id =>
+        {
+            (Some(notification.update), None)
+        }
+        RawSessionActivity::Permission {
+            session_id: actual,
+            permission,
+        } if actual == session_id => (None, Some(permission)),
+        _ => (None, None),
+    }
+}
+
 impl RawNotificationSubscribers {
-    fn subscribe(&self) -> (mpsc::UnboundedReceiver<SequencedSessionNotification>, u64) {
+    fn subscribe(
+        &self,
+        permissions: bool,
+    ) -> (mpsc::UnboundedReceiver<SequencedSessionNotification>, u64) {
         let (sender, receiver) = mpsc::unbounded();
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
         if !state.closed {
-            state.subscribers.push(sender);
+            state.subscribers.push((sender, permissions));
         }
         (receiver, state.last_sequence)
     }
 
     fn publish(&self, notification: SessionNotification) {
+        self.publish_activity(RawSessionActivity::Notification(notification));
+    }
+
+    fn publish_activity(&self, activity: RawSessionActivity) {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
@@ -534,11 +572,22 @@ impl RawNotificationSubscribers {
         state.last_sequence = state.last_sequence.saturating_add(1);
         let entry = SequencedSessionNotification {
             sequence: state.last_sequence,
-            notification,
+            activity,
         };
         state.subscribers = std::mem::take(&mut state.subscribers)
             .into_iter()
-            .filter_map(|sender| sender.unbounded_send(entry.clone()).ok().map(|()| sender))
+            .filter_map(|(sender, permissions)| {
+                let mut delivered = entry.clone();
+                if !permissions
+                    && matches!(delivered.activity, RawSessionActivity::Permission { .. })
+                {
+                    delivered.activity = RawSessionActivity::Boundary;
+                }
+                sender
+                    .unbounded_send(delivered)
+                    .ok()
+                    .map(|()| (sender, permissions))
+            })
             .collect();
     }
 
@@ -1320,8 +1369,13 @@ impl AcpClient {
     pub fn subscribe_raw_notifications(
         &self,
     ) -> std::pin::Pin<Box<dyn Stream<Item = SessionNotification> + Send>> {
-        let (receiver, _) = self.raw_notifications.subscribe();
-        Box::pin(receiver.map(|entry| entry.notification))
+        let (receiver, _) = self.raw_notifications.subscribe(false);
+        Box::pin(receiver.filter_map(|entry| {
+            futures::future::ready(match entry.activity {
+                RawSessionActivity::Notification(notification) => Some(notification),
+                _ => None,
+            })
+        }))
     }
 
     /// Subscribe before one `session/new`, `session/load`, or `session/resume`
@@ -1332,11 +1386,29 @@ impl AcpClient {
     /// This stream is reliable per subscriber and closes when the ACP driver
     /// ends, even if another `AcpClient` clone remains alive.
     pub fn subscribe_lifecycle_notifications(&self) -> LifecycleNotifications {
-        let (receiver, subscription_boundary) = self.raw_notifications.subscribe();
+        let (receiver, subscription_boundary) = self.raw_notifications.subscribe(false);
         LifecycleNotifications {
             receiver,
             subscription_boundary,
         }
+    }
+
+    /// Own permissions and notifications on one reliable ordered lifecycle
+    /// stream. Refuses a second permission consumer; legacy subscriptions
+    /// receive position markers without permission resolvers.
+    pub fn subscribe_lifecycle_with_permissions(&self) -> anyhow::Result<LifecycleNotifications> {
+        let receiver = self
+            .permissions_rx
+            .lock()
+            .map_err(|_| anyhow::anyhow!("permission receiver lock poisoned"))?
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("permission stream already has an owner"))?;
+        drop(receiver);
+        let (receiver, subscription_boundary) = self.raw_notifications.subscribe(true);
+        Ok(LifecycleNotifications {
+            receiver,
+            subscription_boundary,
+        })
     }
 
     /// Take the stream of pending permission requests. Single-consumer: the
@@ -1590,6 +1662,7 @@ async fn drive(
     let notif_usage = plane.usage.clone();
     let handler_perm_tx = plane.perm_tx.clone();
     let handler_permissions = Arc::clone(&plane.permissions);
+    let handler_raw_notifications = Arc::clone(&plane.raw_notifications);
     let loop_permissions = Arc::clone(&plane.permissions);
     let lifecycle_raw_notifications = Arc::clone(&plane.raw_notifications);
 
@@ -1644,6 +1717,7 @@ async fn drive(
                   connection: ConnectionTo<Agent>| {
                 let perm_tx = handler_perm_tx.clone();
                 let permissions = Arc::clone(&handler_permissions);
+                let raw_notifications = Arc::clone(&handler_raw_notifications);
                 async move {
                     let request_id = uuid::Uuid::new_v4().to_string();
                     // Captured before the payload is moved into the item: the
@@ -1669,6 +1743,10 @@ async fn drive(
                         item_tx,
                     );
                     permissions.record(&pending_item, reject.clone(), session_id);
+                    raw_notifications.publish_activity(RawSessionActivity::Permission {
+                        session_id: request.session_id.0.to_string(),
+                        permission: pending_item.clone(),
+                    });
                     // If no one is listening on the permissions stream the item
                     // is dropped immediately and `item_rx` resolves to the
                     // reject option.
@@ -2847,6 +2925,56 @@ mod tests {
                 "each is answered with the agent's own reject option, got {outcome:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn ordered_permission_subscription_has_one_owner_and_legacy_markers_do_not_keep_consent_alive()
+    -> anyhow::Result<()> {
+        let (client, log) =
+            connect_to_stub(PromptBehaviour::AskPermission, ClientOptions::default()).await;
+        let ordered = client.subscribe_lifecycle_with_permissions()?;
+        anyhow::ensure!(
+            client.subscribe_lifecycle_with_permissions().is_err(),
+            "second permission owner accepted"
+        );
+        anyhow::ensure!(
+            client.subscribe_permissions().next().await.is_none(),
+            "legacy permission stream retained ownership"
+        );
+        let legacy = client.subscribe_lifecycle_notifications();
+        let session = client.new_session(PathBuf::from("/"), vec![]).await?;
+        let mut ordered = ordered.session_updates_sequenced(&session);
+        let mut legacy = legacy.session_updates_sequenced(&session);
+        let clone = client.clone();
+        let turn =
+            tokio::spawn(async move { clone.prompt(&session.acp_session_id, "do it").await });
+        let (sequence, pending) = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(entry) = ordered.next().await {
+                if let Some(permission) = entry.permission {
+                    return Ok((entry.sequence, permission));
+                }
+            }
+            anyhow::bail!("ordered permission stream closed")
+        })
+        .await??;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(entry) = legacy.next().await {
+                anyhow::ensure!(
+                    entry.permission.is_none(),
+                    "legacy observer received a permission resolver"
+                );
+                if entry.sequence == sequence {
+                    return Ok(());
+                }
+            }
+            anyhow::bail!("legacy observer missed the permission position marker")
+        })
+        .await??;
+        drop(pending);
+        tokio::time::timeout(Duration::from_secs(2), turn).await???;
+        assert_eq!(log.await_answers(1).await, vec!["rej".to_string()]);
+        client.shutdown().await?;
+        Ok(())
     }
 
     /// I1 (drop arm): dropping every clone still denies — the ledger's weak

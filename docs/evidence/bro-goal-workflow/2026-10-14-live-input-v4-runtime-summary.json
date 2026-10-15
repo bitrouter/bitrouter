@@ -1,0 +1,40 @@
+[
+  {
+    "case": "q01",
+    "lane": "rules-reasoning",
+    "input": "暂停会怎样？",
+    "input_result": {
+      "input_id": "live-input-q01",
+      "source_requirements_revision": 1,
+      "effective_requirements_revision": 1,
+      "answer": "暂停整个目标会暂停所有分支及后续汇总；只暂停某个任务，则会影响该任务及依赖它的下游任务，独立分支不受影响。例如，暂停 left 会同时影响 join，但 right 可继续。暂停不会修改现有要求，也不代表正在执行的操作已立即停止；实际状态需以执行记录为准。恢复某个任务也不会自动恢复已暂停的整个目标。你目前只是在询问，本次没有发出暂停指令。",
+      "clarification": null,
+      "requirements_saved": false,
+      "affected_tasks": [],
+      "control_saved": null,
+      "controlled_tasks": [],
+      "control_superseded": false,
+      "permission_response_saved": null,
+      "classification": null,
+      "reasoning_request_id": "e1e2c8fb-5951-49c4-99cc-45c9fbeb9f50",
+      "clarification_kind": "unknown",
+      "resolutions": []
+    },
+    "run_intent": "run",
+    "requirements_revision": 1,
+    "budget": {
+      "limits": {
+        "elapsed_ms": null,
+        "managed_token_estimates_micro_usd": 6000000
+      },
+      "elapsed_ms": 0,
+      "held": [],
+      "halt": null,
+      "resume_required": false
+    },
+    "provider_attempts": 1,
+    "estimated_model_tokens_micro_usd": 14094,
+    "harness_effects": "not_exercised_domain_fixture_only",
+    "annotation_status": "codex_proposed_unreviewed"
+  }
+]

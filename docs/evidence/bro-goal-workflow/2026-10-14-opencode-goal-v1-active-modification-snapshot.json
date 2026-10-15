@@ -1,0 +1,692 @@
+{
+  "id": "0990fac8-af3b-4135-94cf-8fbce6c0b83f",
+  "owner": "local",
+  "title": "Implement two independent JavaScript modules in this project and",
+  "workspace": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/project",
+  "objective": "Implement two independent JavaScript modules in this project and deliver a verified, reviewable result. Create numbers.mjs exporting sumIntegers(input): sum comma-separated signed safe integers, trim token whitespace, reject empty input/tokens, fractions, nonnumbers and unsafe integers, and reject unsafe sums. Create text.mjs exporting normalizeWhitespace(input): trim/collapse Unicode whitespace to one ASCII space, preserve letter case and non-ASCII letters. The original tests under tests/ are the contracts; do not weaken or alter those assertions. Split the two modules into independent parallel branches so actual executions overlap; a dependent integration/documentation task must consume both checked artifacts and write README.md with examples. For each branch run the applicable npm tests; the missing sibling contract TODO is intentional only before handoff. Final delivery must contain both modules, README.md, all original contracts passing with zero TODO/skipped tests, and actual combined npm test evidence. Use the configured ACP harness and available BRO model route. Work only in assigned isolated workspaces, use Node/npm built-ins, do not install dependencies, use Python, access credentials, merge or deploy. Preserve this source project; deliver the combined patch/workspace for review. Human acceptance is not required.\n\nHarness selection for this separate acceptance attempt: use the configured opencode-live ACP harness for all executable branches. The original Codex attempt remains paused with an unmapped legacy dispatch and a stateless native-reasoning replay refusal; it is not replayed or counted as completed. Keep every original condition above, including the original tests and zero TODO/skips. Use optional BRO model-route control only if actually negotiated; opencode-live already has a configured actual BRO/OpenRouter model.",
+  "revision": 254,
+  "requirements_revision": 2,
+  "run_intent": "run",
+  "created_at_ms": 1792009953713,
+  "updated_at_ms": 1792010424930,
+  "workflow": {
+    "completion": {
+      "specification": {
+        "conditions": [
+          {
+            "id": "integer-contract",
+            "description": "numbers.mjs exports sumIntegers(input), sums comma-separated signed safe integers with token whitespace trimming, rejects empty input/tokens, fractions, nonnumbers, unsafe integers, and unsafe sums, and satisfies every original applicable contract."
+          },
+          {
+            "id": "whitespace-contract",
+            "description": "text.mjs exports normalizeWhitespace(input), trims/collapses Unicode whitespace to one ASCII space, preserves letter case and non-ASCII letters, and satisfies every original applicable contract."
+          },
+          {
+            "id": "original-contracts-preserved",
+            "description": "All original tests under tests/ and their assertions are preserved without weakening, alteration, suppression, or changed discovery. Actual comparison to original contract bytes establishes preservation."
+          },
+          {
+            "id": "parallel-checked-handoff",
+            "description": "The modules were implemented in independent isolated branches whose actual executions overlapped, established by runtime execution records. Each branch ran applicable npm tests and passed its checks before the dependent integration/documentation task consumed both checked artifacts. Only the intentional missing-sibling contract TODO was permitted before handoff."
+          },
+          {
+            "id": "combined-verification",
+            "description": "Actual combined npm test evidence from the final delivery shows all original contracts passing with zero failures, zero TODO tests, and zero skipped tests. Retained command, output, exit status, and inspected totals establish this; file existence and worker claims do not substitute for behavior."
+          },
+          {
+            "id": "documentation-and-delivery",
+            "description": "Deliver a verified, reviewable combined patch/workspace containing both modules, README.md with runnable examples for both exports, unchanged original contracts, and branch/integration verification evidence. Examples have actually been executed successfully. Preserve the source project; do not merge or deploy."
+          },
+          {
+            "id": "execution-restrictions",
+            "description": "All work occurs only in assigned isolated workspaces using Node/npm built-ins, without dependency installation, Python use, credential access, merging, or deployment."
+          },
+          {
+            "id": "harness-and-model",
+            "description": "All executable branches use configured opencode-live ACP with its configured actual BRO/OpenRouter model. Runtime/controller acknowledgment precedes prompts. Available optional route selectors are not used because opencode-live lacks advertised route-control support; preserve its harness default explicitly as uncontrolled. No selector or supplied configuration is treated as proof of actual provider identity or use."
+          },
+          {
+            "id": "separate-acceptance-attempt",
+            "description": "The original Codex attempt remains paused with its unmapped legacy dispatch and stateless native-reasoning replay refusal; it is neither replayed nor counted as completed. This separate attempt retains all original requirements. Missing actual overlap, preservation, or verification evidence blocks completion; human acceptance is not required."
+          }
+        ],
+        "checks": [
+          {
+            "id": "final-combined-npm-tests",
+            "description": "Run npm test on the combined delivery after branch handoff. Require actual original-contract success, with zero TODO/skipped tests verified from the real summary and retained as evidence.",
+            "recipe": {
+              "kind": "npm_test"
+            },
+            "timeout_seconds": 1200
+          },
+          {
+            "id": "final-numbers-file",
+            "description": "The final combined delivery includes numbers.mjs.",
+            "recipe": {
+              "kind": "file_exists",
+              "path": "numbers.mjs"
+            },
+            "timeout_seconds": 1200
+          },
+          {
+            "id": "final-text-file",
+            "description": "The final combined delivery includes text.mjs.",
+            "recipe": {
+              "kind": "file_exists",
+              "path": "text.mjs"
+            },
+            "timeout_seconds": 1200
+          },
+          {
+            "id": "final-readme-file",
+            "description": "The final combined delivery includes README.md with examples; actual example verification remains separately required.",
+            "recipe": {
+              "kind": "file_exists",
+              "path": "README.md"
+            },
+            "timeout_seconds": 1200
+          }
+        ],
+        "human_acceptance_required": false
+      },
+      "attempt": null,
+      "last_completed": null
+    },
+    "coordinator": {
+      "id": "7b8ae4f1-6cd5-4e21-b15d-653acbccdbc2",
+      "expires_at_ms": 1792010446420
+    },
+    "planning": {
+      "state": "planned",
+      "attempt_id": "2aa5576e-8363-4667-9cd1-4f0caf0c6318"
+    },
+    "planning_requirements_revision": 1,
+    "tasks": [
+      {
+        "spec": {
+          "id": "numbers",
+          "title": "Implement and verify integer summation",
+          "instruction": "Use only the configured opencode-live ACP harness in your assigned isolated workspace derived from the source project. Preserve the harness's configured actual BRO/OpenRouter model; model-route control is explicitly uncontrolled because opencode-live is not among the available route-control harnesses. Require runtime/controller acknowledgment before any prompt; do not claim a route selector identifies an actual provider model. This branch and the text branch must be dispatched concurrently, with actual execution overlap recorded by runtime timestamps; independent graph nodes alone are not proof. Do not replay or count the paused original Codex attempt.\nRead package.json and the original tests under tests/ without modifying their assertions or test configuration. Implement numbers.mjs exporting sumIntegers(input): sum comma-separated signed safe integers, trim token whitespace, reject empty input and empty tokens, fractions, nonnumbers, unsafe integers, and unsafe sums. Follow all additional original contract requirements. Use only Node/npm built-ins; do not install dependencies, use Python, access credentials, merge, deploy, or modify the source project outside your assigned workspace. Do not implement the sibling module.\nRun the applicable npm tests in this workspace and retain actual command, output, exit status, and execution timestamps in evidence/numbers-verification.json. All numbers contracts must pass without TODO/skips; only the intentional missing-sibling contract TODO is acceptable before handoff. Record original contract-file hashes using Node built-ins so integration can verify preservation. Deliver only numbers.mjs and evidence/numbers-verification.json as branch artifacts. Handoff requires the machine check and actual test evidence, not a worker assertion.\nAdditional explicit acceptance case: sumIntegers('+2,-1,0') must return the number 1. Execute a separate Node built-in assertion verifying this exact case, without altering the original tests, their assertions, or test configuration. Append separately identifiable verification evidence to evidence/numbers-verification.json, including the actual command, complete output, exit status, execution timestamps, expected result, and observed result. This additional verification does not replace the applicable npm tests or any existing rejection requirements, including rejection of invalid input and unsafe sums. All other Goal constraints remain unchanged; leave the independent text branch unchanged and continuing under its existing run intent.",
+          "harness": "opencode-live",
+          "dependencies": [
+
+          ],
+          "checks": [
+            {
+              "id": "numbers-npm-tests",
+              "description": "Run the project's npm tests on the numbers branch: all applicable numbers contracts pass; only the original intentional missing-text contract TODO is allowed before handoff. Retain actual output and status.",
+              "recipe": {
+                "kind": "npm_test"
+              },
+              "timeout_seconds": 1200
+            },
+            {
+              "id": "numbers-module",
+              "description": "The checked branch artifact includes numbers.mjs.",
+              "recipe": {
+                "kind": "file_exists",
+                "path": "numbers.mjs"
+              },
+              "timeout_seconds": 1200
+            }
+          ]
+        },
+        "requirements_revision": 2,
+        "executions": [
+          {
+            "id": "0df4736d-391d-4440-97e8-e32464690e52",
+            "workspace": "/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/0df4736d-391d-4440-97e8-e32464690e52",
+            "observation": {
+              "state": "running",
+              "run_id": "f4e185d3-0bcd-46b8-b16d-5bf48acb57ca",
+              "native_session_id": "ses_ec3e10942ffe6EI5ChMTTYBSyq"
+            },
+            "requirements_revision": 1,
+            "task_revision": 1,
+            "dispatch_requested": true,
+            "checks": [
+
+            ],
+            "stop": {
+              "state": "confirmed",
+              "operation_id": "fc2d6eaf-5afa-4be9-b3ac-dcf85f7a19fc",
+              "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+            },
+            "base_commit": "125aecfa0f0ec3c356ba64793f2640e566217a53",
+            "handoff": null,
+            "review": null,
+            "reconciliation": {
+              "state": "blocked",
+              "task_revision": 2,
+              "control_source_revision": 1,
+              "reason": "No automatic replacement: tool history has no matching durable permission submission. Reconcile the missing tool/workspace/external-effect evidence before retrying."
+            },
+            "resources": {
+              "selection": {
+                "mcp_servers": [
+
+                ],
+                "skills": [
+
+                ],
+                "context_files": [
+
+                ]
+              },
+              "prompt": {
+                "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/4b4dc4062b1af88baf526d635bdc13eba14ea568d35492f360f577b6ab17e5e0.blob",
+                "sha256": "4b4dc4062b1af88baf526d635bdc13eba14ea568d35492f360f577b6ab17e5e0",
+                "bytes": 4328
+              },
+              "materials": [
+
+              ],
+              "mcp_configuration_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+            }
+          }
+        ],
+        "run_intent": "run",
+        "control_source_revision": 0
+      },
+      {
+        "spec": {
+          "id": "text",
+          "title": "Implement and verify whitespace normalization",
+          "instruction": "Use only the configured opencode-live ACP harness in your assigned isolated workspace derived from the source project. Preserve the harness's configured actual BRO/OpenRouter model; model-route control is explicitly uncontrolled because opencode-live is not among the available route-control harnesses. Require runtime/controller acknowledgment before any prompt; do not claim a route selector identifies an actual provider model. Execute concurrently with the numbers branch, requiring runtime evidence that their actual execution intervals overlap. Do not replay or count the paused original Codex attempt.\nRead package.json and the original tests under tests/ without modifying their assertions or test configuration. Implement text.mjs exporting normalizeWhitespace(input): trim and collapse Unicode whitespace to one ASCII space while preserving letter case and non-ASCII letters. Follow all additional original contract requirements. Use only Node/npm built-ins; do not install dependencies, use Python, access credentials, merge, deploy, or modify the source project outside your assigned workspace. Do not implement the sibling module.\nRun the applicable npm tests in this workspace and retain actual command, output, exit status, and execution timestamps in evidence/text-verification.json. All text contracts must pass without TODO/skips; only the intentional missing-sibling contract TODO is acceptable before handoff. Record original contract-file hashes using Node built-ins so integration can verify preservation. Deliver only text.mjs and evidence/text-verification.json as branch artifacts. Handoff requires the machine check and actual test evidence, not a worker assertion.",
+          "harness": "opencode-live",
+          "dependencies": [
+
+          ],
+          "checks": [
+            {
+              "id": "text-npm-tests",
+              "description": "Run the project's npm tests on the text branch: all applicable text contracts pass; only the original intentional missing-numbers contract TODO is allowed before handoff. Retain actual output and status.",
+              "recipe": {
+                "kind": "npm_test"
+              },
+              "timeout_seconds": 1200
+            },
+            {
+              "id": "text-module",
+              "description": "The checked branch artifact includes text.mjs.",
+              "recipe": {
+                "kind": "file_exists",
+                "path": "text.mjs"
+              },
+              "timeout_seconds": 1200
+            }
+          ]
+        },
+        "requirements_revision": 1,
+        "executions": [
+          {
+            "id": "de51f469-df6f-461c-986a-8b023f94234a",
+            "workspace": "/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/de51f469-df6f-461c-986a-8b023f94234a",
+            "observation": {
+              "state": "running",
+              "run_id": "fb66b1d8-fb69-48d9-aca5-f32e69f10522",
+              "native_session_id": "ses_ec3e10975ffe1Fz2HRtImhNVRP"
+            },
+            "requirements_revision": 1,
+            "task_revision": 1,
+            "dispatch_requested": true,
+            "checks": [
+
+            ],
+            "stop": null,
+            "base_commit": "125aecfa0f0ec3c356ba64793f2640e566217a53",
+            "handoff": null,
+            "review": null,
+            "reconciliation": null,
+            "resources": {
+              "selection": {
+                "mcp_servers": [
+
+                ],
+                "skills": [
+
+                ],
+                "context_files": [
+
+                ]
+              },
+              "prompt": {
+                "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/ddde17a5c293d2b8c6de3b5ff0a0f1ccfe8a9c14697b1dcdca86a0e2e596bb2b.blob",
+                "sha256": "ddde17a5c293d2b8c6de3b5ff0a0f1ccfe8a9c14697b1dcdca86a0e2e596bb2b",
+                "bytes": 4215
+              },
+              "materials": [
+
+              ],
+              "mcp_configuration_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+            }
+          }
+        ],
+        "run_intent": "run",
+        "control_source_revision": 0
+      },
+      {
+        "spec": {
+          "id": "integration",
+          "title": "Integrate checked artifacts and document delivery",
+          "instruction": "Use only opencode-live ACP in the assigned isolated integration workspace, after both dependencies have passed their checks and handed off their artifacts. Preserve the configured actual BRO/OpenRouter model with model-route control explicitly uncontrolled; require runtime/controller acknowledgment before any prompt. Do not replay or count the paused Codex attempt.\nConsume both checked modules and their evidence files through dependency artifact handoff, not a repository merge. Verify the branch evidence contains actual applicable npm executions and that runtime dispatch/execution records establish actual overlapping branch execution. If runtime records or other required evidence are unavailable, mark verification blocked rather than inventing evidence. Verify all original tests under tests/ and their assertions remain unchanged against the original baseline and both branch hash records; do not weaken assertions, suppress tests, change test discovery, or retain missing-sibling TODOs.\nWrite README.md documenting both exports, input rules, errors, Unicode behavior, runnable examples, and the npm test command. Execute its examples with Node built-ins. Run actual combined npm test with both modules present and require every original contract to pass, zero failures, zero TODO tests, and zero skipped tests. Inspect the real test summary in addition to checking exit status; npm success alone does not establish zero TODO/skips. Retain actual command, complete output, exit status, totals, README-example execution evidence, original-contract preservation evidence, and available runtime overlap provenance in evidence/integration-verification.json. Required evidence not covered by supported check recipes must remain a delivery blocker until actually verified.\nUse only Node/npm built-ins. Do not install dependencies, use Python, access credentials, merge, deploy, or modify the preserved source project at /private/tmp/bro-goal-live-eval-20261014/harness-v1/project. Deliver the combined isolated patch/workspace containing numbers.mjs, text.mjs, README.md, unchanged original contracts, and verification evidence for review. No human acceptance is required.",
+          "harness": "opencode-live",
+          "dependencies": [
+            "numbers",
+            "text"
+          ],
+          "checks": [
+            {
+              "id": "integrated-npm-tests",
+              "description": "Execute actual combined npm tests after both checked artifacts arrive; require all original contracts to pass with zero failures, TODOs, or skipped tests, supported by inspected actual output.",
+              "recipe": {
+                "kind": "npm_test"
+              },
+              "timeout_seconds": 1200
+            },
+            {
+              "id": "readme-delivered",
+              "description": "The combined workspace contains the README; example correctness must additionally be established by actual Node execution evidence.",
+              "recipe": {
+                "kind": "file_exists",
+                "path": "README.md"
+              },
+              "timeout_seconds": 1200
+            }
+          ],
+          "resources": {
+            "mcp_servers": [
+
+            ],
+            "skills": [
+
+            ],
+            "context_files": [
+              "numbers.mjs",
+              "text.mjs",
+              "evidence/numbers-verification.json",
+              "evidence/text-verification.json"
+            ]
+          }
+        },
+        "requirements_revision": 2,
+        "executions": [
+
+        ],
+        "run_intent": "run",
+        "control_source_revision": 0
+      }
+    ],
+    "decisions": [
+      {
+        "id": "2178d447f8635139b5cc758b94dfc7ee1eb1f6061fe62a946ea252663b72fb21",
+        "execution_id": "de51f469-df6f-461c-986a-8b023f94234a",
+        "run_id": "fb66b1d8-fb69-48d9-aca5-f32e69f10522",
+        "permission_id": "698dd729-6508-4029-b228-e26309e6f512",
+        "requirements_revision": 1,
+        "task_revision": 1,
+        "request": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/f67e31dfad7810068f6b9bdc49655940f2e3132b677d6ae6530a56c9dc6ac047.blob",
+          "sha256": "f67e31dfad7810068f6b9bdc49655940f2e3132b677d6ae6530a56c9dc6ac047",
+          "bytes": 389
+        },
+        "options": [
+          {
+            "id": "once",
+            "label": "Allow once",
+            "allows": true,
+            "persistent": false
+          },
+          {
+            "id": "always",
+            "label": "Always allow",
+            "allows": true,
+            "persistent": true
+          },
+          {
+            "id": "reject",
+            "label": "Reject",
+            "allows": false,
+            "persistent": false
+          }
+        ],
+        "state": {
+          "state": "obsolete",
+          "reason": "Permission belongs to superseded requirements or execution"
+        }
+      },
+      {
+        "id": "8a5d2ae4a059417acf7142d8c2ca8eb520f0003e67a819c9a4da9d28885de6b3",
+        "execution_id": "0df4736d-391d-4440-97e8-e32464690e52",
+        "run_id": "f4e185d3-0bcd-46b8-b16d-5bf48acb57ca",
+        "permission_id": "96f73db5-58b5-48be-98b9-f478124abf06",
+        "requirements_revision": 1,
+        "task_revision": 1,
+        "request": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/c6301561c618d5f27ae52ffda8681c96fda64d3732b80df3b77fb3c92e5faf1e.blob",
+          "sha256": "c6301561c618d5f27ae52ffda8681c96fda64d3732b80df3b77fb3c92e5faf1e",
+          "bytes": 389
+        },
+        "options": [
+          {
+            "id": "once",
+            "label": "Allow once",
+            "allows": true,
+            "persistent": false
+          },
+          {
+            "id": "always",
+            "label": "Always allow",
+            "allows": true,
+            "persistent": true
+          },
+          {
+            "id": "reject",
+            "label": "Reject",
+            "allows": false,
+            "persistent": false
+          }
+        ],
+        "state": {
+          "state": "obsolete",
+          "reason": "Permission belongs to superseded requirements or execution"
+        }
+      },
+      {
+        "id": "f622bb247660df08bf846290b0a8d46b92572169f1a27c4ca03b4dcc0de56260",
+        "execution_id": "de51f469-df6f-461c-986a-8b023f94234a",
+        "run_id": "fb66b1d8-fb69-48d9-aca5-f32e69f10522",
+        "permission_id": "698dd729-6508-4029-b228-e26309e6f512",
+        "requirements_revision": 2,
+        "task_revision": 1,
+        "request": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/f67e31dfad7810068f6b9bdc49655940f2e3132b677d6ae6530a56c9dc6ac047.blob",
+          "sha256": "f67e31dfad7810068f6b9bdc49655940f2e3132b677d6ae6530a56c9dc6ac047",
+          "bytes": 389
+        },
+        "options": [
+          {
+            "id": "once",
+            "label": "Allow once",
+            "allows": true,
+            "persistent": false
+          },
+          {
+            "id": "always",
+            "label": "Always allow",
+            "allows": true,
+            "persistent": true
+          },
+          {
+            "id": "reject",
+            "label": "Reject",
+            "allows": false,
+            "persistent": false
+          }
+        ],
+        "state": {
+          "state": "pending"
+        }
+      }
+    ]
+  },
+  "inputs": {
+    "after_revision": 173,
+    "pending": null,
+    "latest": {
+      "input_id": "59eef7e8-1507-4304-95bf-d639cd46c5fc",
+      "source_requirements_revision": 1,
+      "effective_requirements_revision": 2,
+      "answer": null,
+      "clarification": null,
+      "requirements_saved": true,
+      "affected_tasks": [
+        "integration",
+        "numbers"
+      ],
+      "control_saved": null,
+      "controlled_tasks": [
+
+      ],
+      "control_superseded": false,
+      "permission_response_saved": null,
+      "classification": {
+        "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/48fcdbec836b51b6f12f3a808243203d13a9b3007110ed2b0c48a8ac99acd3e4.blob",
+        "sha256": "48fcdbec836b51b6f12f3a808243203d13a9b3007110ed2b0c48a8ac99acd3e4",
+        "bytes": 28974
+      },
+      "reasoning_request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+      "clarification_kind": "unknown",
+      "resolutions": [
+
+      ]
+    },
+    "unresolved": [
+
+    ]
+  },
+  "control_source_revision": 1,
+  "accounting": {
+    "work_started": 39,
+    "work_observed": 39,
+    "provider_attempts": 2,
+    "estimated_model_tokens_micro_usd": 65327,
+    "unpriced_outcomes": 36,
+    "in_flight": [
+
+    ],
+    "recent": [
+      {
+        "work": {
+          "id": "ea1c76e7870d27649260ec5d97b17d1350f41224dc056fc245d0589ddb3d946c",
+          "kind": "preparation",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/79daeff84e9b2c511fc60559ce06d1e2908802aa8f93e938ad05c26385bfac3d.blob",
+            "sha256": "79daeff84e9b2c511fc60559ce06d1e2908802aa8f93e938ad05c26385bfac3d",
+            "bytes": 88
+          },
+          "token_reservation": null
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/c924da0a38f2a97faffe9d6f8f8a5ff5dfedd2b6b7cdb3439a69f9c1e53f7435.blob",
+          "sha256": "c924da0a38f2a97faffe9d6f8f8a5ff5dfedd2b6b7cdb3439a69f9c1e53f7435",
+          "bytes": 130
+        },
+        "estimated_model_tokens_micro_usd": null
+      },
+      {
+        "work": {
+          "id": "78b1a5f519e45917862ee96d71712281145ee6b8b07889854ccbc9c621a9a954",
+          "kind": "preparation",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/3df0641c7292265b4186c148a1c1b113db2e9fea18bc6d9e62a7892f3656f6af.blob",
+            "sha256": "3df0641c7292265b4186c148a1c1b113db2e9fea18bc6d9e62a7892f3656f6af",
+            "bytes": 89
+          },
+          "token_reservation": null
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/c9a26ec1bd32dd4592b5f3fd12f28a346ed57cd7763ecad581efb1c683004ccf.blob",
+          "sha256": "c9a26ec1bd32dd4592b5f3fd12f28a346ed57cd7763ecad581efb1c683004ccf",
+          "bytes": 131
+        },
+        "estimated_model_tokens_micro_usd": null
+      },
+      {
+        "work": {
+          "id": "b5d2b873e8e3513be1081758a410c7c168a46545b5cd1f42c91c5e6e628e62ab",
+          "kind": "preparation",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/4fa6fbd5e4c0caf0320d29d9ef43905498936711426e5ef82e42853451407d49.blob",
+            "sha256": "4fa6fbd5e4c0caf0320d29d9ef43905498936711426e5ef82e42853451407d49",
+            "bytes": 89
+          },
+          "token_reservation": null
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/9e06de4774ff67065c28a06540b626a7dd225e67f0b49e950437050552b7690f.blob",
+          "sha256": "9e06de4774ff67065c28a06540b626a7dd225e67f0b49e950437050552b7690f",
+          "bytes": 131
+        },
+        "estimated_model_tokens_micro_usd": null
+      },
+      {
+        "work": {
+          "id": "bb7a6489dd0dfe9795018cd42c2a5ae071c272bd6827b13ae6a283b2534a7ae2",
+          "kind": "preparation",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/99fe10868fc785b1bb6a8ef210775f127fad391b6a2da3b029bba8539e42970d.blob",
+            "sha256": "99fe10868fc785b1bb6a8ef210775f127fad391b6a2da3b029bba8539e42970d",
+            "bytes": 89
+          },
+          "token_reservation": null
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/70faa678edd394e1797d4ac93188576740dd75e0f61301b541b17d027ae18b20.blob",
+          "sha256": "70faa678edd394e1797d4ac93188576740dd75e0f61301b541b17d027ae18b20",
+          "bytes": 131
+        },
+        "estimated_model_tokens_micro_usd": null
+      },
+      {
+        "work": {
+          "id": "0a6efb1f2397af7ad813c316944ef9ed213849d369cd0e52429d3307391dae31",
+          "kind": "preparation",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/86e55a78c7012d25f299b08811a4416ae25a0b608483e3fcb6b0c526b4540758.blob",
+            "sha256": "86e55a78c7012d25f299b08811a4416ae25a0b608483e3fcb6b0c526b4540758",
+            "bytes": 33602
+          },
+          "token_reservation": null
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/63cec7639d4ae5720e66e98758e1620d8a97f2d0604e8ca3429cb4445491696d.blob",
+          "sha256": "63cec7639d4ae5720e66e98758e1620d8a97f2d0604e8ca3429cb4445491696d",
+          "bytes": 1179
+        },
+        "estimated_model_tokens_micro_usd": null
+      },
+      {
+        "work": {
+          "id": "0df63faf0a58d198e4035ea06d9989cb62abdb093cf53282fd280f729ffe4412",
+          "kind": "provider_integration",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/6550ac373d4e02b4883f1b22bd4f46f0551edce5caaaa288e5815dc2f1ac16cf.blob",
+            "sha256": "6550ac373d4e02b4883f1b22bd4f46f0551edce5caaaa288e5815dc2f1ac16cf",
+            "bytes": 110
+          },
+          "token_reservation": null
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/fcaf0e161a32525fda3772540d2dd57d4e99eb5e6f5c27069d5c94227203b94f.blob",
+          "sha256": "fcaf0e161a32525fda3772540d2dd57d4e99eb5e6f5c27069d5c94227203b94f",
+          "bytes": 171
+        },
+        "estimated_model_tokens_micro_usd": null
+      },
+      {
+        "work": {
+          "id": "b8efc43f11a9721f40585553fab5d4868cd55562f9961ebe6a3ac9fd5b4b8516",
+          "kind": "provider_integration",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/755993bb3967fafdb42bd932a16751d6ec6a5d3b51fe28e4650b550ad5f6400e.blob",
+            "sha256": "755993bb3967fafdb42bd932a16751d6ec6a5d3b51fe28e4650b550ad5f6400e",
+            "bytes": 109
+          },
+          "token_reservation": null
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/165c43721dd67e2fb8a92204aacbc4c3a30acb32b4ec878dc210b20a2cfa316d.blob",
+          "sha256": "165c43721dd67e2fb8a92204aacbc4c3a30acb32b4ec878dc210b20a2cfa316d",
+          "bytes": 171
+        },
+        "estimated_model_tokens_micro_usd": null
+      },
+      {
+        "work": {
+          "id": "1030136555724cda80e6d5220cae8c89547346a71baa97befeff05b876d38cf5",
+          "kind": "provider_attempt",
+          "requirements_revision": 1,
+          "request_id": "4dbaf0e1-be6b-436e-aca4-da070009f6bf",
+          "intent": {
+            "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/da6c96f1f518df9aaf42e8fe32a78cc6bedef444606f628c4c00f2e92c7258d6.blob",
+            "sha256": "da6c96f1f518df9aaf42e8fe32a78cc6bedef444606f628c4c00f2e92c7258d6",
+            "bytes": 535
+          },
+          "token_reservation": {
+            "micro_usd": 5372888,
+            "pricing_version": "sha256:a3575f59e7f03833759c747214bdc4108ec34345a0c8bd3906c4c75100b0420a",
+            "provider": "live-openrouter",
+            "model": "openai/gpt-6.1-sol",
+            "input_tokens_bound": 1050000,
+            "output_tokens_bound": 8192,
+            "evidence": {
+              "tariff": {
+                "protocol": "responses",
+                "endpoint_profile": "configured:sha256:76ef4ad6f0c8a4ae66efb13875c107cee40c78997a212353d379acfbb2f45591",
+                "tariff_profile": "configured:sha256:76ef4ad6f0c8a4ae66efb13875c107cee40c78997a212353d379acfbb2f45591",
+                "pricing": {
+                  "input_micro_usd_per_token": 2.0,
+                  "cache_read_micro_usd_per_token": 0.1,
+                  "cache_write_micro_usd_per_token": 2.5,
+                  "output_micro_usd_per_token": 10.0,
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_micro_usd_per_token": 4.0,
+                      "cache_read_micro_usd_per_token": 0.2,
+                      "cache_write_micro_usd_per_token": 5.0,
+                      "output_micro_usd_per_token": 15.0
+                    }
+                  ]
+                },
+                "pricing_version": "sha256:a3575f59e7f03833759c747214bdc4108ec34345a0c8bd3906c4c75100b0420a",
+                "billing_basis": "normalized-disjoint-usage-v1",
+                "unavailable_reason": null
+              },
+              "input_count": null,
+              "limits": {
+                "max_input_tokens": 1050000,
+                "max_output_tokens": 128000,
+                "context_window": 1050000
+              },
+              "output_token_limit_supported": true
+            }
+          }
+        },
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v1/home/goal-workspaces/0990fac8-af3b-4135-94cf-8fbce6c0b83f/artifacts/7e1bb18ed41c711038e6fc9054d0564ef05582ffdb5360c76d90943ce6973ad0.blob",
+          "sha256": "7e1bb18ed41c711038e6fc9054d0564ef05582ffdb5360c76d90943ce6973ad0",
+          "bytes": 8108
+        },
+        "estimated_model_tokens_micro_usd": 26251
+      }
+    ]
+  },
+  "budget": {
+    "limits": {
+      "elapsed_ms": 1200000,
+      "managed_token_estimates_micro_usd": 20000000
+    },
+    "elapsed_ms": 471217,
+    "held": [
+
+    ],
+    "halt": null,
+    "resume_required": false
+  }
+}

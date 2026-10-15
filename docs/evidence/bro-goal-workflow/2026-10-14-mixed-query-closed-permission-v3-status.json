@@ -1,0 +1,50 @@
+{
+  "clippy": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:23:30 UTC",
+    "finished_at": "2026-10-15 01:24:55 UTC"
+  },
+  "fmt": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:24:55 UTC",
+    "finished_at": "2026-10-15 01:24:59 UTC"
+  },
+  "diff": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:24:59 UTC",
+    "finished_at": "2026-10-15 01:24:59 UTC"
+  },
+  "hashes": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:24:59 UTC",
+    "finished_at": "2026-10-15 01:24:59 UTC"
+  },
+  "workspace-nextest": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:24:59 UTC",
+    "finished_at": "2026-10-15 01:43:57 UTC"
+  },
+  "doctests": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:43:57 UTC",
+    "finished_at": "2026-10-15 01:45:29 UTC"
+  },
+  "dist": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:45:29 UTC",
+    "finished_at": "2026-10-15 01:45:30 UTC"
+  },
+  "final-hashes": {
+    "exit_code": 0,
+    "success": true,
+    "started_at": "2026-10-15 01:45:30 UTC",
+    "finished_at": "2026-10-15 01:45:30 UTC"
+  }
+}

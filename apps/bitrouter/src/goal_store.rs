@@ -5,8 +5,9 @@ use bitrouter_orchestrator::goal::{
     identifier, page_bounds, replay, storage_error,
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait, sea_query::Expr,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
+    EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
+    sea_query::Expr,
 };
 
 pub struct DatabaseGoalStore {
@@ -302,6 +303,18 @@ async fn write_commit(
     goal: &GoalSnapshot,
     operation: &GoalOperation,
 ) -> Result<GoalOperation, GoalError> {
+    if tx.get_database_backend() == DatabaseBackend::Sqlite {
+        // Acquire the writer before opening a read snapshot. A deferred WAL
+        // reader cannot upgrade after another pool commits (SQLITE_BUSY).
+        // The no-op does not change revisions or relax the following CAS.
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE bro_goals SET revision = revision WHERE id = ? AND owner = ?",
+            [goal.id.clone().into(), goal.owner.clone().into()],
+        ))
+        .await
+        .map_err(storage_error)?;
+    }
     if let Some(original) = find_operation(tx, &goal.owner, &operation.id).await? {
         return replay(original, &operation.fingerprint);
     }

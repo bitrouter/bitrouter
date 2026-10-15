@@ -1,0 +1,232 @@
+{
+  "binary": {
+    "binary_sha256": "d282d13e872b0ab2ae0caef307e5ffc8ef8999e4a22ea2c570b6013eacd0a218",
+    "source_manifest": "2026-10-15-dependency-proof-v1-source.sha256",
+    "source_files": 951,
+    "stack_setting": "default; RUST_MIN_STACK absent",
+    "worker_configured_model": "anthropic/claude-opus-5.5"
+  },
+  "goal_id": "14d0d9bc-ad4f-44bd-9eeb-62125276c67a",
+  "requirements_revision": 2,
+  "run_intent": "pause",
+  "input": {
+    "input_id": "5411166d-7585-4544-8fab-e90d936857b3",
+    "effective_requirements_revision": 2,
+    "requirements_saved": true,
+    "affected_tasks": [
+      "integration-docs",
+      "text"
+    ],
+    "control_saved": null
+  },
+  "attempts": [
+    {
+      "task": "numbers",
+      "execution": "348a44c6-17f6-44fe-84d8-772421a4120d",
+      "archived": false,
+      "run": "8c362109-eeb1-40e3-9617-79e5c8e91626",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 117,
+      "marker_in_prompt": false,
+      "checks": [
+        {
+          "id": "numbers-npm",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/98176707390fc4c9b0da1b599e75e8e618aa06bb8691f84af3a9cc6df903cef6.blob",
+              "sha256": "98176707390fc4c9b0da1b599e75e8e618aa06bb8691f84af3a9cc6df903cef6",
+              "bytes": 1033
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 1
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "edc0641f-0d34-4354-afd1-4fab45ac718d",
+        "requirements_revision": 2,
+        "task_revision": 1
+      },
+      "handoff": {
+        "attempt_id": "edc0641f-0d34-4354-afd1-4fab45ac718d",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/507b7d187c51ccd43a64d77f0427c015d6c6f9521046e05af76fc6f6b27f3d6c.blob",
+          "sha256": "507b7d187c51ccd43a64d77f0427c015d6c6f9521046e05af76fc6f6b27f3d6c",
+          "bytes": 707
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/50379ed78033cdccb5576b7f657b84eb53f6d1b99fefbfb79f961e1c05e3a5c7.blob",
+          "sha256": "50379ed78033cdccb5576b7f657b84eb53f6d1b99fefbfb79f961e1c05e3a5c7",
+          "bytes": 886
+        },
+        "review_request_id": "63c504ed-9e44-4f48-8751-d2213cbdbe95",
+        "candidate_sha256": "c87632885c3968184112de0e590673e50e83dd2095a6ab309de8397c0152cdc1",
+        "requirements_revision": 2,
+        "task_revision": 1
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "28025bc9-7243-4f80-b308-75e9f91ed817",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "60728d53-95b0-4836-9f15-3f1d1e3c9c4b",
+      "archived": false,
+      "run": "ce5d974d-98b7-49c8-99ed-9b6e418b523a",
+      "task_revision": 2,
+      "source_requirements": 2,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 200,
+      "marker_in_prompt": true,
+      "checks": [
+        {
+          "id": "text-npm",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/8371ff2a1fbc123730745e54c8ed81a7e6e95dc16b53b325fca81484d9d93ea5.blob",
+              "sha256": "8371ff2a1fbc123730745e54c8ed81a7e6e95dc16b53b325fca81484d9d93ea5",
+              "bytes": 1039
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        },
+        {
+          "id": "text-marker-r15",
+          "recipe": "file_contains",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/bedf476d8bf696b300d476aa5a4228af844074e87c0af2717d464df125197d1f.blob",
+              "sha256": "bedf476d8bf696b300d476aa5a4228af844074e87c0af2717d464df125197d1f",
+              "bytes": 525
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "b3fee9c6-47db-458b-8168-7217e7ae9578",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "handoff": {
+        "attempt_id": "b3fee9c6-47db-458b-8168-7217e7ae9578",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/86bca71f57535b4ccb34d1354f1a0373692a1ded9c16340a53ce8ccc3f487c1c.blob",
+          "sha256": "86bca71f57535b4ccb34d1354f1a0373692a1ded9c16340a53ce8ccc3f487c1c",
+          "bytes": 703
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/c0714d1b3b4d6b0f5c4a15c4db36b2fe4b4b8db0eb3105d982f01fde3ccf87e2.blob",
+          "sha256": "c0714d1b3b4d6b0f5c4a15c4db36b2fe4b4b8db0eb3105d982f01fde3ccf87e2",
+          "bytes": 793
+        },
+        "review_request_id": "5437c821-4304-49a2-a596-2fb95249051b",
+        "candidate_sha256": "215d19e014c367c633353ab0003d7bdf8546db08df4b47bfb1f8da3e7897dbc1",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "68604c42-a39b-459d-9a1d-077d02389ed6",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "aa26e8f5-4f90-4949-b92b-a9c632b6c735",
+      "archived": true,
+      "run": "8cb80e67-b90b-4255-9b63-2b2b793dd013",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 218,
+      "marker_in_prompt": false,
+      "checks": [
+
+      ],
+      "review": null,
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "c21a547e-43e2-44ed-a3f4-ad1afad248ed",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": {
+        "state": "verified",
+        "task_revision": 2,
+        "control_source_revision": 1,
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/5bc29d8603107109a0428545ee0e8615b47287cb9461bdb0dc8f6eb3ac619eb1.blob",
+          "sha256": "5bc29d8603107109a0428545ee0e8615b47287cb9461bdb0dc8f6eb3ac619eb1",
+          "bytes": 703
+        },
+        "transcript": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v11/home/goal-workspaces/14d0d9bc-ad4f-44bd-9eeb-62125276c67a/artifacts/7fff0e65d5ca9c45086f692047bb8f83f7f5ddebb9e531697a39865336b49f7f.blob",
+          "sha256": "7fff0e65d5ca9c45086f692047bb8f83f7f5ddebb9e531697a39865336b49f7f",
+          "bytes": 99596
+        }
+      }
+    },
+    {
+      "task": "integration-docs",
+      "execution": "3c9ec3a2-01b1-4fcc-aa9b-972516826c30",
+      "archived": false,
+      "run": "0b1e4915-31c8-4498-bbd6-005838476a8b",
+      "task_revision": 2,
+      "source_requirements": 2,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 190,
+      "marker_in_prompt": true,
+      "checks": [
+
+      ],
+      "review": null,
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "1660d84f-fa5e-415e-92cb-fe29864a3355",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    }
+  ],
+  "operations_exported": 475,
+  "final_delivery": null,
+  "acceptance_passed": false,
+  "observed": [
+    "Actual parallel activity preceded middle Enter, which saved requirements2/marker check with control=null.",
+    "Original numbers execution and updated text2 passed their original npm checks and semantic reviews; text2 marker check passed.",
+    "Integration actual prompt contained exact hash-frozen checked_dependencies bytes for both handoffs, including 1 numbers and 2 text checks.",
+    "Integration later waited on an Edit permission: pre-permission old_string had streamed from escaped Unicode to actual Unicode. Every declared file path remained the same. Strict full-argument equality refused automatic approval.",
+    "Diagnostic Pause confirmed owned stops; no manual permission selection, delivery or success claim."
+  ],
+  "limitations": [
+    "Final delivery remains incomplete; the next narrow policy candidate accepts pre-permission non-path content updates while preserving all path conflicts and post-permission argument fences."
+  ]
+}

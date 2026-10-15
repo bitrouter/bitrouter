@@ -1,0 +1,69 @@
+{
+  "original_case": "s01-step-2/typed-upgrade",
+  "purpose": "One diagnostic replay of the exact captured request; never replaces original failed run",
+  "request_sha256": "48fa60f88402bb5ef5d59e88b58cb402c3799f0154dd4bfabb1285f9fe9d4545",
+  "http_status": 200,
+  "resolved_model": "typesafe/jev-1.13-20260917",
+  "usage": {
+    "input_tokens": 7820,
+    "output_tokens": 217,
+    "cost": 0.00032844
+  },
+  "answer_ids_match": true,
+  "checks": [
+    {
+      "question": "control",
+      "type": "choice",
+      "keys_match": true,
+      "selected_declared": true,
+      "highest_probability": true,
+      "probability_sum": 1.0,
+      "distribution_pass": true,
+      "confidence_valid": true
+    },
+    {
+      "question": "modify",
+      "type": "choice",
+      "keys_match": true,
+      "selected_declared": true,
+      "highest_probability": true,
+      "probability_sum": 1.0,
+      "distribution_pass": true,
+      "confidence_valid": true
+    },
+    {
+      "question": "permission_response",
+      "type": "choice",
+      "keys_match": true,
+      "selected_declared": true,
+      "highest_probability": true,
+      "probability_sum": 1.0,
+      "distribution_pass": true,
+      "confidence_valid": true
+    },
+    {
+      "question": "query",
+      "type": "choice",
+      "keys_match": true,
+      "selected_declared": true,
+      "highest_probability": true,
+      "probability_sum": 1.0,
+      "distribution_pass": true,
+      "confidence_valid": true
+    },
+    {
+      "question": "target",
+      "type": "choice",
+      "keys_match": true,
+      "selected_declared": true,
+      "highest_probability": true,
+      "probability_sum": 1.0,
+      "distribution_pass": true,
+      "confidence_valid": true
+    }
+  ],
+  "original_sequence_conformance": "failed and retained",
+  "effects": "No Goal, permission, execution or test labels changed",
+  "cost_scope": "Provider-reported usage and cost for this diagnostic only; not a Goal-wide invoice or total-fee cap",
+  "interpretation": "This exact-request replay was valid. The original raw invalid response was not retained, so its specific rejected field is unknown. This does not repair or supersede the original 5/6 sequence result; no further retry is scheduled."
+}

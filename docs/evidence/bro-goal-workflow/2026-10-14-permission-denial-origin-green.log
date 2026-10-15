@@ -1,0 +1,54 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sqlx v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sea-query-binder v0.7.0
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 47s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 64c343bc-ae25-4bd9-b082-69389cb8d6bc with nextest profile: default
+    Starting 13 tests across 1 binary (1755 tests skipped)
+        PASS [   0.014s] ( 1/13) bitrouter agent_sessions::tests::client_clones_keep_one_lease_identity
+        PASS [   0.011s] ( 2/13) bitrouter agent_sessions::tests::client_profiles_request_only_their_declared_session_scopes
+        PASS [   0.011s] ( 3/13) bitrouter agent_sessions::tests::confirmed_takeover_keeps_its_id_for_failure_recovery
+        PASS [   0.013s] ( 4/13) bitrouter agent_sessions::tests::foreground_permission_declines_in_flight_attach_history
+        PASS [   0.010s] ( 5/13) bitrouter agent_sessions::tests::older_in_flight_snapshot_cannot_replace_newer_state
+        PASS [   0.010s] ( 6/13) bitrouter agent_sessions::tests::permission_detail_preserves_context_without_terminal_controls
+        PASS [   0.010s] ( 7/13) bitrouter agent_sessions::tests::retained_tool_update_keeps_raw_output_and_text_content
+        PASS [   0.009s] ( 8/13) bitrouter agent_sessions::tests::standalone_rejects_either_noninteractive_stream
+        PASS [   0.010s] ( 9/13) bitrouter chat::code_wire::tests::duplicate_delivery_is_not_reapplied
+        PASS [   0.009s] (10/13) bitrouter chat::code_wire::tests::event_gap_is_rejected_without_advancing_cursor
+        PASS [   0.011s] (11/13) bitrouter chat::code_wire::tests::permission_resolution_and_settlement_are_delivered_once_in_order
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::teardown_denial_has_controller_origin_and_does_not_become_user_consent
+        PASS [  92.049s] (12/13) bitrouter goal_runtime::tests::teardown_denial_has_controller_origin_and_does_not_become_user_consent
+        PASS [   0.014s] (13/13) bitrouter supervisor::tests::legacy_permission_resolution_keeps_an_unknown_origin
+────────────
+     Summary [  92.187s] 13 tests run: 13 passed (1 slow), 1755 skipped

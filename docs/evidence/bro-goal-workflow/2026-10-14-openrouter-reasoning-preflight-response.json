@@ -1,0 +1,30 @@
+{
+  "id": "gen-1791990134-tMddty6sic0S3h4MHRE5",
+  "model": "openai/gpt-6.1-sol",
+  "provider": "OpenAI",
+  "content": "{\"answer\":\"暂停会暂时中断当前 Goal 的执行，通常保留当前进度，之后可以继续运行。\",\"control\":null}",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 76,
+    "completion_tokens": 35,
+    "total_tokens": 111,
+    "cost": 0.000502,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.000502,
+      "upstream_inference_prompt_cost": 0.000152,
+      "upstream_inference_completions_cost": 0.00035
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}

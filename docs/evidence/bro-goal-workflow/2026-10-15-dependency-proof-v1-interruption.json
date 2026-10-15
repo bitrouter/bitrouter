@@ -1,0 +1,7 @@
+{
+  "reason": "Concrete R15 pre-permission Unicode content update rejected despite stable local path; replace source before full test execution.",
+  "owned_nextest_pid": 68331,
+  "status": "interrupted",
+  "signal": 2,
+  "full_suite_passed": false
+}

@@ -84,6 +84,13 @@ estimates are recorded separately from generation and cache counters; neither
 is a settled bill. Native estimated spend limits include observed decision
 estimates and stop new model work when completed work cannot be estimated.
 Set explicit prices when using a spend limit with the decision backend.
+For a Goal's managed token estimate cap, also declare aggregate attempt bounds
+as `decision_model.pricing.max_input_tokens` and `max_output_tokens` for each
+nonzero price. A free token category needs no monetary bound. These are
+operator-supplied limits, not tokenizer measurements or provider invoices.
+Goal admission freezes and reserves the quote before the typed request;
+missing usage retains exposure, and usage exceeding the quote halts new work.
+Unknown prices or missing bounds never mean zero cost.
 
 Model selection uses the version 4 named policy lock, shared with HTTP requests.
 The bundled policy uses the shipped strong default and has no pretrained routes

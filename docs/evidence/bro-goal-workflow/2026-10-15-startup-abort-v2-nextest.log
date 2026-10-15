@@ -1,0 +1,86 @@
+   Compiling ring v0.17.14
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling rustls v0.23.41
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 20s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 84e4e2dd-4931-4558-a495-a00918490743 with nextest profile: default
+    Starting 12 tests across 1 binary (1770 tests skipped)
+        PASS [   0.029s] ( 1/12) bitrouter acp_cli::lifecycle_receipt_tests::typed_lifecycle_receipts_survive_context_without_error_text_matching
+        PASS [   0.026s] ( 2/12) bitrouter goal_runtime::recovery::tests::unopened_startup_rejects_prompt_updates_gaps_and_missing_history
+        PASS [   0.063s] ( 3/12) bitrouter acp_cli::session_host_tests::cancelled_initialize_reaps_the_owned_controller
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        SLOW [>120.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [ 139.545s] ( 4/12) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        FAIL [ 176.246s] ( 5/12) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work has been running for over 60 seconds
+    test goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1781 filtered out; finished in 176.22s
+
+  stderr ───
+    Error: fixture Goal did not reach expected state; execution diagnostics: [{"task":"left","executions":[{"id":"dfbce449-c14d-4a77-b6b3-bbce60afe0c9","observation":{"state":"unknown","run_id":"b7f41cc2-2cf5-4866-8c1b-cb4747e23362","reason":"Original ACP start recovered in Failed; execution and external effects still require reconciliation"},"stop":null,"reconciliation":null}]},{"task":"right","executions":[{"id":"426f57c0-5d81-451a-a8a5-89beedbcc51d","observation":{"state":"failed","run_id":"48a41f5e-fac8-4060-ada3-154dd77b6d08","reason":"ACP adapter exited unexpectedly"},"stop":null,"reconciliation":null}]},{"task":"join","executions":[]}]; permission diagnostics: [{"material":{"permission_id":"65cb8c51-84d7-4b38-a979-709396e1b834","tool_call":{"toolCallId":"fixture-write","kind":"edit","title":"Write right.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp8MgnT9/goal-workspaces/08032747-a257-4d81-b200-f6b8c6b38d2a/426f57c0-5d81-451a-a8a5-89beedbcc51d/right.txt"}],"rawInput":{"path":"right.txt"}},"options":[{"optionId":"allow-once","name":"Allow this fixture write","kind":"allow_once"},{"optionId":"deny-once","name":"Deny this fixture write","kind":"reject_once"}],"earlier_tool_context":{"run_id":"48a41f5e-fac8-4060-ada3-154dd77b6d08","permission_id":"65cb8c51-84d7-4b38-a979-709396e1b834","original_request_sha256":"8c479d82d1e6bb827f71e83c1e7b411f975f5846a456b2cf00c6157b8d70b27d","permission_seq":8,"snapshot_seq":8,"declarations":[{"seq":7,"at":"2026-10-15T05:23:50.733772Z","kind":{"event":"update","update":{"sessionUpdate":"tool_call","toolCallId":"fixture-write","title":"Write right.txt","kind":"edit","status":"in_progress","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp8MgnT9/goal-workspaces/08032747-a257-4d81-b200-f6b8c6b38d2a/426f57c0-5d81-451a-a8a5-89beedbcc51d/right.txt"}]}}}]}},"effective_tool":{"toolCallId":"fixture-write","kind":"edit","title":"Write right.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp8MgnT9/goal-workspaces/08032747-a257-4d81-b200-f6b8c6b38d2a/426f57c0-5d81-451a-a8a5-89beedbcc51d/right.txt"}],"rawInput":{"path":"right.txt"}},"state":{"state":"submitted","operation_id":"f08aeb42-8cda-4965-831f-b400d24d0a0a","option_id":"allow-once"}}]
+
+  Cancelling due to test failure: 1 test still running
+        FAIL [  45.623s] ( 6/12) bitrouter goal_runtime::tests::pre_session_recovery_exhausts_its_bound_without_prompt_or_delivery
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::pre_session_recovery_exhausts_its_bound_without_prompt_or_delivery ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::pre_session_recovery_exhausts_its_bound_without_prompt_or_delivery
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1781 filtered out; finished in 45.61s
+
+  stderr ───
+    Error: fixture Goal did not reach expected state; execution diagnostics: [{"task":"left","executions":[{"id":"6c2ec5f0-71c9-4c81-91d2-c44651e349cd","observation":{"state":"unknown","run_id":"4600d339-671e-4db1-b5b2-9bc81b5a227c","reason":"Original ACP start recovered in Failed; execution and external effects still require reconciliation"},"stop":null,"reconciliation":null}]},{"task":"right","executions":[{"id":"5e060c43-2bc3-4202-ac6e-eb2e0b96faed","observation":{"state":"unknown","run_id":"f2d67c84-75ee-4ee0-b026-bb1ba5b0073a","reason":"Original ACP start recovered in Failed; execution and external effects still require reconciliation"},"stop":null,"reconciliation":null}]},{"task":"join","executions":[]}]; permission diagnostics: []
+
+────────────
+     Summary [ 185.250s] 6/12 tests run: 4 passed (1 slow), 2 failed, 1770 skipped
+        FAIL [ 176.246s] ( 5/12) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        FAIL [  45.623s] ( 6/12) bitrouter goal_runtime::tests::pre_session_recovery_exhausts_its_bound_without_prompt_or_delivery
+warning: 6/12 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+error: test run failed

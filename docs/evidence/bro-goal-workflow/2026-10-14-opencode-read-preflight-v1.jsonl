@@ -1,0 +1,30 @@
+{"type":"session","session_id":"ses_ec3e60e2fffeXeRJ9MCg1B2tlw","agent_session_id":null,"agent":"opencode-live","via":null,"launch_id":null,"version":1,"seq":0}
+{"type":"config_options","options":[{"id":"model","name":"Model","description":null},{"id":"mode","name":"Session Mode","description":null}],"version":1,"seq":1}
+{"type":"available_commands","commands":[{"name":"bitrouter","description":"Set up and run BitRouter as a local LLM proxy that routes requests to OpenAI, Anthropic, Google, and custom providers through a single endpoint. Use this skill when you need to install bitrouter, configure LLM providers, start the proxy server, or route model requests through localhost:8787. Triggers on: bitrouter setup, LLM proxy, model routing, multi-provider gateway, local AI proxy, configuring bitrouter.yaml.\n","hint":null},{"name":"customize-opencode","description":"Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.","hint":null},{"name":"find-skills","description":"Helps users discover and install agent skills when they ask questions like \"how do I do X\", \"find a skill for X\", \"is there a skill that can...\", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.","hint":null},{"name":"init","description":"guided AGENTS.md setup","hint":null},{"name":"review","description":"review changes [commit|branch|pr], defaults to uncommitted","hint":null},{"name":"twitter","description":"Twitter/X data lookup — search tweets, user profiles, followers, replies. Use when the user asks about Twitter activity, social signals, or wants to look up accounts.","hint":null}],"version":1,"seq":2}
+{"type":"tool_call","id":"call_3XjCHLURWuGzXv6WtKP8QjJi","title":"read","status":"pending","diff":null,"version":1,"seq":3}
+{"type":"tool_call_update","id":"call_3XjCHLURWuGzXv6WtKP8QjJi","status":"running","title":"read","diff":null,"version":1,"seq":4}
+{"type":"permission","decision":"approved","title":"read","kind":"read","version":1,"seq":5}
+{"type":"tool_call_update","id":"call_3XjCHLURWuGzXv6WtKP8QjJi","status":"ok","title":"info.md","diff":null,"version":1,"seq":6}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"BRO","version":1,"seq":7}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"_REAL","version":1,"seq":8}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"_H","version":1,"seq":9}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"AR","version":1,"seq":10}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"NESS","version":1,"seq":11}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"_","version":1,"seq":12}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"202","version":1,"seq":13}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"610","version":1,"seq":14}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"14","version":1,"seq":15}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"\n\n","version":1,"seq":16}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"Read","version":1,"seq":17}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":" only","version":1,"seq":18}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":" `","version":1,"seq":19}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"info","version":1,"seq":20}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":".md","version":1,"seq":21}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":"`;","version":1,"seq":22}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":" no","version":1,"seq":23}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":" files","version":1,"seq":24}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":" were","version":1,"seq":25}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":" changed","version":1,"seq":26}
+{"type":"message_chunk","message_id":"msg_13c1a009c001bOnwQE7Yz7NTtE","text":".","version":1,"seq":27}
+{"type":"usage","used":6767,"size":1050000,"cost":{"amount":0.0,"currency":"USD"},"version":1,"seq":28}
+{"type":"result","stop_reason":"end_turn","version":1,"seq":29}

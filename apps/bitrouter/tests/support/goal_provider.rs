@@ -22,11 +22,9 @@ fn plan() -> Value {
             check("has-joined","joined.txt","LEFT\nRIGHT\n")],"human_acceptance_required":false}})
 }
 
-pub fn model(request: &Request) -> ResponseTemplate {
-    let Ok(body) = serde_json::from_slice::<Value>(&request.body) else {
-        return ResponseTemplate::new(400);
-    };
-    let state = body["messages"]
+pub fn model_state(request: &Request) -> Option<Value> {
+    let body: Value = serde_json::from_slice(&request.body).ok()?;
+    body["messages"]
         .as_array()
         .and_then(|messages| {
             messages
@@ -35,11 +33,16 @@ pub fn model(request: &Request) -> ResponseTemplate {
                 .find(|message| message["role"] == "user")
         })
         .and_then(|message| message["content"].as_str())
-        .and_then(|text| serde_json::from_str::<Value>(text).ok());
-    let Some(state) = state else {
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+}
+
+pub fn model(request: &Request) -> ResponseTemplate {
+    let Some(state) = model_state(request) else {
         return ResponseTemplate::new(400);
     };
-    let result = if state.get("available_harnesses").is_some() {
+    let result = if state["scope_selection"] == true {
+        json!({"scope":"no_change"})
+    } else if state.get("available_harnesses").is_some() {
         let mut plan = plan();
         if state["goal"]
             .as_str()
@@ -80,6 +83,10 @@ pub fn model(request: &Request) -> ResponseTemplate {
     {
         let mut result = json!({"answer":null,"objective":null,"task_updates":[{"task_id":"left","instruction":"Write and verify left.txt as LEFT newline. FIXTURE_NEW_LEFT_RULE: this exact version must be used by the replacement execution."}],"control":null,"permission_response":null,"clarification":null});
         let input = state["trusted_state"]["input"].as_str().unwrap_or_default();
+        if input.contains("CHECK_CHANGE_FIXTURE") {
+            result["task_updates"][0]["additional_checks"] =
+                json!([check("left-keeps-seed", "seed.txt", "original input")]);
+        }
         if input.contains("BAD_RESOURCE_CHANGE_FIXTURE") {
             result["task_updates"][0]["resources"] = json!({"mcp_servers":["unavailable-server"]});
         } else if input.contains("RESOURCE_CHANGE_FIXTURE") {
@@ -118,16 +125,44 @@ pub fn model(request: &Request) -> ResponseTemplate {
         json!({"answer":"Fixture explanation: the two actual branches are still active",
             "objective":null,"task_updates":[],"control":null,"permission_response":null,"clarification":null})
     } else if state.get("actual_workspace").is_some() {
-        json!({"ready":true,"reason":"Fixture semantic verdict; actual BRO checks remain required","missing_checks":[]})
+        let supported = state["task"]["dependencies"].as_array().is_some_and(|expected|
+            state["checked_dependencies"].as_array().is_some_and(|actual|
+                expected.len() == actual.len() && expected.iter().all(|id| actual.iter().any(|dependency|
+                    dependency["task_id"] == *id && dependency["actual_checks"].as_array().is_some_and(|checks|
+                        !checks.is_empty() && checks.iter().all(|check|
+                            check["actual_output"]["passed"] == true && check["actual_output"]["completed"] == true
+                                && check["artifact"] == dependency["checked_handoff"]["workspace"]))))));
+        json!({"ready":supported,"reason":"Fixture semantic verdict; supplied actual BRO dependency checks remain required","missing_checks":if supported { vec![] } else { vec!["current checked dependency evidence"] }})
     } else if state.get("integrated_material").is_some() {
-        let supported = state["actual_checks"].as_array().is_some_and(|checks| {
-            checks.len() == 3
-                && checks.iter().all(|check| {
-                    check["actual_output"]["completed"] == true
-                        && check["actual_output"]["passed"] == true
-                        && check["actual_output"]["timed_out"] == false
+        let branch_evidence = state["task_evidence"].as_array().is_some_and(|tasks| {
+            tasks.len() == 3
+                && tasks.iter().all(|task| {
+                    task["material"].is_object()
+                        && task["historical_runtime_observations"]["historical_only"] == true
+                        && task["historical_runtime_observations"]["current_artifact_authority"]
+                            == false
+                        && task["checked_handoff"]["workspace"] == task["artifact"]
+                        && task["actual_checks"].as_array().is_some_and(|checks| {
+                            !checks.is_empty()
+                                && checks.iter().all(|check| {
+                                    check["actual_output"]["completed"] == true
+                                        && check["actual_output"]["passed"] == true
+                                        && check["artifact"] == task["artifact"]
+                                })
+                        })
                 })
         });
+        let supported = branch_evidence
+            && state["source_workspace_observation"]["git_visible_source_matches_frozen_input"]
+                == true
+            && state["actual_checks"].as_array().is_some_and(|checks| {
+                checks.len() == 3
+                    && checks.iter().all(|check| {
+                        check["actual_output"]["completed"] == true
+                            && check["actual_output"]["passed"] == true
+                            && check["actual_output"]["timed_out"] == false
+                    })
+            });
         json!({"conditions":[{"id":"delivery","status":if supported { "met" } else { "unverified" },
             "reason":"Fixture judgment over actual integration checks",
             "evidence":["integrated_material","check:has-left","check:has-right","check:has-joined"]}],

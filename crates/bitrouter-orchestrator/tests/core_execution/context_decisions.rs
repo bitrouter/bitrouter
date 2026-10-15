@@ -81,6 +81,8 @@ fn decision_app(
             pricing: Some(DecisionPricing {
                 input_usd_per_million: 0.1,
                 output_usd_per_million: 0.0,
+                max_input_tokens: None,
+                max_output_tokens: None,
             }),
         })
         .build()?;
