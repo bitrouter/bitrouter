@@ -21,6 +21,7 @@ impl ThreadService {
         caller: &CallerContext,
         idempotency_key: String,
     ) -> Result<ThreadCloseReceipt, ServiceError> {
+        Self::require_native_execution()?;
         let (send, receive) = tokio::sync::oneshot::channel();
         let service = self.clone();
         let target = target.clone();

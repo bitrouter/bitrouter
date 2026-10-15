@@ -308,6 +308,7 @@ pub(crate) fn verified_batch<'a>(
 /// Check a projected payload length without allocating its base64 bytes.
 /// Base64 contains no JSON-escaped characters, so the empty wire envelope
 /// plus its encoded length gives the exact transport size.
+#[cfg(feature = "core")]
 pub(crate) fn check_projected_size(
     identity: &BatchIdentity,
     payload_bytes: u64,

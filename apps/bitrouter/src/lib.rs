@@ -41,6 +41,7 @@ pub mod config_synthesis;
 pub mod conformance;
 pub mod contexts;
 pub mod continuation;
+#[cfg(feature = "core")]
 pub mod core;
 pub mod daemon;
 pub mod daemon_handoff;
@@ -63,6 +64,7 @@ pub mod native_acp;
 pub mod native_code;
 pub mod onboarding;
 pub mod optimization;
+#[cfg(feature = "core")]
 pub mod orchestrator_api;
 pub mod output;
 pub mod paths;

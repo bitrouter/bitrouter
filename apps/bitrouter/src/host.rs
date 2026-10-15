@@ -263,6 +263,7 @@ async fn serve_with_options(
         let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
             .ok_or_else(|| anyhow::anyhow!("daemon reload state is unavailable at startup"))?
             .server_instance_id;
+        #[cfg(feature = "core")]
         let managed_core = crate::orchestrator_api::ManagedCoreApi::new(
             app.clone(), assembled.db.clone(), server_instance_id.clone(),
         );
@@ -319,7 +320,11 @@ async fn serve_with_options(
         // Native requests and queue workers do not yet participate in an atomic
         // handoff gate. Hold admission for the endpoint's whole lifetime so an
         // idle ACP/inference projection cannot authorize stopping BRO work.
-        let native_admission = handoff_gate.admit().ok_or_else(|| anyhow::anyhow!("native runtime admission is closed"))?;
+        let native_admission = if cfg!(feature = "core") {
+            Some(handoff_gate.admit().ok_or_else(|| anyhow::anyhow!("native runtime admission is closed"))?)
+        } else {
+            None
+        };
         // The ingress SERVER span is created from the exporter's own tracer — the
         // SDK installs no global `TracerProvider`, so there is nothing to reach
         // for implicitly. With OTel disabled there is no ingress span at all,
@@ -331,6 +336,7 @@ async fn serve_with_options(
             .map(crate::telemetry::http_layer::router_wrapper);
         let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
         let http = async move {
+            #[cfg(feature = "core")]
             let managed_shutdown = managed_core.clone();
             let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
             let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -352,6 +358,12 @@ async fn serve_with_options(
                 let _ = inference_shutdown_rx.await;
             };
             let inference = async move {
+                let managed_wrapper = move |router: axum::Router| {
+                    #[cfg(feature = "core")]
+                    { managed_core.wrap(router) }
+                    #[cfg(not(feature = "core"))]
+                    { router }
+                };
                 match workflow_trace_capture {
                     Some(capture) => {
                         let workflow_wrapper = capture.router_wrapper();
@@ -361,7 +373,7 @@ async fn serve_with_options(
                                 inference_listener,
                                 move |router| {
                                     workflow_wrapper(otel_wrapper(
-                                        managed_core.wrap(router.merge(eval_router.clone())),
+                                        managed_wrapper(router.merge(eval_router.clone())),
                                     ))
                                 },
                                 inference_shutdown,
@@ -372,7 +384,7 @@ async fn serve_with_options(
                         http_app
                             .serve_listener_with_router_wrapper_and_shutdown(
                                 inference_listener,
-                                move |router| otel_wrapper(managed_core.wrap(router.merge(eval_router.clone()))),
+                                move |router| otel_wrapper(managed_wrapper(router.merge(eval_router.clone()))),
                                 inference_shutdown,
                             )
                             .await
@@ -397,7 +409,7 @@ async fn serve_with_options(
             };
             let task = async move {
                 let _native_admission = native_admission;
-                if let Err(error) = task_service.initialize_execution().await {
+                if cfg!(feature = "core") && let Err(error) = task_service.initialize_execution().await {
                     tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
                 }
                 let runtime = task_service.clone();
@@ -439,6 +451,7 @@ async fn serve_with_options(
 
             tokio::select! {
                 result = &mut inference => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = remote_shutdown_tx.send(());
                     task_shutdown.cancel();
@@ -447,6 +460,7 @@ async fn serve_with_options(
                     result
                 }
                 result = &mut remote => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     task_shutdown.cancel();
@@ -455,6 +469,7 @@ async fn serve_with_options(
                     result
                 }
                 result = &mut task => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
@@ -464,6 +479,7 @@ async fn serve_with_options(
                     result
                 }
                 _ = &mut shutdown => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());

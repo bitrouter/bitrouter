@@ -245,7 +245,9 @@ impl ThreadService {
         caller: &CallerContext,
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
-        self.load_thread(target, caller).await?;
+        if cfg!(feature = "core") {
+            self.load_thread(target, caller).await?;
+        }
         self.admit_turn(target, caller, request, true, false).await
     }
 
@@ -255,7 +257,9 @@ impl ThreadService {
         caller: &CallerContext,
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
-        self.load_thread(target, caller).await?;
+        if cfg!(feature = "core") {
+            self.load_thread(target, caller).await?;
+        }
         self.admit_turn(target, caller, request, false, false).await
     }
 
@@ -267,7 +271,9 @@ impl ThreadService {
         caller: &CallerContext,
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
-        self.load_thread(target, caller).await?;
+        if cfg!(feature = "core") {
+            self.load_thread(target, caller).await?;
+        }
         self.admit_turn(target, caller, request, true, true).await
     }
 
@@ -295,6 +301,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_turn_receipt(&entry).await;
         }
+        Self::require_native_execution()?;
         if request.prompt.trim().is_empty()
             || request.prompt.len() > self.inner.limits.request_bytes
         {

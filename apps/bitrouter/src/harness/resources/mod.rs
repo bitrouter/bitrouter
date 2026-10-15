@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::gateway::mcp::transport::McpServerConfig;
-use bitrouter_ai::types::{Tool, ToolResultOutput};
+#[cfg(feature = "core")]
+use bitrouter_ai::types::Tool;
+use bitrouter_ai::types::ToolResultOutput;
 use rmcp::model::ProtocolVersion;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -76,6 +78,7 @@ pub struct McpTool {
     pub approval_required: bool,
 }
 
+#[cfg(feature = "core")]
 impl McpTool {
     pub(crate) fn declaration(&self) -> Tool {
         Tool::Function {
@@ -191,6 +194,7 @@ impl HarnessResources {
         })
     }
 
+    #[cfg(feature = "core")]
     pub(crate) async fn validate_catalog(&self) -> Result<(), String> {
         self.mcp.lock().await.validate_catalog()
     }
@@ -203,6 +207,7 @@ impl HarnessResources {
         self.inventory.tools.iter().any(|tool| tool.name == name)
     }
 
+    #[cfg(feature = "core")]
     pub(crate) fn validate_call(&self, name: &str, arguments: &str) -> Result<(), String> {
         if !self.contains(name) {
             return Err("MCP tool is not in the frozen inventory".into());

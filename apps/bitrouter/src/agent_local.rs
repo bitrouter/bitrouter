@@ -376,9 +376,9 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
     };
     let result = match command.operation {
         Operation::Capabilities => {
-            return ReplyResult::Capabilities {
-                runtime: Box::new(service.capabilities()),
-                operations: [
+            let runtime = service.capabilities();
+            let operations: &[&str] = if runtime.native_execution {
+                &[
                     "list_threads",
                     "create_thread",
                     "read_thread",
@@ -394,9 +394,19 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                     "resume_queue",
                     "unload_thread",
                 ]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            } else {
+                &[
+                    "list_threads",
+                    "read_thread",
+                    "read_turn",
+                    "history",
+                    "observe",
+                    "unload_thread",
+                ]
+            };
+            return ReplyResult::Capabilities {
+                runtime: Box::new(runtime),
+                operations: operations.iter().map(|name| (*name).to_owned()).collect(),
             };
         }
         Operation::ListThreads {
@@ -416,7 +426,9 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
             read_only,
             verification_command,
             idempotency_key,
-        } => match service.register_local_workspace(&workspace) {
+        } => match ThreadService::require_native_execution()
+            .and_then(|()| service.register_local_workspace(&workspace))
+        {
             Ok(workspace) => service
                 .create_thread(
                     &epoch,
@@ -851,6 +863,9 @@ fn decode_reply(line: &str, request_id: &str) -> Result<ReplyResult> {
         result => Ok(result),
     }
 }
+
+#[cfg(all(test, not(feature = "core")))]
+mod core_disabled_tests;
 
 #[cfg(test)]
 mod tests {

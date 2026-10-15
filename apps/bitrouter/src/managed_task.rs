@@ -1,16 +1,24 @@
 //! Headless managed mode for BRO's native workspace harness.
 
+use bitrouter_ai::types::ReasoningEffort;
 use std::path::PathBuf;
+#[cfg(feature = "core")]
 use std::sync::Arc;
 
+#[cfg(feature = "core")]
 use anyhow::Context;
 
+#[cfg(feature = "core")]
 use crate::gateway::caller::CallerContext;
+#[cfg(feature = "core")]
 use crate::harness::agent::ToolMode;
+#[cfg(feature = "core")]
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession};
+#[cfg(feature = "core")]
 use crate::storage::checkpoint::snapshot::RunStatus;
+#[cfg(feature = "core")]
 use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
-use bitrouter_ai::types::ReasoningEffort;
+#[cfg(feature = "core")]
 use tokio_util::sync::CancellationToken;
 
 pub struct Options {
@@ -25,8 +33,10 @@ pub struct Options {
     pub max_output_tokens: Option<u32>,
 }
 
+#[cfg(feature = "core")]
 struct HeadlessApproval;
 
+#[cfg(feature = "core")]
 #[async_trait::async_trait]
 impl NativeApproval for HeadlessApproval {
     async fn approve(&self, _: &ToolExecute) -> Result<bool, CoreError> {
@@ -36,6 +46,7 @@ impl NativeApproval for HeadlessApproval {
     }
 }
 
+#[cfg(feature = "core")]
 pub async fn run(options: Options) -> anyhow::Result<()> {
     anyhow::ensure!(
         options.max_output_tokens != Some(0),
@@ -140,4 +151,9 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         "managed task did not complete; inspect its retained native session"
     );
     Ok(())
+}
+
+#[cfg(not(feature = "core"))]
+pub async fn run(_options: Options) -> anyhow::Result<()> {
+    anyhow::bail!(crate::harness::agent::NATIVE_UNAVAILABLE)
 }

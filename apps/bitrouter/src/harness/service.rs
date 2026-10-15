@@ -35,12 +35,18 @@ const MAX_EVENT_PAGE: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeCapabilities {
+    #[serde(default = "legacy_native_execution")]
+    pub native_execution: bool,
     #[serde(default)]
     pub startup_discovery: Option<startup::StartupDiscovery>,
     pub server_instance_id: String,
     pub limits: RuntimeLimits,
     #[serde(default)]
     pub execution_ownership: Option<crate::harness::storage::OwnerClaim>,
+}
+
+fn legacy_native_execution() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +126,7 @@ pub enum ErrorCode {
     InstanceChanged,
     ResyncRequired,
     StorageUnavailable,
+    UnsupportedCapability,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,7 +218,7 @@ impl ThreadService {
         Self::with_limits_and_store(app, allowed_workspaces, RuntimeLimits::default(), store)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "core"))]
     fn with_limits(
         app: Arc<App>,
         allowed_workspaces: &[PathBuf],
@@ -308,9 +315,21 @@ impl ThreadService {
         })
     }
 
+    pub(crate) fn require_native_execution() -> Result<(), ServiceError> {
+        if cfg!(feature = "core") {
+            Ok(())
+        } else {
+            Err(ServiceError::new(
+                ErrorCode::UnsupportedCapability,
+                crate::harness::agent::NATIVE_UNAVAILABLE,
+            ))
+        }
+    }
+
     pub fn capabilities(&self) -> RuntimeCapabilities {
         let state = self.lock_state();
         RuntimeCapabilities {
+            native_execution: cfg!(feature = "core"),
             startup_discovery: state.startup_discovery.clone(),
             server_instance_id: self.inner.instance_id.clone(),
             limits: self.inner.limits.clone(),
@@ -340,8 +359,10 @@ impl ThreadService {
             self.inner.workers.close();
         }
         self.inner.workers.wait().await;
-        self.pause_queues_after_shutdown().await;
-        self.stop_execution_owner().await;
+        if cfg!(feature = "core") {
+            self.pause_queues_after_shutdown().await;
+            self.stop_execution_owner().await;
+        }
     }
 
     fn prune(&self, state: &mut State) {
@@ -429,5 +450,8 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 mod tests;
+
+#[cfg(all(test, not(feature = "core")))]
+pub(crate) mod core_disabled_tests;

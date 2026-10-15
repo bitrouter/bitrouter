@@ -2,9 +2,8 @@
 //! harness records. Wire data lives in AI; live connection admission stays core-owned.
 
 use bitrouter_ai::core::protocol::{
-    ArtifactRef, COLLABORATION_TOOLS, Capabilities, ClientMessage, Command, CoreError, ErrorCode,
-    HarnessManifest, HarnessTool, Limits, ToolObservation, ToolOutcome, ToolResult,
-    ToolResultLimits, VERSION, validate_id,
+    ArtifactRef, COLLABORATION_TOOLS, Capabilities, CoreError, ErrorCode, HarnessManifest,
+    HarnessTool, Limits, ToolObservation, ToolResult, ToolResultLimits, VERSION, validate_id,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -124,10 +123,12 @@ impl ToolResultLimitsExt for ToolResultLimits {
     }
 }
 
+#[cfg(feature = "core")]
 pub(crate) fn tool_result_limits(
     input_bytes: u64,
     output_bytes: u64,
 ) -> Result<ToolResultLimits, CoreError> {
+    use bitrouter_ai::core::protocol::{ClientMessage, Command, ToolOutcome};
     let result = ToolResult {
         invocation_id: "x".repeat(128),
         attempt_id: "x".repeat(128),

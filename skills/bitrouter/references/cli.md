@@ -2,6 +2,13 @@
 
 ## Native tasks through the managed core
 
+Local native execution requires the application's `core` feature (enabled in
+the default distribution). A build without core can inspect stored sessions
+and validate their checkpoints, but cannot create or resume native work. Check
+the runtime's `native_execution` capability before submission; unavailable work
+is rejected before execution ownership or workspace resources are acquired.
+This does not disable the separate external ACP harness path.
+
 `bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 connects native tools, AGENTS.md, skills and MCP resources to an in-process
 CoreSession. The core owns routing and sub-agent scheduling; the native harness

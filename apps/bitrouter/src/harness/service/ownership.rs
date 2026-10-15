@@ -10,6 +10,7 @@ impl ThreadService {
     /// Initialize native execution authority. Read-only recovery and observation
     /// remain available when an old owner or legacy unfenced records block work.
     pub async fn initialize_execution(&self) -> Result<ExecutionOwner, ServiceError> {
+        Self::require_native_execution()?;
         let _guard = self.inner.ownership_init.lock().await;
         {
             let state = self.lock_state();

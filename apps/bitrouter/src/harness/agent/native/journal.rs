@@ -39,6 +39,7 @@ pub(super) fn quiescent(snapshot: &crate::storage::checkpoint::snapshot::Session
             .all(|receipt| receipt.outcome.is_some())
 }
 
+#[cfg(feature = "core")]
 pub(super) fn continuation_boundary(
     snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot,
     events: &[bitrouter_ai::core::checkpoint::DurableEvent],
@@ -59,6 +60,7 @@ pub(super) struct Journal {
     pub(super) head: DurableHead,
     pub(super) checkpoint: Option<CheckpointBatch>,
     pub(super) fences: BTreeSet<ToolStartFence>,
+    #[cfg(feature = "core")]
     pub(super) started: BTreeSet<ToolStartFence>,
     pub(super) presented: BTreeSet<String>,
     context_history: crate::storage::checkpoint::snapshot::context::validation::History,
@@ -126,6 +128,7 @@ impl Journal {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     pub(super) fn restore(
         &mut self,
         instance_id: &str,
@@ -235,6 +238,7 @@ impl Journal {
             head: Default::default(),
             checkpoint: None,
             fences: Default::default(),
+            #[cfg(feature = "core")]
             started: Default::default(),
             presented: Default::default(),
             context_history: Default::default(),
@@ -242,6 +246,7 @@ impl Journal {
         }
     }
 
+    #[cfg(feature = "core")]
     pub(super) fn prepare(&self, batch: &CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         self.prepare_verified(&crate::storage::checkpoint::verified_batch(
             batch,
@@ -301,6 +306,7 @@ impl Journal {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     pub(super) fn apply(
         &mut self,
         batch: CheckpointBatch,
@@ -381,6 +387,7 @@ impl Journal {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     pub(super) fn read(
         &self,
         reference: &ArtifactRef,

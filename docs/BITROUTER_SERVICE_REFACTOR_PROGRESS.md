@@ -63,7 +63,7 @@ the contract move must preserve its bytes.
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
+| P0 5 Feature isolation | In progress | Scheduler/local native bridge gated by core; core-disabled inspection and early rejection verified; complete isolated dependency/startup matrix remains |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -888,3 +888,93 @@ wiring, and public harness exchange DTOs still need their separate contract/SDK
 pass. The complete feature/startup matrix, historical writer fixtures,
 terminal-free headless renderer, delivery/performance checks, full P0 review
 and PR remain open. All final A01–A16 acceptance gates remain pending.
+
+## Scheduler isolation and offline native inspection
+
+Changes against `ab89178` put the live scheduler and managed HTTP/WebSocket
+service behind `core`. The local native driver and managed-session adapter move
+to `harness::agent::native::driver` and
+`harness::resources::managed::store::local`, respectively. Token comparison of
+both moved bodies against the parent passes after normalizing their new module
+visibility and qualified paths. Shared journal decoding, immutable-history
+validation and display projection remain available without core.
+
+The core-disabled ThreadService retains a bounded, authorized read cache for
+HTTP/IPC observation. It neither takes workspace fences nor starts queued native
+work. An active observer pins its projection; after detachment the projection
+can unload without resolving or rewriting stored recovery state. Shutdown skips
+execution-owner/queue mutations in this profile. New native execution requests
+fail before workspace discovery, resource initialization or authority acquisition.
+HTTP, local IPC and ACP v1/v2 expose the unavailable execution capability; the
+host does not initialize native execution or retain its lifetime handoff permit
+when core is disabled. Existing external ACP paths remain usable.
+
+The base gateway now detects managed Responses opt-ins even without the core
+host wrapper. It rejects them explicitly and preserves ordinary request bytes.
+The shared inspection retains the prior size, time and concurrent-read bounds;
+cancelled reads release capacity. Enabling core continues to use the managed
+adapter's existing protocol negotiation and authority checks.
+
+Validation evidence:
+
+- The core-disabled targeted suite passes **129 tests** (3,086 outside the
+  filter), including real HTTP capability/auth/mutation/SSE behavior, local IPC
+  observation/unload, negotiated ACP v1/v2 creation rejection, offline cache and
+  shutdown behavior, external ACP, workspace tools and gateway routes. This is
+  `--no-default-features --features harness,tui,mcp,otel-http`; it proves scheduler
+  isolation, not the final minimum or terminal-free harness profile.
+- Four journal replay tests use exact records from the real native driver in
+  `tests/fixtures/native-replay/journal.json.zst`. They accept the recorded run
+  and reject a corrupted digest, an earlier immutable fact rewritten under a
+  valid digest, and inconsistent display projection. Fixture SHA-256 is
+  `7970cc8eadadce2bdd933e7c10ba3661eaaa0db3f6a6f9b43c4b4c0fba610a5c`.
+  Its producer is the current P0 writer after `ab89178`; this is not evidence for
+  an older release's payload compatibility.
+- Workspace all-feature/all-target and application core-disabled/all-target
+  strict Clippy pass with Rust 1.97.0. Strict Rustdoc passes for the workspace
+  with all features and the application with core disabled. Formatting and
+  documentation-link checks pass. Independent read-only code review reports
+  no findings in this stage's scope.
+- Full-core/native regression passes **639 tests** across seven binaries in
+  529.015 seconds, with six slow cases and 3,162 outside the selected/active
+  tests. Coverage includes native scheduling and tools, ThreadService
+  approval/recovery/queue/ownership, real-process HTTP/IPC and ACP v1/v2,
+  managed HTTP/WebSocket and SDK checkpoint exchange, protocol conversion and
+  full 32-agent recovery/capacity scenarios. Source and manifests stayed frozen
+  throughout the run, including fixture subprocess builds.
+
+The targeted runtime commands use separate feature invocations:
+
+```sh
+cargo nextest run -p bitrouter --no-default-features \
+  --features harness,tui,mcp,otel-http --lib --build-jobs 2 --test-threads 2 \
+  --no-fail-fast \
+  -E 'test(gateway::http::) | test(harness::agent::native::replay_tests::) | test(core_disabled_tests::) | test(harness::context::) | test(harness::tools::) | (test(harness::acp::) & !test(harness::acp::native::)) | test(agent_local::tests::)'
+
+cargo nextest run -p bitrouter --all-features --lib \
+  --test core_contract --test core_execution --test orchestrator_core \
+  --test managed_native --test native_acp --test native_agent_process \
+  --build-jobs 2 --test-threads 2 --no-fail-fast \
+  -E 'binary(core_contract) | binary(core_execution) | binary(orchestrator_core) | binary(managed_native) | binary(native_acp) | binary(native_agent_process) | test(core::) | test(harness::agent::) | test(harness::resources::managed::) | test(harness::service::) | test(managed_store::) | test(agent_store::) | test(gateway::http::) | test(agent_local::tests::)'
+```
+
+Strict lint uses `cargo +1.97.0 clippy --workspace --all-features --all-targets
+--jobs 2 -- -D warnings`, and a separate `-p bitrouter --no-default-features
+--features harness,tui,mcp,otel-http --all-targets --jobs 2 -- -D warnings`
+invocation. Rustdoc uses the corresponding workspace/all-feature and
+application/core-disabled selections with `--no-deps --jobs 2` and
+`RUSTDOCFLAGS='-D warnings'`. Runtime tests use stable Rust 1.99.0. All use
+`CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0` and
+`CARGO_PROFILE_TEST_DEBUG=0`; the 1.97 checks use a separate target directory.
+
+The accepted plan now also distinguishes optional HTTP task activation from
+local task/ACP listener construction, and limits the no-custom-compilation
+promise to ordinary official-gateway use. The implementation plan retains its
+verified legacy TUI retirement decisions and links baseline sources to their
+pinned revision.
+
+All final A01–A16 gates remain open. Serving-time workflow/policy and eval/outbox
+separation, complete dependency/activation isolation, terminal-free headless
+formatting, public harness contracts/clients, historical format/backend evidence,
+packaged service delivery, performance comparison, final review and PR remain
+required P0 work. P1 remains excluded.

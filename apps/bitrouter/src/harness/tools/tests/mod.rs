@@ -429,6 +429,7 @@ async fn interpreter_availability_fallback_is_declared_and_never_retried()
         root: workspace.path().canonicalize()?,
         mode: ToolMode::Coding,
         interpreter: Some(preferred),
+        #[cfg(feature = "core")]
         read_gate: None,
     };
     let value = success(

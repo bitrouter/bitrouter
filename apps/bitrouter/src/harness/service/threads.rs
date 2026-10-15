@@ -203,6 +203,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_thread_receipt(&entry).await;
         }
+        Self::require_native_execution()?;
         let workspace = request
             .workspace
             .canonicalize()
@@ -546,29 +547,32 @@ impl ThreadService {
         let _guard = gate
             .try_lock()
             .map_err(|_| ServiceError::new(ErrorCode::Conflict, "Thread commit is in flight"))?;
-        if Arc::strong_count(&gate) != 2
-            || !matches!(
+        // A core-free projection has no execution/recovery authority. Its saved
+        // unresolved work must not pin the bounded read cache indefinitely.
+        let execution_or_recovery = cfg!(feature = "core")
+            && (!matches!(
                 thread.snapshot.status,
                 ThreadStatus::Idle | ThreadStatus::Paused
-            )
-            || thread.snapshot.active_turn_id.is_some()
-            || !thread.queued.is_empty()
-            || !thread.snapshot.queued.is_empty()
-            || thread.storage_error.is_some()
-            || thread.presentation.view.recovery.is_some()
+            ) || thread.snapshot.active_turn_id.is_some()
+                || !thread.queued.is_empty()
+                || !thread.snapshot.queued.is_empty()
+                || thread.storage_error.is_some()
+                || thread.presentation.view.recovery.is_some()
+                || state
+                    .turns
+                    .values()
+                    .filter(|turn| turn.thread_id == thread_id)
+                    .any(|turn| {
+                        !turn.snapshot.status.terminal()
+                            || turn.snapshot.unknown_effect
+                            || turn.pending.is_some()
+                            || turn.storage_error.is_some()
+                    }));
+        if Arc::strong_count(&gate) != 2
             || thread.presentation.publisher.receiver_count() != 0
             || state.running_turns.values().any(|id| id == thread_id)
             || workspace_owned
-            || state
-                .turns
-                .values()
-                .filter(|turn| turn.thread_id == thread_id)
-                .any(|turn| {
-                    !turn.snapshot.status.terminal()
-                        || turn.snapshot.unknown_effect
-                        || turn.pending.is_some()
-                        || turn.storage_error.is_some()
-                })
+            || execution_or_recovery
         {
             return Err(ServiceError::new(
                 ErrorCode::Conflict,
@@ -658,6 +662,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_turn_receipt(&key).await;
         }
+        Self::require_native_execution()?;
         let gate = self.thread_gate(&target.thread_id)?;
         let _guard = gate.lock().await;
         self.authorize_active_turn(target, caller, &request.turn_id)?;
@@ -704,6 +709,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_turn_receipt(&key).await;
         }
+        Self::require_native_execution()?;
         let gate = self.thread_gate(&target.thread_id)?;
         let _guard = gate.lock().await;
         self.authorize_active_turn(target, caller, &answer.turn_id)?;

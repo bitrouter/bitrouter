@@ -34,6 +34,12 @@ struct ApiState {
 }
 
 impl ApiState {
+    fn native_execution(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        authenticated(headers, &self.token)?;
+        instance(headers, &self.service)?;
+        ThreadService::require_native_execution().map_err(runtime_error)
+    }
+
     fn workspace(&self, workspace: &std::path::Path) -> Result<(), ApiError> {
         if self.workspaces.iter().any(|allowed| allowed == workspace) {
             Ok(())
@@ -163,6 +169,7 @@ fn runtime_error(failure: ServiceError) -> ApiError {
             StatusCode::SERVICE_UNAVAILABLE
         }
         ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+        ErrorCode::UnsupportedCapability => StatusCode::NOT_IMPLEMENTED,
     };
     (
         status,
@@ -323,8 +330,26 @@ async fn capabilities(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     authenticated(&headers, &state.token)?;
+    let runtime = state.service.capabilities();
+    let operations: &[&str] = if runtime.native_execution {
+        &[
+            "create_thread",
+            "start_turn",
+            "enqueue_turn",
+            "steer",
+            "cancel_turn",
+            "input",
+            "resume_queue",
+            "read_thread",
+            "read_turn",
+            "history",
+            "observe",
+        ]
+    } else {
+        &["read_thread", "read_turn", "history", "observe"]
+    };
     Ok(Json(
-        json!({"version": 2, "runtime": state.service.capabilities(), "operations": ["create_thread", "start_turn", "enqueue_turn", "steer", "cancel_turn", "input", "resume_queue", "read_thread", "read_turn", "history", "observe"]}),
+        json!({"version": 2, "runtime": runtime, "operations": operations}),
     ))
 }
 async fn create(
@@ -332,8 +357,7 @@ async fn create(
     headers: HeaderMap,
     Json(body): Json<CreateBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    authenticated(&headers, &state.token)?;
-    instance(&headers, &state.service)?;
+    state.native_execution(&headers)?;
     let workspace = body
         .workspace
         .canonicalize()
@@ -391,6 +415,7 @@ async fn turn(
     Path(id): Path<String>,
     Json(body): Json<TurnBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let request = TurnRequest {
         prompt: body.prompt,
@@ -457,6 +482,7 @@ async fn input(
     Path(id): Path<String>,
     Json(body): Json<InputBody>,
 ) -> Result<Json<Value>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let receipt = state
         .service
@@ -480,6 +506,7 @@ async fn cancel(
     Path((id, turn_id)): Path<(String, String)>,
     Json(body): Json<CancelBody>,
 ) -> Result<Json<Value>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let key = acceptance_key(&headers)?;
     let receipt = if matches!(body.mode, CancelMode::Queued) {
@@ -509,6 +536,7 @@ async fn steer(
     Path(id): Path<String>,
     Json(body): Json<SteeringBody>,
 ) -> Result<Json<Value>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let receipt = state
         .service
@@ -530,6 +558,7 @@ async fn resume(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let snapshot = state
         .service
@@ -565,3 +594,6 @@ async fn observe(
     });
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
+
+#[cfg(all(test, not(feature = "core")))]
+mod core_disabled_tests;

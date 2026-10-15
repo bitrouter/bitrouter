@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use crate::storage::checkpoint::snapshot::context::view::ContextRepresentation;
 use crate::storage::checkpoint::snapshot::context::{ContextStore, FEATURE, digest, invalid};
+#[cfg(feature = "core")]
 use bitrouter_ai::core::checkpoint::CheckpointPayload;
 use bitrouter_ai::core::protocol::CoreError;
 
@@ -277,6 +278,7 @@ pub(crate) struct History {
     immutable: BTreeMap<String, String>,
 }
 
+#[cfg(feature = "core")]
 pub(crate) fn validate_history(
     payload: &CheckpointPayload,
     history: &mut History,

@@ -37,20 +37,20 @@ pub(crate) struct WorkspaceTools {
     root: PathBuf,
     mode: ToolMode,
     interpreter: Option<Interpreter>,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "core"))]
     read_gate: Option<std::sync::Arc<ReadGate>>,
 }
 
 /// Blocks inside real file workers so scheduler tests can establish overlap and
 /// cleanup without relying on filesystem speed or special blocking files.
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 #[derive(Default)]
 pub(crate) struct ReadGate {
     state: std::sync::Mutex<ReadGateState>,
     changed: std::sync::Condvar,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 #[derive(Default)]
 struct ReadGateState {
     entered: Vec<String>,
@@ -60,7 +60,7 @@ struct ReadGateState {
     peak: usize,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 impl ReadGate {
     fn enter(&self, arguments: &str) -> Result<(), String> {
         let label = serde_json::from_str::<serde_json::Value>(arguments)
@@ -341,12 +341,12 @@ impl WorkspaceTools {
             root,
             mode,
             interpreter,
-            #[cfg(test)]
+            #[cfg(all(test, feature = "core"))]
             read_gate: None,
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "core"))]
     pub(crate) fn set_read_gate(&mut self, gate: std::sync::Arc<ReadGate>) {
         self.read_gate = Some(gate);
     }
@@ -404,14 +404,14 @@ impl WorkspaceTools {
             match ToolKind::lookup(name).and_then(|kind| kind.parse(arguments)) {
                 Ok(ToolArgs::Read(args)) => {
                     let tools = self.clone();
-                    #[cfg(test)]
+                    #[cfg(all(test, feature = "core"))]
                     let arguments = arguments.to_owned();
                     let cancel = cancel.clone();
                     tokio::task::spawn_blocking(move || {
                         if cancel.is_cancelled() {
                             return Err("cancelled before reading".into());
                         }
-                        #[cfg(test)]
+                        #[cfg(all(test, feature = "core"))]
                         if let Some(gate) = &tools.read_gate {
                             gate.enter(&arguments)?;
                         }

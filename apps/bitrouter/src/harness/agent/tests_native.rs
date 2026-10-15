@@ -11,6 +11,57 @@ use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+/// Produce exact native journal bytes for the scheduler-independent replay suite.
+/// Regeneration is explicit so ordinary test runs never rewrite the fixture.
+#[tokio::test]
+#[ignore = "fixture authoring: set BITROUTER_NATIVE_REPLAY_FIXTURE to an output file"]
+async fn write_native_replay_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    let destination = std::env::var_os("BITROUTER_NATIVE_REPLAY_FIXTURE")
+        .ok_or("BITROUTER_NATIVE_REPLAY_FIXTURE is required")?;
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        workspace.path().join("evidence.txt"),
+        "retained native evidence\n",
+    )?;
+    let runner = super::agent(
+        &workspace,
+        vec![
+            turn(vec![call(
+                "read-evidence",
+                "read",
+                serde_json::json!({"path":"evidence.txt"}),
+            )]),
+            turn(vec![text("Evidence retained.")]),
+        ],
+        |_| {},
+    )?;
+    let (commits, owner) = commit_recorder();
+    let report = runner
+        .run_with_approvals(
+            "Read evidence.txt and retain the result.",
+            CancellationToken::new(),
+            None,
+            None,
+            Some(commits),
+            None,
+        )
+        .await;
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
+    let facts = owner.await?;
+    let mut replay = None;
+    for fact in &facts {
+        crate::harness::agent::native::Saved::replay(&mut replay, fact)?;
+    }
+    assert!(
+        replay
+            .as_ref()
+            .is_some_and(|saved| saved.complete_projection())
+    );
+    let json = serde_json::to_vec(&facts)?;
+    std::fs::write(destination, zstd::stream::encode_all(json.as_slice(), 3)?)?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_task_scope()
 -> Result<(), Box<dyn std::error::Error>> {

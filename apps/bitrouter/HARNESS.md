@@ -2,8 +2,8 @@
 
 Application `core` owns scheduling. Application `harness` owns native execution,
 durable Thread/Turn state, workspace resources and the external-agent ACP stack.
-The host assembles transport and storage. Model routing currently uses the SDK
-pipeline while its service implementation moves into the application in P0 3.
+The host assembles transport and storage. Model routing uses the application's
+gateway pipeline; the SDK contains service clients.
 
 Paths below are relative to `src/harness/` unless stated otherwise. The P0
 [service plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md) defines the final
@@ -24,7 +24,7 @@ The existing ACP stack is `bitrouter::harness::acp`, selected by the application
 
 The app injects route/cost services and retains CLI/UI adapters. This extraction
 does not attach external ACP sessions to native `ThreadService` execution. Agent configuration data remains in
-`bitrouter_sdk::config::agent` beside the shared `Config`, without ACP runtime
+`bitrouter::config::agent` beside the application `Config`, without ACP runtime
 dependencies.
 
 ## Native ACP ingress
@@ -40,6 +40,14 @@ cancel newer work. Runtime format 7 retains supported 2/3/4/5/6 reads.
 See [the native ACP contract](../../docs/BRO_NATIVE_ACP_SERVER_SPEC.md) and
 [local acceptance](../../docs/BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md). External
 client/controller paths remain v1; native v2 is pinned to the SDK's draft schema.
+
+Local native execution requires `core`. Without it, HTTP and local IPC retain
+stored-session reads and observation, and ACP initialization reports
+`_meta.bitrouter.nativeExecution: false`. New native work is rejected before
+workspace/resource discovery or execution-owner acquisition. Offline recovery
+validates native checkpoint bytes and immutable history, without starting queued
+work or rewriting the journal at shutdown. Read projections can be unloaded when
+no observer holds them; this does not resolve their stored recovery blockers.
 
 ## Read the contracts first
 
@@ -64,10 +72,10 @@ from `service`, `thread` or `storage`.
 2. `service/admission.rs` accepts a keyed input and commits its Turn identity.
 3. `service/runner.rs` drives the Agent while handling commit, approval, model-boundary
    and live-output channels.
-4. `agent.rs` owns the native model/tool run contract. `agent/native.rs` adapts
-   production runs to the Core scheduler; its `native/` modules keep the durable
-   journal, Core port, budget, projections, bounded scheduling, artifacts, and
-   native tool dispatch together.
+4. `agent.rs` owns the native model/tool run contract. `agent/native/driver.rs`
+   adapts production runs to the core scheduler behind `core`, alongside the
+   port, budget, scheduling, artifacts and tool dispatch. `agent/native.rs`,
+   journal decoding and display projection validation remain available offline.
 5. `tools.rs` declares, validates and dispatches the six tools. Implementations live
    in `tools/{read,glob,grep,write,edit,shell}.rs`.
 6. `service/verification.rs` runs the optional configured check.
@@ -102,6 +110,10 @@ an external integration test.
 - Agent and tool suites live in `agent/tests.rs`, `agent/tests_native.rs`, and
   `tools/tests/mod.rs`.
 - Service behavior suites live in `service/tests/`, indexed by `service/tests.rs`.
+- Core-disabled behavior uses `service/core_disabled_tests.rs` and the HTTP,
+  IPC and ACP adapter tests. Exact native writer records in
+  application-relative `tests/fixtures/native-replay/journal.json.zst` exercise offline replay in
+  both profiles; the fixture README records its current-writer provenance.
 - Shared service fixtures, request constructors and synchronization helpers live
   in `service/tests/support.rs`; suites do not borrow helpers from other suites.
 - Focused workspace/reconstruction tests remain beside those implementations in

@@ -29,6 +29,9 @@ mod flow;
 mod project;
 mod wire;
 
+#[cfg(all(test, not(feature = "core")))]
+mod core_disabled_tests;
+
 use flow::Flow;
 use project::Projector;
 use wire::{Wire, invalid};
@@ -210,6 +213,7 @@ impl NativeAcpServer {
         let key = Self::operation_key(&params)?;
         let value = match method {
             "session/new" => {
+                ThreadService::require_native_execution().map_err(service_error)?;
                 let cwd: PathBuf = serde_json::from_value(params["cwd"].clone())
                     .map_err(|e| invalid(e.to_string()))?;
                 if !cwd.is_absolute() {

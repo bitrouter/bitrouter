@@ -69,12 +69,17 @@ impl Wire {
 
     pub(super) fn initialize(self) -> Result<Value, Error> {
         let info = json!({"name":"bitrouter-orchestrator", "version":env!("CARGO_PKG_VERSION")});
-        let meta = json!({"bitrouter":{"version":1,"schemaVersion":"1.10.2","queueResume":"_bitrouter/session/resume_queue"}});
+        let mut meta = json!({"bitrouter":{"version":1,"schemaVersion":"1.10.2","nativeExecution":cfg!(feature = "core")}});
+        let mut sessions = json!({"list":{},"resume":{}});
+        if cfg!(feature = "core") {
+            meta["bitrouter"]["queueResume"] = json!("_bitrouter/session/resume_queue");
+            sessions["close"] = json!({});
+        }
         match self {
             Self::V1 => checked::<v1::InitializeResponse>(json!({
                 "protocolVersion":1,"agentInfo":info,"authMethods":[],"_meta":meta,
                 "agentCapabilities":{"loadSession":true,"promptCapabilities":{"embeddedContext":true},
-                    "mcpCapabilities":{"http":true},"sessionCapabilities":{"list":{},"resume":{},"close":{}}}
+                    "mcpCapabilities":{"http":true},"sessionCapabilities":sessions}
             })),
             Self::V2 => checked::<v2::InitializeResponse>(json!({
                 "protocolVersion":2,"info":info,"_meta":meta,

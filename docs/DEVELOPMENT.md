@@ -6,8 +6,8 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 The table below describes the current implementation during P0. Core, harness,
 TUI, telemetry, model/provider runtime and the old SDK server have moved into
-the application. The SDK provides gateway HTTP/SSE, control and evaluation clients; core
-client extraction and application feature isolation remain in progress. The final
+the application. The SDK provides gateway HTTP/SSE, control, evaluation and
+managed core transport clients; application feature isolation remains in progress. The final
 architecture and migration gates are in the
 [service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 
@@ -16,7 +16,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation, catalog and managed-attempt evidence contracts; optional schema derives; no service runtime or transport |
-| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control and evaluation service clients using AI wire contracts; core streaming clients remain in migration |
+| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control and evaluation clients using AI wire contracts; optional managed core WebSocket transport with caller-owned checkpoint ACKs |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, terminal UI, optional OTLP and management commands |
 | `helpers/dist-helper` | helper | Unpublished registry/chart tooling; configuration schema delegates to the application-owned generator |
@@ -94,8 +94,14 @@ live below `snapshot::context`. These remain application storage types;
 AI/SDK checkpoint envelopes carry the state opaquely. Public observation DTOs
 must not expose the complete private snapshot. Core retains live context
 selection, collaboration, accounting transitions and session execution.
-Harness-only runtime wiring and the complete
-feature matrix remain in progress.
+The scheduler and its local native drivers are gated by `core`. Without core,
+native session inspection and observation validate stored records, but execution
+mutations fail before workspace discovery or execution-owner acquisition. HTTP,
+local IPC and native ACP report this distinction. The host skips native execution
+initialization in that profile, and offline shutdown leaves queued work intact.
+Complete harness-only dependency isolation and the minimum feature matrix remain
+in progress; the core-disabled checks currently retain the other default runtime
+dependencies.
 
 The SDK provides the existing core capability HTTP method and, with its client
 `core` feature, the managed WebSocket channel. Clients explicitly persist and

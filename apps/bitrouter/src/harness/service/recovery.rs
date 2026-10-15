@@ -109,6 +109,7 @@ impl ThreadService {
         caller: &CallerContext,
         request: ThreadRecoveryRequest,
     ) -> Result<ThreadView, ServiceError> {
+        Self::require_native_execution()?;
         let (send, receive) = oneshot::channel();
         let service = self.clone();
         let target = target.clone();
@@ -898,12 +899,17 @@ impl ThreadService {
             .active_turn_id
             .clone()
             .unwrap_or_else(|| target.thread_id.clone());
-        let fence = self
-            .workspace_io(false, move || {
+        // Core-free observation retains bounded projections, never a workspace
+        // fence or authority to resume the reconstructed execution.
+        let fence = if cfg!(feature = "core") {
+            self.workspace_io(false, move || {
                 workspace::WorkspaceFence::inspect(&workspace, &epoch, &execution_id)
             })
             .await?
-            .map(Arc::new);
+            .map(Arc::new)
+        } else {
+            None
+        };
         let mut state = self.lock_state();
         if let Some(existing) = state.threads.get(&target.thread_id) {
             existing.authorize(caller)?;
@@ -947,14 +953,16 @@ impl ThreadService {
                 .workspace_fences
                 .insert(thread.snapshot.workspace.clone(), fence);
         }
-        state.active_workspaces.insert(
-            thread.snapshot.workspace.clone(),
-            thread
-                .snapshot
-                .active_turn_id
-                .clone()
-                .unwrap_or_else(|| target.thread_id.clone()),
-        );
+        if cfg!(feature = "core") {
+            state.active_workspaces.insert(
+                thread.snapshot.workspace.clone(),
+                thread
+                    .snapshot
+                    .active_turn_id
+                    .clone()
+                    .unwrap_or_else(|| target.thread_id.clone()),
+            );
+        }
         for (turn_id, task) in tasks {
             state.turns.insert(turn_id, task);
         }

@@ -136,6 +136,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_steering(&key).await;
         }
+        Self::require_native_execution()?;
         self.read_thread(target, caller)?;
         if request.text.trim().is_empty() || request.text.len() > self.inner.limits.request_bytes {
             return Err("nonempty steering within the input bound is required".into());

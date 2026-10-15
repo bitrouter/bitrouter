@@ -117,38 +117,13 @@ pub(super) async fn intercept(
     if !parts.headers.contains_key("bitrouter-beta") {
         // The ordinary route retains its existing body/SDK contract. Inspection
         // has a separate host bound and cannot consume managed output slots.
-        let inspection = match api.shared.inspections.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                return ApiError::core(ErrorCode::Busy, "response inspection capacity reached")
-                    .into_response();
-            }
-        };
-        let bytes = match tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            to_bytes(body, 16 * 1024 * 1024),
-        )
-        .await
-        {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(_)) => {
-                return ApiError::core(
-                    ErrorCode::LimitExceeded,
-                    "request body exceeds inference limit",
-                )
-                .into_response();
-            }
-            Err(_) => {
-                return ApiError::core(
-                    ErrorCode::LimitExceeded,
-                    "response inspection body timed out",
-                )
-                .into_response();
-            }
-        };
-        let managed = serde_json::from_slice::<Value>(&bytes).is_ok_and(|body| {
-            body.get("bitrouter").is_some() || body["multi_agent"]["enabled"] == true
-        });
+        let (bytes, managed) =
+            match crate::gateway::http::managed_profile::inspect(body, &api.shared.inspections)
+                .await
+            {
+                Ok(inspected) => inspected,
+                Err(error) => return ApiError::from(error).into_response(),
+            };
         if managed {
             return ApiError::core(
                 ErrorCode::UnsupportedVersion,
@@ -156,7 +131,6 @@ pub(super) async fn intercept(
             )
             .into_response();
         }
-        drop(inspection);
         return next
             .run(Request::from_parts(parts, Body::from(bytes)))
             .await;

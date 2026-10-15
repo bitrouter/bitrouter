@@ -37,6 +37,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_turn_receipt(&entry).await;
         }
+        Self::require_native_execution()?;
         let gate = self.thread_gate(&target.thread_id)?;
         let _guard = gate.lock().await;
         let (entry, mut snapshot, messages, cursor) = {
@@ -156,6 +157,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_thread_receipt(&entry).await;
         }
+        Self::require_native_execution()?;
         let gate = self.thread_gate(&target.thread_id)?;
         let guard = gate.lock().await;
         let (mut snapshot, messages) = {
@@ -241,6 +243,9 @@ impl ThreadService {
     }
 
     pub(super) async fn drive_queues(&self) {
+        if !cfg!(feature = "core") {
+            return;
+        }
         let _admission = self.inner.admission.lock().await;
         let candidates = {
             let state = self.lock_state();

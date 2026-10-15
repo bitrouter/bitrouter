@@ -11,7 +11,8 @@ use async_trait::async_trait;
 use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::store::{Journal, MAX_STORE_BYTES, NativePort, NativeStore, StartedTool, error};
+use super::store::local::{Journal, NativePort, StartedTool, error};
+use super::store::{MAX_STORE_BYTES, NativeStore};
 use super::{super::HarnessConfig, NativeResources};
 use crate::core::session::{CoreSession, HarnessPort};
 use crate::harness::agent::ToolMode;

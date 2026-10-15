@@ -388,7 +388,7 @@ struct MemoryState {
     owners: HashMap<String, ExecutionOwner>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 impl MemoryExecutionStore {
     pub(crate) fn set_format_for_test(&self, id: &str, version: u32) -> Result<(), String> {
         let mut state = self

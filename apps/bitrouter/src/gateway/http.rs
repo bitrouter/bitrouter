@@ -10,6 +10,8 @@
 //! pipeline, and renders the result back in the **same** inbound protocol —
 //! the outbound (provider) protocol is chosen per routing target.
 
+pub(crate) mod managed_profile;
+
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
@@ -317,6 +319,8 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/health", get(health))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
+    #[cfg(not(feature = "core"))]
+    let router = managed_profile::disabled(router);
     match options.router_wrapper {
         Some(wrapper) => wrapper(router),
         None => router,

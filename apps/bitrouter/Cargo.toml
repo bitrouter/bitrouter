@@ -179,6 +179,22 @@ name = "telemetry_ingress_log_target"
 required-features = ["otel-http"]
 
 [[test]]
+name = "core_contract"
+required-features = ["core"]
+
+[[test]]
+name = "core_execution"
+required-features = ["core"]
+
+[[test]]
+name = "orchestrator_core"
+required-features = ["core"]
+
+[[test]]
+name = "managed_native"
+required-features = ["core", "harness"]
+
+[[test]]
 name = "telemetry_grpc_transport"
 required-features = ["otel-grpc"]
 

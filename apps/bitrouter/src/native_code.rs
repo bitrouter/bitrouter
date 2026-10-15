@@ -1070,6 +1070,7 @@ mod tests {
                 let result = match (index, command.operation) {
                     (0, Operation::Capabilities) => ReplyResult::Capabilities {
                         runtime: Box::new(crate::harness::service::RuntimeCapabilities {
+                            native_execution: true,
                             server_instance_id: "epoch".into(),
                             limits: Default::default(),
                             execution_ownership: None,
@@ -1221,6 +1222,7 @@ mod tests {
                 let result = if index == 0 {
                     ReplyResult::Capabilities {
                         runtime: Box::new(crate::harness::service::RuntimeCapabilities {
+                            native_execution: true,
                             server_instance_id: "epoch".into(),
                             limits: Default::default(),
                             execution_ownership: None,

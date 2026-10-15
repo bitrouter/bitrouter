@@ -96,10 +96,12 @@ impl ThreadService {
             let (event_tx, mut event_rx) = mpsc::channel(64);
             let (approval_tx, mut approval_rx) = mpsc::channel(1);
             let (commit_tx, mut commit_rx) = mpsc::channel::<CommitRequest>(1);
-            let controls = self.lock_state().turns.get(&turn_id).map(|turn| {
+            let controls = self.lock_state().turns.get(&turn_id).map(|_turn| {
                 crate::harness::control::TurnControl {
-                    fence: Arc::clone(&turn.fence),
-                    native: Arc::clone(&turn.native),
+                    #[cfg(feature = "core")]
+                    fence: Arc::clone(&_turn.fence),
+                    #[cfg(feature = "core")]
+                    native: Arc::clone(&_turn.native),
                 }
             });
             let run_cancel = cancel.clone();

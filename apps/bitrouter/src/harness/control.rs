@@ -49,7 +49,9 @@ impl LaunchFence {
 
 #[derive(Clone)]
 pub(crate) struct TurnControl {
+    #[cfg(feature = "core")]
     pub fence: std::sync::Arc<LaunchFence>,
+    #[cfg(feature = "core")]
     pub native: std::sync::Arc<NativeInputs>,
 }
 
@@ -73,6 +75,7 @@ impl NativeInputs {
         self.changed.notify_one();
     }
 
+    #[cfg(feature = "core")]
     pub(crate) fn take(&self) -> std::collections::VecDeque<(String, String)> {
         std::mem::take(
             &mut *self
@@ -82,6 +85,7 @@ impl NativeInputs {
         )
     }
 
+    #[cfg(feature = "core")]
     pub(crate) async fn changed(&self) {
         self.changed.notified().await;
     }

@@ -22,6 +22,7 @@ use bitrouter_ai::core::protocol::{
     SignalUpdate, ToolEffect, ToolExecute, ToolOutcome, ToolResult,
 };
 
+#[cfg(feature = "core")]
 pub mod session;
 pub mod store;
 

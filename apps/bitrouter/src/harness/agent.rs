@@ -14,6 +14,9 @@ use crate::harness::tools::WorkspaceTools;
 
 pub(crate) mod native;
 
+pub(crate) const NATIVE_UNAVAILABLE: &str =
+    "native execution requires the core feature; stored sessions remain available for inspection";
+
 const DEFAULT_INSTRUCTIONS: &str = "You are BRO, a coding agent. Work in the selected server workspace. Use read, glob, and grep to inspect code; use write and edit to change it, and the shell tool to run commands and checks. For edit, supply unique oldText values from the original file. Report what actually happened; do not claim a check passed unless its tool result shows it.";
 const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Inspect the selected server workspace using read, glob, and grep. Do not change files or run commands. Report what you actually observed.";
 
@@ -177,8 +180,11 @@ pub struct RunReport {
 pub struct Agent {
     native: Option<native::Saved>,
     native_record_bytes: usize,
+    #[cfg(feature = "core")]
     native_checkpoint_bytes: u64,
+    #[cfg(feature = "core")]
     app: Arc<App>,
+    #[cfg(feature = "core")]
     caller: CallerContext,
     tools: WorkspaceTools,
     resource_config: Arc<crate::harness::resources::HarnessConfig>,
@@ -267,6 +273,7 @@ impl Agent {
         self
     }
 
+    #[cfg(feature = "core")]
     fn declarations(&self) -> Vec<bitrouter_ai::types::Tool> {
         let mut tools = self.tools.declarations();
         if let Some(resources) = &self.resources {
@@ -281,6 +288,7 @@ impl Agent {
         tools
     }
 
+    #[cfg(feature = "core")]
     fn validate_call(&self, name: &str, arguments: &str) -> Result<(), String> {
         if let Some(resources) = &self.resources
             && resources.contains(name)
@@ -310,11 +318,14 @@ impl Agent {
     }
 
     pub fn new(
-        app: Arc<App>,
-        caller: CallerContext,
+        _app: Arc<App>,
+        _caller: CallerContext,
         workspace: &Path,
         config: AgentConfig,
     ) -> Result<Self, String> {
+        if !cfg!(feature = "core") {
+            return Err(NATIVE_UNAVAILABLE.into());
+        }
         if config.model.trim().is_empty()
             || config.max_steps == 0
             || config.max_tool_calls == 0
@@ -335,9 +346,12 @@ impl Agent {
         Ok(Self {
             native: None,
             native_record_bytes: 4 * 1024 * 1024,
+            #[cfg(feature = "core")]
             native_checkpoint_bytes: 32 * 1024 * 1024,
-            app,
-            caller,
+            #[cfg(feature = "core")]
+            app: _app,
+            #[cfg(feature = "core")]
+            caller: _caller,
             tools,
             resource_config: Arc::new(crate::harness::resources::HarnessConfig::default()),
             resources: None,
@@ -700,6 +714,7 @@ impl Agent {
     }
 }
 
+#[cfg(feature = "core")]
 fn estimate_cost(prompt_tokens: u64, completion_tokens: u64, rates: EstimateRates) -> u64 {
     let total = u128::from(prompt_tokens) * u128::from(rates.prompt)
         + u128::from(completion_tokens) * u128::from(rates.completion);
@@ -722,6 +737,7 @@ async fn commit_execution(
         .map_err(|_| "execution commit acknowledgement lost".to_string())?
 }
 
+#[cfg(feature = "core")]
 fn not_executed(reason: &str) -> ToolResultOutput {
     ToolResultOutput::ErrorJson {
         value: serde_json::json!({"error": reason, "execution_status": "not_executed"}),
@@ -747,5 +763,5 @@ async fn finish(
     report
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 mod tests;
