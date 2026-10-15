@@ -1,0 +1,418 @@
+{
+  "goal_id": "3e666f6a-abd3-497c-a7ff-d878e12d1322",
+  "source_manifest": "2026-10-15-runtime-evidence-v2-source.sha256",
+  "contexts": [
+    {
+      "native_intent": {
+        "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v2/home/goal-workspaces/3e666f6a-abd3-497c-a7ff-d878e12d1322/artifacts/44c36645ea4d0faf7c962e41b89d90faeafc8204639ec178a416f603fadb3fb7.blob",
+        "sha256": "44c36645ea4d0faf7c962e41b89d90faeafc8204639ec178a416f603fadb3fb7",
+        "bytes": 12119
+      },
+      "work_id": "4a5b8f16c9b51a2242020fd48e47f4a2f3afd883dd49b143db29264b7b88f611",
+      "request_id": "ab280f7d-28dd-47b3-a4eb-2868e026a028",
+      "scope": "handoff_review",
+      "runtime_observations": [
+        {
+          "status": "observed",
+          "goal_id": "3e666f6a-abd3-497c-a7ff-d878e12d1322",
+          "requirements_revision": 1,
+          "task_id": "numbers",
+          "task_revision": 1,
+          "execution_id": "f7cf435f-8fe6-4035-8c55-6b0400b4fa67",
+          "execution_requirements_revision": 1,
+          "execution_task_revision": 1,
+          "current_task_version": true,
+          "run_id": "f15a3355-d408-488b-886d-9adcd79492a6",
+          "harness": "opencode-live",
+          "process": "stopped",
+          "turn": "idle",
+          "failure_recorded": false,
+          "requested_model_route": null,
+          "controller_confirmed_route": null,
+          "supervisor_confirmed_route": null,
+          "actual_provider_model": "unreported by these protocol observations",
+          "history_complete": true,
+          "snapshot_seq": 270,
+          "timeline_complete": true,
+          "time_ordered": true,
+          "timeline": [
+            {
+              "event": "process",
+              "process": "running",
+              "seq": 1,
+              "at": "2026-10-15T04:43:51.945890Z"
+            },
+            {
+              "event": "prompt_admitted",
+              "seq": 3,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "controller_turn_state",
+              "turn": "submitting",
+              "seq": 4,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "controller_turn_state",
+              "turn": "working",
+              "seq": 5,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "worker_activity_observed",
+              "seq": 8,
+              "at": "2026-10-15T04:43:54.525720Z"
+            },
+            {
+              "event": "turn_settled",
+              "seq": 267,
+              "at": "2026-10-15T04:44:20.841638Z"
+            },
+            {
+              "event": "process",
+              "process": "stopping",
+              "seq": 269,
+              "at": "2026-10-15T04:44:21.423119Z"
+            },
+            {
+              "event": "process",
+              "process": "stopped",
+              "seq": 270,
+              "at": "2026-10-15T04:44:21.437028Z"
+            }
+          ],
+          "worker_activity_markers": 1,
+          "admission_is_execution_evidence": false,
+          "omitted_timeline_events": 0,
+          "scope": "Only this execution. No prompt text, reasoning, worker output, tool arguments or permission grants are copied. Missing or omitted history is unknown, not evidence of no work. Prompt and Working markers are controller admission, not acknowledgment or actual worker activity. Public agent output/tool updates or an incoming permission request provide one observed activity marker per pending turn; repeated chunks are coalesced. An activity marker does not prove tool completion or artifact correctness. Only complete, ordered activity-to-settled boundaries can support execution overlap; never infer missing boundaries or use process admission times. Uncontrolled default routing requires no model-switch acknowledgment and is not an actual provider-model identity. These observations grant no permission and do not verify artifacts."
+        }
+      ]
+    },
+    {
+      "native_intent": {
+        "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v2/home/goal-workspaces/3e666f6a-abd3-497c-a7ff-d878e12d1322/artifacts/74be41c17251cc9a8b997383721cdbac17bc191a5487b543428ac53e93fe4e24.blob",
+        "sha256": "74be41c17251cc9a8b997383721cdbac17bc191a5487b543428ac53e93fe4e24",
+        "bytes": 33063
+      },
+      "work_id": "9acb9ef08f9eda4aa59cbbcf00d3b1cc61b1f68603967081227686176d57d3a9",
+      "request_id": "0af2c44a-5efe-4f43-bcd4-792e400f8ce2",
+      "scope": "input_understanding",
+      "runtime_observations": [
+        {
+          "status": "observed",
+          "goal_id": "3e666f6a-abd3-497c-a7ff-d878e12d1322",
+          "requirements_revision": 1,
+          "task_id": "numbers",
+          "task_revision": 1,
+          "execution_id": "f7cf435f-8fe6-4035-8c55-6b0400b4fa67",
+          "execution_requirements_revision": 1,
+          "execution_task_revision": 1,
+          "current_task_version": true,
+          "run_id": "f15a3355-d408-488b-886d-9adcd79492a6",
+          "harness": "opencode-live",
+          "process": "stopped",
+          "turn": "idle",
+          "failure_recorded": false,
+          "requested_model_route": null,
+          "controller_confirmed_route": null,
+          "supervisor_confirmed_route": null,
+          "actual_provider_model": "unreported by these protocol observations",
+          "history_complete": true,
+          "snapshot_seq": 270,
+          "timeline_complete": true,
+          "time_ordered": true,
+          "timeline": [
+            {
+              "event": "process",
+              "process": "running",
+              "seq": 1,
+              "at": "2026-10-15T04:43:51.945890Z"
+            },
+            {
+              "event": "prompt_admitted",
+              "seq": 3,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "controller_turn_state",
+              "turn": "submitting",
+              "seq": 4,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "controller_turn_state",
+              "turn": "working",
+              "seq": 5,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "worker_activity_observed",
+              "seq": 8,
+              "at": "2026-10-15T04:43:54.525720Z"
+            },
+            {
+              "event": "turn_settled",
+              "seq": 267,
+              "at": "2026-10-15T04:44:20.841638Z"
+            },
+            {
+              "event": "process",
+              "process": "stopping",
+              "seq": 269,
+              "at": "2026-10-15T04:44:21.423119Z"
+            },
+            {
+              "event": "process",
+              "process": "stopped",
+              "seq": 270,
+              "at": "2026-10-15T04:44:21.437028Z"
+            }
+          ],
+          "worker_activity_markers": 1,
+          "admission_is_execution_evidence": false,
+          "omitted_timeline_events": 0,
+          "scope": "Only this execution. No prompt text, reasoning, worker output, tool arguments or permission grants are copied. Missing or omitted history is unknown, not evidence of no work. Prompt and Working markers are controller admission, not acknowledgment or actual worker activity. Public agent output/tool updates or an incoming permission request provide one observed activity marker per pending turn; repeated chunks are coalesced. An activity marker does not prove tool completion or artifact correctness. Only complete, ordered activity-to-settled boundaries can support execution overlap; never infer missing boundaries or use process admission times. Uncontrolled default routing requires no model-switch acknowledgment and is not an actual provider-model identity. These observations grant no permission and do not verify artifacts."
+        },
+        {
+          "status": "observed",
+          "goal_id": "3e666f6a-abd3-497c-a7ff-d878e12d1322",
+          "requirements_revision": 1,
+          "task_id": "text",
+          "task_revision": 1,
+          "execution_id": "1e86ec99-ffad-4fdd-b262-79cc4fccc2be",
+          "execution_requirements_revision": 1,
+          "execution_task_revision": 1,
+          "current_task_version": true,
+          "run_id": "d3476cc7-433c-4c94-940b-dd3a91f9ad20",
+          "harness": "opencode-live",
+          "process": "failed",
+          "turn": "idle",
+          "failure_recorded": true,
+          "requested_model_route": null,
+          "controller_confirmed_route": null,
+          "supervisor_confirmed_route": null,
+          "actual_provider_model": "unreported by these protocol observations",
+          "history_complete": true,
+          "snapshot_seq": 1,
+          "timeline_complete": true,
+          "time_ordered": true,
+          "timeline": [
+            {
+              "event": "turn_failed",
+              "seq": 1,
+              "at": "2026-10-15T04:43:51.460005Z"
+            }
+          ],
+          "worker_activity_markers": 0,
+          "admission_is_execution_evidence": false,
+          "omitted_timeline_events": 0,
+          "scope": "Only this execution. No prompt text, reasoning, worker output, tool arguments or permission grants are copied. Missing or omitted history is unknown, not evidence of no work. Prompt and Working markers are controller admission, not acknowledgment or actual worker activity. Public agent output/tool updates or an incoming permission request provide one observed activity marker per pending turn; repeated chunks are coalesced. An activity marker does not prove tool completion or artifact correctness. Only complete, ordered activity-to-settled boundaries can support execution overlap; never infer missing boundaries or use process admission times. Uncontrolled default routing requires no model-switch acknowledgment and is not an actual provider-model identity. These observations grant no permission and do not verify artifacts."
+        }
+      ]
+    },
+    {
+      "native_intent": {
+        "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v2/home/goal-workspaces/3e666f6a-abd3-497c-a7ff-d878e12d1322/artifacts/99271b2e50aed98b0f284a8493af629fff37f5fca35329f7b51c9b313cf6ecaa.blob",
+        "sha256": "99271b2e50aed98b0f284a8493af629fff37f5fca35329f7b51c9b313cf6ecaa",
+        "bytes": 41178
+      },
+      "work_id": "6139bb632d2ea02c2496ab9827339b2177c9252df3bf3bf56d9e422d7b38ac38",
+      "request_id": "fbfca80d-07de-4bb1-af9e-444b8d45fe9b",
+      "scope": "input_understanding",
+      "runtime_observations": [
+        {
+          "status": "observed",
+          "goal_id": "3e666f6a-abd3-497c-a7ff-d878e12d1322",
+          "requirements_revision": 1,
+          "task_id": "numbers",
+          "task_revision": 1,
+          "execution_id": "f7cf435f-8fe6-4035-8c55-6b0400b4fa67",
+          "execution_requirements_revision": 1,
+          "execution_task_revision": 1,
+          "current_task_version": true,
+          "run_id": "f15a3355-d408-488b-886d-9adcd79492a6",
+          "harness": "opencode-live",
+          "process": "stopped",
+          "turn": "idle",
+          "failure_recorded": false,
+          "requested_model_route": null,
+          "controller_confirmed_route": null,
+          "supervisor_confirmed_route": null,
+          "actual_provider_model": "unreported by these protocol observations",
+          "history_complete": true,
+          "snapshot_seq": 270,
+          "timeline_complete": true,
+          "time_ordered": true,
+          "timeline": [
+            {
+              "event": "process",
+              "process": "running",
+              "seq": 1,
+              "at": "2026-10-15T04:43:51.945890Z"
+            },
+            {
+              "event": "prompt_admitted",
+              "seq": 3,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "controller_turn_state",
+              "turn": "submitting",
+              "seq": 4,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "controller_turn_state",
+              "turn": "working",
+              "seq": 5,
+              "at": "2026-10-15T04:43:51.946428Z"
+            },
+            {
+              "event": "worker_activity_observed",
+              "seq": 8,
+              "at": "2026-10-15T04:43:54.525720Z"
+            },
+            {
+              "event": "turn_settled",
+              "seq": 267,
+              "at": "2026-10-15T04:44:20.841638Z"
+            },
+            {
+              "event": "process",
+              "process": "stopping",
+              "seq": 269,
+              "at": "2026-10-15T04:44:21.423119Z"
+            },
+            {
+              "event": "process",
+              "process": "stopped",
+              "seq": 270,
+              "at": "2026-10-15T04:44:21.437028Z"
+            }
+          ],
+          "worker_activity_markers": 1,
+          "admission_is_execution_evidence": false,
+          "omitted_timeline_events": 0,
+          "scope": "Only this execution. No prompt text, reasoning, worker output, tool arguments or permission grants are copied. Missing or omitted history is unknown, not evidence of no work. Prompt and Working markers are controller admission, not acknowledgment or actual worker activity. Public agent output/tool updates or an incoming permission request provide one observed activity marker per pending turn; repeated chunks are coalesced. An activity marker does not prove tool completion or artifact correctness. Only complete, ordered activity-to-settled boundaries can support execution overlap; never infer missing boundaries or use process admission times. Uncontrolled default routing requires no model-switch acknowledgment and is not an actual provider-model identity. These observations grant no permission and do not verify artifacts."
+        },
+        {
+          "status": "observed",
+          "goal_id": "3e666f6a-abd3-497c-a7ff-d878e12d1322",
+          "requirements_revision": 1,
+          "task_id": "text",
+          "task_revision": 1,
+          "execution_id": "1e86ec99-ffad-4fdd-b262-79cc4fccc2be",
+          "execution_requirements_revision": 1,
+          "execution_task_revision": 1,
+          "current_task_version": true,
+          "run_id": "d3476cc7-433c-4c94-940b-dd3a91f9ad20",
+          "harness": "opencode-live",
+          "process": "failed",
+          "turn": "idle",
+          "failure_recorded": true,
+          "requested_model_route": null,
+          "controller_confirmed_route": null,
+          "supervisor_confirmed_route": null,
+          "actual_provider_model": "unreported by these protocol observations",
+          "history_complete": true,
+          "snapshot_seq": 1,
+          "timeline_complete": true,
+          "time_ordered": true,
+          "timeline": [
+            {
+              "event": "turn_failed",
+              "seq": 1,
+              "at": "2026-10-15T04:43:51.460005Z"
+            }
+          ],
+          "worker_activity_markers": 0,
+          "admission_is_execution_evidence": false,
+          "omitted_timeline_events": 0,
+          "scope": "Only this execution. No prompt text, reasoning, worker output, tool arguments or permission grants are copied. Missing or omitted history is unknown, not evidence of no work. Prompt and Working markers are controller admission, not acknowledgment or actual worker activity. Public agent output/tool updates or an incoming permission request provide one observed activity marker per pending turn; repeated chunks are coalesced. An activity marker does not prove tool completion or artifact correctness. Only complete, ordered activity-to-settled boundaries can support execution overlap; never infer missing boundaries or use process admission times. Uncontrolled default routing requires no model-switch acknowledgment and is not an actual provider-model identity. These observations grant no permission and do not verify artifacts."
+        }
+      ]
+    }
+  ],
+  "typed_native": {
+    "outcome": {
+      "Ok": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "control": {
+            "type": "choice",
+            "choice": "pause",
+            "confidence": 0.94,
+            "probabilities": {
+              "none": 0.0,
+              "pause": 0.95,
+              "run": 0.0,
+              "stop": 0.03,
+              "unknown": 0.02
+            }
+          },
+          "modify": {
+            "type": "choice",
+            "choice": "absent",
+            "confidence": 0.76,
+            "probabilities": {
+              "absent": 0.84,
+              "present": 0.15,
+              "unknown": 0.01
+            }
+          },
+          "permission_response": {
+            "type": "choice",
+            "choice": "absent",
+            "confidence": 0.74,
+            "probabilities": {
+              "absent": 0.83,
+              "present": 0.06,
+              "unknown": 0.11
+            }
+          },
+          "query": {
+            "type": "choice",
+            "choice": "present",
+            "confidence": 0.95,
+            "probabilities": {
+              "absent": 0.02,
+              "present": 0.97,
+              "unknown": 0.01
+            }
+          },
+          "target": {
+            "type": "choice",
+            "choice": "task:text",
+            "confidence": 0.5,
+            "probabilities": {
+              "goal": 0.27,
+              "task:integration-docs": 0.0,
+              "task:numbers": 0.01,
+              "task:text": 0.6,
+              "unknown": 0.12
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 13156,
+          "output_tokens": 223
+        }
+      }
+    },
+    "effect_authority": "runtime only"
+  },
+  "input_result": {
+    "input_id": "b62f0d09-e99a-4cb8-8bf5-079f981da4a1",
+    "requirements_saved": false,
+    "control_saved": {
+      "target": "goal",
+      "intent": "pause"
+    },
+    "clarification_kind": "query",
+    "clarification": "Can you provide the ACP startup error or failure log for text run d3476cc7-433c-4c94-940b-dd3a91f9ad20 so the cause can be determined?",
+    "answer": "The text branch’s ACP start was recorded as Failed at 2026-10-15T04:43:51.460005Z, with no observed worker activity. The supplied records do not include the underlying startup error, so they establish the failure but not its cause. Execution and external effects still require reconciliation. Pausing the Goal retains partial results; no requirement changes are needed.",
+    "reasoning_request_id": "fbfca80d-07de-4bb1-af9e-444b8d45fe9b"
+  },
+  "bound_evidence_limit": "Public protocol observations only. No original prompt text, worker output, reasoning, tool args or permission grants copied in runtime_observations. One real actual-Goal example; not calibrated classifier quality or completed parallel delivery."
+}

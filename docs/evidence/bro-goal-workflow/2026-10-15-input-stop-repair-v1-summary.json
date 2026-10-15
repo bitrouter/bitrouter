@@ -1,0 +1,773 @@
+{
+  "source_manifest": "2026-10-15-stop-repair-v1-source.sha256",
+  "source_files": 947,
+  "test_status": {
+    "binary_sha256": "eb8f82667d4ea384358fa68e41040b5a2219d7287543bc391105270975a93ccf",
+    "source_manifest": "2026-10-15-stop-repair-v1-source.sha256",
+    "runs": {
+      "sequences": {
+        "exit": 0,
+        "signal": null,
+        "seconds": 63.208
+      },
+      "corpus": {
+        "exit": 0,
+        "signal": null,
+        "seconds": 233.579
+      }
+    }
+  },
+  "label_authority": "q03 and q07 include human-reviewed semantics; remaining draft labels are not human gold or a calibrated accuracy claim.",
+  "evidence_scope": "Real typed/reasoning calls and durable Goal state over labeled workflow fixtures; no harness dispatch or adoption is exercised by these input evaluations.",
+  "historical_failure": "The earlier source-v5 nominal sequence conformance failure remains recorded in input-v7-summary; this is one new-source evaluation, not a replacement of that failure.",
+  "runs": {
+    "sequences": {
+      "rows": 18,
+      "effect_violations": 0,
+      "nominal_native_outcomes": {
+        "rows": 6,
+        "valid": 6
+      },
+      "injected_fault_rows": 3,
+      "direct_withdrawal_rows": 0,
+      "metrics": {
+        "rules-reasoning": {
+          "rows": 9,
+          "reasoning_attempts": 9,
+          "reasoning_latency_ms": {
+            "median": 2940,
+            "p95": 3865
+          },
+          "configured_reasoning_token_estimate_micro_usd": 102632,
+          "scope": "Provider attempt wall latency and configured managed token estimate; typed latency/cost, user wait, tool fees and total invoice are not included."
+        },
+        "typed-upgrade": {
+          "rows": 9,
+          "reasoning_attempts": 9,
+          "reasoning_latency_ms": {
+            "median": 3081,
+            "p95": 3588
+          },
+          "configured_reasoning_token_estimate_micro_usd": 103863,
+          "scope": "Provider attempt wall latency and configured managed token estimate; typed latency/cost, user wait, tool fees and total invoice are not included."
+        }
+      },
+      "row_effects": [
+        {
+          "case": "s01-step-1",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s01-step-2",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s01-step-1",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "s01-step-2",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "s02-step-1",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s02-step-2",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s02-step-1",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "s02-step-2",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "s03-step-1",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s03-step-2",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s03-step-1",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "s03-step-2",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "s06",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s06",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "timeout"
+        },
+        {
+          "case": "s07",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s07",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "invalid_response"
+        },
+        {
+          "case": "s08",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "s08",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "http"
+        }
+      ]
+    },
+    "corpus": {
+      "rows": 54,
+      "effect_violations": 0,
+      "nominal_native_outcomes": {
+        "rows": 26,
+        "valid": 26
+      },
+      "injected_fault_rows": 0,
+      "direct_withdrawal_rows": 1,
+      "metrics": {
+        "rules-reasoning": {
+          "rows": 27,
+          "reasoning_attempts": 28,
+          "reasoning_latency_ms": {
+            "median": 3559,
+            "p95": 5437
+          },
+          "configured_reasoning_token_estimate_micro_usd": 346126,
+          "scope": "Provider attempt wall latency and configured managed token estimate; typed latency/cost, user wait, tool fees and total invoice are not included."
+        },
+        "typed-upgrade": {
+          "rows": 27,
+          "reasoning_attempts": 28,
+          "reasoning_latency_ms": {
+            "median": 3938,
+            "p95": 6893
+          },
+          "configured_reasoning_token_estimate_micro_usd": 345115,
+          "scope": "Provider attempt wall latency and configured managed token estimate; typed latency/cost, user wait, tool fees and total invoice are not included."
+        }
+      },
+      "row_effects": [
+        {
+          "case": "q01",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q01",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q02",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q02",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q03",
+          "lane": "rules-reasoning",
+          "annotation_status": {
+            "status": "human_reviewed_clarification",
+            "date": "2026-10-14",
+            "decision": "Clarify the failed attempt or log when current Goal has no failure evidence; do not invent a cause or change execution",
+            "previous_clarification": false
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q03",
+          "lane": "typed-upgrade",
+          "annotation_status": {
+            "status": "human_reviewed_clarification",
+            "date": "2026-10-14",
+            "decision": "Clarify the failed attempt or log when current Goal has no failure evidence; do not invent a cause or change execution",
+            "previous_clarification": false
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q04",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q04",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q05",
+          "lane": "rules-reasoning",
+          "annotation_status": {
+            "status": "codex_proposed_from_approved_spec",
+            "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q05",
+          "lane": "typed-upgrade",
+          "annotation_status": {
+            "status": "codex_proposed_from_approved_spec",
+            "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q06",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q06",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q07",
+          "lane": "rules-reasoning",
+          "annotation_status": {
+            "status": "human_reviewed_control_intent",
+            "date": "2026-10-14",
+            "decision": "Temporary hold defaults to pause and retains resumption intent",
+            "previous_intent": "stop"
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q07",
+          "lane": "typed-upgrade",
+          "annotation_status": {
+            "status": "human_reviewed_control_intent",
+            "date": "2026-10-14",
+            "decision": "Temporary hold defaults to pause and retains resumption intent",
+            "previous_intent": "stop"
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q08",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q08",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q09",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q09",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q10",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q10",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q11",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q11",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q12",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q12",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q13",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q13",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q14",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q14",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q15",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q15",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q16",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q16",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q17",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q17",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q18",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q18",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q19",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q19",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q20",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q20",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q21",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q21",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q22",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q22",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q23",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q23",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q24",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q24",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q25",
+          "lane": "rules-reasoning",
+          "annotation_status": {
+            "status": "codex_proposed_from_approved_spec",
+            "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q25",
+          "lane": "typed-upgrade",
+          "annotation_status": {
+            "status": "codex_proposed_from_approved_spec",
+            "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+          },
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q26",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q26",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        },
+        {
+          "case": "q27",
+          "lane": "rules-reasoning",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": null
+        },
+        {
+          "case": "q27",
+          "lane": "typed-upgrade",
+          "annotation_status": "codex_proposed_unreviewed",
+          "effect_violations": [
+
+          ],
+          "native_outcome": "valid"
+        }
+      ]
+    }
+  }
+}

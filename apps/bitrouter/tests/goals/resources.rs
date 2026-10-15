@@ -99,6 +99,7 @@ async fn selected_resources_must_be_frozen_before_dispatch_and_survive_reload() 
             path: "seed.txt".into(),
             content,
         }],
+        checked_dependencies: None,
         mcp_configuration_sha256: "b".repeat(64),
     };
     let changed = Change::PrepareResources {
@@ -261,6 +262,7 @@ fn resource_material_cannot_expand_selection_or_omit_the_selected_bytes() -> Res
         },
         prompt: report(dir.path(), "actual prompt")?,
         materials: vec![],
+        checked_dependencies: None,
         mcp_configuration_sha256: "a".repeat(64),
     };
     assert!(prepared.validate().is_err());
@@ -268,6 +270,16 @@ fn resource_material_cannot_expand_selection_or_omit_the_selected_bytes() -> Res
         path: "unselected".into(),
         content: report(dir.path(), "content")?,
     });
+    assert!(prepared.validate().is_err());
+    prepared.materials[0] = Material::Context {
+        path: "chosen".into(),
+        content: report(dir.path(), "selected")?,
+    };
+    prepared.checked_dependencies = Some(report(dir.path(), "actual checked dependency evidence")?);
+    assert!(prepared.validate().is_ok());
+    if let Some(reference) = &mut prepared.checked_dependencies {
+        reference.bytes = 128 * 1024 + 1;
+    }
     assert!(prepared.validate().is_err());
     Ok(())
 }

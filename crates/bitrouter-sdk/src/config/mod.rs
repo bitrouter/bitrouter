@@ -1853,9 +1853,27 @@ pub fn parse_with<F>(yaml: &str, lookup: F) -> Result<Config>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let substituted = substitute_with(yaml, lookup)?;
-    let mut config: Config = serde_saphyr::from_str(&substituted)
-        .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
+    let resolved = std::cell::RefCell::new(Vec::new());
+    let substituted = substitute_with(yaml, |name| {
+        let value = lookup(name);
+        if let Some(value) = &value
+            && !value.is_empty()
+        {
+            resolved.borrow_mut().push(value.clone());
+        }
+        value
+    })?;
+    let mut config: Config = serde_saphyr::from_str(&substituted).map_err(|error| {
+        // Expanded YAML can contain provider credentials beside an invalid
+        // field. Preserve parser wording/location, never source snippets.
+        let mut options = serde_saphyr::RenderOptions::new(&serde_saphyr::DefaultMessageFormatter);
+        options.snippets = serde_saphyr::SnippetMode::Off;
+        let mut message = error.render_with_options(options);
+        for value in resolved.borrow().iter() {
+            message = message.replace(value, "<redacted>");
+        }
+        BitrouterError::bad_request(format!("invalid bitrouter.yaml: {}", message))
+    })?;
     resolve_derivations(&mut config)?;
     config.validate_router_config()?;
     validate_trajectory_config(&config.trajectory)?;

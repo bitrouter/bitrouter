@@ -1,0 +1,35 @@
+{
+  "goal_id": "7a2b3b61-f0ea-4af9-8d48-84698562d377",
+  "run_intent": "pause",
+  "requirements": 1,
+  "work_started_unchanged": true,
+  "readonly_scopes": [
+    "peek",
+    "transcript"
+  ],
+  "runs": [
+    {
+      "run_id": "dcf9d69a-06ee-4ce7-8e08-84d5cb662306",
+      "process": "failed",
+      "last_seq": 0,
+      "history_complete": false,
+      "events": 0,
+      "event_response": "sessions"
+    },
+    {
+      "run_id": "5f3e6e6b-d025-4a04-a3f2-47ff14f5fd21",
+      "process": "stopped",
+      "last_seq": 344,
+      "history_complete": true,
+      "events": 344,
+      "event_response": "sessions"
+    }
+  ],
+  "daemon_pid": 51740,
+  "limit": "Readonly cold reconstruction only; failed startup history remains explicitly incomplete. This is not actual overlap, running-input adoption, final delivery or a general recovery proof.",
+  "additional_assertions": [
+    "task specifications, task versions, run intents and execution identities preserved",
+    "actual readonly supervisor inventory exactly matches the two original run IDs; no new run",
+    "stopped text history sequences exactly 1..344, snapshot cutoff and last_seq agree, history complete"
+  ]
+}

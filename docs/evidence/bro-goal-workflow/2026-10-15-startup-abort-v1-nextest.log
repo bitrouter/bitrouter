@@ -1,0 +1,68 @@
+   Compiling tokio-rustls v0.26.4
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sqlx v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling axoupdater v0.10.0
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling sea-orm-migration v1.1.20
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 33s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 8aee3463-4a9f-425c-bd0e-b3a4ff76806e with nextest profile: default
+    Starting 9 tests across 1 binary (1770 tests skipped)
+        PASS [   0.021s] (1/9) bitrouter goal_runtime::recovery::tests::unopened_startup_rejects_prompt_updates_gaps_and_missing_history
+        PASS [   0.042s] (2/9) bitrouter acp_cli::session_host_tests::cancelled_initialize_reaps_the_owned_controller
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [>120.000s] (───) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        SLOW [>120.000s] (───) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [ 126.884s] (3/9) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [   0.721s] (4/9) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   0.019s] (5/9) bitrouter supervisor::tests::startup_abort_requires_a_positive_receipt_and_preserves_failed_history
+        PASS [   0.016s] (6/9) bitrouter supervisor::tests::stopped_history_is_hash_bound_and_cannot_cross_run_or_live_state
+        PASS [   0.017s] (7/9) bitrouter supervisor::tests::stopping_startup_releases_completion_lock_before_waiting
+        PASS [   0.011s] (8/9) bitrouter supervisor::tests::unconfirmed_startup_cannot_stop_cleanly_or_be_removed
+        FAIL [ 164.648s] (9/9) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work has been running for over 60 seconds
+    test goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 164.64s
+
+  stderr ───
+    Error: fixture Goal did not reach expected state; execution diagnostics: [{"task":"left","executions":[{"id":"f69de0c6-c826-4c2f-8c44-be68d5f9a485","observation":{"state":"failed","run_id":"e1cd687d-dcf9-47cd-b6a7-9e8205193475","reason":"ACP adapter exited unexpectedly"},"stop":null,"reconciliation":null}]},{"task":"right","executions":[{"id":"5732d783-8204-40f1-bcb8-6e34e49b55df","observation":{"state":"unknown","run_id":"43cf3bc9-bad1-44e9-bb02-5920c83b306e","reason":"Original ACP start recovered in Failed; execution and external effects still require reconciliation"},"stop":null,"reconciliation":null}]},{"task":"join","executions":[]}]; permission diagnostics: [{"material":{"permission_id":"31f42132-283b-40fd-9c4f-78bf87a86947","tool_call":{"toolCallId":"fixture-write","kind":"edit","title":"Write left.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpcdtqMh/goal-workspaces/7a964eff-d62d-4f5f-b7fd-d7adc3a6a2bc/f69de0c6-c826-4c2f-8c44-be68d5f9a485/left.txt"}],"rawInput":{"path":"left.txt"}},"options":[{"optionId":"allow-once","name":"Allow this fixture write","kind":"allow_once"},{"optionId":"deny-once","name":"Deny this fixture write","kind":"reject_once"}],"earlier_tool_context":{"run_id":"e1cd687d-dcf9-47cd-b6a7-9e8205193475","permission_id":"31f42132-283b-40fd-9c4f-78bf87a86947","original_request_sha256":"d0dd8bba208badacd924c7068f541be3c222bc1a905fcd277a1da1bcd4f2668f","permission_seq":8,"snapshot_seq":8,"declarations":[{"seq":7,"at":"2026-10-15T05:14:47.841288Z","kind":{"event":"update","update":{"sessionUpdate":"tool_call","toolCallId":"fixture-write","title":"Write left.txt","kind":"edit","status":"in_progress","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpcdtqMh/goal-workspaces/7a964eff-d62d-4f5f-b7fd-d7adc3a6a2bc/f69de0c6-c826-4c2f-8c44-be68d5f9a485/left.txt"}]}}}]}},"effective_tool":{"toolCallId":"fixture-write","kind":"edit","title":"Write left.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpcdtqMh/goal-workspaces/7a964eff-d62d-4f5f-b7fd-d7adc3a6a2bc/f69de0c6-c826-4c2f-8c44-be68d5f9a485/left.txt"}],"rawInput":{"path":"left.txt"}},"state":{"state":"submitted","operation_id":"f4ce05fd-7a74-49d8-aa7d-2a254ec7ac17","option_id":"allow-once"}}]
+
+  Cancelling due to test failure:
+────────────
+     Summary [ 164.682s] 9 tests run: 8 passed (1 slow), 1 failed, 1770 skipped
+        FAIL [ 164.648s] (9/9) bitrouter goal_runtime::tests::confirmed_pre_session_failure_retries_without_replaying_goal_work
+error: test run failed

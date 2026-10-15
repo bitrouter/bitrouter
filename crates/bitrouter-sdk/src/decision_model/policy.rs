@@ -70,6 +70,14 @@ pub struct DecisionPricing {
     pub input_usd_per_million: f64,
     /// USD per million output tokens.
     pub output_usd_per_million: f64,
+    /// Operator-declared upper bound on aggregate input usage per attempt.
+    /// Absence leaves a nonzero input price unbounded for Goal admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u64>,
+    /// Aggregate output usage bound, required only for nonzero output prices.
+    /// A zero output price has bounded monetary exposure without a token cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
 }
 
 impl DecisionPricing {
@@ -80,6 +88,9 @@ impl DecisionPricing {
             .any(|amount| !amount.is_finite() || amount < 0.0)
         {
             return Err("decision_model.pricing must contain finite nonnegative prices".into());
+        }
+        if self.max_input_tokens == Some(0) || self.max_output_tokens == Some(0) {
+            return Err("decision_model.pricing token bounds must be positive".into());
         }
         Ok(())
     }

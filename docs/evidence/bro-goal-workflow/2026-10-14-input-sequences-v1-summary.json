@@ -1,0 +1,30 @@
+{
+  "run_id": "4491a809-52e5-4c0c-b326-164c4c16434d",
+  "status": "failed",
+  "steps": 12,
+  "violations": [
+    {
+      "case": "s03-step-2",
+      "lane": "rules-reasoning",
+      "violations": [
+        "clarification kind differs from annotation"
+      ]
+    },
+    {
+      "case": "s03-step-2",
+      "lane": "typed-upgrade",
+      "violations": [
+        "clarification kind differs from annotation"
+      ]
+    }
+  ],
+  "source_manifest": "2026-10-14-input-sequences-v1-source.sha256",
+  "labels_status": "Codex proposed, not human gold",
+  "review": {
+    "reviewer": "Codex source and durable instruction inspection",
+    "s01": "Both lanes replace the selected character parser with the regex parser in step 2, retaining original positive/negative checks. Scheme A remains a historical option in fictional supplied facts, not an additional required implementation.",
+    "s02": "Both lanes retain negative checks while adding zero checks in step 2; Goal remains paused. Only left and dependent join version; independent right remains unchanged.",
+    "s03": "Step 1 both lanes save explicit Goal pause, factual unknown-failure answer and Query clarification. Step 2 both models ask concrete Change clarification but also propose redundant Goal pause. Runtime refuses the whole proposal, preserving Pause and requirements but recording Unknown; this is a failure, not silently relabelled."
+  },
+  "evidence_limit": "Synthetic domain workflow state and real model calls; no harness dispatch, adoption or verification proof."
+}

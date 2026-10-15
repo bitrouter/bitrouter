@@ -3,6 +3,44 @@
 use super::*;
 
 #[test]
+fn malformed_config_diagnostics_omit_inline_and_expanded_credentials() -> crate::Result<()> {
+    let credential = "configuration-secret-must-not-appear-6ba527";
+    for key in [credential, "${BRO_DIAGNOSTIC_SECRET}"] {
+        for (protocol, extra) in [
+            ("chat_completions", ""),
+            (
+                "[{'*': chat_completions}]",
+                "decision_model:\n  model: fixture-decision\n  timeout_ms: '${BRO_DIAGNOSTIC_SECRET}'\n",
+            ),
+        ] {
+            let yaml = format!(
+                "inherit_defaults: false\nproviders:\n  example:\n    api_base: https://example.com/v1\n    api_key: '{key}'\n    api_protocol: {protocol}\n{extra}"
+            );
+            let error = parse_with(&yaml, |name| {
+                (name == "BRO_DIAGNOSTIC_SECRET").then(|| credential.into())
+            })
+            .err()
+            .ok_or_else(|| BitrouterError::internal("malformed provider protocol accepted"))?;
+            let message = error.to_string();
+            assert!(
+                !message.contains(credential),
+                "configuration credential leaked"
+            );
+            assert!(
+                !message.contains("configuration-secret"),
+                "credential prefix leaked"
+            );
+            assert!(
+                !message.contains("api_key:"),
+                "expanded source snippet leaked"
+            );
+            assert!(message.contains("line"), "parser location was lost");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn decision_model_config_validates_bounds_without_loading_credentials() -> crate::Result<()> {
     let config = parse_with(
         "inherit_defaults: false\ndecision_model:\n  model: fixture-decision\n",
@@ -1976,5 +2014,26 @@ fn retired_active_protocols_and_providers_require_explicit_migration() -> crate:
         infer_protocol("https://aiplatform.googleapis.com/v1/publishers/google"),
         ApiProtocol::Custom("generate_content".into())
     );
+    Ok(())
+}
+
+#[test]
+fn decision_pricing_accepts_optional_aggregate_bounds_and_refuses_zero() -> crate::Result<()> {
+    let prefix = "inherit_defaults: false\ndecision_model:\n  model: fixture\n  pricing:\n    input_usd_per_million: 1\n    output_usd_per_million: 2\n";
+    let config = parse_with(
+        &format!("{prefix}    max_input_tokens: 100\n    max_output_tokens: 50\n"),
+        |_| None,
+    )?;
+    let pricing = config
+        .decision_model
+        .as_ref()
+        .and_then(|model| model.pricing.as_ref())
+        .ok_or_else(|| BitrouterError::internal("pricing missing"))?;
+    assert_eq!(pricing.max_input_tokens, Some(100));
+    assert_eq!(pricing.max_output_tokens, Some(50));
+    assert!(parse_with(prefix, |_| None)?.decision_model.is_some());
+    for field in ["max_input_tokens", "max_output_tokens"] {
+        assert!(parse_with(&format!("{prefix}    {field}: 0\n"), |_| None).is_err());
+    }
     Ok(())
 }

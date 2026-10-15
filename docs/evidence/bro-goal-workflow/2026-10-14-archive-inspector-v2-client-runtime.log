@@ -1,0 +1,28 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 18s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID b4a70721-4dfa-4309-bc1b-37af579420bf with nextest profile: default
+    Starting 13 tests across 1 binary (1739 tests skipped)
+        PASS [   0.049s] ( 1/13) bitrouter goal_code::tests::actual_database_receipt_must_match_the_original_client_payload
+        PASS [   0.028s] ( 2/13) bitrouter goal_code::tests::changed_protocol_outbox_is_preserved_without_reinterpreting_or_replaying
+        PASS [   0.091s] ( 3/13) bitrouter goal_code::evidence::tests::archive_inspector_reads_committed_chain_and_rejects_uncommitted_or_foreign_material
+        PASS [   0.010s] ( 4/13) bitrouter goal_code::tests::old_receipt_with_identical_text_cannot_clear_a_different_pending_draft
+        PASS [   0.022s] ( 5/13) bitrouter goal_code::tests::outbox_retains_exact_identity_scope_and_text_without_replaying
+        PASS [   0.050s] ( 6/13) bitrouter goal_code::tests::exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt
+        PASS [   0.020s] ( 7/13) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.034s] ( 8/13) bitrouter goal_code::tests::projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer
+        PASS [   0.032s] ( 9/13) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        PASS [   0.009s] (10/13) bitrouter goal_code::tests::receipt_recovery_rotates_lanes_without_replaying_or_replacing_identity
+        PASS [   0.009s] (11/13) bitrouter goal_code::tests::unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop
+        PASS [   0.034s] (12/13) bitrouter goal_code::tests::real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        PASS [ 114.810s] (13/13) bitrouter goal_runtime::tests::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+────────────
+     Summary [ 115.010s] 13 tests run: 13 passed (1 slow), 1739 skipped

@@ -1,0 +1,25 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 07s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 229d76ab-83e7-4cce-b581-b0a954b0f1b2 with nextest profile: default
+    Starting 10 tests across 1 binary (1761 tests skipped)
+        PASS [   0.021s] ( 1/10) bitrouter goal_permission_material::tests::context_rejects_foreign_late_changed_or_contradictory_declarations
+        PASS [   0.016s] ( 2/10) bitrouter goal_permission_material::tests::delivery_rejects_scope_widening_reused_calls_and_late_argument_changes
+        PASS [   0.012s] ( 3/10) bitrouter goal_permission_material::tests::earlier_context_fills_missing_locations_without_rewriting_the_request
+        PASS [   0.013s] ( 4/10) bitrouter goal_permission_material::tests::oversized_or_late_only_context_cannot_fall_back_to_automatic_approval
+        PASS [   0.037s] ( 5/10) bitrouter goal_runtime::permissions::tests::captured_context_allows_only_declared_workspace_reads_and_keeps_all_paths
+        PASS [   0.018s] ( 6/10) bitrouter goal_runtime::permissions::tests::local_file_policy_rejects_paths_through_an_external_symlink
+        PASS [   0.044s] ( 7/10) bitrouter goal_runtime::permissions::tests::local_file_policy_uses_declared_kind_and_paths_without_granting_execute
+        PASS [   0.013s] ( 8/10) bitrouter goal_runtime::recovery::tests::denied_local_tool_requires_actual_rejection_origin_and_failed_terminal
+        PASS [   0.011s] ( 9/10) bitrouter goal_runtime::recovery::tests::later_local_kind_cannot_hide_prior_execute_or_fetch
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [  85.131s] (10/10) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+────────────
+     Summary [  85.321s] 10 tests run: 10 passed (1 slow), 1761 skipped

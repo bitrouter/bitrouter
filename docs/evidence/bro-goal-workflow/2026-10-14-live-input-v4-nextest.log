@@ -1,0 +1,58 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 36s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID fb37c4e2-5938-49f7-90bb-ef0610358a98 with nextest profile: default
+    Starting 1 test across 1 binary (1752 tests skipped)
+        FAIL [   4.986s] (1/1) bitrouter goal_runtime::tests::live_input::live_current_goal_hypothetical_and_explicit_pause_use_real_models_and_durable_effects
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::live_input::live_current_goal_hypothetical_and_explicit_pause_use_real_models_and_durable_effects ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::live_input::live_current_goal_hypothetical_and_explicit_pause_use_real_models_and_durable_effects
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1752 filtered out; finished in 4.97s
+
+  stderr ───
+    Error: bad request: Goal model accounting operation d389e9e5614e6b5ef6decbae0c9bb9393b5a69ed62d16e50bd75e1ba0406409f-begin was not acknowledged: Goal budget prevents new work: This model call has no bounded token-price quote; it cannot enter the configured estimate cap
+
+────────────
+     Summary [   4.993s] 1 test run: 0 passed, 1 failed, 1752 skipped
+        FAIL [   4.986s] (1/1) bitrouter goal_runtime::tests::live_input::live_current_goal_hypothetical_and_explicit_pause_use_real_models_and_durable_effects
+error: test run failed

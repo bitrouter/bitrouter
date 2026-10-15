@@ -73,6 +73,12 @@ pub(super) fn document(state: &State) -> Vec<Line<'static>> {
     } else if let Some(goal) = state.current_goal() {
         lines.push(line(format!("{} / {}", goal.workspace, goal.title)));
         if let Some(book) = state.notebook() {
+            if book.omitted_events > 0 {
+                lines.push(line(format!(
+                    "{} older display entries omitted · Ctrl-O opens persistent history",
+                    book.omitted_events
+                )));
+            }
             for event in &book.events {
                 lines.push(Line::default());
                 lines.extend(event.lines().map(line));
@@ -114,6 +120,7 @@ pub(super) fn footer(
             Screen::Goals => "Goals",
             Screen::New => "New Goal",
             Screen::Workflow => "Workflow · read only",
+            Screen::History => "Goal history · read only",
             _ => "Task / evidence · read only",
         }
         .into()
@@ -360,7 +367,39 @@ pub(super) fn footer(
                             "Saving original operation; other views remain available.",
                         ));
                     }
-                    rows.push(line("Ctrl-P pause · Ctrl-X stop · Ctrl-R resume · Ctrl-B budget · Ctrl-A decisions/accept · Ctrl-I evidence"));
+                    rows.push(line("Ctrl-P pause · Ctrl-X stop · Ctrl-R resume · Ctrl-B budget · Ctrl-A decisions/accept · Ctrl-I evidence · Ctrl-O history"));
+                }
+            }
+            Screen::History => {
+                if let Some(page) = &state.history {
+                    rows.push(line(format!(
+                        "After revision {} · pinned cutoff {}",
+                        page.after,
+                        page.cutoff
+                            .map_or_else(|| "loading".into(), |revision| revision.to_string())
+                    )));
+                    if page.pending {
+                        rows.push(line("Reading persisted history…"));
+                    }
+                    if let Some(error) = &page.error {
+                        rows.push(line(format!("History unavailable: {error} · r retry")));
+                    }
+                    let body: Vec<_> = page
+                        .lines
+                        .iter()
+                        .flat_map(|text| text.lines())
+                        .map(line)
+                        .flat_map(|row| wrap(&row, width))
+                        .collect();
+                    let capacity = usize::from(height.saturating_sub(8));
+                    let offset = page.offset.min(body.len().saturating_sub(capacity));
+                    rows.extend(body.into_iter().skip(offset).take(capacity));
+                    rows.push(line(
+                        "↑↓ read page · PgUp/PgDn pages · Home first · r refresh · Esc back",
+                    ));
+                    rows.push(line(
+                        "Execution continues; draft and current Goal are unchanged.",
+                    ));
                 }
             }
             Screen::Workflow => {

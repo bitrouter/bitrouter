@@ -1,0 +1,48 @@
+{
+  "binary": {
+    "binary_sha256": "511d5bf5c33b70bb4a3d10466d8d248b0c45ffdd46bb9347bcb4150c0ae88924",
+    "source_manifest": "docs/evidence/bro-goal-workflow/2026-10-15-startup-abort-v3-source.sha256",
+    "runner": "copied current Rust libtest executable; no concurrent Cargo"
+  },
+  "runner": "direct copied Rust libtest; one ignored credentialed test actually executed",
+  "results": 52,
+  "mismatches": [
+    {
+      "case": "q21",
+      "lane": "rules-reasoning",
+      "annotation_status": "codex_proposed_unreviewed",
+      "violations": [
+        "clarification differs from annotation"
+      ],
+      "answer": "当前目标仍设为运行：left、right 两个分支负责复现并验证解析器输入，join 负责汇总已检查的结果。但运行时观测不可用，目前没有可核实的执行进度或检查结果，因此无法确认复现、验证已完成到哪一步。此前“覆盖空输入”的请求尚未保存为要求，仍待明确空输入应被接受还是拒绝。",
+      "clarification": "能否提供 left、right 分支的最新执行日志或检查结果，以便确认实际进度？",
+      "clarification_kind": "query",
+      "requirements_saved": false,
+      "control_saved": null,
+      "retained_unresolved": [
+        "u1",
+        "live-input-q21"
+      ]
+    },
+    {
+      "case": "q21",
+      "lane": "typed-upgrade",
+      "annotation_status": "codex_proposed_unreviewed",
+      "violations": [
+        "clarification differs from annotation"
+      ],
+      "answer": "目前记录显示：left、right 两个分支已请求启动，运行意图均为继续执行；join 汇总任务尚无执行记录。但两个分支都缺少可核实的运行映射，也没有已记录的检查结果，因此无法确认实际进度或是否完成。此前“覆盖空输入”的追加要求尚未保存，仍待确认空输入应被接受还是拒绝。",
+      "clarification": "能否提供 left、right 分支的最新执行日志或结果，以便确认实际进度？",
+      "clarification_kind": "query",
+      "requirements_saved": false,
+      "control_saved": null,
+      "retained_unresolved": [
+        "u1",
+        "live-input-q21"
+      ]
+    }
+  ],
+  "status": "failed; no aggregate accuracy or calibration claim",
+  "label_authority": "q03 and q07 explicitly human reviewed; other labels remain Codex-proposed; q21 question is pending",
+  "sequences": "not run by this candidate after corpus failed; not inherited as current success"
+}

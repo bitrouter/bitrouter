@@ -1,0 +1,41 @@
+{
+  "run_id": "ac1c667c-4340-42cb-80a9-5bf6ef1378ec",
+  "exit_code": 100,
+  "duration_seconds": 261.736,
+  "lanes": 52,
+  "effect_difference_lanes": [
+    {
+      "case": "q05",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+        "clarification differs from annotation"
+      ]
+    },
+    {
+      "case": "q05",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+        "clarification differs from annotation"
+      ]
+    },
+    {
+      "case": "q25",
+      "lane": "rules-reasoning",
+      "effect_violations": [
+        "clarification differs from annotation"
+      ]
+    },
+    {
+      "case": "q25",
+      "lane": "typed-upgrade",
+      "effect_violations": [
+        "clarification differs from annotation"
+      ]
+    }
+  ],
+  "runtime_error_lanes": 0,
+  "original_labels_sha256": "fb1536b6e06858ecd623b1c6b3b0edee1d247a8647f93cbd9b26d523e658ba75",
+  "harness_effects": "not_exercised_domain_fixture_only",
+  "q26_duplicate_of_q05": true,
+  "label_authority": "Candidate annotations; q03/q07 have explicit human decisions. Other cases are not human gold."
+}

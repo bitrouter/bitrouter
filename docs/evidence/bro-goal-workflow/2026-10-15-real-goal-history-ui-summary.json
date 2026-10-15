@@ -1,0 +1,31 @@
+{
+  "client_binary": {
+    "sha256": "dcf36b4b587849dc02a0eca309b5214a1d7a1c6a81a3e978e5a07ec57d434f00",
+    "source_manifest": "docs/evidence/bro-goal-workflow/2026-10-15-completion-evidence-v2-source.sha256",
+    "scope": "actual source-v2 PTY-built UI client; private daemon remains source-v5"
+  },
+  "daemon_scope": "Existing source-v5 private daemon; not upgraded by the source-v2 UI",
+  "goal": "2bb6c569-f213-48e1-8eb2-b657a58f3395",
+  "requirements": 2,
+  "intent": "pause",
+  "before_revision": 1074,
+  "after_revision": 1110,
+  "observations": {
+    "readonly_header": true,
+    "first_page": true,
+    "next_page": true,
+    "draft_retained": true
+  },
+  "new_persisted_operations": 36,
+  "managed_generation_attempts_before": 6,
+  "managed_generation_attempts_after": 6,
+  "native_tty_sha256": "507c602f332c3261414e9e99be8f044ec8f889e47ead88865eca401215b55950",
+  "exit": 0,
+  "scope": "Actual native terminal read-only Goal observation and persistent-history round trip. No new input/control/permission, no managed work, no completion claim. Unsubmitted draft visible after returning; UI then detached normally.",
+  "input_control_permission_or_dispatch_operations": 0,
+  "execution_identities_unchanged": true,
+  "background_operation_kinds": {
+    "workflow/budget/observe_elapsed": 22,
+    "workflow/claim_coordinator": 14
+  }
+}

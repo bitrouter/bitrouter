@@ -9,7 +9,9 @@
 //!   several shapes (Codex multi-turn) — parsed leniently, never 400.
 //! - #454-2: the streaming envelope is complete, every event carries a
 //!   `sequence_number`, `response.completed` carries the full `response`
-//!   object, and there is **no** `[DONE]` sentinel.
+//!   object, and the encoder emits **no** `[DONE]` sentinel. The decoder accepts
+//!   one untyped transport terminator after a validated terminal, as used by
+//!   stateless compatible endpoints; it never substitutes for a terminal.
 //! - #432: `response.incomplete` and unknown forward-compatible events are not
 //!   mis-flagged as errors.
 //! - #434: function-call stream items map `item_id` back to `call_id`, and
@@ -3748,6 +3750,8 @@ struct ResponsesStreamDecoder {
     /// executor to consume and validate every later SSE event before exposing
     /// success to the pipeline, where a terminal otherwise stops polling.
     successful_terminal: Option<StreamPart>,
+    /// An optional, untyped transport terminator carries no additional content.
+    transport_terminated: bool,
 }
 
 impl ResponsesStreamDecoder {
@@ -3781,6 +3785,16 @@ impl StreamDecoder for ResponsesStreamDecoder {
         let data = event.data.trim();
         if data.is_empty() {
             return Ok(Vec::new());
+        }
+        if data == "[DONE]" && event.event.as_deref().is_none_or(|name| name == "message") {
+            if self.successful_terminal.is_some() && !self.transport_terminated {
+                self.transport_terminated = true;
+                return Ok(Vec::new());
+            }
+            return Err(ModelError::InvalidResponse {
+                message: "Responses transport terminator requires one validated terminal and must not repeat".to_string(),
+                usage: None,
+            });
         }
         if self.successful_terminal.is_some() {
             return Err(ModelError::InvalidResponse {

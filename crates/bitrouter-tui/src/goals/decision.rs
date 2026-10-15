@@ -1,5 +1,5 @@
 //! Pinned actual permission requests. Viewing is never consent.
-use super::{Decision, Effect, Screen, State};
+use super::{Decision, Effect, Screen, State, Task};
 use crossterm::event::KeyCode;
 
 pub(super) struct Dialog {
@@ -43,6 +43,40 @@ impl Dialog {
 }
 
 impl State {
+    pub fn detail_evidence_is_open(&self, goal_id: &str, artifact_id: &str) -> bool {
+        self.screen == Screen::Detail
+            && self.current.as_deref() == Some(goal_id)
+            && self
+                .detail
+                .as_ref()
+                .and_then(|task| {
+                    task.artifacts
+                        .get(self.notebook().map_or(0, |book| book.selected_artifact))
+                })
+                .is_some_and(|artifact| artifact.id == artifact_id)
+    }
+
+    /// Archive navigation replaces only the pinned read-only inspector.
+    pub fn receive_archive(&mut self, goal_id: &str, artifact_id: &str, detail: Task) -> bool {
+        if !self.detail_evidence_is_open(goal_id, artifact_id) {
+            return false;
+        }
+        if self.archived_detail.is_none()
+            && let Some(original) = self.detail.take()
+        {
+            let offset = self.notebook().map_or(0, |book| book.detail_offset);
+            let selected = self.notebook().map_or(0, |book| book.selected_artifact);
+            self.archived_detail = Some((original, offset, selected));
+        }
+        self.detail = Some(detail);
+        self.artifact_preview = None;
+        if let Some(book) = self.notebooks.get_mut(goal_id) {
+            book.detail_offset = 0;
+            book.selected_artifact = 0;
+        }
+        true
+    }
+
     pub fn permission_evidence_is_open(&self, goal_id: &str, artifact_id: &str) -> bool {
         self.screen == Screen::Goal
             && self.current.as_deref() == Some(goal_id)
@@ -73,16 +107,7 @@ impl State {
                 .is_some_and(|decision| decision.request.id == artifact_id)
         {
             dialog.material = Some(result);
-        } else if self.screen == Screen::Detail
-            && self
-                .detail
-                .as_ref()
-                .and_then(|task| {
-                    task.artifacts
-                        .get(self.notebook().map_or(0, |book| book.selected_artifact))
-                })
-                .is_some_and(|artifact| artifact.id == artifact_id)
-        {
+        } else if self.detail_evidence_is_open(goal_id, artifact_id) {
             match result {
                 Ok(text) => self.artifact_preview = Some(text),
                 Err(reason) => self.notice = Some(format!("Evidence unavailable: {reason}")),

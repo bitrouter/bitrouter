@@ -1024,7 +1024,7 @@ selection: omitted/null preserves it, and an empty selection removes it. BRO
 validates configured IDs, skill versions, route control and scope before saving.
 Affected tasks and dependents receive new revisions; independent branches retain
 their version. Old execution is stopped and reconciled before replacement at
-the next safe boundary. Paused work stays paused. Requested resources and actual
+the next safe boundary. A superseded running task may wait at most ten seconds for a tool permission or settled boundary before cancellation; no new old-version permissions are admitted. Pause, stop and budget exhaustion bypass this wait. Waiting is not stop confirmation or effect reconciliation. Paused work stays paused. Requested resources and actual
 provided material/controller acknowledgments are shown separately. This does
 not mutate a harness's private in-flight context or prove tool/skill use.
 
@@ -1068,9 +1068,12 @@ attempt limits and cumulative budget/accounting are retained.
 | Ctrl-G | Open VISUAL/EDITOR for this draft; success replaces it, failure retains it; Enter still submits |
 | Ctrl-P / Ctrl-X / Ctrl-R | Explicit pause / stop / resume intent |
 | Ctrl-B | Exact elapsed-time and configured model-token estimate limits |
-| Ctrl-A | Actual permission requests; no default consent |
-| Ctrl-I | Explicit acceptance of the pinned delivery, only when required |
+| Ctrl-A | Actual permission requests, or explicit acceptance of the pinned delivery only when required; no default consent |
+| Ctrl-I | Goal requirements, budgets, delivery and pinned evidence |
+| Ctrl-O | Read-only persistent operation history; PgUp/PgDn pages, arrows read, Home oldest, r refresh |
 | Ctrl-Q | Detach; does not stop the Goal |
+
+The middle transcript retains a bounded recent display; older persisted facts remain accessible with Ctrl-O. History pages pin their revision cutoff and never retarget input or submit controls. Refresh explicitly opens a new cutoff. Drafts and unresolved submissions remain retained while idle off-page caches are released.
 
 Workflow/detail is read-only: Enter opens pinned evidence, Space folds known
 node details, Ctrl-F opens a full-screen inspector and Esc returns. Evidence
@@ -1087,10 +1090,12 @@ the private workspace, and an unchanged captured workspace. Pending BRO checks,
 missing tool endings, unscoped/persistent/external permissions or incomplete
 history remain blocked. Recovery reads the immutable permission submission history and matches the
 actual ACP request and selected response, including after closed permission
-cards leave the live view. Reconciliation evidence, replacement dispatch and
-current-version verification are separate. Old local partial work stays
+cards leave the live view. A failed local tool may have no ACP permission request. Such a call remains separate from consent and can reconcile only with explicit workspace scope, a stable failed terminal state, complete unreused history, confirmed process termination and a stable workspace snapshot that includes possible partial local effects. An offered permission still needs its actual resolution; successful calls without a request and unknown/external effects remain outside this narrow recovery path. Failure alone never proves no effects. Reconciliation evidence, replacement dispatch and
+current-version verification are separate. Final review may read bounded prior public activity, including a hash- and receipt-verified archive, for historical workflow conditions such as parallel work. Such history never substitutes for current artifact checks or grants execution authority. Current upstream check outputs and handoffs are hash-verified, frozen in checked_dependencies and included in the dependent prompt before dispatch; the same exact supplied context is validated for review. Prepared context is distinct from a harness acknowledgment or private model use. Old local partial work stays
 inspectable; it does not satisfy a new task version by itself. Permission
-auto-allow excludes edits to Git/BRO control metadata.
+auto-allow excludes edits to Git/BRO control metadata. Local read/edit/search policy validates every explicit ACP location and original rawInput path/file_path/filePath argument together; missing paths, malformed values, outside targets, external symlinks and conflicting scope remain unapproved. Before permission, streamed non-path arguments may change; the actual offered request remains unchanged, and every earlier path declaration must stay consistent. Changes after permission still require a new decision. A path argument is not rewritten as a harness-reported location. Each prepared worker prompt names its actual isolated workspace and requests explicit tool paths, including searches with implicit working-directory defaults. This is context guidance; missing or contradictory scope still requires a decision and is never synthesized as reported permission evidence.
+
+A settled failed machine check or current semantic rejection with an actual report can trigger a fresh isolated repair after the same effect reconciliation. The worker receives bounded, hash-verified failed material and actual check/review evidence; requirements and checks remain unchanged. Each task version permits at most three executions (sixteen retained). Unknown checks, interrupted reviews without a result, incomplete tool scope and external effects remain blocked. Review also receives bounded original verifier inputs from the immutable dispatch baseline; omissions are explicit and never prove correctness.
 
 Budget time includes waiting/pauses; dollar limits cover configured managed
 model-token estimates, not all unknown harness/tool/provider invoices. Raising

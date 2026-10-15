@@ -4114,10 +4114,6 @@ fn responses_stream_rejects_duplicate_or_post_terminal_events() -> crate::error:
         },
         SseEvent {
             event: None,
-            data: "[DONE]".to_string(),
-        },
-        SseEvent {
-            event: None,
             data: "malformed nonempty trailing data".to_string(),
         },
     ] {
@@ -4127,6 +4123,98 @@ fn responses_stream_rejects_duplicate_or_post_terminal_events() -> crate::error:
             .decode(&trailing)
             .expect_err("no event may follow a Responses terminal");
         assert!(error.to_string().contains("after its terminal"));
+    }
+    Ok(())
+}
+
+#[test]
+fn responses_completed_transport_terminator_preserves_captured_terminal() -> crate::error::Result<()>
+{
+    // Captured from a real stateless Responses endpoint; no scripted server.
+    let stream = include_str!("../../tests/fixtures/responses-completed-done.sse");
+    let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
+    let mut parts = Vec::new();
+    for block in stream
+        .split("\n\n")
+        .filter(|block| !block.trim().is_empty())
+    {
+        let event = block
+            .lines()
+            .find_map(|line| line.strip_prefix("event:"))
+            .map(|value| value.trim().to_string());
+        let data = block
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.extend(decoder.decode(&SseEvent { event, data })?);
+    }
+    assert!(
+        !parts
+            .iter()
+            .any(|part| matches!(part, StreamPart::ResponseCompleted { .. }))
+    );
+    parts.extend(decoder.finish()?);
+    assert_eq!(
+        parts
+            .iter()
+            .filter(|part| matches!(part, StreamPart::ResponseCompleted { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        parts
+            .iter()
+            .any(|part| matches!(part, StreamPart::TextDelta { text } if text == "OK"))
+    );
+    assert!(parts.iter().any(
+        |part| matches!(part, StreamPart::ResponseCompleted { status, usage:Some(usage), .. }
+        if status == "completed" && usage.prompt_tokens == 11 && usage.completion_tokens == 5)
+    ));
+    Ok(())
+}
+
+#[test]
+fn responses_transport_terminator_cannot_create_success_or_hide_later_data()
+-> crate::error::Result<()> {
+    let done = SseEvent {
+        event: None,
+        data: "[DONE]".to_string(),
+    };
+    let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
+    assert!(decoder.decode(&done).is_err());
+    assert!(decoder.finish().is_err());
+    let terminal = SseEvent {
+        event: Some("response.completed".to_string()),
+        data: serde_json::json!({"type":"response.completed","response":{
+            "id":"validated-terminal","status":"completed","output":[]
+        }})
+        .to_string(),
+    };
+    for trailing in [
+        done.clone(),
+        terminal.clone(),
+        SseEvent {
+            event: Some("response.failed".to_string()),
+            data: "[DONE]".to_string(),
+        },
+        SseEvent {
+            event: None,
+            data: serde_json::json!({
+                "type":"response.output_text.delta","delta":"must not appear after completion"
+            })
+            .to_string(),
+        },
+        SseEvent {
+            event: None,
+            data: "malformed trailing data".to_string(),
+        },
+    ] {
+        let mut decoder = adapter_for(ApiProtocol::Responses)?.stream_decoder();
+        assert!(decoder.decode(&terminal)?.is_empty());
+        assert!(decoder.decode(&done)?.is_empty());
+        assert!(decoder.decode(&trailing).is_err());
     }
     Ok(())
 }

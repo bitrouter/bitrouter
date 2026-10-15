@@ -1,0 +1,48 @@
+[
+  {
+    "case": "q01",
+    "lane": "rules-reasoning",
+    "annotation_status": "codex_proposed_unreviewed",
+    "harness_effects": "not_exercised_domain_fixture_only",
+    "input": "暂停会怎样？",
+    "input_result": {
+      "input_id": "live-input-q01",
+      "source_requirements_revision": 1,
+      "effective_requirements_revision": 1,
+      "answer": null,
+      "clarification": "bad request: Goal model source/owner or durable acknowledgement is unavailable",
+      "requirements_saved": false,
+      "affected_tasks": [],
+      "control_saved": null,
+      "controlled_tasks": [],
+      "control_superseded": false,
+      "permission_response_saved": null,
+      "classification": null,
+      "reasoning_request_id": null,
+      "clarification_kind": "unknown",
+      "resolutions": []
+    },
+    "budget": {
+      "limits": {
+        "elapsed_ms": null,
+        "managed_token_estimates_micro_usd": 6000000
+      },
+      "elapsed_ms": 0,
+      "held": [],
+      "halt": "No frozen model route has a bounded token-price reservation fitting the Goal cap",
+      "resume_required": true
+    },
+    "accounting": {
+      "work_started": 16,
+      "work_observed": 16,
+      "provider_attempts": 0,
+      "estimated_model_tokens_micro_usd": 0
+    },
+    "plan_observation": [
+      {
+        "accepted_routes": [],
+        "token_reservations": []
+      }
+    ]
+  }
+]

@@ -1,0 +1,83 @@
+   Compiling ring v0.17.14
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling rustls v0.23.41
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling sqlx-core v0.8.6
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling tonic v0.14.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling tonic-prost v0.14.6
+   Compiling opentelemetry-proto v0.32.0
+   Compiling sea-query-binder v0.7.0
+   Compiling tonic-types v0.14.6
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 28s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 9b085486-99d7-4a78-aa69-555bcb508cbc with nextest profile: default
+    Starting 2 tests across 8 binaries (3639 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        SLOW [>120.000s] (───) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        FAIL [ 150.819s] (1/2) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission has been running for over 60 seconds
+    test goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1771 filtered out; finished in 150.80s
+
+  stderr ───
+    Error: fixture Goal did not reach expected state; execution diagnostics: [{"task":"left","executions":[{"id":"3fdd96a9-2255-4ade-8dce-234aa33b8f1e","observation":{"state":"running","run_id":"a84960b3-5878-44f1-ae4a-5ce666290fdc","native_session_id":"goal-fixture-13866"},"stop":{"state":"confirmed","operation_id":"7c9f50ca-8741-4105-a17b-cd7867f8c18b","detail":"Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"},"reconciliation":null}]},{"task":"right","executions":[{"id":"9139f8d1-57cc-488b-bc20-ad9dfe373da0","observation":{"state":"running","run_id":"c2d03b02-5e7d-4888-a16d-8eff3b01b6ba","native_session_id":"goal-fixture-13917"},"stop":{"state":"confirmed","operation_id":"68f1a4bf-242a-42d0-968f-4ea0d1e3aa48","detail":"Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"},"reconciliation":null}]},{"task":"join","executions":[]}]; permission diagnostics: [{"material":{"permission_id":"bb877ce4-9acc-470a-83c5-e4631cd393be","tool_call":{"toolCallId":"fixture-write","kind":"edit","title":"Write left.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpaM8a0e/goal-workspaces/cd7c947e-9009-44c1-8de5-9a9e02b02cda/3fdd96a9-2255-4ade-8dce-234aa33b8f1e/left.txt"}],"rawInput":{"path":"left.txt"}},"options":[{"optionId":"allow-once","name":"Allow this fixture write","kind":"allow_once"},{"optionId":"deny-once","name":"Deny this fixture write","kind":"reject_once"}],"earlier_tool_context":{"run_id":"a84960b3-5878-44f1-ae4a-5ce666290fdc","permission_id":"bb877ce4-9acc-470a-83c5-e4631cd393be","original_request_sha256":"27ebcf8b05a20e845f5f1b2f603c477353b79262d8b1eedb0aef6986edac123b","permission_seq":8,"snapshot_seq":8,"declarations":[{"seq":7,"at":"2026-10-15T00:46:08.494857Z","kind":{"event":"update","update":{"sessionUpdate":"tool_call","toolCallId":"fixture-write","title":"Write left.txt","kind":"edit","status":"in_progress","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpaM8a0e/goal-workspaces/cd7c947e-9009-44c1-8de5-9a9e02b02cda/3fdd96a9-2255-4ade-8dce-234aa33b8f1e/left.txt"}]}}}]}},"effective_tool":{"toolCallId":"fixture-write","kind":"edit","title":"Write left.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpaM8a0e/goal-workspaces/cd7c947e-9009-44c1-8de5-9a9e02b02cda/3fdd96a9-2255-4ade-8dce-234aa33b8f1e/left.txt"}],"rawInput":{"path":"left.txt"}},"state":{"state":"submitted","operation_id":"d01cf2c5-3954-44dd-a30e-5feeb32684a1","option_id":"allow-once"}},{"material":{"permission_id":"58ea25dd-b42c-4ce0-a2c4-41cb62411c48","tool_call":{"toolCallId":"fixture-write","kind":"read","title":"Write right.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpaM8a0e/goal-workspaces/cd7c947e-9009-44c1-8de5-9a9e02b02cda/9139f8d1-57cc-488b-bc20-ad9dfe373da0/right.txt"}],"rawInput":{"path":"right.txt"}},"options":[{"optionId":"allow-always","name":"Allow persistently","kind":"allow_always"},{"optionId":"deny-once","name":"Reject once","kind":"reject_once"}],"earlier_tool_context":{"run_id":"c2d03b02-5e7d-4888-a16d-8eff3b01b6ba","permission_id":"58ea25dd-b42c-4ce0-a2c4-41cb62411c48","original_request_sha256":"ea3d53ef95adb289a329db9b3f9f1a6f8340345bbb96ac2ecb52d1ad4589abff","permission_seq":8,"snapshot_seq":8,"declarations":[{"seq":7,"at":"2026-10-15T00:46:08.494914Z","kind":{"event":"update","update":{"sessionUpdate":"tool_call","toolCallId":"fixture-write","title":"Write right.txt","kind":"read","status":"in_progress","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpaM8a0e/goal-workspaces/cd7c947e-9009-44c1-8de5-9a9e02b02cda/9139f8d1-57cc-488b-bc20-ad9dfe373da0/right.txt"}]}}}]}},"effective_tool":{"toolCallId":"fixture-write","kind":"read","title":"Write right.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpaM8a0e/goal-workspaces/cd7c947e-9009-44c1-8de5-9a9e02b02cda/9139f8d1-57cc-488b-bc20-ad9dfe373da0/right.txt"}],"rawInput":{"path":"right.txt"}},"state":{"state":"pending"}}]
+
+        FAIL [   0.074s] (2/2) bitrouter::goals input_tests::query_clarification_preserves_explicit_pause_and_rejects_change_ambiguity
+  stdout ───
+
+    running 1 test
+    test input_tests::query_clarification_preserves_explicit_pause_and_rejects_change_ambiguity ... FAILED
+
+    failures:
+
+    failures:
+        input_tests::query_clarification_preserves_explicit_pause_and_rejects_change_ambiguity
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 79 filtered out; finished in 0.06s
+
+  stderr ───
+    Error: invalid Goal request: unresolved input cannot commit proposed effects
+
+────────────
+     Summary [ 150.917s] 2 tests run: 0 passed, 2 failed, 3639 skipped
+        FAIL [ 150.819s] (1/2) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        FAIL [   0.074s] (2/2) bitrouter::goals input_tests::query_clarification_preserves_explicit_pause_and_rejects_change_ambiguity
+error: test run failed
