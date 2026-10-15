@@ -13,7 +13,7 @@ fn artifact_error() -> CoreError {
     )
 }
 
-pub(super) fn quiescent(snapshot: &crate::core::session::SessionSnapshot) -> bool {
+pub(super) fn quiescent(snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot) -> bool {
     snapshot
         .agents
         .values()
@@ -40,7 +40,7 @@ pub(super) fn quiescent(snapshot: &crate::core::session::SessionSnapshot) -> boo
 }
 
 pub(super) fn continuation_boundary(
-    snapshot: &crate::core::session::SessionSnapshot,
+    snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot,
     events: &[bitrouter_ai::core::checkpoint::DurableEvent],
 ) -> bool {
     quiescent(snapshot)
@@ -61,7 +61,7 @@ pub(super) struct Journal {
     pub(super) fences: BTreeSet<ToolStartFence>,
     pub(super) started: BTreeSet<ToolStartFence>,
     pub(super) presented: BTreeSet<String>,
-    context_history: crate::core::context_router::validation::History,
+    context_history: crate::storage::checkpoint::snapshot::context::validation::History,
     artifacts: BTreeMap<String, (ArtifactRef, std::sync::Arc<Vec<u8>>)>,
     quota: u64,
 }
@@ -96,7 +96,7 @@ impl Journal {
             .as_ref()
             .map(|batch| {
                 let payload = batch.decode(&self.limits)?;
-                let state: crate::core::session::SessionSnapshot =
+                let state: crate::storage::checkpoint::snapshot::SessionSnapshot =
                     serde_json::from_value(payload.checkpoint.state).map_err(|_| {
                         CoreError::rejected(
                             ErrorCode::CheckpointConflict,
@@ -107,9 +107,9 @@ impl Journal {
                     state.run.as_ref().is_none_or(|run| {
                         matches!(
                             run.status,
-                            crate::core::session::RunStatus::Completed
-                                | crate::core::session::RunStatus::Cancelled
-                                | crate::core::session::RunStatus::Failed
+                            crate::storage::checkpoint::snapshot::RunStatus::Completed
+                                | crate::storage::checkpoint::snapshot::RunStatus::Cancelled
+                                | crate::storage::checkpoint::snapshot::RunStatus::Failed
                         )
                     }) && quiescent(&state),
                 )
@@ -131,7 +131,7 @@ impl Journal {
         instance_id: &str,
         manifest: bitrouter_ai::core::protocol::HarnessManifest,
     ) -> Result<bitrouter_ai::core::protocol::Restore, CoreError> {
-        use crate::core::session::{RunStatus, SessionSnapshot};
+        use crate::storage::checkpoint::snapshot::SessionSnapshot;
         use bitrouter_ai::core::protocol::{
             Bind, Restore, ToolObservation, ToolOutcome, ToolStatus,
         };
@@ -149,7 +149,9 @@ impl Journal {
         let active = snapshot.run.as_ref().is_some_and(|run| {
             !matches!(
                 run.status,
-                RunStatus::Completed | RunStatus::Cancelled | RunStatus::Failed
+                crate::storage::checkpoint::snapshot::RunStatus::Completed
+                    | crate::storage::checkpoint::snapshot::RunStatus::Cancelled
+                    | crate::storage::checkpoint::snapshot::RunStatus::Failed
             )
         });
         if active && !continuation_boundary(&snapshot, &payload.events) {
@@ -288,7 +290,7 @@ impl Journal {
         decoded: &super::DecodedCheckpoint<'_>,
         ack: &CheckpointAck,
     ) -> Result<(), CoreError> {
-        crate::core::context_router::validation::validate_store_history(
+        crate::storage::checkpoint::snapshot::context::validation::validate_store_history(
             &decoded.snapshot.context_store,
             &mut self.context_history,
         )?;
@@ -305,7 +307,7 @@ impl Journal {
         ack: &CheckpointAck,
     ) -> Result<(), CoreError> {
         let payload = batch.decode(&self.limits)?;
-        crate::core::context_router::validation::validate_history(
+        crate::storage::checkpoint::snapshot::context::validation::validate_history(
             &payload,
             &mut self.context_history,
         )?;

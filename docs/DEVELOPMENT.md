@@ -86,8 +86,16 @@ shared manifest and frozen tool-result validation. `ClientMessageExt` remains
 in `bitrouter::core::protocol` for live connection-grant checks; `CommitGate`
 remains in `bitrouter::core::checkpoint`. These traits add methods to the shared
 data; they do not provide a plugin interface or transfer persistence authority.
-The shared codecs do not depend on core execution. Full snapshot/history
-recovery and feature isolation remain in progress.
+The shared codecs do not depend on core execution. Private persisted session
+records now live in `bitrouter::storage::checkpoint::snapshot`, including
+`SessionSnapshot`, its routing/collaboration/accounting records and context
+evidence. Offline immutable-history validation and bounded observation projection
+live below `snapshot::context`. These remain application storage types;
+AI/SDK checkpoint envelopes carry the state opaquely. Public observation DTOs
+must not expose the complete private snapshot. Core retains live context
+selection, collaboration, accounting transitions and session execution.
+Harness-only runtime wiring and the complete
+feature matrix remain in progress.
 
 The SDK provides the existing core capability HTTP method and, with its client
 `core` feature, the managed WebSocket channel. Clients explicitly persist and

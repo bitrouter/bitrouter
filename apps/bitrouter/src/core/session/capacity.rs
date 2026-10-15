@@ -212,7 +212,7 @@ pub(super) fn check(
         .manifest
         .required_features
         .iter()
-        .any(|feature| feature == super::super::context_router::NATIVE_TOOLS);
+        .any(|feature| feature == crate::storage::checkpoint::snapshot::context::NATIVE_TOOLS);
     for agent in projected.agents.values_mut() {
         let Some(turn) = &mut agent.turn else {
             continue;
@@ -345,7 +345,7 @@ pub(super) fn check(
             .values()
             .flat_map(|run| run.work.values())
             .filter(|work| {
-                work.state == crate::core::accounting::work::CostWorkState::IntentRecorded
+                work.state == crate::storage::checkpoint::snapshot::accounting::work::CostWorkState::IntentRecorded
             })
             .count() as u64,
     )?;
@@ -357,11 +357,13 @@ pub(super) fn check(
             ("execution_epoch".into(), grant.execution_epoch.to_string()),
         ]));
         reserve.add(entry_bytes(&operation)?)?;
-        reserve.add(entry_bytes(&release::ReleaseRecord {
-            operation_id: operation.operation_id.clone(),
-            grant: grant.clone(),
-            state_revision: u64::MAX,
-        })?)?;
+        reserve.add(entry_bytes(
+            &crate::storage::checkpoint::snapshot::release::ReleaseRecord {
+                operation_id: operation.operation_id.clone(),
+                grant: grant.clone(),
+                state_revision: u64::MAX,
+            },
+        )?)?;
         event_payloads.push(encode(&operation)?);
     }
     let identity = BatchIdentity {
@@ -1129,16 +1131,18 @@ mod tests {
                 step_id: "root-step".into(),
                 action,
                 wait_output_version: Some(wait_output::VERSION),
-                wait: Some(collaboration::WaitState {
-                    targets: BTreeMap::from([(
-                        "child".into(),
-                        collaboration::WaitTarget {
-                            agent_turn_id: "child-turn".into(),
-                            status: Some(AgentStatus::WaitingTool),
-                        },
-                    )]),
-                    deadline_ms: 600_000,
-                }),
+                wait: Some(
+                    crate::storage::checkpoint::snapshot::collaboration::WaitState {
+                        targets: BTreeMap::from([(
+                            "child".into(),
+                            crate::storage::checkpoint::snapshot::collaboration::WaitTarget {
+                                agent_turn_id: "child-turn".into(),
+                                status: Some(AgentStatus::WaitingTool),
+                            },
+                        )]),
+                        deadline_ms: 600_000,
+                    },
+                ),
                 result: None,
                 consumed: false,
             });

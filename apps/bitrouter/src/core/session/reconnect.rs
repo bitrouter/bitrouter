@@ -1,7 +1,8 @@
 //! Same-owner transport reconciliation and evidence-only late model outcomes.
 
 use super::*;
-use crate::core::accounting::work::{CostWorkKind, CostWorkState, report_digest};
+use crate::core::accounting::work::report_digest;
+use crate::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter_ai::core::protocol::{
     OwnershipGrant, PendingProviderEvidence, ProviderAttemptEvidence,
 };
@@ -438,7 +439,7 @@ fn unknown_commit(mut error: CoreError) -> CoreError {
 fn evidence_work<'a>(
     state: &'a SessionSnapshot,
     evidence: &ProviderAttemptEvidence,
-) -> Result<&'a crate::core::accounting::work::CostWork, CoreError> {
+) -> Result<&'a crate::storage::checkpoint::snapshot::accounting::work::CostWork, CoreError> {
     state
         .cost_work
         .get(&evidence.run_id)

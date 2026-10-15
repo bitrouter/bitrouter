@@ -101,7 +101,7 @@ async fn native_turns_restore_the_same_core_and_keep_evidence_and_views()
             sessions.insert(batch.identity.session_id.clone());
             epochs.insert(batch.identity.execution_epoch);
             latest = Some(serde_json::from_value::<
-                crate::core::session::SessionSnapshot,
+                crate::storage::checkpoint::snapshot::SessionSnapshot,
             >(batch.decode(limits)?.checkpoint.state)?);
         }
         if let ExecutionRecord::ThreadEvent { event } = record {

@@ -20,7 +20,7 @@ pub(super) fn remaining_tools(state: &SessionSnapshot) -> u64 {
                 .work
                 .values()
                 .filter(|work| {
-                    work.kind == super::super::accounting::work::CostWorkKind::WorkspaceTool
+                    work.kind == crate::storage::checkpoint::snapshot::accounting::work::CostWorkKind::WorkspaceTool
                 })
                 .count() as u64
         },

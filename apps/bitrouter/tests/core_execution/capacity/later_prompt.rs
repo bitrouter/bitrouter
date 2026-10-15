@@ -1,7 +1,7 @@
 //! Accepted tool history must survive rejection of a later model attempt.
 
 use super::*;
-use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter_ai::core::checkpoint::ToolStartFence;
 use bitrouter_ai::core::protocol::OperationReceipt;
 use bitrouter_ai::types::ToolResultOutput;

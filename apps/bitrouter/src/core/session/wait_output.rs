@@ -3,8 +3,8 @@
 //! dispatcher, response capture and canonical pairing implementation.
 
 use super::*;
-use crate::core::collaboration::{WaitState, WaitTarget};
 use crate::storage::checkpoint::serialized_bytes;
+use crate::storage::checkpoint::snapshot::collaboration::{WaitState, WaitTarget};
 
 pub(super) const VERSION: u32 = 1;
 
@@ -269,10 +269,12 @@ pub(super) fn reserved(state: &SessionSnapshot, host: &Limits) -> Result<u64, Co
             if responses::active_id(state).is_some() {
                 bytes = add(
                     bytes,
-                    serialized_bytes(&responses::ResponseEvent {
-                        agent_name: agent.display_path.clone(),
-                        event,
-                    })?,
+                    serialized_bytes(
+                        &crate::storage::checkpoint::snapshot::responses::ResponseEvent {
+                            agent_name: agent.display_path.clone(),
+                            event,
+                        },
+                    )?,
                 )?;
             }
             if let Some(observations) = result["value"]["agents"].as_array() {

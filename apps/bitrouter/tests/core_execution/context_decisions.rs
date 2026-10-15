@@ -1,10 +1,10 @@
 use super::*;
-use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter::core::context_router::FEATURE;
 use bitrouter::gateway::model::decision::DecisionRuntime;
 use bitrouter::gateway::model::decision::policy::DecisionPolicy;
 use bitrouter::gateway::model::decision::policy::DecisionPricing;
 use bitrouter::gateway::model::decision::typesafe::TypeSafeExecutor;
+use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
+use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
 use bitrouter_ai::core::protocol::ContextMode;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -504,7 +504,6 @@ async fn signal_change_invalidates_inflight_decision_and_replans() -> TestResult
 
 #[tokio::test]
 async fn omitted_tool_exchange_can_be_recalled_as_one_group() -> TestResult {
-    use bitrouter::core::context_router::tools::ContextAction;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(decide)
@@ -550,9 +549,11 @@ async fn omitted_tool_exchange_can_be_recalled_as_one_group() -> TestResult {
             "recall",
             session.head().await.state_revision,
             &snapshot.agent_id,
-            Action::Context(ContextAction::Recall {
-                block_ids: vec![block.block_id.clone()],
-            }),
+            Action::Context(
+                bitrouter::storage::checkpoint::snapshot::context::action::ContextAction::Recall {
+                    block_ids: vec![block.block_id.clone()],
+                },
+            ),
         )
         .await?;
     let second = harness
@@ -576,8 +577,7 @@ async fn omitted_tool_exchange_can_be_recalled_as_one_group() -> TestResult {
 
 #[tokio::test]
 async fn derived_representations_keep_exact_sources_and_expire_with_workspace() -> TestResult {
-    use bitrouter::core::context_router::evidence::SourceSpan;
-    use bitrouter::core::context_router::tools::ContextAction;
+    use bitrouter::storage::checkpoint::snapshot::context::evidence::SourceSpan;
     for (extract, changed, unknown) in [
         (false, false, false),
         (true, false, false),
@@ -618,7 +618,7 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
             .find(|block| !block.protected)
             .ok_or("missing optional group")?;
         let action = if extract {
-            ContextAction::Extract {
+            bitrouter::storage::checkpoint::snapshot::context::action::ContextAction::Extract {
                 block_id: block.block_id.clone(),
                 spans: vec![SourceSpan {
                     message_index: 1,
@@ -628,7 +628,7 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
                 }],
             }
         } else {
-            ContextAction::Publish {
+            bitrouter::storage::checkpoint::snapshot::context::action::ContextAction::Publish {
                 block_ids: vec![block.block_id.clone()],
                 summary: "summary-only-sentinel".into(),
             }
@@ -683,10 +683,10 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
 
 #[tokio::test]
 async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -> TestResult {
-    use bitrouter::core::context_router::inspection::{Inspection, RoutingPhase};
     use bitrouter::gateway::routing::signals::NextStepRole;
     use bitrouter::gateway::routing::signals::ProgressState;
     use bitrouter::gateway::routing::signals::TaskFamily;
+
     let server = MockServer::start().await;
     Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &Request| {
         let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else { return ResponseTemplate::new(400) };
@@ -722,12 +722,12 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     };
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Some(inspection) = Inspection::capture(&session.snapshot().await)
+            if let Some(inspection) = bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&session.snapshot().await)
                 && let Some(routing) = inspection
                     .tasks
                     .first()
                     .and_then(|task| task.routing.as_ref())
-                && routing.phase == RoutingPhase::Classifying
+                && routing.phase == bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Classifying
             {
                 assert!(routing.workflow.is_none() && routing.model.is_none());
                 break;
@@ -738,13 +738,18 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     .await?;
     driving.await??;
     let mut state = session.snapshot().await;
-    let inspection = Inspection::capture(&state).ok_or("inspection missing")?;
+    let inspection =
+        bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&state)
+            .ok_or("inspection missing")?;
     let routing = inspection
         .tasks
         .first()
         .and_then(|task| task.routing.as_ref())
         .ok_or("routing missing")?;
-    assert_eq!(routing.phase, RoutingPhase::Finished);
+    assert_eq!(
+        routing.phase,
+        bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Finished
+    );
     let workflow = routing.workflow.as_ref().ok_or("workflow missing")?;
     assert_eq!(workflow.task_family, TaskFamily::CodeFrontendUi);
     assert_eq!(workflow.next_step_role, NextStepRole::Implement);
@@ -756,15 +761,20 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .get_mut(&root_id)
         .and_then(|agent| agent.turn.as_mut())
         .ok_or("root missing")?;
-    turn.status = bitrouter::core::session::AgentStatus::Runnable;
+    turn.status = bitrouter::storage::checkpoint::snapshot::AgentStatus::Runnable;
     turn.final_answer = None;
-    let preparing = Inspection::capture(&state).ok_or("preparation inspection missing")?;
+    let preparing =
+        bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&state)
+            .ok_or("preparation inspection missing")?;
     let routing = preparing
         .tasks
         .first()
         .and_then(|task| task.routing.as_ref())
         .ok_or("preparation routing missing")?;
-    assert_eq!(routing.phase, RoutingPhase::Preparing);
+    assert_eq!(
+        routing.phase,
+        bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Preparing
+    );
     assert!(routing.workflow.is_none() && routing.model.is_none());
     // The same runnable boundary waits for dependencies when a final answer
     // exists and a child has unfinished work.
@@ -772,7 +782,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     child.agent_id = "waiting-child".into();
     child.parent_id = Some(root_id.clone());
     child.turn.as_mut().ok_or("child turn missing")?.status =
-        bitrouter::core::session::AgentStatus::Runnable;
+        bitrouter::storage::checkpoint::snapshot::AgentStatus::Runnable;
     state.agents.insert(child.agent_id.clone(), child);
     state
         .agents
@@ -780,13 +790,18 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .and_then(|agent| agent.turn.as_mut())
         .ok_or("root missing")?
         .final_answer = Some("waiting for child".into());
-    let waiting = Inspection::capture(&state).ok_or("waiting inspection missing")?;
+    let waiting =
+        bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&state)
+            .ok_or("waiting inspection missing")?;
     let routing = waiting
         .tasks
         .first()
         .and_then(|task| task.routing.as_ref())
         .ok_or("waiting routing missing")?;
-    assert_eq!(routing.phase, RoutingPhase::Waiting);
+    assert_eq!(
+        routing.phase,
+        bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Waiting
+    );
     assert!(routing.model.is_some());
     session.disconnect().await;
     Ok(())

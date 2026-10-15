@@ -2,10 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::session::{AgentStatus, ModelStep, SessionSnapshot};
 use crate::gateway::routing::signals::NextStepRole;
 use crate::gateway::routing::signals::ProgressState;
 use crate::gateway::routing::signals::TaskFamily;
+use crate::storage::checkpoint::snapshot::{AgentStatus, ModelStep, SessionSnapshot};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Inspection {
@@ -96,7 +96,7 @@ pub struct DecisionUsage {
 
 impl Inspection {
     pub fn capture(state: &SessionSnapshot) -> Option<Self> {
-        if !super::tasks::enabled(state) {
+        if !crate::storage::checkpoint::snapshot::context::enabled(state) {
             return None;
         }
         let run = state.run.as_ref()?;
@@ -124,7 +124,10 @@ impl Inspection {
                     task_id: work.task_id.clone(),
                     agent_id: work.agent_id.clone(),
                     parent_task_id: work.parent_task_id.clone(),
-                    text_preview: super::planner::truncate(&work.text, 256).into(),
+                    text_preview: crate::storage::checkpoint::snapshot::context::view::truncate(
+                        &work.text, 256,
+                    )
+                    .into(),
                     status: work.status,
                     view_id: work.last_view_id.clone(),
                     prompt_bytes: view.map(|view| view.prompt_bytes),
@@ -211,7 +214,10 @@ impl Inspection {
     }
 }
 
-fn task_routing(state: &SessionSnapshot, work: &super::WorkUnit) -> Option<RoutingStatus> {
+fn task_routing(
+    state: &SessionSnapshot,
+    work: &crate::storage::checkpoint::snapshot::context::WorkUnit,
+) -> Option<RoutingStatus> {
     let turn = state
         .agents
         .get(&work.agent_id)?
@@ -220,7 +226,7 @@ fn task_routing(state: &SessionSnapshot, work: &super::WorkUnit) -> Option<Routi
         .filter(|turn| turn.agent_turn_id == work.task_id)?;
     let waiting = turn.status == AgentStatus::Runnable
         && turn.final_answer.is_some()
-        && crate::core::session::pending_dependencies(state, &work.agent_id);
+        && crate::storage::checkpoint::snapshot::pending_dependencies(state, &work.agent_id);
     let step = turn
         .steps
         .last()

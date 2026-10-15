@@ -1,7 +1,7 @@
 use super::*;
-use bitrouter::core::accounting::work::CostWorkState;
-use bitrouter::core::session::AgentStatus;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::AgentStatus;
+use bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState;
 use bitrouter_ai::core::protocol::ProviderAttemptEvidence;
 
 pub(super) struct FaultPort {
@@ -427,7 +427,7 @@ async fn late_canonical_output_rejection_preserves_applied_steering() -> TestRes
     let state = session.snapshot().await;
     assert_eq!(
         state.steering["steer"].disposition,
-        bitrouter::core::session::steering::SteeringDisposition::Applied
+        bitrouter::storage::checkpoint::snapshot::steering::SteeringDisposition::Applied
     );
     assert_eq!(state.root_turn().ok_or("turn")?.steps.len(), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
@@ -702,7 +702,7 @@ async fn retired_attempt_keeps_output_capacity_and_contract_for_late_evidence() 
                         .run
                         .ok_or("run")?
                         .resource_constraint,
-                    Some(bitrouter::core::session::ResourceConstraint::CheckpointCapacity)
+                    Some(bitrouter::storage::checkpoint::snapshot::ResourceConstraint::CheckpointCapacity)
                 );
                 exhausted = true;
                 break;

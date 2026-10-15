@@ -19,9 +19,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{Agent, RunChannels, RunReport, RunStatus};
-use crate::core::context_router::FEATURE;
-use crate::core::session::{CoreSession, RunStatus as CoreStatus, SessionSnapshot};
+use crate::core::session::CoreSession;
 use crate::storage::checkpoint::VerifiedBatch;
+use crate::storage::checkpoint::snapshot::context::FEATURE;
+use crate::storage::checkpoint::snapshot::{RunStatus as CoreStatus, SessionSnapshot};
 use bitrouter_ai::core::checkpoint::{CheckpointBatch, DurableHead};
 use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
@@ -54,7 +55,7 @@ impl<'a> DecodedCheckpoint<'a> {
         let snapshot: SessionSnapshot =
             serde_json::from_value(verified.payload().checkpoint.state.clone())
                 .map_err(|error| error.to_string())?;
-        crate::core::context_router::validation::validate(&snapshot)
+        crate::storage::checkpoint::snapshot::context::validation::validate(&snapshot)
             .map_err(|error| error.message)?;
         Ok(Self { verified, snapshot })
     }
@@ -312,8 +313,8 @@ impl Agent {
             core_instance_id: grant.core_instance_id.clone(),
             operations: vec![
                 FEATURE.into(),
-                crate::core::context_router::NATIVE_TOOLS.into(),
-                crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
+                crate::storage::checkpoint::snapshot::context::NATIVE_TOOLS.into(),
+                crate::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING.into(),
             ],
             transports: vec!["native".into()],
             unsupported_features: Vec::new(),
@@ -367,8 +368,8 @@ impl Agent {
             max_artifact_chunk_bytes: limits.input_bytes / 4,
             required_features: vec![
                 FEATURE.into(),
-                crate::core::context_router::NATIVE_TOOLS.into(),
-                crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
+                crate::storage::checkpoint::snapshot::context::NATIVE_TOOLS.into(),
+                crate::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING.into(),
             ],
         };
         let (output, mut commands) = mpsc::channel(64);

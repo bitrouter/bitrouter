@@ -220,13 +220,13 @@ async fn explicit_optional_history_rebuild_is_committed_recounted_and_auditable(
         rebuilt.preparation_work.is_empty(),
         "reconstruction must not rerun preparation or model selection"
     );
-    use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
+
     let ledger = &state.cost_work[&turn.run_id];
     assert_eq!(
         ledger
             .work
             .values()
-            .filter(|work| work.kind == CostWorkKind::InputCount)
+            .filter(|work| work.kind == bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkKind::InputCount)
             .count(),
         3
     );
@@ -234,23 +234,29 @@ async fn explicit_optional_history_rebuild_is_committed_recounted_and_auditable(
     let rebuilt_count = &ledger.work[&format!("{}/count/0", rebuilt.step_id)];
     assert_eq!(rejected_count.request_id, rebuilt_count.request_id);
     assert_ne!(rejected_count.step_id, rebuilt_count.step_id);
-    assert_eq!(rejected_count.state, CostWorkState::OutcomeRecorded);
-    assert_eq!(rebuilt_count.state, CostWorkState::OutcomeRecorded);
+    assert_eq!(
+        rejected_count.state,
+        bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState::OutcomeRecorded
+    );
+    assert_eq!(
+        rebuilt_count.state,
+        bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState::OutcomeRecorded
+    );
     assert_eq!(
         ledger
             .work
             .values()
-            .filter(|work| work.kind == CostWorkKind::Preparation)
+            .filter(|work| work.kind == bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkKind::Preparation)
             .count(),
         2
     );
     assert_eq!(
         ledger.work[&format!("{}/rebuild", rejected.step_id)].state,
-        CostWorkState::OutcomeRecorded
+        bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState::OutcomeRecorded
     );
     assert_eq!(
         ledger.work[&format!("{}/validation", rebuilt.step_id)].state,
-        CostWorkState::OutcomeRecorded
+        bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState::OutcomeRecorded
     );
     assert!(
         ledger
@@ -493,7 +499,7 @@ async fn failed_reconstruction_commit_keeps_the_original_context() -> TestResult
     let work = &state.cost_work[&turn.run_id].work[&format!("{}/rebuild", step.step_id)];
     assert_eq!(
         work.state,
-        bitrouter::core::accounting::work::CostWorkState::IntentRecorded
+        bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState::IntentRecorded
     );
     assert!(work.elapsed_ms.is_none());
     Ok(())

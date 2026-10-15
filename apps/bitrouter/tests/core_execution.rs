@@ -57,8 +57,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bitrouter::core::collaboration::{Action, Work};
-use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
+use bitrouter::core::session::{CoreSession, HarnessPort};
 use bitrouter::gateway::assembly::App;
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::model::target::AuthScheme;
@@ -71,6 +70,8 @@ use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
 use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use bitrouter::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
 use bitrouter::storage::checkpoint::sha256;
+use bitrouter::storage::checkpoint::snapshot::collaboration::{Action, Work};
+use bitrouter::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
 use bitrouter_ai::core::protocol::{
     ArtifactRef, Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest,
@@ -958,7 +959,7 @@ async fn all_infeasible_capacity_candidates_are_durably_rejected() -> TestResult
     let application = step.application.as_ref().ok_or("missing application")?;
     assert!(matches!(
         application.disposition,
-        bitrouter::core::routing::ApplicationDisposition::Rejected
+        bitrouter::storage::checkpoint::snapshot::routing::ApplicationDisposition::Rejected
     ));
     assert_eq!(
         application.reason.as_ref().map(|reason| reason.code),
@@ -1095,7 +1096,7 @@ async fn context_preparation_rejection_is_durable_before_dispatch() -> TestResul
         assert_eq!(decision.decision_id, applied.decision_id);
         assert!(matches!(
             applied.disposition,
-            bitrouter::core::routing::ApplicationDisposition::Rejected
+            bitrouter::storage::checkpoint::snapshot::routing::ApplicationDisposition::Rejected
         ));
         assert_eq!(
             applied.reason.as_ref().map(|error| error.code),
@@ -1417,7 +1418,7 @@ async fn bind_app_with_headers(
         workspace_id: "workspace_1".into(),
         workspace_revision: if features
             .iter()
-            .any(|feature| feature == bitrouter::core::context_router::FEATURE)
+            .any(|feature| feature == bitrouter::storage::checkpoint::snapshot::context::FEATURE)
         {
             Some("workspace-v2".into())
         } else {
@@ -1868,11 +1869,11 @@ async fn required_material_waits_for_request_ack_and_validated_resolution() -> T
     let fetch = &waiting.cost_work[&run_id].work[&request.0];
     assert_eq!(
         fetch.kind,
-        bitrouter::core::accounting::work::CostWorkKind::MaterialFetch
+        bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkKind::MaterialFetch
     );
     assert_eq!(
         fetch.state,
-        bitrouter::core::accounting::work::CostWorkState::IntentRecorded
+        bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState::IntentRecorded
     );
     assert!(fetch.step_id.is_none());
     assert!(fetch.request_id.is_none());
@@ -2363,7 +2364,6 @@ async fn idle_workers(
 
 #[tokio::test]
 async fn delegate_reuses_the_stable_idle_candidate_and_joins_its_model_receipts() -> TestResult {
-    use bitrouter::core::allocation::ContextKind;
     use bitrouter_ai::core::protocol::{ContextMode, ModelMode};
     for mode in [ContextMode::Fixed, ContextMode::Auto] {
         let (session, executor, harness, root, workers) = idle_workers(2, true).await?;
@@ -2405,7 +2405,10 @@ async fn delegate_reuses_the_stable_idle_candidate_and_joins_its_model_receipts(
         assert_eq!(allocation.input.routing.context, mode);
         assert_eq!(allocation.input.effort.as_deref(), Some("low"));
         assert!(allocation.applied_state_revision.is_none());
-        assert_eq!(allocation.candidates[0].kind, ContextKind::Reuse);
+        assert_eq!(
+            allocation.candidates[0].kind,
+            bitrouter::storage::checkpoint::snapshot::allocation::ContextKind::Reuse
+        );
         assert!(allocation.candidates[0].rejection_reasons.is_empty());
         assert_eq!(reserved.agents.len(), 3);
         let done = session.drive().await?;
@@ -2467,7 +2470,6 @@ async fn delegate_reuses_the_stable_idle_candidate_and_joins_its_model_receipts(
 
 #[tokio::test]
 async fn ambiguous_delegate_uses_fresh_context_with_recorded_reuse_rejections() -> TestResult {
-    use bitrouter::core::allocation::ContextKind;
     for (case, reason) in [
         ("unknown", "workspace_revision_unknown"),
         ("workspace", "workspace_revision_changed"),
@@ -2559,7 +2561,7 @@ async fn ambiguous_delegate_uses_fresh_context_with_recorded_reuse_rejections() 
         );
         assert_eq!(
             allocation.candidates.last().map(|candidate| candidate.kind),
-            Some(ContextKind::Fresh)
+            Some(bitrouter::storage::checkpoint::snapshot::allocation::ContextKind::Fresh)
         );
         assert_eq!(state.agents[id].history.len(), 1, "{case}");
         assert_eq!(state.agents[id].history[0].content, vec![text(&task.text)]);
@@ -2660,7 +2662,10 @@ async fn reused_reservation_is_revalidated_after_signals_change() -> TestResult 
         .turn
         .as_ref()
         .ok_or("missing child turn")?;
-    assert_eq!(child.status, bitrouter::core::session::AgentStatus::Failed);
+    assert_eq!(
+        child.status,
+        bitrouter::storage::checkpoint::snapshot::AgentStatus::Failed
+    );
     assert!(child.steps.is_empty());
     assert!(child.notified);
     assert_eq!(
@@ -2748,7 +2753,10 @@ async fn reuse_activation_checks_requirements_pinned_after_the_original_decision
         .as_ref()
         .ok_or("child turn missing")?;
     assert!(child.steps.is_empty());
-    assert_eq!(child.status, bitrouter::core::session::AgentStatus::Failed);
+    assert_eq!(
+        child.status,
+        bitrouter::storage::checkpoint::snapshot::AgentStatus::Failed
+    );
     assert_eq!(
         executor
             .prompts
@@ -3850,7 +3858,7 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
             .get(&child)
             .and_then(|agent| agent.turn.as_ref())
             .map(|turn| turn.status),
-        Some(bitrouter::core::session::AgentStatus::Cancelling)
+        Some(bitrouter::storage::checkpoint::snapshot::AgentStatus::Cancelling)
     );
     let done = tokio::time::timeout(Duration::from_secs(5), running).await???;
     assert_eq!(
@@ -3864,7 +3872,7 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
         .ok_or("child disappeared")?;
     assert_eq!(
         child.status,
-        bitrouter::core::session::AgentStatus::Interrupted
+        bitrouter::storage::checkpoint::snapshot::AgentStatus::Interrupted
     );
     assert!(child.final_answer.is_none());
     assert!(
@@ -4062,10 +4070,9 @@ async fn children_overlap_with_bounded_slots_and_root_joins_their_results() -> T
         "overlap must not be charged twice: attempts={attempt_ms}, run={active_ms}"
     );
     assert!(done.agents.values().all(|agent| {
-        agent
-            .turn
-            .as_ref()
-            .is_some_and(|turn| turn.status == bitrouter::core::session::AgentStatus::Completed)
+        agent.turn.as_ref().is_some_and(|turn| {
+            turn.status == bitrouter::storage::checkpoint::snapshot::AgentStatus::Completed
+        })
     }));
     assert!(harness.sent.lock().await.is_empty());
     let store = harness.store.lock().await;
@@ -4326,7 +4333,7 @@ async fn fallbacks_have_separate_committed_attempts_and_actual_providers() -> Te
     assert_eq!(applied.agent_turn_id, turn.agent_turn_id);
     assert!(matches!(
         applied.disposition,
-        bitrouter::core::routing::ApplicationDisposition::Applied
+        bitrouter::storage::checkpoint::snapshot::routing::ApplicationDisposition::Applied
     ));
     for attempt in &step.attempts {
         let receipt = attempt

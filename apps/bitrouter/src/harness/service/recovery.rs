@@ -1108,7 +1108,7 @@ impl Rebuild {
     fn consume(
         &mut self,
         record: &ExecutionRecord,
-    ) -> Result<Option<crate::core::session::SessionSnapshot>, ServiceError> {
+    ) -> Result<Option<crate::storage::checkpoint::snapshot::SessionSnapshot>, ServiceError> {
         let mut native_snapshot = None;
         match record {
             ExecutionRecord::ThreadCreated { .. } if self.sequence != 1 => {

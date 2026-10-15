@@ -702,8 +702,8 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
                 max_artifact_chunk_bytes: 8192,
                 required_features: if portable {
                     vec![
-                        bitrouter::core::context_router::FEATURE.into(),
-                        bitrouter::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
+                        bitrouter::storage::checkpoint::snapshot::context::FEATURE.into(),
+                        bitrouter::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING.into(),
                     ]
                 } else {
                     Vec::new()
@@ -892,9 +892,10 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
                 session.disconnect().await;
                 let store = harness.store.lock().await;
                 let checkpoint = store.batches.last().context("recovery checkpoint")?.clone();
-                let restored: bitrouter::core::session::SessionSnapshot = serde_json::from_value(
-                    checkpoint.decode(&Limits::default())?.checkpoint.state,
-                )?;
+                let restored: bitrouter::storage::checkpoint::snapshot::SessionSnapshot =
+                    serde_json::from_value(
+                        checkpoint.decode(&Limits::default())?.checkpoint.state,
+                    )?;
                 let request = bitrouter_ai::core::protocol::Restore {
                     binding: Bind {
                         grant: harness.grant.clone(),

@@ -163,7 +163,7 @@ async fn monetary_claims_usage_free_rate_limit_is_unknown_despite_legacy_zero() 
         .work
         .values()
         .filter(|work| {
-            work.kind == bitrouter::core::accounting::work::CostWorkKind::ProviderAttempt
+            work.kind == bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkKind::ProviderAttempt
         })
         .collect();
     assert_eq!(attempts.len(), 2);
@@ -349,7 +349,7 @@ async fn monetary_claims_retain_estimate_and_import_late_reconciled_bill_once() 
             .context("checkpoint")?
             .decode(&Limits::default())?;
         assert_eq!(last.events[0].run_id.as_deref(), Some(run_id.as_str()));
-        let persisted: bitrouter::core::session::SessionSnapshot =
+        let persisted: bitrouter::storage::checkpoint::snapshot::SessionSnapshot =
             serde_json::from_value(last.checkpoint.state)?;
         assert_eq!(persisted.cost_work, late.cost_work);
     }

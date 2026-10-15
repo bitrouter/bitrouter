@@ -7,8 +7,8 @@ use crate::storage::checkpoint::validation::HarnessManifestExt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::collaboration::Action;
 use crate::core::session::HarnessPort;
+use crate::storage::checkpoint::snapshot::collaboration::Action;
 use async_trait::async_trait;
 use axum::extract::State;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};

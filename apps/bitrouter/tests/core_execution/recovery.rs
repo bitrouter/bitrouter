@@ -1,6 +1,6 @@
 use super::*;
-use bitrouter::core::session::AgentStatus;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::AgentStatus;
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::protocol::{
     Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
@@ -334,7 +334,6 @@ async fn recovery_replays_committed_output_and_never_confirmed_effects() -> Test
 #[tokio::test]
 async fn recovery_closes_interrupted_work_with_new_attempt_and_preserved_unknown_spend()
 -> TestResult {
-    use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
     let store = completed_store().await?;
     for kind in [
         "input.accepted",
@@ -373,8 +372,8 @@ async fn recovery_closes_interrupted_work_with_new_attempt_and_preserved_unknown
                 .work
                 .get(&steps[0].attempts[0].attempt_id)
                 .ok_or("missing uncertain spend")?;
-            assert_eq!(prior.kind, CostWorkKind::ProviderAttempt);
-            assert_eq!(prior.state, CostWorkState::IntentRecorded);
+            assert_eq!(prior.kind, bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkKind::ProviderAttempt);
+            assert_eq!(prior.state, bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState::IntentRecorded);
             assert!(
                 run.token_accounting
                     .as_ref()

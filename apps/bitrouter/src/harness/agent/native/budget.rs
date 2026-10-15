@@ -1,8 +1,8 @@
 //! Native run limits use the Core ledger, including retired child work.
 
-use crate::core::accounting::work::{CostWorkKind, CostWorkState};
-use crate::core::session::SessionSnapshot;
 use crate::harness::agent::{AgentConfig, RunReport};
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
+use crate::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 #[derive(Clone)]
@@ -34,7 +34,7 @@ impl Budget {
     pub(super) fn observe(&mut self, state: &SessionSnapshot) {
         let Some(run) = &state.run else { return };
         if let Some(turn) = state.root_turn()
-            && turn.status == crate::core::session::AgentStatus::Failed
+            && turn.status == crate::storage::checkpoint::snapshot::AgentStatus::Failed
             && let Some(step) = turn.steps.last()
             && step.plan.is_none()
             && let Some(limit) = turn.input.context_limit_bytes

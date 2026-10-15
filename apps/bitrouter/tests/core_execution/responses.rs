@@ -1,7 +1,7 @@
 use super::*;
-use bitrouter::core::session::AgentStatus;
 use bitrouter::gateway::pipeline::hooks::HopOutcome;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::AgentStatus;
 use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
@@ -558,7 +558,7 @@ async fn exchange_recovery_rejects_erasure_and_terminal_rewrites() -> TestResult
 
 #[tokio::test]
 async fn continuation_results_are_atomic_and_share_channel_operations() -> TestResult {
-    use bitrouter::core::session::responses::ResponseToolResult;
+    use bitrouter::storage::checkpoint::snapshot::responses::ResponseToolResult;
     let harness = Arc::new(Harness::new(None, None));
     let (session, executor, _) = setup(
         vec![output(vec![call("read")]), output(vec![text("done")])],
@@ -653,7 +653,7 @@ async fn continuation_results_are_atomic_and_share_channel_operations() -> TestR
 
 #[tokio::test]
 async fn continuation_result_ack_loss_reconciles_the_whole_batch() -> TestResult {
-    use bitrouter::core::session::responses::ResponseToolResult;
+    use bitrouter::storage::checkpoint::snapshot::responses::ResponseToolResult;
     for committed in [false, true] {
         let harness = Arc::new(Harness::new(None, None));
         let port = Arc::new(reconnect::FaultPort::new(
@@ -834,7 +834,7 @@ async fn descendant_limit_counts_waits_and_prevents_followup_capacity_cycles() -
 
 #[tokio::test]
 async fn continuation_batch_obeys_the_frozen_run_input_bound() -> TestResult {
-    use bitrouter::core::session::responses::ResponseToolResult;
+    use bitrouter::storage::checkpoint::snapshot::responses::ResponseToolResult;
     let harness = Arc::new(Harness::new(None, None));
     let (session, _, _) =
         setup(vec![output(vec![call("one"), call("two")])], harness, false).await?;

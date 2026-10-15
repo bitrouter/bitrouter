@@ -1,32 +1,14 @@
 //! Model-facing evidence operations. Authority is checked against the task's
 //! admitted evidence inventory, independently of semantic decisions.
 
+use crate::storage::checkpoint::snapshot::context::action::ContextAction;
+
 use bitrouter_ai::types::Tool;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::FEATURE;
-use crate::core::session::SessionSnapshot;
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
+use crate::storage::checkpoint::snapshot::context::FEATURE;
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "name", content = "arguments", deny_unknown_fields)]
-pub enum ContextAction {
-    #[serde(rename = "context_search")]
-    Search { query: String },
-    #[serde(rename = "context_recall")]
-    Recall { block_ids: Vec<String> },
-    #[serde(rename = "context_publish")]
-    Publish {
-        block_ids: Vec<String>,
-        summary: String,
-    },
-    #[serde(rename = "context_extract")]
-    Extract {
-        block_id: String,
-        spans: Vec<super::evidence::SourceSpan>,
-    },
-}
 
 pub fn declarations(enabled: bool) -> Vec<Tool> {
     if !enabled {
@@ -66,12 +48,12 @@ pub fn apply(
         .get(actor_id)
         .and_then(|agent| agent.turn.as_ref())
         .map(|turn| turn.agent_turn_id.clone())
-        .ok_or_else(|| super::invalid("context task is absent"))?;
-    let work = state
-        .context_store
-        .work
-        .get_mut(&task_id)
-        .ok_or_else(|| super::invalid("context task was not catalogued"))?;
+        .ok_or_else(|| {
+            crate::storage::checkpoint::snapshot::context::invalid("context task is absent")
+        })?;
+    let work = state.context_store.work.get_mut(&task_id).ok_or_else(|| {
+        crate::storage::checkpoint::snapshot::context::invalid("context task was not catalogued")
+    })?;
     let result = match action {
         ContextAction::Extract { block_id, spans } => {
             if state
@@ -96,7 +78,9 @@ pub fn apply(
         }
         ContextAction::Search { query } => {
             if query.is_empty() || query.len() > 1024 {
-                return Err(super::invalid("evidence query must be 1 to 1024 bytes"));
+                return Err(crate::storage::checkpoint::snapshot::context::invalid(
+                    "evidence query must be 1 to 1024 bytes",
+                ));
             }
             let query = query.to_lowercase();
             let mut entries = Vec::new();
@@ -110,13 +94,14 @@ pub fn apply(
                 {
                     continue;
                 }
-                let body = serde_json::to_string(&block.messages)
-                    .map_err(|error| super::invalid(error.to_string()))?;
+                let body = serde_json::to_string(&block.messages).map_err(|error| {
+                    crate::storage::checkpoint::snapshot::context::invalid(error.to_string())
+                })?;
                 if query == "*" || body.to_lowercase().contains(&query) {
                     entries.push(json!({"block_id":block.block_id,"source":block.source,
                         "current_workspace":block.source.is_current(&state.manifest),
                         "bytes":block.bytes,"protected":block.protected,
-                        "preview":super::planner::truncate(&body, 768)}));
+                        "preview":crate::storage::checkpoint::snapshot::context::view::truncate(&body, 768)}));
                 }
                 if entries.len() == 8 {
                     break;
@@ -172,10 +157,9 @@ pub fn apply(
         && !matches!(action, ContextAction::Search { .. })
         && let Some(agent) = state.agents.get_mut(actor_id)
     {
-        agent.context_revision = agent
-            .context_revision
-            .checked_add(1)
-            .ok_or_else(|| super::invalid("context revision exhausted"))?;
+        agent.context_revision = agent.context_revision.checked_add(1).ok_or_else(|| {
+            crate::storage::checkpoint::snapshot::context::invalid("context revision exhausted")
+        })?;
     }
     result
 }

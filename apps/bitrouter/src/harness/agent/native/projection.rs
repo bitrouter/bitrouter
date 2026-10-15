@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput};
 
-use crate::core::session::SessionSnapshot;
 use crate::harness::agent::RunEvent;
 use crate::harness::item::{CallOrigin, CallRecord};
 use crate::harness::storage::{EffectStatus, ExecutionRecord};
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
 
 #[derive(Default)]
 pub(super) struct Projection {

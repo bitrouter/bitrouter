@@ -1,12 +1,12 @@
 //! Actual HTTP retries, durable sub-work barriers and shared settlement.
 
 use super::*;
-use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::gateway::model::client::HttpTimeouts;
 use bitrouter::gateway::pipeline::executor::HttpExecutor;
 use bitrouter::gateway::pipeline::native_work::NativeProviderWorkKind;
 use bitrouter::gateway::providers::auth::{AuthApplier, AuthAppliers};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

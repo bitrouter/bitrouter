@@ -13,11 +13,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::store::{Journal, MAX_STORE_BYTES, NativePort, NativeStore, StartedTool, error};
 use super::{super::HarnessConfig, NativeResources};
-use crate::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
+use crate::core::session::{CoreSession, HarnessPort};
 use crate::harness::agent::ToolMode;
 use crate::harness::service::workspace::WorkspaceFence;
 use crate::harness::storage::ExecutionOwner;
 use crate::storage::checkpoint::sha256;
+use crate::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
 use bitrouter_ai::core::checkpoint::ToolStartFence;
 use bitrouter_ai::core::protocol::{
     Bind, Capabilities, CoreError, ErrorCode, OwnershipGrant, Restore, ServerMessage, TaskInput,

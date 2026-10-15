@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::core::session::RunStatus;
 use crate::gateway::caller::CallerContext;
 use crate::harness::agent::ToolMode;
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession};
+use crate::storage::checkpoint::snapshot::RunStatus;
 use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
 use bitrouter_ai::types::ReasoningEffort;
 use tokio_util::sync::CancellationToken;

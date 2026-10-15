@@ -884,7 +884,9 @@ async fn restore_history_at(
     Ok(())
 }
 
-fn context_status(inspection: &crate::core::context_router::inspection::Inspection) -> String {
+fn context_status(
+    inspection: &crate::storage::checkpoint::snapshot::context::inspection::Inspection,
+) -> String {
     let decisions = &inspection.decisions;
     format!(
         "Routing · {} tasks · {} decision calls · {} pending · {} failed",

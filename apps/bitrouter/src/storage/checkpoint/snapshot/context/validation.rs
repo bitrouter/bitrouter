@@ -1,12 +1,12 @@
 //! Checkpoint validation for immutable evidence and irreversible decision facts.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use super::planner::ContextRepresentation;
-use super::{ContextStore, FEATURE, digest, invalid};
-use crate::core::session::SessionSnapshot;
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
+use crate::storage::checkpoint::snapshot::context::view::ContextRepresentation;
+use crate::storage::checkpoint::snapshot::context::{ContextStore, FEATURE, digest, invalid};
 use bitrouter_ai::core::checkpoint::CheckpointPayload;
 use bitrouter_ai::core::protocol::CoreError;
 
@@ -56,10 +56,9 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
             || work.recalled.iter().any(|id| !work.evidence.contains(id))
             || work.shared_evidence.iter().any(|id| {
                 !work.evidence.contains(id)
-                    || store
-                        .evidence
-                        .get(id)
-                        .is_none_or(|block| !super::tasks::portable(block))
+                    || store.evidence.get(id).is_none_or(|block| {
+                        !crate::storage::checkpoint::snapshot::context::portable(block)
+                    })
             })
             || work
                 .result_evidence
@@ -161,12 +160,12 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
             .work
             .get(&view.task_id)
             .ok_or_else(|| invalid("view task is absent"))?;
-        let expected = super::planner::view_identity(view)?;
+        let expected = crate::storage::checkpoint::snapshot::context::view::view_identity(view)?;
         if id != &view.view_id || *id != expected {
             return Err(invalid("context view commitment changed"));
         }
-        let mut full = BTreeSet::new();
-        let mut represented = BTreeSet::new();
+        let mut full = std::collections::BTreeSet::new();
+        let mut represented = std::collections::BTreeSet::new();
         let mut selected_order = Vec::new();
         for representation in &view.selected {
             match representation {
@@ -296,7 +295,7 @@ pub(crate) fn validate_store_history(
     store: &ContextStore,
     history: &mut History,
 ) -> Result<(), CoreError> {
-    let mut current = BTreeMap::new();
+    let mut current = std::collections::BTreeMap::new();
     for (id, artifact) in &store.artifacts {
         remember(&mut current, "artifact", id, artifact)?;
     }

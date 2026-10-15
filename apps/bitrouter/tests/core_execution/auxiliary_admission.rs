@@ -408,7 +408,7 @@ async fn pending_preparation_keeps_outcome_capacity_through_saturation_and_ack_l
         );
         assert_eq!(
             done.run.as_ref().and_then(|run| run.resource_constraint),
-            Some(bitrouter::core::session::ResourceConstraint::CheckpointCapacity)
+            Some(bitrouter::storage::checkpoint::snapshot::ResourceConstraint::CheckpointCapacity)
         );
         let record = done.root_turn().ok_or("turn")?.steps[0]
             .preparation_work

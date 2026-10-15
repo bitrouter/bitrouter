@@ -1,25 +1,9 @@
 //! Durable FIFO root inputs. Acceptance reserves identity; activation alone
 //! creates the run's context, budget and cost inventory.
 
+use crate::storage::checkpoint::snapshot::root_queue::QueuedRootInput;
+
 use super::*;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueuedRootInput {
-    pub operation_id: String,
-    pub run_id: String,
-    pub agent_turn_id: String,
-    pub input: TaskInput,
-    pub limits: Limits,
-    /// Harness requirements can grow after acceptance without changing the
-    /// caller's bounded input envelope or its original operation fingerprint.
-    pub required_materials: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RootQueue {
-    pub pending: VecDeque<QueuedRootInput>,
-    pub paused: bool,
-}
 
 impl CoreSession {
     /// Accept a future root input without changing the active agent context.

@@ -319,7 +319,10 @@ impl ThreadService {
         thread_id: &str,
         version: u64,
         facts: &[ExecutionRecord],
-        previous_context: Option<&(String, crate::core::context_router::inspection::Inspection)>,
+        previous_context: Option<&(
+            String,
+            crate::storage::checkpoint::snapshot::context::inspection::Inspection,
+        )>,
     ) -> Result<(Vec<ExecutionRecord>, ThreadEvent), ServiceError> {
         let framed = super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
         let seq = version
@@ -399,7 +402,7 @@ pub(super) fn project_with_native(
     record: &ExecutionRecord,
     thread_id: &str,
     turn_id: Option<&str>,
-    native_snapshot: Option<&crate::core::session::SessionSnapshot>,
+    native_snapshot: Option<&crate::storage::checkpoint::snapshot::SessionSnapshot>,
     changes: &mut Vec<ThreadChange>,
 ) {
     let turn = turn_id.map_or_else(String::new, str::to_owned);
@@ -410,17 +413,17 @@ pub(super) fn project_with_native(
                 Some(snapshot) => Some(snapshot),
                 None => {
                     decoded = batch.decode(limits).ok().and_then(|payload| {
-                        serde_json::from_value::<crate::core::session::SessionSnapshot>(
-                            payload.checkpoint.state,
-                        )
+                        serde_json::from_value::<
+                            crate::storage::checkpoint::snapshot::SessionSnapshot,
+                        >(payload.checkpoint.state)
                         .ok()
                     });
                     decoded.as_ref()
                 }
             };
-            let Some(inspection) =
-                snapshot.and_then(crate::core::context_router::inspection::Inspection::capture)
-            else {
+            let Some(inspection) = snapshot.and_then(
+                crate::storage::checkpoint::snapshot::context::inspection::Inspection::capture,
+            ) else {
                 return;
             };
             ThreadChange::ContextRouting {

@@ -1,6 +1,6 @@
 use super::*;
-use bitrouter::core::session::ResourceConstraint;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::ResourceConstraint;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "capacity/tree_limits.rs"]
@@ -276,8 +276,6 @@ async fn cleanup_capacity_survives_saturation_full_tool_outcomes_and_release() -
 
 #[tokio::test]
 async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_loss() -> TestResult {
-    use bitrouter::core::session::AgentStatus;
-
     for committed in [false, true] {
         let harness = Arc::new(Harness::new(None, None));
         let port = Arc::new(reconnect::FaultPort::new(
@@ -453,7 +451,8 @@ async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_los
         assert!(done.agents.values().all(|agent| {
             agent.queue.is_empty()
                 && agent.turn.as_ref().is_some_and(|turn| {
-                    turn.status == AgentStatus::Interrupted
+                    turn.status
+                        == bitrouter::storage::checkpoint::snapshot::AgentStatus::Interrupted
                         && (agent.parent_id.is_none() || turn.notified)
                         && turn.invocations.iter().all(|call| call.consumed)
                 })

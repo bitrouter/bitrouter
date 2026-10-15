@@ -1,10 +1,10 @@
 //! Joint native provider-state and core allocation conformance through real HTTP.
 
 use super::*;
-use bitrouter::core::allocation::ContextKind;
-use bitrouter::core::collaboration::{Action, Work};
-use bitrouter::core::session::SessionSnapshot;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::SessionSnapshot;
+use bitrouter::storage::checkpoint::snapshot::allocation::ContextKind;
+use bitrouter::storage::checkpoint::snapshot::collaboration::{Action, Work};
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::evidence::ContinuationFailure;
 
@@ -147,7 +147,7 @@ fn work(text: &str, fresh: bool) -> Work {
 fn receipt<'a>(
     snapshot: &'a SessionSnapshot,
     agent: &str,
-) -> Result<&'a bitrouter::core::routing::ExecutionReceipt> {
+) -> Result<&'a bitrouter::storage::checkpoint::snapshot::routing::ExecutionReceipt> {
     snapshot
         .agents
         .get(agent)

@@ -169,7 +169,7 @@ pub enum RecoveryBlocker {
 pub enum ThreadChange {
     ContextRouting {
         turn_id: String,
-        inspection: Box<crate::core::context_router::inspection::Inspection>,
+        inspection: Box<crate::storage::checkpoint::snapshot::context::inspection::Inspection>,
     },
     Created {
         view: Box<ThreadView>,

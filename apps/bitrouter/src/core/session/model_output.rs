@@ -3,8 +3,8 @@
 //! separate admission obligations; no placeholder here is execution evidence.
 
 use super::*;
-use crate::core::accounting::work::CostWorkState;
 use crate::storage::checkpoint::serialized_bytes;
+use crate::storage::checkpoint::snapshot::accounting::work::CostWorkState;
 
 pub(super) const DELIVERY_VERSION: u32 = 2;
 pub(super) const CURRENT_VERSION: u32 = 3;
@@ -239,15 +239,17 @@ fn delivery(
     if response {
         reserved = sum(
             reserved,
-            serialized_bytes(&responses::ResponseOutput {
-                event_seq: u64::MAX,
-                agent_id: agent.agent_id.clone(),
-                agent_name: agent.display_path.clone(),
-                agent_turn_id: turn.agent_turn_id.clone(),
-                step_id: step.step_id.clone(),
-                message,
-                call_ids: BTreeMap::new(),
-            })?,
+            serialized_bytes(
+                &crate::storage::checkpoint::snapshot::responses::ResponseOutput {
+                    event_seq: u64::MAX,
+                    agent_id: agent.agent_id.clone(),
+                    agent_name: agent.display_path.clone(),
+                    agent_turn_id: turn.agent_turn_id.clone(),
+                    step_id: step.step_id.clone(),
+                    message,
+                    call_ids: BTreeMap::new(),
+                },
+            )?,
         )?;
     }
     Ok(reserved)

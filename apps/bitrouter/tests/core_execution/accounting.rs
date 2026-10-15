@@ -1,5 +1,4 @@
 use super::*;
-use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::gateway::pipeline::native_accounting::NativeCostBasis;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostClaim;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostEstimator;
@@ -7,6 +6,7 @@ use bitrouter::gateway::pipeline::native_accounting::NativeCostObservation;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostScope;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostSource;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter_ai::core::evidence::NativeAttemptReport;
 use bitrouter_ai::core::evidence::NativeTokenCost;
 use bitrouter_ai::core::evidence::NativeTokenRates;
@@ -519,7 +519,8 @@ async fn estimate_becomes_visible_only_with_outcome_ack_and_is_not_recounted() -
     if let Some(object) = legacy.as_object_mut() {
         object.remove("token_accounting");
     }
-    let restored: bitrouter::core::session::RootRun = serde_json::from_value(legacy)?;
+    let restored: bitrouter::storage::checkpoint::snapshot::RootRun =
+        serde_json::from_value(legacy)?;
     assert!(restored.token_accounting.is_none());
     let mut legacy = serde_json::to_value(&state)?;
     legacy

@@ -1,30 +1,11 @@
 //! Targeted durable input. Receipt and application are separate barriers;
 //! provider output and workspace effects retain their original attribution.
 
+use crate::storage::checkpoint::snapshot::steering::{SteeringDisposition, SteeringRecord};
+
 use super::*;
 use crate::storage::checkpoint::validate_tool_start_fences;
 use bitrouter_ai::core::checkpoint::ToolStartFence;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SteeringDisposition {
-    Received,
-    Applied,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SteeringRecord {
-    pub operation_id: String,
-    pub run_id: String,
-    pub agent_id: String,
-    pub agent_turn_id: String,
-    pub text: String,
-    pub received_state_revision: u64,
-    pub disposition: SteeringDisposition,
-    pub resolved_state_revision: Option<u64>,
-    pub tool_start_fences: Vec<ToolStartFence>,
-}
 
 pub(super) struct SteeringTarget {
     pub agent_id: String,

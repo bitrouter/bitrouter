@@ -1,10 +1,10 @@
 //! The same scripted collaboration crosses local and authenticated remote ports.
 
 use super::*;
-use bitrouter::core::allocation::ContextKind;
-use bitrouter::core::routing::ApplicationDisposition;
-use bitrouter::core::session::{AgentStatus, SessionSnapshot};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::allocation::ContextKind;
+use bitrouter::storage::checkpoint::snapshot::routing::ApplicationDisposition;
+use bitrouter::storage::checkpoint::snapshot::{AgentStatus, SessionSnapshot};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;

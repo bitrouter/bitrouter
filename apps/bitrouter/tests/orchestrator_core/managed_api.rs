@@ -639,7 +639,7 @@ async fn disconnected_existing_session_restores_unstarted_tools_on_the_same_host
     tokio::time::timeout(std::time::Duration::from_secs(10), task).await???;
     let records = store.lock().await;
     let checkpoint = records.batches.last().context("checkpoint")?.clone();
-    let state: bitrouter::core::session::SessionSnapshot =
+    let state: bitrouter::storage::checkpoint::snapshot::SessionSnapshot =
         serde_json::from_value(checkpoint.decode(&Limits::default())?.checkpoint.state)?;
     let run = state.run.as_ref().context("run")?;
     let grant = OwnershipGrant {
@@ -721,7 +721,7 @@ async fn restore_ack_loss_keeps_the_registered_replacement_and_exact_batch() -> 
         tokio::time::timeout(std::time::Duration::from_secs(10), task).await???;
         let records = store.lock().await;
         let checkpoint = records.batches.last().context("checkpoint")?.clone();
-        let state: bitrouter::core::session::SessionSnapshot =
+        let state: bitrouter::storage::checkpoint::snapshot::SessionSnapshot =
             serde_json::from_value(checkpoint.decode(&Limits::default())?.checkpoint.state)?;
         let run = state.run.as_ref().context("run")?;
         let grant = OwnershipGrant {

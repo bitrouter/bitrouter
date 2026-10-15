@@ -1,15 +1,10 @@
 //! Durable ownership release. A transport reconnect cannot renew a released
 //! grant; only authenticated restoration under a higher epoch can do that.
 
+use crate::storage::checkpoint::snapshot::release::ReleaseRecord;
+
 use super::*;
 use bitrouter_ai::core::protocol::OwnershipGrant;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReleaseRecord {
-    pub operation_id: String,
-    pub grant: OwnershipGrant,
-    pub state_revision: u64,
-}
 
 fn fingerprint(expected_revision: u64) -> Result<String, CoreError> {
     digest(&json!({"type":"session.release","expected_state_revision":expected_revision}))

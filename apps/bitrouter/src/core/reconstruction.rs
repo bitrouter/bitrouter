@@ -4,37 +4,18 @@
 //! Completion alone never makes evidence optional. Original history remains in
 //! the rejected step's immutable snapshot.
 
-use crate::gateway::pipeline::native::NativePlan;
-use crate::gateway::pipeline::native_projection::{ProjectionRecord, responses_reasoning};
-use bitrouter_ai::types::{Message, Prompt, Role};
-use serde::{Deserialize, Serialize};
+use crate::storage::checkpoint::snapshot::reconstruction::PortableReasoningRecord;
 
-use super::session::{ModelStep, SessionSnapshot, selected_materials};
+use crate::gateway::pipeline::native::NativePlan;
+use crate::gateway::pipeline::native_projection::responses_reasoning;
+use bitrouter_ai::types::{Message, Prompt, Role};
+use serde::Serialize;
+
+use crate::storage::checkpoint::snapshot::{ModelStep, SessionSnapshot};
+
+use super::session::selected_materials;
 use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::protocol::{ContextMode, CoreError, ErrorCode};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RebuildRecord {
-    pub strategy: String,
-    pub source_context_revision: u64,
-    pub source_history_sha256: String,
-    pub rebuilt_step_id: Option<String>,
-    pub removed_history_messages: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub removed_settled_history_messages: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub portable_reasoning: Option<PortableReasoningRecord>,
-    pub elapsed_ms: u64,
-    pub error: Option<CoreError>,
-}
-
-/// Both the retained execution history and the exact prepared view are bound
-/// to their immutable sources in the rejected step and evidence store.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PortableReasoningRecord {
-    pub history: ProjectionRecord,
-    pub prompt: ProjectionRecord,
-}
 
 pub(crate) struct RebuiltContext {
     pub prompt: Prompt,
@@ -47,7 +28,7 @@ pub(crate) struct RebuiltContext {
 impl RebuiltContext {
     pub fn strategy(&self) -> &'static str {
         if self.portable_reasoning.is_some() {
-            super::context_router::PORTABLE_RESPONSES_REASONING
+            crate::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING
         } else {
             "explicitly_optional_history_v1"
         }
@@ -78,19 +59,14 @@ pub(crate) fn candidate(
         return Err(invalid("context reconstruction source changed"));
     }
     step.context.validate_prepared(&plan.prompt)?;
-    if state
-        .manifest
-        .required_features
-        .iter()
-        .any(|feature| feature == super::context_router::PORTABLE_RESPONSES_REASONING)
-        && !state
-            .context_store
-            .executions
-            .get(&step.step_id)
-            .and_then(|execution| execution.routing.as_ref())
-            .is_some_and(|routing| {
-                routing.strategy == bitrouter_ai::routing::ContextStrategy::Preserve
-            })
+    if state.manifest.required_features.iter().any(|feature| {
+        feature == crate::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING
+    }) && !state
+        .context_store
+        .executions
+        .get(&step.step_id)
+        .and_then(|execution| execution.routing.as_ref())
+        .is_some_and(|routing| routing.strategy == bitrouter_ai::routing::ContextStrategy::Preserve)
         && step.decision.as_ref().is_some_and(|decision| {
             decision.routes.iter().any(|route| {
                 route.rejection_reasons == ["protocol_incompatible:private_context_target_mismatch"]

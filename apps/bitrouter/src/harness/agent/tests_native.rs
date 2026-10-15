@@ -553,7 +553,7 @@ async fn native_agent_executes_context_decision_through_core_and_thread_commit_c
             _ => None,
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let state: crate::core::session::SessionSnapshot = serde_json::from_value(
+    let state: crate::storage::checkpoint::snapshot::SessionSnapshot = serde_json::from_value(
         states
             .last()
             .ok_or("Core checkpoint missing")?

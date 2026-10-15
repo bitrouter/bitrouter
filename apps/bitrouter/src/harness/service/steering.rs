@@ -28,7 +28,7 @@ impl ThreadService {
                 continue;
             };
             let checkpoint = batch.decode(limits).map_err(|error| error.message)?;
-            let snapshot: crate::core::session::SessionSnapshot =
+            let snapshot: crate::storage::checkpoint::snapshot::SessionSnapshot =
                 serde_json::from_value(checkpoint.checkpoint.state)
                     .map_err(|error| ServiceError::storage(error.to_string()))?;
             let state = self.lock_state();
@@ -45,11 +45,11 @@ impl ThreadService {
                         "native steering projection differs from accepted input",
                     ));
                 }
-                use crate::core::session::steering::SteeringDisposition;
+
                 let mut receipt = pending.receipt.clone();
                 match core.disposition {
-                    SteeringDisposition::Received => continue,
-                    SteeringDisposition::Applied => {
+                    crate::storage::checkpoint::snapshot::steering::SteeringDisposition::Received => continue,
+                    crate::storage::checkpoint::snapshot::steering::SteeringDisposition::Applied => {
                         receipt.status = SteeringStatus::Applied;
                         receipt.context_version = snapshot
                             .agents
@@ -66,7 +66,7 @@ impl ThreadService {
                             })
                             .map(|step| step.step_id.clone());
                     }
-                    SteeringDisposition::Cancelled => {
+                    crate::storage::checkpoint::snapshot::steering::SteeringDisposition::Cancelled => {
                         receipt.status = SteeringStatus::NotApplied;
                         receipt.reason =
                             Some("Core task cancelled before applying steering".into());

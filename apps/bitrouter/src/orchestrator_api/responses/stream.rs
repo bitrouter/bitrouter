@@ -186,7 +186,7 @@ fn body(
 }
 
 pub(super) fn json(
-    exchange: Arc<crate::core::session::responses::ResponseExchange>,
+    exchange: Arc<crate::storage::checkpoint::snapshot::responses::ResponseExchange>,
     scope: Arc<Scope>,
     permit: OwnedSemaphorePermit,
 ) -> Response {
@@ -527,7 +527,7 @@ mod tests {
     #[tokio::test]
     async fn unsupported_retained_output_ends_with_a_typed_sse_error()
     -> Result<(), Box<dyn std::error::Error>> {
-        use crate::core::session::responses::{ResponseExchange, ResponseOutput};
+        use crate::storage::checkpoint::snapshot::responses::{ResponseExchange, ResponseOutput};
         use bitrouter_ai::types::{Content, DataContent, Message, Role};
         let mut exchange: ResponseExchange = serde_json::from_value(serde_json::json!({
             "response_id":"response", "operation_id":"operation", "run_id":"run", "created_at":1,

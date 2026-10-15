@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bitrouter::core::session::{CoreSession, HarnessPort, RunStatus};
+use bitrouter::core::session::{CoreSession, HarnessPort};
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::storage::checkpoint::sha256;
+use bitrouter::storage::checkpoint::snapshot::RunStatus;
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
 use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, CoreError, DiscardableHistory, ErrorCode, HarnessManifest,
@@ -396,8 +397,8 @@ models:
 
 #[tokio::test]
 async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<()> {
-    use bitrouter::core::context_router::FEATURE;
     use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
+    use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
     use bitrouter_ai::core::protocol::ModelMode;
     use bitrouter_ai::eval::EvalScope;
     let home = tempfile::tempdir()?;

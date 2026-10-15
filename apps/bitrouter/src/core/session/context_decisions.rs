@@ -1,11 +1,14 @@
 //! Durable decision attempts and context application before SDK preparation.
 
 use super::*;
-use crate::core::context_router::evidence::EvidenceSource;
-use crate::core::context_router::planner::{CandidateSet, CompileOptions, SourceRevision};
-use crate::core::context_router::{DecisionReceipt, ExecutionPlan, FEATURE, WorkUnit};
+use crate::core::context_router::planner::CompileOptions;
 use crate::gateway::model::decision::types::DecisionError;
 use crate::gateway::model::decision::types::DecisionFailure;
+use crate::storage::checkpoint::snapshot::context::evidence::EvidenceSource;
+use crate::storage::checkpoint::snapshot::context::view::{CandidateSet, SourceRevision};
+use crate::storage::checkpoint::snapshot::context::{
+    DecisionReceipt, ExecutionPlan, FEATURE, WorkUnit,
+};
 
 pub(super) fn enabled(state: &SessionSnapshot) -> bool {
     state
@@ -97,17 +100,18 @@ pub(super) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
         for call in &turn.invocations {
             if let Some(result) = &call.result {
                 for reference in &result.evidence {
-                    let evidence = crate::core::context_router::evidence::EvidenceArtifact {
-                        reference: reference.clone(),
-                        source: EvidenceSource {
-                            task_id: turn.agent_turn_id.clone(),
-                            agent_id: agent_id.clone(),
-                            workspace_id: call.dispatch.workspace_id.clone(),
-                            workspace_revision: result.workspace_revision.clone(),
-                            permission_revision: call.dispatch.permission_revision,
-                            tool_manifest_digest: call.dispatch.tool_manifest_digest.clone(),
-                        },
-                    };
+                    let evidence =
+                        crate::storage::checkpoint::snapshot::context::evidence::EvidenceArtifact {
+                            reference: reference.clone(),
+                            source: EvidenceSource {
+                                task_id: turn.agent_turn_id.clone(),
+                                agent_id: agent_id.clone(),
+                                workspace_id: call.dispatch.workspace_id.clone(),
+                                workspace_revision: result.workspace_revision.clone(),
+                                permission_revision: call.dispatch.permission_revision,
+                                tool_manifest_digest: call.dispatch.tool_manifest_digest.clone(),
+                            },
+                        };
                     let key = format!("{}:{}", turn.agent_turn_id, reference.artifact_id);
                     if let Some(prior) = state.context_store.artifacts.insert(key, evidence.clone())
                         && prior != evidence
@@ -520,7 +524,7 @@ impl CoreSession {
         let prompt = &plan.prompt;
         view.prompt_sha256 = digest(prompt)?;
         view.prompt_bytes = serde_json::to_vec(prompt).map_err(json_error)?.len();
-        view.view_id = crate::core::context_router::planner::view_identity(&view)?;
+        view.view_id = crate::storage::checkpoint::snapshot::context::view::view_identity(&view)?;
         let routing = Some(plan.selection.clone());
         self.transition_for(Some(agent_id), "context.view.applied", |state, _| {
             validate_decision_source(state, agent_id, step_id, &source)?;
@@ -572,11 +576,9 @@ impl CoreSession {
 
 fn portable_reasoning(state: &SessionSnapshot, turn: &AgentTurn) -> bool {
     turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto
-        && state
-            .manifest
-            .required_features
-            .iter()
-            .any(|feature| feature == crate::core::context_router::PORTABLE_RESPONSES_REASONING)
+        && state.manifest.required_features.iter().any(|feature| {
+            feature == crate::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING
+        })
 }
 
 pub(super) struct Pending {
@@ -584,7 +586,10 @@ pub(super) struct Pending {
     task_id: String,
     decision_id: Option<String>,
     reason: String,
-    views: std::collections::BTreeMap<String, crate::core::context_router::planner::ContextView>,
+    views: std::collections::BTreeMap<
+        String,
+        crate::storage::checkpoint::snapshot::context::view::ContextView,
+    >,
 }
 
 fn validate_decision_source(

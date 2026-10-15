@@ -1,8 +1,8 @@
 //! Translate provenance-preserving Core views into shared routing candidates.
 
-use super::planner::{ContextRepresentation, ContextView};
 use crate::gateway::routing::ContextCapability;
 use crate::gateway::routing::plan;
+use crate::storage::checkpoint::snapshot::context::view::{ContextRepresentation, ContextView};
 use bitrouter_ai::types::Prompt;
 
 pub(crate) fn view(id: &str, view: &ContextView, prompt: &Prompt) -> plan::View {

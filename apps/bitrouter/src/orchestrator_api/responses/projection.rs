@@ -1,7 +1,7 @@
 //! Borrowed Responses wire views; output text is never copied into JSON values.
 
-use crate::core::session::RunStatus;
-use crate::core::session::responses::{ResponseEvent, ResponseExchange};
+use crate::storage::checkpoint::snapshot::RunStatus;
+use crate::storage::checkpoint::snapshot::responses::{ResponseEvent, ResponseExchange};
 use bitrouter_ai::core::protocol::{ToolExecute, VERSION};
 use bitrouter_ai::types::Content;
 use serde::Serialize;

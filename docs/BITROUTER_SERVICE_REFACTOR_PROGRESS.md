@@ -60,7 +60,7 @@ the contract move must preserve its bytes.
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
-| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs detached from scheduler modules; private snapshot/history isolation and terminal-free transcript formatting remain |
+| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving-time workflow/policy separation and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
 | P0 5 Feature isolation | Pending | Complete isolated build matrix and runtime availability checks |
@@ -809,10 +809,82 @@ cargo nextest run -p bitrouter --all-features --build-jobs 2 --test-threads 2 \
   -E 'binary(core_contract) | binary(core_execution) | binary(orchestrator_core) | binary(managed_native) | test(core::) | test(harness::agent::) | test(harness::resources::managed::) | test(harness::service::) | test(managed_store::) | test(agent_store::)'
 ```
 
-Private `SessionSnapshot`, its persisted routing/collaboration/cost/context-view
-records and immutable-history validation still need separation from online
-scheduling. This codec move is not evidence that a harness-only build or the
-final feature matrix already works. The shared record graph must preserve its
-serde defaults and exact historical meanings; live planner, collaboration,
-accounting and session transition implementations remain core-owned. Full P0
-acceptance, packaged delivery and the PR remain open.
+At this checkpoint, private `SessionSnapshot`, its persisted records and
+immutable-history validation still required separation from online scheduling;
+the following stage addresses that dependency. This codec move alone is not
+evidence that a harness-only build or the final feature matrix already works.
+
+## Shared private snapshot and offline history extraction
+
+Changes against `2570f3b` move 69 persisted record declarations to
+`bitrouter::storage::checkpoint::snapshot`. The complete private state remains
+inside the application; neither AI nor SDK gains a snapshot or runtime
+dependency. The actual data owners are:
+
+| Previous core owner | Application storage owner below `storage::checkpoint::snapshot` |
+| --- | --- |
+| `session` records | Root module: `SessionSnapshot`, agent/run/step/invocation records and statuses |
+| `allocation`, `routing`, `collaboration`, `signals`, `reconstruction` records | Corresponding record modules |
+| `accounting`, `accounting::work` records | `accounting`, `accounting::work` |
+| `session::{root_queue,steering,release,responses}` records | `root_queue`, `steering`, `release`, `responses` |
+| `context_router` records and feature identifiers | `context` |
+| `context_router::planner` records | `context::view` |
+| `context_router::evidence` records | `context::evidence` |
+| `context_router::tools::ContextAction` | `context::action::ContextAction` |
+| Immutable context-history validation | `context::validation` |
+| Bounded stored-state observation projection | `context::inspection` |
+
+Intrinsic defaults, response emptiness, evidence commitments and exact UTF-8
+span extraction, view identity, portable-evidence checks, task-tree inspection
+and accounting getters accompany the records. Core retains live context
+compilation/selection, evidence publication, collaboration application, cost
+recording and session mutation. Existing inherent implementations remain with
+their runtime owners in the same application crate. The only visibility
+expansions are crate-local access to the shared context digest/error helpers and
+the immutable evidence-source compatibility predicate.
+
+Harness native journal/recovery, budget and observation code now imports the
+storage owners directly, as do core, managed response adapters and tests. No
+forwarding exports, checkpoint version changes, new serde fields or changed
+defaults were introduced. Reserved feature strings, wait defaults and existing
+serde callbacks retain their values and meanings. Stored records and offline
+helpers import no core/harness implementations or Tokio, reqwest or Axum APIs;
+their existing gateway data and pure validation/projection dependencies remain
+inside the application.
+
+Validation evidence:
+
+- Comparison against `2570f3b` passed for 91 moved declarations/helpers and two
+  complete offline modules, preserving fields, derives, serde attributes,
+  defaults, predicates and diagnostics after normalizing qualified owner paths
+  and formatting. The remaining 80 runtime/consumer/test files also matched
+  after excluding imports and applying the same path/format normalization.
+- Workspace all-feature/all-target compilation passed. Strict workspace
+  all-feature/all-target Clippy and strict workspace Rustdoc passed on Rust
+  1.97.0. Formatting and whitespace checks passed.
+- Independent read-only code and documentation review found no actionable
+  issues. It checked unique record ownership, serde/default/callback parity,
+  pure helper dependencies, visibility, cfg boundaries and direct consumer
+  imports. It did not independently execute the parent-run Cargo checks.
+- The targeted nextest run passed **589 tests**, with five slow tests and
+  3,198 tests outside the selected filter, in 522.973 seconds. It covered
+  core contracts/execution, native journal and service recovery, managed
+  storage, HTTP/WebSocket authority, provider continuity, SDK checkpoint
+  exchange and maximum-tree completion after lost terminal ACKs. Source and
+  manifests stayed unchanged throughout, including fixture subprocess builds.
+
+The targeted runtime command selected only the required test binaries:
+
+```sh
+cargo nextest run -p bitrouter --all-features --lib \
+  --test core_contract --test core_execution --test orchestrator_core \
+  --test managed_native --build-jobs 2 --test-threads 2 \
+  -E 'binary(core_contract) | binary(core_execution) | binary(orchestrator_core) | binary(managed_native) | test(core::) | test(harness::agent::) | test(harness::resources::managed::) | test(harness::service::) | test(managed_store::) | test(agent_store::)'
+```
+
+This stage removes the snapshot dependency on online scheduling; it does not
+prove a harness-only feature profile. Host bridges still need explicit profile
+wiring, and public harness exchange DTOs still need their separate contract/SDK
+pass. The complete feature/startup matrix, historical writer fixtures,
+terminal-free headless renderer, delivery/performance checks, full P0 review
+and PR remain open. All final A01–A16 acceptance gates remain pending.

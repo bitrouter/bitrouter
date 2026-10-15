@@ -2,6 +2,7 @@
 //! These checks do not persist a batch or authorize dispatch. The harness owns
 //! atomic append; core owns the acknowledgement barrier.
 
+pub mod snapshot;
 pub mod validation;
 
 use bitrouter_ai::core::checkpoint::{

@@ -18,7 +18,7 @@ pub(super) fn admit(
         .manifest
         .required_features
         .iter()
-        .any(|feature| feature == super::super::context_router::NATIVE_TOOLS)
+        .any(|feature| feature == crate::storage::checkpoint::snapshot::context::NATIVE_TOOLS)
     {
         // Native values offload large bodies; reserve a small, explicitly frozen
         // metadata envelope instead of the entire command input allowance.

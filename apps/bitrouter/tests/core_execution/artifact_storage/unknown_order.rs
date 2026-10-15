@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter::core::accounting::work::CostWorkKind;
+use bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkKind;
 
 #[derive(Clone, Copy, Debug)]
 enum Pressure {

@@ -78,8 +78,8 @@ impl ManagedCoreApi {
                 "checkpoint.ack",
                 "artifact.chunk",
                 "responses.create",
-                crate::core::context_router::FEATURE,
-                crate::core::context_router::PORTABLE_RESPONSES_REASONING,
+                crate::storage::checkpoint::snapshot::context::FEATURE,
+                crate::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING,
             ]
             .into_iter()
             .map(String::from)

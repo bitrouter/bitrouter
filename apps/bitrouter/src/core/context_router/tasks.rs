@@ -1,45 +1,13 @@
 //! Shared task evidence does not copy another worker's provider conversation.
 
-use bitrouter_ai::types::{Content, Message, Role};
+use crate::storage::checkpoint::snapshot::context::{enabled, portable};
 
-use super::evidence::{EvidenceBlock, EvidenceSource};
-use super::{FEATURE, invalid};
-use crate::core::session::{AgentTurn, SessionSnapshot};
+use bitrouter_ai::types::{Message, Role};
+
+use crate::storage::checkpoint::snapshot::context::evidence::{EvidenceBlock, EvidenceSource};
+use crate::storage::checkpoint::snapshot::context::invalid;
+use crate::storage::checkpoint::snapshot::{AgentTurn, SessionSnapshot};
 use bitrouter_ai::core::protocol::CoreError;
-
-pub(crate) fn enabled(state: &SessionSnapshot) -> bool {
-    state
-        .manifest
-        .required_features
-        .iter()
-        .any(|feature| feature == FEATURE)
-}
-
-/// Opaque provider continuations stay with their originating conversation.
-/// Related tasks can share plain text and complete ordinary tool exchanges.
-pub(crate) fn portable(block: &EvidenceBlock) -> bool {
-    block
-        .messages
-        .iter()
-        .flat_map(|message| &message.content)
-        .all(|content| match content {
-            Content::Text {
-                provider_metadata, ..
-            } => provider_metadata.is_empty(),
-            Content::ToolCall {
-                provider_metadata,
-                provider_executed,
-                dynamic,
-                ..
-            } => provider_metadata.is_empty() && !provider_executed && !dynamic,
-            Content::ToolResult {
-                provider_metadata,
-                dynamic,
-                ..
-            } => provider_metadata.is_empty() && !dynamic,
-            _ => false,
-        })
-}
 
 pub(crate) fn inherited(state: &SessionSnapshot, turn: &AgentTurn) -> Vec<String> {
     let isolated = turn
@@ -51,7 +19,8 @@ pub(crate) fn inherited(state: &SessionSnapshot, turn: &AgentTurn) -> Vec<String
                 || allocation.task.independent_review
                 || allocation.candidates.iter().any(|candidate| {
                     Some(&candidate.candidate_id) == allocation.selected_candidate_id.as_ref()
-                        && candidate.kind == crate::core::allocation::ContextKind::Fresh
+                        && candidate.kind
+                            == crate::storage::checkpoint::snapshot::allocation::ContextKind::Fresh
                 })
         });
     if isolated {

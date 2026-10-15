@@ -1,8 +1,8 @@
 //! Crash the shipped CLI, retaining only the independent harness's journal.
 
 use super::*;
-use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::protocol::{
     RunActivityReconciliation, ToolEffect, ToolObservation, ToolStatus,

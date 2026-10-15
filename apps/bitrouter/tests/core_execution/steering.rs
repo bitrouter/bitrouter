@@ -1,6 +1,6 @@
 use super::*;
-use bitrouter::core::session::steering::SteeringDisposition;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::steering::SteeringDisposition;
 use bitrouter_ai::core::checkpoint::ToolStartFence;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
@@ -512,7 +512,7 @@ async fn steering_provisional_fence_does_not_reject_another_agents_admitted_atte
                 .as_ref()
                 .ok_or("child")?
                 .status,
-            bitrouter::core::session::AgentStatus::Completed
+            bitrouter::storage::checkpoint::snapshot::AgentStatus::Completed
         );
         assert_eq!(
             done.steering.contains_key("steer"),

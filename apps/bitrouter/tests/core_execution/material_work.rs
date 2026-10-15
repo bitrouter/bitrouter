@@ -1,6 +1,6 @@
 use super::*;
-use bitrouter::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 
 async fn start_with_material(session: &CoreSession) -> Result<String, CoreError> {
     session

@@ -1,23 +1,16 @@
 //! Deterministic context allocation before shared model preparation. Admission
 //! here proves context eligibility, not provider capability or token capacity.
 
+use crate::storage::checkpoint::snapshot::allocation::{
+    ContextAllocation, ContextCandidate, ContextKind, ContextSource,
+};
+
 use bitrouter_ai::types::Message;
-use serde::{Deserialize, Serialize};
 
-use super::collaboration::{Assignment, Work};
-use super::routing::ContextManifest;
-use super::session::{AgentState, SessionSnapshot};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode, MaterialRef, TaskInput};
-
-/// Facts on which retained history depends. Keep all distinct sources across
-/// turns: a later model step cannot certify older evidence as newly observed.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ContextSource {
-    pub permission_revision: u64,
-    pub workspace_revision: Option<String>,
-    pub tool_manifest_digest: String,
-    pub materials: Vec<MaterialRef>,
-}
+use crate::storage::checkpoint::snapshot::collaboration::{Assignment, Work};
+use crate::storage::checkpoint::snapshot::routing::ContextManifest;
+use crate::storage::checkpoint::snapshot::{AgentState, SessionSnapshot};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode, TaskInput};
 
 impl ContextSource {
     pub fn capture(context: &ContextManifest) -> Self {
@@ -28,45 +21,6 @@ impl ContextSource {
             materials: context.materials.clone(),
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContextKind {
-    Reuse,
-    Fresh,
-    Inherited,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextCandidate {
-    pub candidate_id: String,
-    pub kind: ContextKind,
-    pub agent_id: Option<String>,
-    pub context_revision: Option<u64>,
-    /// Empty means eligible for allocation. Model feasibility remains a
-    /// separate, mandatory gate before any provider attempt.
-    pub rejection_reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextAllocation {
-    pub allocation_id: String,
-    pub policy_id: String,
-    pub source: String,
-    pub input_state_revision: u64,
-    pub signal_revision: u64,
-    pub actor_id: String,
-    pub actor_context_revision: u64,
-    pub assignment_id: String,
-    pub task: Work,
-    pub input: TaskInput,
-    pub candidates: Vec<ContextCandidate>,
-    pub selected_candidate_id: Option<String>,
-    pub selected_agent_id: Option<String>,
-    pub error: Option<CoreError>,
-    pub applied_state_revision: Option<u64>,
-    pub application_error: Option<CoreError>,
 }
 
 pub(crate) enum Intent<'a> {
@@ -243,7 +197,7 @@ fn reuse_rejections(
                     .iter()
                     .any(|call| !call.consumed || call.result.is_none())
         })
-        || super::session::pending_dependencies(state, &agent.agent_id)
+        || crate::storage::checkpoint::snapshot::pending_dependencies(state, &agent.agent_id)
     {
         reasons.push("worker_not_idle".into());
     }
