@@ -584,9 +584,9 @@ pub(super) async fn delete_dependents(tx: &DatabaseTransaction, key: &str) -> Re
             .one(tx)
             .await?
         {
-            crate::evolution::store::records::Entity::delete_many()
-                .filter(crate::evolution::store::records::Column::SessionKey.eq(cp.session_key))
-                .filter(crate::evolution::store::records::Column::Kind.eq("judge_job"))
+            crate::storage::evolution::records::Entity::delete_many()
+                .filter(crate::storage::evolution::records::Column::SessionKey.eq(cp.session_key))
+                .filter(crate::storage::evolution::records::Column::Kind.eq("judge_job"))
                 .exec(tx)
                 .await?;
         }

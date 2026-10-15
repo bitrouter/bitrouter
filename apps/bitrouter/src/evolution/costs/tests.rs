@@ -1,5 +1,7 @@
 use super::*;
 use crate::evolution::jobs::JobStatus;
+use crate::storage::session_identity::SessionIdentity;
+use sea_orm::TransactionTrait;
 
 fn job(owner: &str, id: &str) -> JudgeJob {
     JudgeJob {

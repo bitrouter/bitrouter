@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::{BlockStatus, ControlState, Publication};
-use crate::evolution::rubric::digest;
+use crate::storage::evolution::digest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

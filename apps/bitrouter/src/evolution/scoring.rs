@@ -6,11 +6,13 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::evidence::{EVIDENCE_VERSION, EvidencePacket};
-use super::rubric::{Criterion, QualityBounds, RUBRIC_VERSION, RubricEvaluation, digest, library};
+use super::rubric::{Criterion, QualityBounds, RUBRIC_VERSION, RubricEvaluation, library};
+use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::{
     AssessmentRevision, AssessmentSource, RevisionInput,
 };
-use crate::acp_trajectory::{CanonicalStore, SessionIdentity};
+use crate::storage::evolution::digest;
+use crate::storage::session_identity::SessionIdentity;
 
 pub const TUI_EVALUATOR_ID: &str = "local-tui-reviewer";
 pub const TUI_EVALUATOR_VERSION: &str = "manual-rubric-ui-v1";

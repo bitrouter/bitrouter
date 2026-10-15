@@ -18,7 +18,6 @@ use sea_orm::{
     QueryOrder, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use entities::{connections, events, sessions};
@@ -26,26 +25,7 @@ use entities::{connections, events, sessions};
 /// Version of the canonical event interpretation, independent of ACP's version.
 pub const CANONICAL_VERSION: u32 = 1;
 
-/// The complete native identity scope; `key()` is only a storage index.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionIdentity {
-    pub owner: String,
-    pub source: String,
-    pub native_session_id: String,
-}
-
-impl SessionIdentity {
-    pub fn key(&self) -> Result<String> {
-        ensure!(
-            !self.owner.is_empty() && !self.source.is_empty() && !self.native_session_id.is_empty(),
-            "native identity fields must not be empty"
-        );
-        Ok(Sha256::digest(serde_json::to_vec(self)?)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect())
-    }
-}
+use crate::storage::session_identity::SessionIdentity;
 
 /// Recording scope and optional, locally established metering namespace.
 #[derive(Debug, Clone)]

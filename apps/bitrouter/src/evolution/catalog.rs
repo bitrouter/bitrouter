@@ -15,8 +15,8 @@ use bitrouter_ai::types::ApiProtocol;
 use serde_json::{Value, json};
 
 use super::control::BlockDefinition;
-use super::rubric::digest;
 use crate::policy_lock::PolicyRoutingSnapshot;
+use crate::storage::evolution::digest;
 
 /// A request-time compatibility guard is part of every block arm. If a
 /// candidate's possible tiers cannot serve this request, retain the established

@@ -2,10 +2,11 @@
 //! service. The ACP agent is a fixture; model quality is not evaluated here.
 
 use super::*;
-use bitrouter::acp_trajectory::{CanonicalStore, SessionIdentity};
+use bitrouter::acp_trajectory::CanonicalStore;
 use bitrouter::daemon::{AcpControlPlane, NoopObserveStatus, NoopReloader};
 use bitrouter::evolution::bandit::BanditConfig;
 use bitrouter::evolution::control::{BlockDefinition, BlockRule, BlockStatus, EvolutionMode};
+use bitrouter::storage::session_identity::SessionIdentity;
 
 #[path = "evolution/native.rs"]
 mod native;

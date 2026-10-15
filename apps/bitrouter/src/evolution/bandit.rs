@@ -15,7 +15,8 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, StudentT};
 use serde::{Deserialize, Serialize};
 
-use super::rubric::{PPM, digest};
+use super::rubric::PPM;
+use crate::storage::evolution::digest;
 
 pub const LEARNER_VERSION: &str = "checkpoint-normal-inverse-gamma-ts-v3";
 

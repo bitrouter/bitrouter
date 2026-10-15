@@ -16,8 +16,8 @@ use crate::evolution::control::{
     BlockDefinition, BlockRule, BlockStatus, ControlState, EvolutionMode,
 };
 use crate::evolution::judge::JUDGE_VERSION;
-use crate::evolution::rubric::digest;
 use crate::evolution::scoring::{TUI_EVALUATOR_ID, TUI_EVALUATOR_VERSION, measurement_contract};
+use crate::storage::evolution::digest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

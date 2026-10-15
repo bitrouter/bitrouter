@@ -310,7 +310,7 @@ fn main() -> Result<()> {
         "scope":"allocator_only; promotion is not enacted; fixed allocation and TS share irreversible quality withdrawal; no live routing or judge accuracy claim",
         "likelihood":"normal_inverse_gamma; Student-t mean sampling; independent quality/log-cost/log-latency",
         "learner_config":BanditConfig {posterior_draws:2048,maximum_challenger_sessions:args.sessions,..BanditConfig::default()},
-        "learner_source_digest":bitrouter::evolution::rubric::digest(&include_str!("../src/evolution/bandit.rs"))?,
+        "learner_source_digest":bitrouter::storage::evolution::digest(&include_str!("../src/evolution/bandit.rs"))?,
         "seeds":args.seeds,"sessions_per_run":args.sessions,"summary":summary,"runs":runs});
     let serialized = serde_json::to_string_pretty(&report)?;
     if let Some(path) = args.output {

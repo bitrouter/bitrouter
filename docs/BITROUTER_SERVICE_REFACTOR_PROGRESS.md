@@ -61,7 +61,7 @@ the contract move must preserve its bytes.
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow projections, pending observations and settlement moved to gateway; eval publication is optional; reserved-request protections, remaining policy ownership and final dependency matrix remain |
+| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical request protection, remaining policy ownership and final dependency matrix remain |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
 | P0 5 Feature isolation | In progress | Scheduler/local native bridge, eval HTTP mounting and automatic outbox publication gated by core; core-disabled inspection and no-OTLP activation isolation verified; complete isolated dependency/startup matrix remains |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
@@ -1245,3 +1245,92 @@ still require their gateway/core split. Full-to-minimum-to-full artifact
 transition evidence, final dependency/startup isolation, harness HTTP clients,
 packaging, performance, full final verification and PR remain required. P1 is
 excluded. No artifact was published and no PR was created in this stage.
+
+## Gateway request reservations and shared record ownership
+
+Changes against `12dbe69` move operational judge admission, observation and
+settlement to `gateway::metering::judge`. Assembly still registers that same
+concrete hook before authentication for both generation and Decisions. Existing
+job reservation construction and cost-report operations remain learning-owned
+in `evolution::costs`; they extend the gateway-owned handle without moving job
+scheduling or evaluation into the gateway. Replay rejection markers move to
+`gateway::metering::replay`, so always-run metering and settlement no longer
+import their marker types from the evolution runtime.
+
+The actual shared durable dependencies move with this boundary:
+
+- `EvolutionStore` and its unchanged digest algorithm to `storage::evolution`;
+- persisted `ExecutionHop` and `ExecutionOutcome` to `storage::execution`;
+- `SessionIdentity` and its existing storage index to `storage::session_identity`.
+
+Capture, checkpoint cleanup, learning, CLI, examples and test consumers import
+the new owners directly. No forwarding modules, duplicate record definitions,
+new AI contracts or schema migrations are introduced. The gateway hooks and
+shared records have no source import of evolution, ACP capture or the harness.
+This does not yet gate evolution startup or canonical execution admission; the
+existing request behavior remains active while that remaining split is prepared.
+
+Source comparison verified the complete identity and execution definitions,
+store and digest implementation, job reservation body, admission/finish path,
+pre-request hook, observation/settlement implementations and event names against
+the parent revision. Persisted table names, digest domains, field order/serde
+representation and existing tests are preserved. No newly written version-tag
+fixture is treated as historical data evidence.
+
+Validation evidence:
+
+- Stable all-feature/all-target application `cargo check` passed. The initial
+  pass found one grouped test import still pointing at the old store and two
+  imports now used only by relocated code/tests; those were corrected.
+- Full-feature focused runtime: **216 passed**, 3,180 outside the filter,
+  in 9.344 seconds. Core/OTLP-disabled runtime: **214 passed**, 2,950 outside the
+  filter, in 9.115 seconds, with `--no-default-features --features harness,tui,mcp`.
+  The only identity difference is the two expected OTLP full-stack cases.
+- Coverage includes real pipeline judge admission and missing/unknown usage,
+  cached responses, retries and authoritative receipts; canonical accounting,
+  streaming/disconnect and authenticated capture scopes; atomic reservations,
+  checkpoint deletion/recovery, policy learning and cost-report consumers; and
+  CLI checkpoint/revision persistence across processes.
+- Strict Clippy initially found a relocated test module before production impls.
+  The unchanged module moved to the file end. After that layout-only repair,
+  the eight judge accounting/reservation regressions passed again in both
+  profiles: 0.361 seconds full, 0.293 seconds disabled. No production algorithm
+  or test assertion changed to satisfy the lint.
+- Final Rust 1.97.0 strict workspace all-feature/all-target Clippy and application
+  disabled-profile all-target Clippy passed. Strict Rustdoc passed for the
+  all-feature workspace and disabled application profile. Formatting, whitespace,
+  source parity and updated documentation link checks passed.
+- Independent read-only review found no actionable correctness or ownership
+  findings. It checked persisted layouts/indexes, admission ordering, accounting,
+  retained tests and nonlocal reservation/report implementations. It did not run
+  Cargo; the test evidence is recorded separately.
+
+The broader runtime commands were:
+
+```sh
+reservation_filter='test(evolution::) | test(gateway::metering::) | test(acp_trajectory::) | test(metering::) | test(eval::settlement::) | test(actions::code::evolution::) | binary(acp_checkpoints) | binary(full_stack) | binary(source_boundaries)'
+
+cargo nextest run -p bitrouter --all-features --lib \
+  --test acp_checkpoints --test full_stack --test source_boundaries \
+  --build-jobs 2 --test-threads 2 --no-fail-fast -E "$reservation_filter"
+
+cargo nextest run -p bitrouter --no-default-features \
+  --features harness,tui,mcp --lib \
+  --test acp_checkpoints --test full_stack --test source_boundaries \
+  --build-jobs 2 --test-threads 2 --no-fail-fast -E "$reservation_filter"
+```
+
+The final layout verification used `--lib` in the same two profiles with
+`test(gateway::metering::judge::) | test(evolution::costs::) |
+test(evolution::runtime::tests::judge_costs::)`. Toolchain/debug/incremental
+settings are unchanged; ambient OTLP endpoint configuration was unset. Source
+and manifests stayed frozen during each runtime pass and its nested CLI builds.
+
+This stage preserves existing behavior while correcting implementation ownership.
+Evolution is still compiled and assembled in the disabled-core test profile;
+those tests do not prove final minimum-gateway isolation. Remaining work includes
+canonical gateway inventory/admission and their persisted capture dependencies,
+learning activation/CLI gates, the rest of the feature matrix and all final P0
+acceptance/delivery evidence. Full/minimum/full artifact transitions are still
+unverified. All A01–A16 final gates remain open; no PR or publication is claimed,
+and P1 remains excluded.

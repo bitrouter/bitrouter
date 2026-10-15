@@ -1,11 +1,12 @@
 //! Full assembled-pipeline cost tests use controlled HTTP responses, not models.
 
 use super::*;
-use crate::evolution::costs::JudgeCosts;
 use crate::evolution::jobs::{JobStatus, JudgeJob, JudgeJobs};
 use crate::evolution::operator::{EvolutionOperation, EvolutionReport};
-use crate::evolution::{scoring, store::EvolutionStore};
+use crate::evolution::scoring;
+use crate::gateway::metering::judge::JudgeCosts;
 use crate::metering::entities::requests;
+use crate::storage::evolution::EvolutionStore;
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 
 async fn setup_job(fixture: &Fixture, id: &str, model: &str) -> Result<(JudgeJobs, JudgeJob)> {

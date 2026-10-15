@@ -20,8 +20,8 @@ use wiremock::{
     matchers::{method, path},
 };
 
+use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::CriterionScore;
-use crate::acp_trajectory::{CanonicalStore, SessionIdentity};
 use crate::evolution::control::{BlockDefinition, BlockRule, EvolutionMode};
 use crate::evolution::evidence::{EvidenceKind, EvidencePacket};
 use crate::evolution::rubric::{
@@ -29,6 +29,7 @@ use crate::evolution::rubric::{
 };
 use crate::evolution::runtime::EvolutionRuntime;
 use crate::evolution::scheduler::EvolutionScheduler;
+use crate::storage::session_identity::SessionIdentity;
 
 mod publication;
 

@@ -15,7 +15,6 @@ pub mod runtime;
 pub mod scheduler;
 pub mod scoring;
 pub mod service;
-pub mod store;
 
 #[cfg(test)]
 mod tests;

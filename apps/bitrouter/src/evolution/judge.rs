@@ -10,8 +10,9 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::{Content, GenerationParams, Message, Prompt, Role, ToolChoice, Usage};
 use serde::{Deserialize, Serialize};
 
-use super::rubric::{RubricEvaluation, digest};
+use super::rubric::RubricEvaluation;
 use super::scoring::ScoringInput;
+use crate::storage::evolution::digest;
 
 pub const JUDGE_VERSION: &str = "recorded-evidence-judge-v2";
 

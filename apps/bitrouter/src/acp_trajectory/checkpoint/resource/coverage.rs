@@ -6,7 +6,7 @@ use crate::evolution::inventory::{
     COVERAGE_KIND, CoverageRegistration, GatewayInventory, GatewayRequest, INVENTORY_KIND,
     INVENTORY_VERSION,
 };
-use crate::evolution::store::EvolutionStore;
+use crate::storage::evolution::EvolutionStore;
 
 pub(super) struct InventoryObservation {
     pub requests: BTreeMap<String, RequestAssociation>,

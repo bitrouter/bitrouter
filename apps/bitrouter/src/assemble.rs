@@ -887,7 +887,7 @@ async fn assemble_app(
         policy_runtime.clone(),
     );
     let evolution_for_hooks = evolution.clone();
-    let judge_costs = crate::evolution::costs::JudgeCosts::new(db.clone());
+    let judge_costs = crate::gateway::metering::judge::JudgeCosts::new(db.clone());
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
@@ -924,7 +924,7 @@ async fn assemble_app(
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
             lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
-            lm.require_hook::<crate::evolution::costs::JudgeCosts>(
+            lm.require_hook::<crate::gateway::metering::judge::JudgeCosts>(
                 HookStage::PreResolution,
                 OperationScope::Both,
             );

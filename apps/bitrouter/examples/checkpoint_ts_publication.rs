@@ -12,7 +12,7 @@ use bitrouter::evolution::bandit::{
 use bitrouter::evolution::control::{
     BlockDefinition, BlockRule, BlockStatus, ControlState, EvolutionMode,
 };
-use bitrouter::evolution::rubric::digest;
+use bitrouter::storage::evolution::digest;
 use clap::{Parser, ValueEnum};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use serde::Serialize;

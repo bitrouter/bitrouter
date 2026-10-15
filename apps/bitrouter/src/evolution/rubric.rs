@@ -2,9 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::storage::evolution::digest;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::evidence::{EVIDENCE_VERSION, EvidencePacket};
 use crate::acp_trajectory::checkpoint::types::{
@@ -138,10 +138,6 @@ impl QualityBounds {
         (self.unknown_weight == 0 && !self.required_unknown && self.capture_gaps.is_empty())
             .then_some(f64::from(self.lower_ppm) / f64::from(PPM))
     }
-}
-
-pub fn digest(value: &impl Serialize) -> Result<String> {
-    Ok(hex::encode(Sha256::digest(serde_json::to_vec(value)?)))
 }
 
 impl RubricEvaluation {

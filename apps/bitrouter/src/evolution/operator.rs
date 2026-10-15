@@ -228,7 +228,7 @@ impl EvolutionRuntime {
             }
         }
         let recorded_jobs = JudgeJobs::new(service.store.clone()).list().await?;
-        let judge_costs = super::costs::JudgeCosts::new(self.db.clone())
+        let judge_costs = crate::gateway::metering::judge::JudgeCosts::new(self.db.clone())
             .report(owner, &recorded_jobs)
             .await?;
         let jobs = recorded_jobs

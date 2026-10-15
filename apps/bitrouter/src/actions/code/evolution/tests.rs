@@ -8,11 +8,12 @@ use std::time::Duration;
 use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
 use serde_json::json;
 
-use crate::acp_trajectory::{CanonicalStore, Recorder, RecordingScope, SessionIdentity};
+use crate::acp_trajectory::{CanonicalStore, Recorder, RecordingScope};
 use crate::administration_target::InspectionTarget;
 use crate::daemon::{AcpControlPlane, NoopObserveStatus, NoopReloader};
 use crate::evolution::evidence::EvidenceKind;
 use crate::paths::ConfigSource;
+use crate::storage::session_identity::SessionIdentity;
 
 struct Fixture {
     services: CodeServices,

@@ -20,11 +20,12 @@ use super::control::{BlockStatus, ControlState, EvolutionMode};
 use super::jobs::{JobStatus, JudgeJobs};
 use super::runtime::EvolutionRuntime;
 use super::service::{CONTROL_KEY, CONTROL_KIND, EvolutionService};
-use super::store::EvolutionStore;
 use crate::acp_trajectory::{
-    CanonicalStore, SessionIdentity,
+    CanonicalStore,
     entities::{events, sessions},
 };
+use crate::storage::evolution::EvolutionStore;
+use crate::storage::session_identity::SessionIdentity;
 
 const CURSOR_KIND: &str = "checkpoint_schedule";
 

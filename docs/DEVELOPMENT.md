@@ -328,6 +328,23 @@ boundary: evolution startup, reserved-request protections, learning commands and
 remaining mixed module imports still require separation. The progress ledger
 records the remaining work before claiming a minimum gateway profile.
 
+Reserved judge request admission and attempt bookkeeping now belong to
+`gateway::metering::judge::JudgeCosts`. They retain their pre-authentication
+ordering and existing dispatch/replay checks. Always-run accounting and
+evaluation consume the replay markers from `gateway::metering::replay` instead
+of depending on a learning runtime. Job reservation construction and cost-report
+operations remain in `evolution::costs`; their implementation extends the
+gateway-owned handle without changing its admission behavior.
+
+The supporting record store and digest live in `storage::evolution`, persisted
+`ExecutionHop`/`ExecutionOutcome` in `storage::execution`, and the native
+`SessionIdentity` index in `storage::session_identity`. Capture, gateway and
+learning consumers use the same definitions. Storage table names, digest domains,
+serialized fields and validation remain unchanged. These are internal application
+records, not new SDK contracts or authority to execute a session. Canonical
+execution admission and learning activation still need their remaining split
+before evolution can be fully gated by core.
+
 `bitrouter-ai` contains no model execution or authentication implementation.
 Optional guardrails adapters and telemetry remain application modules; enabling
 a Cargo feature alone does not register a checker or opt into export.

@@ -8,7 +8,11 @@ use sea_orm::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::rubric::digest;
+use sha2::{Digest, Sha256};
+
+pub fn digest(value: &impl Serialize) -> Result<String> {
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(value)?)))
+}
 
 pub mod records {
     use sea_orm::entity::prelude::*;

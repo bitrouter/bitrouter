@@ -8,9 +8,11 @@ use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Serialize};
 
-use super::{judge, rubric::digest, scoring, store::EvolutionStore};
+use super::{judge, scoring};
+use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::AssessmentSource;
-use crate::acp_trajectory::{CanonicalStore, SessionIdentity};
+use crate::storage::evolution::{EvolutionStore, digest};
+use crate::storage::session_identity::SessionIdentity;
 
 const KIND: &str = "judge_job";
 const MAX_ATTEMPTS: usize = 3;
@@ -349,7 +351,7 @@ impl JudgeJobs {
         job.lease_until = Some((now + chrono::Duration::minutes(2)).to_rfc3339());
         if job.cached_response.is_none() {
             let request_id = format!("brjudge_{}", uuid::Uuid::new_v4().simple());
-            super::costs::JudgeCosts::new(self.store.db.clone())
+            crate::gateway::metering::judge::JudgeCosts::new(self.store.db.clone())
                 .reserve(&tx, &job, &request_id)
                 .await?;
             job.request_ids.push(request_id);

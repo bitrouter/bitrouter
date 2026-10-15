@@ -10,8 +10,9 @@ use crate::gateway::pipeline::hooks::PreRequestHook;
 use bitrouter_ai::types::ToolChoice;
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
-use crate::acp_trajectory::{RecordingScope, SessionIdentity};
+use crate::acp_trajectory::RecordingScope;
 use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
+use crate::storage::session_identity::SessionIdentity;
 
 struct JudgeRequestContract;
 
@@ -454,8 +455,8 @@ async fn a_live_lease_prevents_a_second_worker_and_an_expired_lease_recovers() -
         .enqueue(&identity, &checkpoint, "fixture:judge", None)
         .await?;
     let record_id = jobs.store.id(KIND, &job.job_id)?;
-    let mut stored: super::super::store::records::ActiveModel =
-        super::super::store::records::Entity::find_by_id(&record_id)
+    let mut stored: crate::storage::evolution::records::ActiveModel =
+        crate::storage::evolution::records::Entity::find_by_id(&record_id)
             .one(&jobs.store.db)
             .await?
             .context("missing record")?

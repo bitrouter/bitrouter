@@ -6,7 +6,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::bandit::{Arm, BanditConfig, BatchPlan, Recommendation};
-use super::rubric::digest;
+use crate::storage::evolution::digest;
 
 pub mod restoration;
 pub mod revisions;

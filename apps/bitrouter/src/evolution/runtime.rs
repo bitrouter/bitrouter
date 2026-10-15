@@ -28,29 +28,20 @@ use super::catalog::{block_digest, request_compatible};
 use super::control::{BlockDefinition, ControlState};
 use super::inventory::{BeginResult, GatewayInventory, GatewayRequest, InventoryBinding};
 use super::service::{DecisionContext, EvolutionService, RouteIntent, RoutingDependencies};
-use super::store::EvolutionStore;
-use crate::acp_trajectory::{
-    SessionIdentity,
-    entities::{connections, events, sessions},
-};
+use crate::acp_trajectory::entities::{connections, events, sessions};
 use crate::auth::events::ApiPrincipalEstablished;
 use crate::metering::recorder::MeteringSettlementEvent;
 use crate::policy_lock::{PolicyRoutingSnapshot, PolicyRuntime};
 use crate::session_identity::RequestSessionContext;
+use crate::storage::evolution::EvolutionStore;
+use crate::storage::session_identity::SessionIdentity;
 
 pub(super) const EXECUTION_KIND: &str = "execution";
 
-pub mod candidates;
+use crate::gateway::metering::replay::CanonicalRequestReplayRejected;
+use crate::storage::execution::{ExecutionHop, ExecutionOutcome};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecutionHop {
-    pub provider: String,
-    pub model: String,
-    pub account: Option<String>,
-    pub protocol: String,
-    pub status: String,
-    pub error_code: Option<String>,
-}
+pub mod candidates;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionSettlement {
@@ -66,14 +57,6 @@ pub struct ExecutionSettlement {
     pub final_metered_cost_micro_usd: Option<u64>,
     /// Complete request cost only when every attempted generation is covered.
     pub total_cost_micro_usd: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionOutcome {
-    Completed,
-    Failed,
-    ClientDisconnected,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,17 +96,6 @@ impl PipelineEvent for GatewayRequestObserved {
 impl PipelineEvent for CanonicalRequestBound {
     fn event_name(&self) -> &'static str {
         "evolution.canonical_request_bound"
-    }
-}
-
-/// A durable execution already owns this request identity. Always-run
-/// bookkeeping must not overwrite that execution with the rejected replay.
-#[derive(Debug, Serialize)]
-pub(crate) struct CanonicalRequestReplayRejected;
-
-impl PipelineEvent for CanonicalRequestReplayRejected {
-    fn event_name(&self) -> &'static str {
-        "evolution.request_replay_rejected"
     }
 }
 
@@ -281,10 +253,10 @@ impl EvolutionRuntime {
     pub async fn executions(&self, identity: &SessionIdentity) -> Result<Vec<ExecutionRecord>> {
         let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
         let key = identity.key()?;
-        let mut rows: Vec<ExecutionRecord> = super::store::records::Entity::find()
-            .filter(super::store::records::Column::ScopeId.eq(&store.scope_id))
-            .filter(super::store::records::Column::Kind.eq(EXECUTION_KIND))
-            .filter(super::store::records::Column::SessionKey.eq(key))
+        let mut rows: Vec<ExecutionRecord> = crate::storage::evolution::records::Entity::find()
+            .filter(crate::storage::evolution::records::Column::ScopeId.eq(&store.scope_id))
+            .filter(crate::storage::evolution::records::Column::Kind.eq(EXECUTION_KIND))
+            .filter(crate::storage::evolution::records::Column::SessionKey.eq(key))
             .all(&self.db)
             .await?
             .into_iter()

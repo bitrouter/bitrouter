@@ -1,6 +1,6 @@
 use super::*;
 use crate::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use crate::acp_trajectory::{Recorder, RecordingScope, SessionIdentity};
+use crate::acp_trajectory::{Recorder, RecordingScope};
 use crate::evolution::{
     control::{BlockDefinition, BlockRule},
     rubric::{Applicability, RUBRIC_VERSION, RubricItem, library},
@@ -8,6 +8,7 @@ use crate::evolution::{
     service::DecisionContext,
 };
 use crate::harness::acp::capture::{CaptureDirection, CaptureEvent, CapturePort};
+use crate::storage::session_identity::SessionIdentity;
 use std::sync::Arc;
 
 async fn fixture() -> Result<(

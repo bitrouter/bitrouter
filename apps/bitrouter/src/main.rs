@@ -6160,7 +6160,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             .await?;
             bitrouter::db::run_migrations(&db).await?;
             let store = bitrouter::acp_trajectory::CanonicalStore::new(db.clone());
-            let identity = bitrouter::acp_trajectory::SessionIdentity {
+            let identity = bitrouter::storage::session_identity::SessionIdentity {
                 owner: "local".into(),
                 source: agent,
                 native_session_id: session,
@@ -6168,7 +6168,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             let report = match action {
                 AcpCheckpointAction::Judge { checkpoint, model } => {
                     let jobs = bitrouter::evolution::jobs::JudgeJobs::new(
-                        bitrouter::evolution::store::EvolutionStore::new(db, &identity.owner)?,
+                        bitrouter::storage::evolution::EvolutionStore::new(db, &identity.owner)?,
                     );
                     let job = jobs.enqueue(&identity, &checkpoint, &model, None).await?;
                     let mut judge_config = cfg.clone();
@@ -6198,7 +6198,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                 }
                 AcpCheckpointAction::JudgeJob { job_id, resume } => {
                     let jobs = bitrouter::evolution::jobs::JudgeJobs::new(
-                        bitrouter::evolution::store::EvolutionStore::new(db, &identity.owner)?,
+                        bitrouter::storage::evolution::EvolutionStore::new(db, &identity.owner)?,
                     );
                     let job = jobs.get(&job_id).await?;
                     anyhow::ensure!(
@@ -6304,7 +6304,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                     ))?
                 }
                 AcpRecordingAction::Show { agent, session } => {
-                    let identity = bitrouter::acp_trajectory::SessionIdentity {
+                    let identity = bitrouter::storage::session_identity::SessionIdentity {
                         owner: "local".into(),
                         source: agent,
                         native_session_id: session,
@@ -6314,7 +6314,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                     ))?;
                 }
                 AcpRecordingAction::Delete { agent, session } => {
-                    let identity = bitrouter::acp_trajectory::SessionIdentity {
+                    let identity = bitrouter::storage::session_identity::SessionIdentity {
                         owner: "local".into(),
                         source: agent,
                         native_session_id: session,

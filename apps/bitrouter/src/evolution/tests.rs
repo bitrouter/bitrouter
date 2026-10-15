@@ -4,7 +4,8 @@ use serde_json::json;
 
 use super::{evidence::EvidencePacket, rubric::*, scoring};
 use crate::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use crate::acp_trajectory::{CanonicalStore, RecordingScope, SessionIdentity};
+use crate::acp_trajectory::{CanonicalStore, RecordingScope};
+use crate::storage::session_identity::SessionIdentity;
 
 pub(super) async fn fixture() -> Result<(CanonicalStore, SessionIdentity, String)> {
     let db = crate::db::connect("sqlite::memory:").await?;

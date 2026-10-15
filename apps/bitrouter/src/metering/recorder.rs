@@ -130,8 +130,8 @@ fn route_scope(ctx: &SettlementContext) -> String {
 #[async_trait]
 impl SettlementRecorder for MeteringRecorder {
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
-        if ctx.has_event::<crate::evolution::runtime::CanonicalRequestReplayRejected>()
-            || ctx.has_event::<crate::evolution::costs::JudgeAttemptReplayRejected>()
+        if ctx.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>()
+            || ctx.has_event::<crate::gateway::metering::replay::JudgeAttemptReplayRejected>()
         {
             return Ok(());
         }

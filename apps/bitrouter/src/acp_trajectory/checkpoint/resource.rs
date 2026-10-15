@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::evolution::inventory::{coverage_matches, lock_connection};
-use crate::evolution::store::EvolutionStore;
+use crate::storage::evolution::EvolutionStore;
 
 mod coverage;
 

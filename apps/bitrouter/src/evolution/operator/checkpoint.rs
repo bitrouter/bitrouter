@@ -4,13 +4,14 @@ use anyhow::{Result, ensure};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
+use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::{
     AssessmentRevision, AssessmentSource, Checkpoint, EffectiveAssessment,
 };
-use crate::acp_trajectory::{CanonicalStore, SessionIdentity};
 use crate::evolution::evidence::EvidencePacket;
 use crate::evolution::rubric::RubricEvaluation;
 use crate::evolution::scoring::{self, RubricSubmission, ScoringReceipt};
+use crate::storage::session_identity::SessionIdentity;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
