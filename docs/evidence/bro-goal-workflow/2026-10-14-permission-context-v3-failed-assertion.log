@@ -1,0 +1,75 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 48s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 89b13df9-a02b-4965-83dd-dfd87617ef87 with nextest profile: default
+    Starting 10 tests across 1 binary (1756 tests skipped)
+        PASS [   0.030s] ( 1/10) bitrouter goal_code::tests::permission_preview_separates_earlier_declarations_from_original_rpc
+        PASS [   0.032s] ( 2/10) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.016s] ( 3/10) bitrouter goal_permission_material::tests::context_rejects_foreign_late_changed_or_contradictory_declarations
+        PASS [   0.018s] ( 4/10) bitrouter goal_permission_material::tests::delivery_rejects_scope_widening_reused_calls_and_late_argument_changes
+        PASS [   0.015s] ( 5/10) bitrouter goal_permission_material::tests::earlier_context_fills_missing_locations_without_rewriting_the_request
+        PASS [   0.016s] ( 6/10) bitrouter goal_permission_material::tests::oversized_or_late_only_context_cannot_fall_back_to_automatic_approval
+        PASS [   0.030s] ( 7/10) bitrouter goal_runtime::permissions::tests::captured_context_allows_only_declared_workspace_reads_and_keeps_all_paths
+        PASS [   0.019s] ( 8/10) bitrouter goal_runtime::permissions::tests::local_file_policy_rejects_paths_through_an_external_symlink
+        PASS [   0.053s] ( 9/10) bitrouter goal_runtime::permissions::tests::local_file_policy_uses_declared_kind_and_paths_without_granting_execute
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery
+        FAIL [  95.252s] (10/10) bitrouter goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery has been running for over 60 seconds
+    test goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1765 filtered out; finished in 95.24s
+
+  stderr ───
+
+    thread 'goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery' (4199676) panicked at apps/bitrouter/src/goal_runtime/tests.rs:541:13:
+    assertion `left == right` failed
+      left: 1
+     right: 3
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure:
+────────────
+     Summary [  95.495s] 10 tests run: 9 passed, 1 failed, 1756 skipped
+        FAIL [  95.252s] (10/10) bitrouter goal_runtime::tests::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery
+error: test run failed

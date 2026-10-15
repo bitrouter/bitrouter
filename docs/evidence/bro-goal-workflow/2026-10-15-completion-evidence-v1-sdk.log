@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+────────────
+ Nextest run ID 64650cff-35bb-4ee7-9ae3-e6159c7d5d10 with nextest profile: default
+    Starting 4 tests across 1 binary (730 tests skipped)
+        PASS [   0.039s] (1/4) bitrouter-sdk language_model::native_work::tests::cancelled_durable_admission_preserves_identity_without_dispatch
+        PASS [   0.039s] (2/4) bitrouter-sdk language_model::native_work::tests::accepted_headers_keep_their_original_observation_after_flush
+        PASS [   0.012s] (3/4) bitrouter-sdk language_model::native_work::tests::cancelled_http_future_records_one_unknown_outcome
+        PASS [   0.012s] (4/4) bitrouter-sdk language_model::native_work::tests::rejected_admission_does_not_report_an_uncommitted_intent
+────────────
+     Summary [   0.054s] 4 tests run: 4 passed, 730 skipped

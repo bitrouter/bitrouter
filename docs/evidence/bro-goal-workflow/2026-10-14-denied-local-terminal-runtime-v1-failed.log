@@ -1,0 +1,65 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 56s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 05b593bb-7e1f-4c16-b8d4-ed5d6182a325 with nextest profile: default
+    Starting 4 tests across 1 binary (1768 tests skipped)
+        PASS [   0.021s] (1/4) bitrouter goal_runtime::recovery::tests::denied_local_tool_requires_actual_rejection_origin_and_failed_terminal
+        PASS [   0.014s] (2/4) bitrouter goal_runtime::recovery::tests::later_local_kind_cannot_hide_prior_execute_or_fetch
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        SLOW [>120.000s] (───) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        FAIL [ 146.119s] (3/4) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission has been running for over 60 seconds
+    test goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1771 filtered out; finished in 146.11s
+
+  stderr ───
+    Error: fixture Goal did not reach expected state; permission diagnostics: [{"material":{"permission_id":"cee4c400-3604-46db-bf04-e8cc0741cb32","tool_call":{"toolCallId":"fixture-write","kind":"read","title":"Write right.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpZWHJ1G/goal-workspaces/439ece3b-dd6e-40d8-be60-3712d93775b9/f4ebf0b7-0145-4a6a-8903-76d6efa3cbbc/right.txt"}],"rawInput":{"path":"right.txt"}},"options":[{"optionId":"allow-always","name":"Allow persistently","kind":"allow_always"},{"optionId":"deny-once","name":"Reject once","kind":"reject_once"}],"earlier_tool_context":{"run_id":"4bf5f84c-af1c-472a-bf28-07d6d0bb6770","permission_id":"cee4c400-3604-46db-bf04-e8cc0741cb32","original_request_sha256":"df6a44ac1cf0b82425524fef973592143ae7ec74e85737ba794b125ef48f356d","permission_seq":8,"snapshot_seq":8,"declarations":[{"seq":7,"at":"2026-10-15T00:01:07.764101Z","kind":{"event":"update","update":{"sessionUpdate":"tool_call","toolCallId":"fixture-write","title":"Write right.txt","kind":"read","status":"in_progress","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpZWHJ1G/goal-workspaces/439ece3b-dd6e-40d8-be60-3712d93775b9/f4ebf0b7-0145-4a6a-8903-76d6efa3cbbc/right.txt"}]}}}]}},"effective_tool":{"toolCallId":"fixture-write","kind":"read","title":"Write right.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpZWHJ1G/goal-workspaces/439ece3b-dd6e-40d8-be60-3712d93775b9/f4ebf0b7-0145-4a6a-8903-76d6efa3cbbc/right.txt"}],"rawInput":{"path":"right.txt"}},"state":{"state":"pending"}},{"material":{"permission_id":"dcde813b-b61d-411a-af62-52c05faf2039","tool_call":{"toolCallId":"fixture-write","kind":"edit","title":"Write left.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpZWHJ1G/goal-workspaces/439ece3b-dd6e-40d8-be60-3712d93775b9/5594ab6a-671f-415f-8be1-931a709909fb/left.txt"}],"rawInput":{"path":"left.txt"}},"options":[{"optionId":"allow-once","name":"Allow this fixture write","kind":"allow_once"},{"optionId":"deny-once","name":"Deny this fixture write","kind":"reject_once"}],"earlier_tool_context":{"run_id":"8acb7844-1043-46ed-8867-2b376676e322","permission_id":"dcde813b-b61d-411a-af62-52c05faf2039","original_request_sha256":"4daaca326d6926a4292fbebc1081079ceaf15b4078a099da0cfe517d3d2719b4","permission_seq":8,"snapshot_seq":8,"declarations":[{"seq":7,"at":"2026-10-15T00:01:09.433305Z","kind":{"event":"update","update":{"sessionUpdate":"tool_call","toolCallId":"fixture-write","title":"Write left.txt","kind":"edit","status":"in_progress","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpZWHJ1G/goal-workspaces/439ece3b-dd6e-40d8-be60-3712d93775b9/5594ab6a-671f-415f-8be1-931a709909fb/left.txt"}]}}}]}},"effective_tool":{"toolCallId":"fixture-write","kind":"edit","title":"Write left.txt","locations":[{"path":"/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpZWHJ1G/goal-workspaces/439ece3b-dd6e-40d8-be60-3712d93775b9/5594ab6a-671f-415f-8be1-931a709909fb/left.txt"}],"rawInput":{"path":"left.txt"}},"state":{"state":"submitted","operation_id":"9f5e144d-e0b7-4c69-ac93-63eda1702021","option_id":"allow-once"}}]
+
+  Cancelling due to test failure:
+────────────
+     Summary [ 146.159s] 3/4 tests run: 2 passed, 1 failed, 1768 skipped
+        FAIL [ 146.119s] (3/4) bitrouter goal_runtime::tests::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+warning: 1/4 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+error: test run failed

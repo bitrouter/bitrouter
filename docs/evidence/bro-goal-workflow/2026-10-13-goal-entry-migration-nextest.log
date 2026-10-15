@@ -1,0 +1,100 @@
+   Compiling rustls v0.23.41
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 25s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 0ba9b487-4623-45ff-b781-68ac4507303a with nextest profile: default
+    Starting 51 tests across 6 binaries (1813 tests skipped)
+        PASS [   0.025s] ( 1/51) bitrouter goal_code::tests::receipt_recovery_rotates_lanes_without_replaying_or_replacing_identity
+        PASS [   0.027s] ( 2/51) bitrouter goal_code::tests::unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop
+        PASS [   0.051s] ( 3/51) bitrouter goal_code::tests::outbox_retains_exact_identity_scope_and_text_without_replaying
+        PASS [   0.051s] ( 4/51) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.052s] ( 5/51) bitrouter goal_code::tests::changed_protocol_outbox_is_preserved_without_reinterpreting_or_replaying
+        PASS [   0.075s] ( 6/51) bitrouter goal_code::tests::actual_database_receipt_must_match_the_original_client_payload
+        PASS [   0.078s] ( 7/51) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        PASS [   0.078s] ( 8/51) bitrouter goal_code::tests::old_receipt_with_identical_text_cannot_clear_a_different_pending_draft
+        PASS [   0.082s] ( 9/51) bitrouter goal_code::tests::real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        PASS [  78.504s] (10/51) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        PASS [   0.061s] (11/51) bitrouter::code_tui_pty background::remote_context_rejects_background_and_session_mutations_before_local_start
+        PASS [  78.568s] (12/51) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        PASS [  78.568s] (13/51) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        PASS [  78.692s] (14/51) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        PASS [  79.145s] (15/51) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        PASS [  79.510s] (16/51) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        PASS [   1.293s] (17/51) bitrouter::code_tui_pty background::schema_failure_never_becomes_ready_for_review
+        PASS [   1.230s] (18/51) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        PASS [   1.363s] (19/51) bitrouter::code_tui_pty background_cli_returns_before_settlement_and_run_survives_client_exit
+        PASS [   1.452s] (20/51) bitrouter::code_tui_pty evolution::evolution_api_checkpoint_history_keeps_current_reward_and_original_revisions
+        PASS [   1.025s] (21/51) bitrouter::code_tui_pty evolution::session_api_client_loss_during_startup_keeps_daemon_ownership_until_explicit_stop
+        PASS [   0.921s] (22/51) bitrouter::code_tui_pty evolution::session_api_detach_preserves_pending_permissions_without_answering_or_stopping
+        PASS [  80.569s] (23/51) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [   1.054s] (24/51) bitrouter::code_tui_pty evolution::session_api_explicit_detach_keeps_accepted_turn_running_and_delivers_after_client_exit
+        PASS [   1.151s] (25/51) bitrouter::code_tui_pty evolution::session_api_failed_settings_retain_the_last_confirmed_value
+        PASS [   1.238s] (26/51) bitrouter::code_tui_pty evolution::session_api_late_adapter_failure_keeps_completed_transcript_and_native_identity
+        PASS [   1.231s] (27/51) bitrouter::code_tui_pty evolution::session_api_load_replays_history_and_resume_preserves_distinct_native_ids
+        PASS [   0.016s] (28/51) bitrouter::code_tui_pty pty_runner_reads_writes_and_resizes_without_a_sleep
+        PASS [   0.969s] (29/51) bitrouter::code_tui_pty evolution::session_api_overlapping_permissions_keep_identity_and_require_explicit_answers
+        PASS [   0.024s] (30/51) bitrouter::code_tui_pty remote_cli_failure_keeps_the_remote_error_without_local_model_fallback
+        PASS [   0.062s] (31/51) bitrouter::code_tui_pty remote_cli_read_actions_preserve_authentication_and_never_start_local_work
+        PASS [   1.008s] (32/51) bitrouter::code_tui_pty evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+        PASS [   0.656s] (33/51) bitrouter::code_tui_pty explicit_socket_status_is_readonly_without_starting_an_agent
+        PASS [   0.692s] (34/51) bitrouter::code_tui_pty mock_acp_minimal_lifecycle_logs_exact_multiline_prompt_text
+        PASS [   0.751s] (35/51) bitrouter::code_tui_pty mock_acp_models_delayed_cancellation_and_overlapping_permissions
+        PASS [   2.164s] (36/51) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        PASS [   0.050s] (37/51) bitrouter::onboarding goals_on_a_pipe_reject_before_setup_config_or_daemon_access
+        PASS [   0.041s] (38/51) bitrouter::onboarding onboarding_launch_and_goal_entries_do_not_start_acp_without_a_terminal
+        PASS [   0.015s] (39/51) bitrouter::onboarding public_help_exposes_canonical_agent_entry_points
+        PASS [   0.140s] (40/51) bitrouter::onboarding removed_goal_agent_flags_and_aliases_reject_without_setup_or_daemon_access
+        PASS [   0.924s] (41/51) bitrouter::code_tui_pty standalone_agents_and_attach_restore_terminal_without_stopping_runs
+        PASS [   0.040s] (42/51) bitrouter::bin/bro tests::canonical_agent_commands_are_positional
+        PASS [   0.057s] (43/51) bitrouter::bin/bro tests::goals_entry_rejects_retired_agent_flags_and_aliases
+        PASS [  84.504s] (44/51) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [  84.701s] (45/51) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [   4.871s] (46/51) bitrouter::native_agent_tui native_api_cold_directory_history_and_open_preserve_context_without_execution
+        PASS [  86.942s] (47/51) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [   5.326s] (48/51) bitrouter::native_agent_tui native_api_reports_classifier_generation_and_final_routing_facts
+        PASS [   8.066s] (49/51) bitrouter::native_agent_tui native_api_approvals_disconnect_queue_context_and_cancel_remain_durable
+        PASS [  13.197s] (50/51) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        PASS [  20.716s] (51/51) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+────────────
+     Summary [ 102.356s] 51 tests run: 51 passed (10 slow), 1813 skipped

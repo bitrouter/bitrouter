@@ -1,0 +1,280 @@
+{
+  "binary": {
+    "binary_sha256": "fc9e6de39202adebe3ea17475a6975a7ea8a84482c8ac585768dc6c2792cf5df",
+    "source_manifest": "2026-10-15-explicit-path-scope-v1-source.sha256",
+    "source_files": 949,
+    "stack_setting": "default; RUST_MIN_STACK absent",
+    "worker_configured_model": "anthropic/claude-opus-5.5"
+  },
+  "goal_id": "6b705e4c-1f33-4cf6-adfd-c2cd57993658",
+  "requirements_revision": 2,
+  "run_intent": "pause",
+  "input": {
+    "input_id": "99765658-fc1b-4245-9558-9e994342bbb2",
+    "effective_requirements_revision": 2,
+    "requirements_saved": true,
+    "affected_tasks": [
+      "integration-docs",
+      "text"
+    ],
+    "control_saved": null
+  },
+  "attempts": [
+    {
+      "task": "numbers",
+      "execution": "5bcbe7e7-5d48-41bf-afaf-839614e8d85b",
+      "archived": false,
+      "run": "7054e078-c3e6-41b7-91a6-d5f69e2a7cc0",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 84,
+      "marker_in_prompt": false,
+      "checks": [
+        {
+          "id": "numbers-npm-contracts",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/6cbf13b0083164f21e310f104a11050052d19781541d8ede1c5f74de0dd70f32.blob",
+              "sha256": "6cbf13b0083164f21e310f104a11050052d19781541d8ede1c5f74de0dd70f32",
+              "bytes": 1035
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 1
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "425b52a1-ec04-4d52-93b1-19840efe84f8",
+        "requirements_revision": 2,
+        "task_revision": 1
+      },
+      "handoff": {
+        "attempt_id": "425b52a1-ec04-4d52-93b1-19840efe84f8",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/1344e201f22a38d9aba6c6bd147c2452ecb99c81d7b86ba4831452690b1031ff.blob",
+          "sha256": "1344e201f22a38d9aba6c6bd147c2452ecb99c81d7b86ba4831452690b1031ff",
+          "bytes": 705
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/877839f1e2937c5483d7b441501c8a4d8b5bb26e5d27ef67a2461cbad6c221fd.blob",
+          "sha256": "877839f1e2937c5483d7b441501c8a4d8b5bb26e5d27ef67a2461cbad6c221fd",
+          "bytes": 912
+        },
+        "review_request_id": "dbba43c3-3279-4214-85e9-4bca8459e251",
+        "candidate_sha256": "e9eec54a73534cae9c477b8a455a041745f12c579b2475a97ea6b0d27515d15d",
+        "requirements_revision": 2,
+        "task_revision": 1
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "365c8f34-9d2b-49b1-8cc5-81f7a24e607a",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "7b75377d-b12a-4fe8-8f12-cab55eb219ff",
+      "archived": false,
+      "run": "ac042001-d103-481e-92a4-79d0f0664459",
+      "task_revision": 2,
+      "source_requirements": 2,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 196,
+      "marker_in_prompt": true,
+      "checks": [
+        {
+          "id": "text-npm-contracts",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/905212ea441705ea7576a64d228b5a050edd14451c0c476a8f16e7c49400c55b.blob",
+              "sha256": "905212ea441705ea7576a64d228b5a050edd14451c0c476a8f16e7c49400c55b",
+              "bytes": 1037
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        },
+        {
+          "id": "text-marker-r13",
+          "recipe": "file_contains",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/27504a4cfa00e111336f165845611f9fe26323995814e6d70995c18e17e7e57b.blob",
+              "sha256": "27504a4cfa00e111336f165845611f9fe26323995814e6d70995c18e17e7e57b",
+              "bytes": 524
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "1a0dae93-f250-4d38-a08e-5591b0831475",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "handoff": {
+        "attempt_id": "1a0dae93-f250-4d38-a08e-5591b0831475",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/eeacfc9bffb34fcf1bad9f401d9e777d00c34d37d7be98bdfdc27de0d6e8d900.blob",
+          "sha256": "eeacfc9bffb34fcf1bad9f401d9e777d00c34d37d7be98bdfdc27de0d6e8d900",
+          "bytes": 701
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/00e39da67b6322aaf55faf7ac49ebf6a97407bcc9fc7f9cd9692da564b014273.blob",
+          "sha256": "00e39da67b6322aaf55faf7ac49ebf6a97407bcc9fc7f9cd9692da564b014273",
+          "bytes": 943
+        },
+        "review_request_id": "260ed7f0-dfe4-4403-965a-b90bca087a52",
+        "candidate_sha256": "d831c64e87fe8849758b6515199f5d9806b5364e193b01e353d0b1c00603e4ac",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "529678ab-4747-4c81-94a6-bd82827ce409",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "c783c272-fd2e-4041-b4c7-38977b58e8a7",
+      "archived": true,
+      "run": "3bbd1f08-10ed-4cd6-b9dd-e285226f6296",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 66,
+      "marker_in_prompt": false,
+      "checks": [
+
+      ],
+      "review": null,
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "866ed617-db5e-4a46-acd2-51cf27700be3",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": {
+        "state": "verified",
+        "task_revision": 2,
+        "control_source_revision": 1,
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/47a065786cee0fae316e037bd010b79545131eaf605f427cf73f09b2deb413d1.blob",
+          "sha256": "47a065786cee0fae316e037bd010b79545131eaf605f427cf73f09b2deb413d1",
+          "bytes": 364
+        },
+        "transcript": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/d77e6b074fe53ea4f17fe9e1d0941ec0613ab70f9b4310428d4bcf2bf40478e3.blob",
+          "sha256": "d77e6b074fe53ea4f17fe9e1d0941ec0613ab70f9b4310428d4bcf2bf40478e3",
+          "bytes": 70553
+        }
+      }
+    },
+    {
+      "task": "integration-docs",
+      "execution": "9c5bf489-055b-4e3b-ab5e-02d4dfb9bb8b",
+      "archived": false,
+      "run": "b4d77873-a214-4efb-896e-df477df61f79",
+      "task_revision": 2,
+      "source_requirements": 2,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 360,
+      "marker_in_prompt": true,
+      "checks": [
+        {
+          "id": "integration-task-npm-contracts",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/c5c683520d82286a83d32fe97ee0bdbbba815d51601421bfed324e0053372754.blob",
+              "sha256": "c5c683520d82286a83d32fe97ee0bdbbba815d51601421bfed324e0053372754",
+              "bytes": 999
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        },
+        {
+          "id": "integration-readme",
+          "recipe": "file_exists",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/b1e60477134f793afb00616ff3ff05009feb61036fbb971c385fa7ff0d57d868.blob",
+              "sha256": "b1e60477134f793afb00616ff3ff05009feb61036fbb971c385fa7ff0d57d868",
+              "bytes": 488
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        }
+      ],
+      "review": {
+        "state": "rejected",
+        "attempt_id": "531973bb-60c7-4d93-8bc8-d22bad54208e",
+        "reason": "The actual patch contains both modules and README.md without changes to the original tests or package.json. The README examples agree with the implementations and contracts. BRO's persisted integration check passed both original contracts with exit status 0, zero failures, zero TODOs and zero skipped tests; the README existence check also passed. Bound runtime observations confirm claude-live and the claude-worker route, with a settled turn and stopped process; actual provider identity is unreported. However, the assigned task explicitly requires consuming both artifacts together with persisted successful branch checks. No branch check results or evidence of their consumption are supplied, and the candidate explicitly says it did not see those results. The successful combined check does not replace that dependency-handoff requirement.; missing checks: Persisted successful applicable npm test evidence for the numbers branch and text branch, bound to their delivered artifacts, and evidence that integration consumed both checked artifacts with those results.",
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v9/home/goal-workspaces/6b705e4c-1f33-4cf6-adfd-c2cd57993658/artifacts/23558e8391620fa18b98c04855e82b8658a0b0bbb4f3805d7a5a670462e8d4ff.blob",
+          "sha256": "23558e8391620fa18b98c04855e82b8658a0b0bbb4f3805d7a5a670462e8d4ff",
+          "bytes": 1102
+        },
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "c4bc1add-97e1-441c-ab10-baaa6f3da5a4",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": {
+        "state": "blocked",
+        "task_revision": 2,
+        "control_source_revision": 1,
+        "reason": "No automatic replacement: tool execution has no matching scoped permission. Reconcile the missing tool/workspace/external-effect evidence before retrying."
+      }
+    }
+  ],
+  "operations_exported": 814,
+  "final_delivery": null,
+  "acceptance_passed": false,
+  "observed": [
+    "Actual Enter saved requirements2/additive marker with control=null during real independent activity.",
+    "Original numbers execution and text2 both passed their required npm checks and semantic handoff; original numbers task version was retained.",
+    "Integration consumed checked artifacts and passed actual combined npm tests with zero failures/TODO/skips plus its README check.",
+    "Integration review rejected missing host-provided branch check reports and proof they were supplied before dispatch. Current dependency context only passed worker candidate reports.",
+    "Recovery then blocked on three failed local Edit calls with no permission request; their actual error output reported old_string mismatches. No no-effect or consent inference was made."
+  ],
+  "limitations": [
+    "No final completion or verified delivery.",
+    "Source component run passed36/37; malformed locations were discarded by a tolerant SDK roundtrip, causing the intended rejection regression to fail.",
+    "The next source preserves raw scope fields, supplies actual checked dependency evidence before dispatch/review, and separately audits failed unrequested local tools without forging permission or no-effect facts.",
+    "Original workspace/tests/attempt limits and artifacts were not manually changed."
+  ]
+}

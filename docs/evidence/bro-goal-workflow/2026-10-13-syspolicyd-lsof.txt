@@ -1,0 +1,36 @@
+COMMAND   PID USER   FD      TYPE             DEVICE SIZE/OFF                NODE NAME
+syspolicy 490 root  cwd       DIR               1,16      704                   2 /
+syspolicy 490 root  txt       REG               1,16  2653968 1152921500312565752 /usr/libexec/syspolicyd
+syspolicy 490 root  txt       REG               1,16    73964           166890587 /Library/Preferences/Logging/.plist-cache.8BXo1pAr
+syspolicy 490 root  txt       REG               1,16    32768               17707 /private/var/db/SystemPolicyConfiguration/Tickets-shm
+syspolicy 490 root  txt       REG               1,16   294912               17800 /private/var/db/SystemPolicyConfiguration/ExecPolicy-shm
+syspolicy 490 root  txt       REG               1,16   234224           136500990 /private/var/db/timezone/tz/2026c.1.0/icutz/icutz44l.dat
+syspolicy 490 root  txt       REG               1,16    32768               17736 /private/var/db/SystemPolicyConfiguration/KextPolicy-shm
+syspolicy 490 root  txt       REG               1,16   550528 1152921500312092156 /System/Library/CoreServices/ManagedClient.app/Contents/PlugIns/MCXToolsInterface.bundle/Contents/MacOS/MCXToolsInterface
+syspolicy 490 root  txt       REG               1,16    32768           166890601 /private/var/db/mds/messages/se_SecurityMessages
+syspolicy 490 root  txt       REG               1,16   428096 1152921500312198041 /System/Library/Frameworks/Security.framework/Versions/A/PlugIns/csparser.bundle/Contents/MacOS/csparser
+syspolicy 490 root  txt       REG               1,16   697969           142003131 /private/var/db/nsurlstoraged/dafsaData.bin
+syspolicy 490 root  txt       REG               1,16   283312 1152921500312144788 /System/Library/Frameworks/CFNetwork.framework/Versions/A/Resources/Localizable.loctable
+syspolicy 490 root  txt       REG               1,16  2299152 1152921500312563341 /usr/lib/dyld
+syspolicy 490 root  txt       REG               1,16    81279 1152921500312149680 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/OSServices.framework/Versions/A/Resources/Localizable.loctable
+syspolicy 490 root  txt       REG               1,16 34147264 1152921500312573805 /usr/share/icu/icudt76l.dat
+syspolicy 490 root  txt       REG               1,16   162399           177332323 /private/var/db/analyticsd/events.allowlist
+syspolicy 490 root  txt       REG               1,16   851468 1152921500312152129 /System/Library/Frameworks/Foundation.framework/Versions/C/Resources/FoundationErrors.loctable
+syspolicy 490 root    0r      CHR                3,2      0t0                 336 /dev/null
+syspolicy 490 root    1u      CHR                3,2      0t0                 336 /dev/null
+syspolicy 490 root    2u      CHR                3,2  0t26197                 336 /dev/null
+syspolicy 490 root    3u      REG               1,16   446464               17701 /private/var/db/SystemPolicyConfiguration/Tickets
+syspolicy 490 root    4u      REG               1,16  4000552               17706 /private/var/db/SystemPolicyConfiguration/Tickets-wal
+syspolicy 490 root    5u      REG               1,16    32768               17707 /private/var/db/SystemPolicyConfiguration/Tickets-shm
+syspolicy 490 root    6   NPOLICY
+syspolicy 490 root    7u      REG               1,16     4096               17729 /private/var/db/SystemPolicyConfiguration/KextPolicy
+syspolicy 490 root    8u      REG               1,16   337872               17735 /private/var/db/SystemPolicyConfiguration/KextPolicy-wal
+syspolicy 490 root    9u      REG               1,16    32768               17736 /private/var/db/SystemPolicyConfiguration/KextPolicy-shm
+syspolicy 490 root   10r      REG               1,16  8368128           166892592 /private/var/db/SystemPolicyConfiguration/gke.bundle/Contents/Resources/gk.db
+syspolicy 490 root   11u      REG               1,16 12984320               17797 /private/var/db/SystemPolicyConfiguration/ExecPolicy
+syspolicy 490 root   12u      REG               1,16    32768               17799 /private/var/db/SystemPolicyConfiguration/ExecPolicy-wal
+syspolicy 490 root   13u      REG               1,16   294912               17800 /private/var/db/SystemPolicyConfiguration/ExecPolicy-shm
+syspolicy 490 root   14u    systm 0xc8dea33517d68ad4      0t0                     [ctl com.apple.netsrc id 7 unit 6]
+syspolicy 490 root   15r      REG               1,16    77824           175103752 /private/var/db/SystemPolicyConfiguration/XProtect.bundle/Contents/Resources/gk.db
+syspolicy 490 root   16u      REG               1,16   589824            67028361 /private/var/db/SystemPolicyConfiguration/SystemPolicy
+syspolicy 490 root   17u      REG               1,16  6062080               16571 /private/var/db/gkopaque.bundle/Contents/Resources/gkopaque.db

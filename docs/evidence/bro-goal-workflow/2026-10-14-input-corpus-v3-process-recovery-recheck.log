@@ -1,0 +1,8 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.01s
+────────────
+ Nextest run ID d9890be7-3328-4ace-bb98-3d0d151914d6 with nextest profile: default
+    Starting 1 test across 1 binary (262 tests skipped)
+        PASS [   7.494s] (1/1) bitrouter-orchestrator service::tests::process_recovery::native_process_loss_at_commit_windows_never_retires_owner_or_replays_work
+────────────
+     Summary [   7.504s] 1 test run: 1 passed, 262 skipped

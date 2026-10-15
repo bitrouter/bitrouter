@@ -1,0 +1,30 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error[E0599]: no method named `verify` found for struct `goal_code::client::Pending` in the current scope
+   --> apps/bitrouter/src/goal_code/tests.rs:488:11
+    |
+488 |     saved.verify(&operation)?;
+    |           ^^^^^^
+    |
+   ::: apps/bitrouter/src/goal_code/client.rs:54:1
+    |
+ 54 | pub(super) struct Pending {
+    | ------------------------- method `verify` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `verify`, perhaps you need to implement one of them:
+            candidate #1: `VerificationAlgorithm`
+            candidate #2: `digest::mac::Mac`
+            candidate #3: `hmac::Mac`
+            candidate #4: `rsa::padding::Verification`
+            candidate #5: `rsa::traits::padding::SignatureScheme`
+            candidate #6: `signature::verifier::Verifier`
+help: there is a method `verifies` with a similar name
+    |
+488 -     saved.verify(&operation)?;
+488 +     saved.verifies(&operation)?;
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `bitrouter` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter --all-features --locked` exited with code 101

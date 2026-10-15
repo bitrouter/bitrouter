@@ -1,0 +1,37 @@
+{
+  "kind": "actual_harness_preflight",
+  "date": "2026-10-14",
+  "harness": "OpenCode 1.18.3 native ACP",
+  "model_path": "Private BRO gpt-6.1-chat -> live-openrouter-chat/openai/gpt-6.1-sol Chat Completions",
+  "entry": "bro run opencode-live with approve-reads and 90-second turn bound",
+  "exit_code": 0,
+  "stream_events": 30,
+  "actual_marker": "BRO_REAL_HARNESS_20261014",
+  "permission": {
+    "kind": "read",
+    "decision": "approved"
+  },
+  "harness_reported_usage_cost": {
+    "amount": 0,
+    "currency": "USD",
+    "invoice_verified": false,
+    "zero_real_cost_proven": false
+  },
+  "new_goal_id": "0990fac8-af3b-4135-94cf-8fbce6c0b83f",
+  "original_failed_goal_id": "8f974923-6c6f-417a-9892-ddd2d1c4626c",
+  "objective_sha256": "410fc203e2ef94d5a90830ec0eee0ccac011b5454099e3bcf88dee9eb21b29c4",
+  "limits": {
+    "elapsed_ms": 1200000,
+    "managed_token_estimates_micro_usd": 20000000
+  },
+  "scope": "Readonly preflight passes; real parallel Goal workflow remains unfinished",
+  "primary_docs": [
+    "https://opencode.ai/docs/providers/#custom-provider",
+    "https://opencode.ai/docs/config/"
+  ],
+  "limitations": [
+    "Original Codex replay refusal and unmapped legacy dispatch preserved",
+    "Not a production deployment or full certification",
+    "End turn and admitted sessions are not verification or Goal completion"
+  ]
+}

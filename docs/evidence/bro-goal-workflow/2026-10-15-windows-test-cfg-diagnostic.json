@@ -1,0 +1,22 @@
+{
+  "headRevision": "bfc50f68e4151f939b9a7051aa4b46472355ed31",
+  "job": {
+    "id": 116408327229,
+    "head_sha": "bfc50f68e4151f939b9a7051aa4b46472355ed31",
+    "name": "clippy (windows-latest)",
+    "status": "completed",
+    "conclusion": "failure"
+  },
+  "job_url": "https://github.com/bitrouter/bitrouter/actions/runs/38730961456/job/116408327229",
+  "related_test_job_url": "https://github.com/bitrouter/bitrouter/actions/runs/38730961456/job/116408327107",
+  "errors": [
+    "2026-10-15T12:00:32.7750257Z error: function `read_archive_fixture` is never used",
+    "2026-10-15T12:00:32.7781903Z ##[error]  --> apps\\bitrouter\\src\\goal_code.rs:46:21",
+    "2026-10-15T12:00:32.7793339Z error: function `input_feedback_fixture` is never used",
+    "2026-10-15T12:00:32.7794540Z ##[error]  --> apps\\bitrouter\\src\\goal_code.rs:66:15",
+    "2026-10-15T12:00:47.7074657Z error: could not compile `bitrouter` (lib test) due to 2 previous errors"
+  ],
+  "cause": "Two cfg(test) UI test helpers had only cfg(all(test, unix)) consumers, so non-Unix lib tests compiled unused helpers under -D warnings.",
+  "fix": "Match helper definitions to existing Unix test consumers; no allow/expect suppression, test removal, new ignore or production behavior change.",
+  "completion_correction": "A complete status was recorded before inspecting the final CI result. The same authorized task remains active through repair and fresh head-specific CI."
+}

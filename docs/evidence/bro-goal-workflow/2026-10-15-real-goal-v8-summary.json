@@ -1,0 +1,135 @@
+{
+  "binary": {
+    "binary_sha256": "dcf36b4b587849dc02a0eca309b5214a1d7a1c6a81a3e978e5a07ec57d434f00",
+    "source_manifest": "docs/evidence/bro-goal-workflow/2026-10-15-completion-evidence-v2-source.sha256",
+    "native_adapter": "@agentclientprotocol/claude-agent-acp@0.75.1",
+    "native_config_scope": "private CLAUDE_CONFIG_DIR only; ask read/edit/search, deny listed tools outside the existing acceptance boundary",
+    "normal_user_config_changed": false,
+    "original_tests": [
+      {
+        "name": "numbers.test.mjs",
+        "sha256": "4dc666e2ca2d3b02a55d86523efa8334343aa7b62e71760816f14fcb9d503a15",
+        "original_sha256": "4dc666e2ca2d3b02a55d86523efa8334343aa7b62e71760816f14fcb9d503a15"
+      },
+      {
+        "name": "text.test.mjs",
+        "sha256": "14b5783788dc82b3386e3904a568c7e4d6e6dbc3c5ba2beecb9a576b030a78ce",
+        "original_sha256": "14b5783788dc82b3386e3904a568c7e4d6e6dbc3c5ba2beecb9a576b030a78ce"
+      }
+    ],
+    "goal_created": false,
+    "worker_route": "claude-worker",
+    "configured_worker_model": "anthropic/claude-sonnet-4.6",
+    "outbound_wire": "messages",
+    "worker_tariff": "unconfigured; unknown, not zero; catalog base prices not treated as a complete tariff",
+    "native_options": {
+      "MAX_THINKING_TOKENS": "0"
+    }
+  },
+  "goal_id": "4c7edbb6-462c-463c-87f5-2ffefc84450d",
+  "requirements_revision": 2,
+  "run_intent": "pause",
+  "input": {
+    "input_id": "ecaf002c-c597-4a17-aaeb-c49a2f1a4bc0",
+    "source_requirements_revision": 1,
+    "effective_requirements_revision": 2,
+    "requirements_saved": true,
+    "affected_tasks": [
+      "integration",
+      "text"
+    ],
+    "control_saved": null,
+    "clarification_kind": "unknown"
+  },
+  "attempts": [
+    {
+      "task": "numbers",
+      "execution": "444fe97e-1819-4a5e-a40f-0f4eca972cde",
+      "archived": false,
+      "run": "8e2e95d3-3089-4964-922e-721285954053",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 87,
+      "marker_in_prompt": false,
+      "checks": [
+        {
+          "id": "numbers-contracts",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v4/home/goal-workspaces/4c7edbb6-462c-463c-87f5-2ffefc84450d/artifacts/3e1a6dda97151a3e93e67be53fa4d652d02caa1e84907aa395ca741e481d6c2a.blob",
+              "sha256": "3e1a6dda97151a3e93e67be53fa4d652d02caa1e84907aa395ca741e481d6c2a",
+              "bytes": 1035
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 1
+        }
+      ],
+      "review": {
+        "state": "rejected",
+        "attempt_id": "52040c2b-d431-42ab-9d42-8334ea6d6745",
+        "reason": "The actual numbers.mjs rejects explicitly positive signed integers such as '+2' because its regex permits only an optional minus. It also accumulates with Number without checking intermediate overflow: '9007199254740991,2,-2' returns the incorrect safe value 9007199254740990. BRO's persisted npm test did pass (exit 0, numbers contract passing, only the permitted missing-text TODO), but those results do not establish the full required behavior. Runtime observations confirm claude-live and claude-worker and show activity followed by settlement and process stop; actual provider identity is unreported. This branch is not ready for handoff.; missing checks: Verify acceptance of explicitly positive signed integers after correcting token validation., Verify summation cannot silently lose precision when intermediate totals exceed the safe-integer range., Original package.json and contract contents, and evidence of their required structured inspection, are not supplied.",
+        "report": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v4/home/goal-workspaces/4c7edbb6-462c-463c-87f5-2ffefc84450d/artifacts/74da38118030ac5b04886c56c00b5bb589428ddcb6f3f391d8e12a99cf80f3b0.blob",
+          "sha256": "74da38118030ac5b04886c56c00b5bb589428ddcb6f3f391d8e12a99cf80f3b0",
+          "bytes": 1008
+        },
+        "requirements_revision": 2,
+        "task_revision": 1
+      },
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "4816f822-2ed9-4490-a2d4-08f3b9e99fd7",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "62f1e34d-56f4-4225-9b1d-00828cef1722",
+      "archived": false,
+      "run": "4be3a381-2871-4167-bb43-f36c1901242a",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 77,
+      "marker_in_prompt": false,
+      "checks": [
+
+      ],
+      "review": null,
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "9f430e44-6377-4f02-a0d1-f921a8914df7",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": {
+        "state": "blocked",
+        "task_revision": 2,
+        "control_source_revision": 1,
+        "reason": "No automatic replacement: tool execution has no matching scoped permission. Reconcile the missing tool/workspace/external-effect evidence before retrying."
+      }
+    }
+  ],
+  "completion": null,
+  "final_delivery": null,
+  "acceptance_passed": false,
+  "operations_exported": 434,
+  "limitations": [
+    "Actual controller-confirmed claude-worker route uses native Messages with configured anthropic/claude-sonnet-4.6. Both original independent executions showed public activity before input.",
+    "Running input saved requirements2 and additive check without control. Numbers retained its original task version/worker.",
+    "Text1 was cancelled after announcing a write but before that tool produced a permission request. Missing matching scoped permission correctly blocked replacement; no text2 execution was admitted.",
+    "Numbers original npm check passed, but real semantic review rejected missing positive-sign support and unsafe Number accumulation. Passing the existing tests was not treated as complete behavior.",
+    "No final integration or delivery. Diagnostic Pause settled owned processes and UI detached. Old failed cases and original test assertions remain unchanged."
+  ]
+}

@@ -1,0 +1,56 @@
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-schema v0.16.2
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 33s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID a075917e-6d24-4df8-ba3b-743c48ceeae8 with nextest profile: default
+    Starting 18 tests across 1 binary (1733 tests skipped)
+        PASS [   0.074s] ( 1/18) bitrouter acp_trajectory::checkpoint::tests::immutable_prefixes_keep_old_tool_versions_and_detect_content_corruption
+        PASS [   0.074s] ( 2/18) bitrouter acp_trajectory::checkpoint::tests::interruption_after_scoring_invalidates_freshness_without_rewriting_the_prefix
+        PASS [   0.089s] ( 3/18) bitrouter acp_trajectory::checkpoint::tests::inherited_prefixes_family_unions_and_deletion_preserve_native_scope
+        PASS [   0.090s] ( 4/18) bitrouter acp_trajectory::checkpoint::tests::concurrent_creation_and_revision_selection_are_durable
+        PASS [   0.037s] ( 5/18) bitrouter acp_trajectory::checkpoint::tests::invalid_labels_and_out_of_prefix_citations_are_rejected
+        PASS [   0.039s] ( 6/18) bitrouter acp_trajectory::checkpoint::tests::latest_resource_reader_preserves_scope_deletion_and_revision_integrity
+        PASS [   0.057s] ( 7/18) bitrouter acp_trajectory::checkpoint::tests::late_metering_changes_resources_without_changing_content_or_labels
+        PASS [   0.039s] ( 8/18) bitrouter acp_trajectory::checkpoint::tests::missing_parent_and_capture_gaps_remain_explicit
+        PASS [   0.047s] ( 9/18) bitrouter evolution::runtime::tests::resource_coverage::capture_acknowledgement_fences_namespace_preexisting_requests_and_runtime_restart
+        PASS [   0.064s] (10/18) bitrouter acp_trajectory::checkpoint::tests::revision_cas_retries_corrections_and_retractions_preserve_one_label
+        PASS [   0.055s] (11/18) bitrouter evolution::runtime::tests::resource_coverage::late_settlement_revises_resources_without_mutating_checkpoint_content
+        PASS [   0.092s] (12/18) bitrouter evolution::runtime::tests::resource_coverage::fork_resources_union_inherited_requests_and_exclude_later_parent_work
+        PASS [   0.056s] (13/18) bitrouter evolution::runtime::tests::resource_coverage::missing_handshake_disables_new_trials_and_cannot_be_repaired_retroactively
+        PASS [   0.067s] (14/18) bitrouter evolution::runtime::tests::resource_coverage::unresolved_post_stop_calls_stay_unknown_only_through_their_native_interval
+        PASS [   0.084s] (15/18) bitrouter evolution::runtime::tests::resource_coverage::post_stop_calls_extend_own_resources_without_changing_content
+        PASS [   0.074s] (16/18) bitrouter evolution::runtime::tests::resource_coverage::priced_gateway_requests_complete_a_stopped_prefix_and_exclude_later_work
+        PASS [   0.069s] (17/18) bitrouter evolution::runtime::tests::resource_coverage::unresolved_requests_are_retained_and_known_other_sessions_are_excluded
+        PASS [   0.362s] (18/18) bitrouter acp_trajectory::checkpoint::tests::long_session_manifests_and_large_assessments_round_trip
+────────────
+     Summary [   0.460s] 18 tests run: 18 passed, 1733 skipped

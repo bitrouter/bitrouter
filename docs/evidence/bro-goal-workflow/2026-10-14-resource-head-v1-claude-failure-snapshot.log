@@ -1,0 +1,90 @@
+   Compiling rustls v0.23.41
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 16s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 6370ffe1-d3c9-4316-b7e5-bee791c14ba9 with nextest profile: default
+    Starting 2 tests across 1 binary (36 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>120.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>180.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>240.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>300.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>360.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>420.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>480.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>540.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>600.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>660.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>720.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>780.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>840.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>900.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>960.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>1020.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>1080.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>1140.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>1200.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        SLOW [>1260.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+        FAIL [1294.160s] (1/2) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+  stdout ───
+
+    running 1 test
+    test evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback has been running for over 60 seconds
+    test evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback ... FAILED
+
+    failures:
+
+    failures:
+        evolution::native::coding::publication::maintained_claude_session_coding_publication_and_rollback
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 1294.14s
+
+  stderr ───
+    claude-acp: coding trial 16; baseline 16; candidate 0; Exploring; posterior lower 0 ppm
+    claude-acp: coding trial 32; baseline 32; candidate 0; Exploring; posterior lower 0 ppm
+    claude-acp: coding trial 48; baseline 43; candidate 5; Exploring; posterior lower 101155 ppm
+    claude-acp: coding trial 64; baseline 57; candidate 7; Exploring; posterior lower 168415 ppm
+    claude-acp: coding trial 80; baseline 71; candidate 9; Exploring; posterior lower 259114 ppm
+    claude-acp: coding trial 96; baseline 87; candidate 9; Exploring; posterior lower 248493 ppm
+    claude-acp: coding trial 112; baseline 102; candidate 10; Exploring; posterior lower 306843 ppm
+    claude-acp: coding trial 128; baseline 116; candidate 12; Exploring; posterior lower 374592 ppm
+    claude-acp: coding trial 144; baseline 129; candidate 15; Exploring; posterior lower 514973 ppm
+    claude-acp: coding trial 160; baseline 141; candidate 19; Exploring; posterior lower 659016 ppm
+    Error: coding evidence or background publication did not settle; phase: reading learning snapshot; last observation: {"block_status":"exploring","trial_sessions":162,"monitor_sessions":0,"quality":false,"cost":true,"latency":false,"rollback":false}; worker: WorkerStatus { running: true, last_started_at: Some("2026-10-14T14:49:13.981015+00:00"), last_finished_at: Some("2026-10-14T14:49:13.980999+00:00"), last_report: Some(PassReport { checkpoints_created: 0, jobs_completed: 0, publications: 0, errors: {"43c2fb00d84bb847804b7538dd9063679aa7538e8bc71e9dd3a654d910c6ee05": "judge_execution_or_submission_failed"} }) }
+
+    Caused by:
+        deadline has elapsed
+
+        SLOW [> 60.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_codex_session_coding_publication_and_rollback
+        SLOW [>120.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_codex_session_coding_publication_and_rollback
+        SLOW [>180.000s] (───) bitrouter::code_tui_pty evolution::native::coding::publication::maintained_codex_session_coding_publication_and_rollback

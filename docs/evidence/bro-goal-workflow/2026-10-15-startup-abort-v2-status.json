@@ -1,0 +1,10 @@
+{
+  "clippy": {
+    "exit": 0,
+    "seconds": 112.22
+  },
+  "nextest": {
+    "exit": 100,
+    "seconds": 329.976
+  }
+}

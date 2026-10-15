@@ -1,0 +1,32 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 25s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 40130e57-012a-46d4-a578-e02514a9ecb9 with nextest profile: default
+    Starting 1 test across 7 binaries (3561 tests skipped)
+        FAIL [  47.115s] (1/1) bitrouter goal_runtime::tests::live_input::live_continuous_goal_inputs_use_persisted_state_and_durable_effects
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::live_input::live_continuous_goal_inputs_use_persisted_state_and_durable_effects ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::live_input::live_continuous_goal_inputs_use_persisted_state_and_durable_effects
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1772 filtered out; finished in 47.10s
+
+  stderr ───
+    Error: live input evaluation failed: s02-step-1/typed-upgrade: typed backend did not return a valid native outcome
+
+────────────
+     Summary [  47.126s] 1 test run: 0 passed, 1 failed, 3561 skipped
+        FAIL [  47.115s] (1/1) bitrouter goal_runtime::tests::live_input::live_continuous_goal_inputs_use_persisted_state_and_durable_effects
+error: test run failed

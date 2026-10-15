@@ -1,0 +1,62 @@
+   Compiling ring v0.17.14
+   Compiling bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 01s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 1ad5076b-9d60-42f5-95c8-f684f77cab56 with nextest profile: default
+    Starting 1 test across 1 binary (2 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        FAIL [ 115.102s] (1/1) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+  stdout ───
+
+    running 1 test
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution has been running for over 60 seconds
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution ... FAILED
+
+    failures:
+
+    failures:
+        active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 115.09s
+
+  stderr ───
+    Error: Goal did not reach expected state: Workflow { completion: Progress { specification: Some(Specification { conditions: [Condition { id: "delivery", description: "Both independent files and the actual dependency join are delivered" }], checks: [CheckSpec { id: "has-left", description: "Actual left.txt contents", recipe: FileContains { path: "left.txt", text: "LEFT\n" }, timeout_seconds: 10 }, CheckSpec { id: "has-right", description: "Actual right.txt contents", recipe: FileContains { path: "right.txt", text: "RIGHT\n" }, timeout_seconds: 10 }, CheckSpec { id: "has-joined", description: "Actual joined.txt contents", recipe: FileContains { path: "joined.txt", text: "LEFT\nRIGHT\n" }, timeout_seconds: 10 }], human_acceptance_required: false }), attempt: None, last_completed: None }, coordinator: Some(CoordinatorLease { id: "8e940afc-f693-4cc3-865b-6f072f439b63", expires_at_ms: 1791943237990 }), planning: Planned { attempt_id: "3fa7e932-79b3-4248-abd5-58f7e5d1d871" }, planning_requirements_revision: 1, tasks: [Task { spec: TaskSpec { id: "left", title: "Fixture left", instruction: "Write and verify left.txt", harness: "goal-peer", dependencies: [], checks: [CheckSpec { id: "left-written", description: "Actual left.txt contents", recipe: FileContains { path: "left.txt", text: "LEFT\n" }, timeout_seconds: 10 }] }, requirements_revision: 1, executions: [Execution { id: "6c46dec8-4638-49b4-abfc-fb35aa162443", workspace: "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpgdT1Sa/goal-workspaces/111602ac-ebe9-4a8d-8b85-9a775e542fec/6c46dec8-4638-49b4-abfc-fb35aa162443", observation: Failed { run_id: Some("b91a89c1-4172-4c08-99f6-f677104955c9"), reason: "ACP adapter exited unexpectedly" }, requirements_revision: 1, task_revision: 1, dispatch_requested: true, checks: [], stop: None, base_commit: Some("329019d43951a72d091e4ba4e5d79914232a75df"), handoff: None, review: None, reconciliation: None }], run_intent: Run, control_source_revision: 0 }, Task { spec: TaskSpec { id: "right", title: "Fixture right", instruction: "Write and verify right.txt", harness: "goal-peer", dependencies: [], checks: [CheckSpec { id: "right-written", description: "Actual right.txt contents", recipe: FileContains { path: "right.txt", text: "RIGHT\n" }, timeout_seconds: 10 }] }, requirements_revision: 1, executions: [Execution { id: "807e8ac7-2d8b-4224-8d6f-c2da4f7c9d5c", workspace: "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpgdT1Sa/goal-workspaces/111602ac-ebe9-4a8d-8b85-9a775e542fec/807e8ac7-2d8b-4224-8d6f-c2da4f7c9d5c", observation: Running { run_id: "bc114bd1-dec7-4e82-9830-576817035abe", native_session_id: Some("goal-fixture-12711") }, requirements_revision: 1, task_revision: 1, dispatch_requested: true, checks: [], stop: None, base_commit: Some("329019d43951a72d091e4ba4e5d79914232a75df"), handoff: None, review: None, reconciliation: None }], run_intent: Run, control_source_revision: 0 }, Task { spec: TaskSpec { id: "join", title: "Fixture join", instruction: "Write and verify joined.txt", harness: "goal-peer", dependencies: ["left", "right"], checks: [CheckSpec { id: "join-written", description: "Actual joined.txt contents", recipe: FileContains { path: "joined.txt", text: "LEFT\nRIGHT\n" }, timeout_seconds: 10 }] }, requirements_revision: 1, executions: [], run_intent: Run, control_source_revision: 0 }], decisions: [PermissionDecision { id: "74d6d5e4bcba7fb0011b469077d99d9cce7b956bc10ddc81c66c538cde07d35d", execution_id: "807e8ac7-2d8b-4224-8d6f-c2da4f7c9d5c", run_id: "bc114bd1-dec7-4e82-9830-576817035abe", permission_id: "eab90292-5b99-493c-a58b-3e118092f6b6", requirements_revision: 1, task_revision: 1, request: ArtifactRef { path: "/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpgdT1Sa/goal-workspaces/111602ac-ebe9-4a8d-8b85-9a775e542fec/artifacts/6261a64737cbe3e8e95f2d4964d3183fc6d3fb160d332953fb424265945f88a5.blob", sha256: "6261a64737cbe3e8e95f2d4964d3183fc6d3fb160d332953fb424265945f88a5", bytes: 536 }, options: [PermissionOption { id: "allow-once", label: "Allow this fixture write", allows: true, persistent: false }, PermissionOption { id: "deny-once", label: "Deny this fixture write", allows: false, persistent: false }], state: Submitted { operation_id: "c070df16-1e58-4a53-8313-f83ef2b5cf3e", option_id: "allow-once" } }, PermissionDecision { id: "124b2b4a381a95af7c9847ff1a1ba69325dfcf39cde141e1ad862188177517a1", execution_id: "807e8ac7-2d8b-4224-8d6f-c2da4f7c9d5c", run_id: "bc114bd1-dec7-4e82-9830-576817035abe", permission_id: "ca009981-3392-4e4e-9060-8d7d7e8e523d", requirements_revision: 1, task_revision: 1, request: ArtifactRef { path: "/private/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpgdT1Sa/goal-workspaces/111602ac-ebe9-4a8d-8b85-9a775e542fec/artifacts/5cc87ca367be39c5bbab751b352acd5326da07434ff223cfe9e5ab83d8745c99.blob", sha256: "5cc87ca367be39c5bbab751b352acd5326da07434ff223cfe9e5ab83d8745c99", bytes: 542 }, options: [PermissionOption { id: "allow-once", label: "Allow second fixture write", allows: true, persistent: false }, PermissionOption { id: "deny-once", label: "Deny this fixture write", allows: false, persistent: false }], state: Pending }] }
+
+  Cancelling due to test failure:
+────────────
+     Summary [ 115.103s] 1 test run: 0 passed, 1 failed, 2 skipped
+        FAIL [ 115.102s] (1/1) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+error: test run failed
