@@ -17,8 +17,8 @@ use wiremock::{Mock, Request, ResponseTemplate};
 mod fixture;
 
 #[cfg(unix)]
-#[path = "../../../tests/support/example_binary.rs"]
-mod example_binary;
+#[path = "../../../tests/support/fixture_binary.rs"]
+mod fixture_binary;
 
 fn config(server: &wiremock::MockServer) -> HarnessConfig {
     HarnessConfig {
@@ -310,7 +310,7 @@ fn stdio_config() -> Result<HarnessConfig, String> {
     static BINARY: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
         std::sync::OnceLock::new();
     let binary = BINARY
-        .get_or_init(|| example_binary::build("bitrouter-orchestrator", "harness_mcp_fixture"))
+        .get_or_init(|| fixture_binary::build("harness_mcp_fixture"))
         .as_ref()
         .map_err(Clone::clone)?;
     Ok(HarnessConfig {

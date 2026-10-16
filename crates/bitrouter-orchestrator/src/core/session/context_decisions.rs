@@ -268,6 +268,24 @@ impl CoreSession {
                     && !receipt.stale
             });
             if let Some(prior) = prior {
+                // Reconcile the original attempt, never execute the decision
+                // again just because the outer Goal outcome ACK was lost.
+                if let Some(outcome) = &prior.outcome {
+                    control
+                        .before_typed_decision(
+                            &prior.decision_id,
+                            &prior.request,
+                            prior.pricing.as_ref(),
+                        )
+                        .await
+                        .map_err(|error| reject(ErrorCode::NoFeasibleRoute, &error.to_string()))?;
+                    control
+                        .after_typed_decision(&prior.decision_id, outcome, prior.pricing.as_ref())
+                        .await
+                        .map_err(|error| {
+                            reject(ErrorCode::CheckpointUnavailable, &error.to_string())
+                        })?;
+                }
                 decision_id = Some(prior.decision_id.clone());
                 response = prior
                     .outcome
@@ -302,16 +320,41 @@ impl CoreSession {
                     });
                     Ok(json!({"decision_id":attempt_id,"task_id":task_id,"request_sha256":request_sha256}))
                 }).await?;
-                self.ensure_dispatch_with_budget(agent_id, step_id, attempt_id.clone(), true)
-                    .await?;
+                let admission = control
+                    .before_typed_decision(&attempt_id, &request, runtime.pricing.as_ref())
+                    .await
+                    .map_err(|error| reject(ErrorCode::NoFeasibleRoute, &error.to_string()));
+                let dispatch = match admission {
+                    Ok(()) => {
+                        self.ensure_dispatch_with_budget(
+                            agent_id,
+                            step_id,
+                            attempt_id.clone(),
+                            true,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
                 let started = Instant::now();
-                let mut outcome = tokio::select! {
-                    biased;
-                    () = control.provider_cancellation.cancelled() => Err(DecisionError {
-                        kind: DecisionFailure::Cancelled, message: "decision execution cancelled".into(),
-                        usage: None, may_have_run: true,
-                    }),
-                    outcome = runtime.executor.execute(&request, &control.provider_cancellation) => outcome,
+                let mut outcome = match &dispatch {
+                    Err(error) => Err(DecisionError::invalid_request(&error.message)),
+                    Ok(()) => {
+                        let call = runtime
+                            .executor
+                            .execute(&request, &control.provider_cancellation);
+                        tokio::pin!(call);
+                        tokio::select! {
+                            biased;
+                            () = control.provider_cancelled() => {
+                                control.provider_cancellation.cancel();
+                                // The executor must settle any usage already
+                                // observed. Dropping it would lose that evidence.
+                                call.await
+                            },
+                            outcome = &mut call => outcome,
+                        }
+                    }
                 };
                 // Custom executors obey the same wire/usage contract as HTTP.
                 if let Ok(result) = &outcome
@@ -357,10 +400,21 @@ impl CoreSession {
                         Ok(json!({"decision_id":attempt_id,"stale":stale,"elapsed_ms":elapsed_ms}))
                     })
                     .await;
+                // Both outcomes are attempted even if Core's checkpoint ACK
+                // failed. The host still owns aggregate costs after a cancel.
+                // An admission callback may commit its intent and then reject
+                // a changed source. It still needs the known no-dispatch
+                // outcome; a host with no saved intent treats that as a no-op.
+                let host_recorded = control
+                    .after_typed_decision(&attempt_id, &outcome, runtime.pricing.as_ref())
+                    .await
+                    .map_err(|error| reject(ErrorCode::CheckpointUnavailable, &error.to_string()));
                 if let Err(error) = recorded {
                     self.disconnect().await;
                     return Err(error);
                 }
+                host_recorded?;
+                dispatch?;
                 if stale {
                     return Err(reject(
                         ErrorCode::StaleRevision,

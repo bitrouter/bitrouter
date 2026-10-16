@@ -1,0 +1,477 @@
+//! Built-in workers use ThreadService; Goal records only reference its facts.
+use super::*;
+use bitrouter_orchestrator::agent::AgentConfig;
+use bitrouter_orchestrator::goal::workflow::ThreadExecution;
+use bitrouter_orchestrator::thread::{GoalWork, PermissionProfile, ThreadRequest, ThreadTarget};
+use bitrouter_orchestrator::turn::{CancelTurnRequest, TurnRequest};
+
+pub(super) fn source(goal: &GoalSnapshot, task: &Task, execution: &Execution) -> Result<GoalWork> {
+    Ok(GoalWork {
+        owner_thread_id: goal
+            .workflow
+            .owner_thread_id
+            .clone()
+            .context("Goal owner Thread is missing")?,
+        goal_id: goal.id.clone(),
+        task_id: task.spec.id.clone(),
+        execution_id: execution.id.clone(),
+        task_revision: execution.task_revision,
+        control_source_revision: execution.control_source_revision,
+    })
+}
+
+pub(super) fn turn_key(execution_id: &str) -> String {
+    format!("goal-work-{execution_id}-turn")
+}
+
+impl Coordinator {
+    fn native_workspace(&self, goal: &GoalSnapshot, execution: &Execution) -> Result<PathBuf> {
+        let expected = self.workspaces.join(&goal.id).join(&execution.id);
+        let workspace = execution.workspace.canonicalize()?;
+        anyhow::ensure!(
+            execution.workspace == expected
+                && workspace
+                    == self
+                        .workspaces
+                        .canonicalize()?
+                        .join(&goal.id)
+                        .join(&execution.id),
+            "native worker workspace is outside its managed Goal attempt"
+        );
+        // Restore the host's narrow managed-directory registration before cold
+        // receipt reads. Existing registrations retain withdrawn profiles;
+        // this neither resumes a Turn nor grants once-only tool permission.
+        Ok(self.threads.register_local_workspace(&workspace)?)
+    }
+
+    pub(super) async fn native_execution_evidence(
+        &self,
+        goal: &GoalSnapshot,
+        task: &Task,
+        execution: &Execution,
+    ) -> Result<serde_json::Value> {
+        anyhow::ensure!(
+            goal.workflow
+                .tasks
+                .iter()
+                .any(|known| known.spec == task.spec && known.executions.contains(execution)),
+            "native execution is outside this Goal cutoff"
+        );
+        self.native_workspace(goal, execution)?;
+        let binding = execution
+            .thread
+            .as_ref()
+            .context("native execution has no accepted Thread/Turn link")?;
+        let target = ThreadTarget {
+            thread_id: binding.thread_id.clone(),
+            server_instance_id: self.threads.capabilities().server_instance_id,
+        };
+        let caller = CallerContext::local();
+        let view = self
+            .threads
+            .read_stored_thread_view(&target, &caller)
+            .await?;
+        anyhow::ensure!(
+            view.thread.goal_work.as_ref() == Some(&source(goal, task, execution)?)
+                && view.thread.workspace.canonicalize()? == execution.workspace.canonicalize()?,
+            "native execution source or workspace does not match"
+        );
+        let turn = self
+            .threads
+            .read_stored_turn(&target, &caller, &binding.turn_id)
+            .await?;
+        Ok(
+            serde_json::json!({"status":"observed", "executor":"built_in", "goal_id":goal.id,
+            "task_id":task.spec.id, "execution_id":execution.id, "thread_id":binding.thread_id, "turn_id":binding.turn_id,
+            "execution_requirements_revision":execution.requirements_revision,"execution_task_revision":execution.task_revision,
+            "current_task_version":execution.task_revision == task.requirements_revision,
+            "turn_status":turn.status,"unknown_effect":turn.unknown_effect,"verification":turn.verification,
+            "requested_model_route":execution.resources.as_ref().and_then(|resources| resources.selection.model_route.as_ref()),
+            "recorded_model_selector":turn.model,"actual_provider_model":"unreported by this snapshot projection",
+            "snapshot_seq":view.thread.cursor,"history_complete":false,"timeline_complete":false,
+            "admission_is_execution_evidence":false,
+            "scope":"Committed native Thread/Turn projection only. This does not include a complete activity timeline, prove parallel overlap, verify artifacts or authorize replay. Model selector and configured resources do not prove actual provider or tool/skill use."}),
+        )
+    }
+
+    pub(super) async fn launch_native(
+        &self,
+        goal: &GoalSnapshot,
+        task: &Task,
+        execution_id: &str,
+        prompt: String,
+    ) -> Result<()> {
+        let execution = goal
+            .workflow
+            .tasks
+            .iter()
+            .flat_map(|task| &task.executions)
+            .find(|execution| execution.id == execution_id)
+            .context("native work attempt is missing")?;
+        let source = source(goal, task, execution)?;
+        let control = model_control::ModelControl::for_worker(self, goal, source.clone());
+        control.gate().await?;
+        let workspace = self.native_workspace(goal, execution)?;
+        let epoch = self.threads.capabilities().server_instance_id;
+        let caller = CallerContext::local();
+        let key = bitrouter_orchestrator::service::worker::thread_key(&source)?;
+        let thread = match self
+            .threads
+            .find_thread_admission(&epoch, &caller, &key)
+            .await?
+        {
+            Some(thread) => thread,
+            None => {
+                let config = self.routing.snapshot_config();
+                let model = task
+                    .spec
+                    .resources
+                    .model_route
+                    .as_deref()
+                    .or_else(|| crate::policy_lock::native_default_model(&config))
+                    .context("no built-in reasoning route is configured")?;
+                let mut agent = AgentConfig::fixed(model, None)
+                    .with_model_mode(crate::policy_lock::native_model_mode(&config, model)?);
+                agent.max_context_bytes =
+                    self.threads.capabilities().limits.context_bytes_per_thread;
+                let servers = task
+                    .spec
+                    .resources
+                    .mcp_servers
+                    .iter()
+                    .map(|id| {
+                        config
+                            .mcp_servers
+                            .get(id)
+                            .cloned()
+                            .context("selected native MCP server disappeared")
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                self.threads
+                    .create_goal_worker_thread(
+                        &ThreadTarget {
+                            thread_id: source.owner_thread_id.clone(),
+                            server_instance_id: epoch.clone(),
+                        },
+                        &source,
+                        ThreadRequest {
+                            caller: caller.clone(),
+                            workspace,
+                            config: agent,
+                            permission_profile: PermissionProfile::Ask,
+                            verification_command: None,
+                            idempotency_key: key,
+                        },
+                        Some(servers),
+                    )
+                    .await?
+            }
+        };
+        anyhow::ensure!(
+            thread.goal_work.as_ref() == Some(&source),
+            "native worker belongs to another work source"
+        );
+        let target = ThreadTarget {
+            thread_id: thread.thread_id.clone(),
+            server_instance_id: epoch,
+        };
+        let key = turn_key(execution_id);
+        let turn = match self
+            .threads
+            .find_goal_worker_turn(&target, &caller, &key)
+            .await?
+        {
+            Some(turn) => turn,
+            None => {
+                self.threads
+                    .wait_goal_worker_turn(
+                        &target,
+                        &caller,
+                        source.clone(),
+                        TurnRequest {
+                            prompt,
+                            idempotency_key: key,
+                        },
+                        control,
+                    )
+                    .await?
+            }
+        };
+        self.change(
+            goal,
+            Change::BindWorkerTurn {
+                execution_id: execution_id.into(),
+                thread: ThreadExecution {
+                    thread_id: turn.thread_id,
+                    turn_id: turn.turn_id,
+                },
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub(super) async fn drive_native(
+        &self,
+        goal: &GoalSnapshot,
+        task: &Task,
+        execution: &Execution,
+    ) -> Result<()> {
+        let caller = CallerContext::local();
+        let epoch = self.threads.capabilities().server_instance_id;
+        if execution.dispatch_requested {
+            self.native_workspace(goal, execution)?;
+        }
+        let Some(binding) = &execution.thread else {
+            if !execution.dispatch_requested {
+                return self
+                    .change(
+                        goal,
+                        Change::ObserveExecution {
+                            execution_id: execution.id.clone(),
+                            observation: Observation::Failed {
+                                run_id: None,
+                                reason:
+                                    "Native workspace preparation ended before dispatch admission"
+                                        .into(),
+                            },
+                        },
+                    )
+                    .await;
+            }
+            // A saved dispatch intent is not permission to repeat an unknown
+            // admission. Find both actions by their original independent keys.
+            let source = source(goal, task, execution)?;
+            let key = bitrouter_orchestrator::service::worker::thread_key(&source)?;
+            if let Some(thread) = self
+                .threads
+                .find_thread_admission(&epoch, &caller, &key)
+                .await?
+            {
+                anyhow::ensure!(
+                    thread.goal_work.as_ref() == Some(&source),
+                    "recovered native Thread has a different source"
+                );
+                let target = ThreadTarget {
+                    thread_id: thread.thread_id,
+                    server_instance_id: epoch,
+                };
+                if let Some(turn) = self
+                    .threads
+                    .find_goal_worker_turn(&target, &caller, &turn_key(&execution.id))
+                    .await?
+                {
+                    self.change(
+                        goal,
+                        Change::BindWorkerTurn {
+                            execution_id: execution.id.clone(),
+                            thread: ThreadExecution {
+                                thread_id: turn.thread_id,
+                                turn_id: turn.turn_id,
+                            },
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
+            if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
+                // The original durable admission key is absent. Re-submit that
+                // same action with its saved input; admission serializes a
+                // concurrent acceptance rather than creating another attempt.
+                let prepared = execution
+                    .resources
+                    .as_ref()
+                    .context("native dispatch lacks its saved input")?;
+                let prompt = String::from_utf8(
+                    crate::goal_artifacts::read(
+                        &crate::goal_artifacts::root(&self.workspaces, &goal.id),
+                        &prepared.prompt,
+                    )
+                    .await?,
+                )?;
+                return self.launch_native(goal, task, &execution.id, prompt).await;
+            }
+            if matches!(execution.observation, Observation::Requested) {
+                self.change(goal, Change::ObserveExecution { execution_id: execution.id.clone(),
+                    observation: Observation::Unknown { run_id: None, reason: "Native dispatch has no confirmed original Thread/Turn admission; no automatic replay".into() } }).await?;
+            }
+            return Ok(());
+        };
+        let target = ThreadTarget {
+            thread_id: binding.thread_id.clone(),
+            server_instance_id: epoch,
+        };
+        let turn = self
+            .threads
+            .read_stored_turn(&target, &caller, &binding.turn_id)
+            .await?;
+        let terminal = matches!(
+            turn.status,
+            TurnStatus::Completed
+                | TurnStatus::Failed
+                | TurnStatus::Cancelled
+                | TurnStatus::Interrupted
+        );
+        let stop_needed = goal.run_intent != RunIntent::Run
+            || task.run_intent != RunIntent::Run
+            || execution.task_revision != task.requirements_revision
+            || goal.budget.admission(goal.created_at_ms, now()?).is_err()
+            || matches!(
+                execution.observation,
+                Observation::Candidate { .. }
+                    | Observation::Failed { .. }
+                    | Observation::Unknown { .. }
+            )
+            || matches!(
+                execution.stop,
+                Some(StopState::Requested { .. } | StopState::Unknown { .. })
+            );
+        if stop_needed && !matches!(execution.stop, Some(StopState::Confirmed { .. })) {
+            let _stop_gate = self.stop_gate.lock().await;
+            let GoalReply::Snapshot { goal: current } = self
+                .goals
+                .execute(
+                    "local",
+                    GoalCommand::Get {
+                        goal_id: goal.id.clone(),
+                    },
+                    now()?,
+                )
+                .await?
+            else {
+                anyhow::bail!("native stop snapshot unavailable");
+            };
+            let current_execution = current
+                .workflow
+                .tasks
+                .iter()
+                .flat_map(|task| &task.executions)
+                .find(|known| known.id == execution.id)
+                .context("native stop source disappeared")?;
+            let operation_id = match &current_execution.stop {
+                None => {
+                    let operation_id = format!("native-stop-{}", execution.id);
+                    self.change(
+                        &current,
+                        Change::RequestStop {
+                            execution_id: execution.id.clone(),
+                            operation_id: operation_id.clone(),
+                        },
+                    )
+                    .await?;
+                    operation_id
+                }
+                Some(
+                    StopState::Requested { operation_id } | StopState::Unknown { operation_id, .. },
+                ) => operation_id.clone(),
+                Some(_) => return Ok(()),
+            };
+            let was_unknown = matches!(current_execution.stop, Some(StopState::Unknown { .. }));
+            if (terminal || turn.status == TurnStatus::RecoveryRequired)
+                && (!was_unknown || terminal && !turn.unknown_effect)
+            {
+                self.change(
+                    &current,
+                    Change::ObserveStop {
+                        execution_id: execution.id.clone(),
+                        operation_id,
+                        confirmed: terminal && !turn.unknown_effect,
+                        detail: format!(
+                            "Native Turn {:?}; unknown_effect={}",
+                            turn.status, turn.unknown_effect
+                        ),
+                    },
+                )
+                .await?;
+            } else if !was_unknown
+                && matches!(
+                    turn.status,
+                    TurnStatus::Accepted | TurnStatus::Running | TurnStatus::WaitingForInput
+                )
+            {
+                self.threads
+                    .cancel_turn(
+                        &target,
+                        &caller,
+                        CancelTurnRequest {
+                            turn_id: binding.turn_id.clone(),
+                            idempotency_key: operation_id,
+                        },
+                    )
+                    .await?;
+            }
+            return Ok(());
+        }
+        if matches!(
+            execution.observation,
+            Observation::Requested | Observation::Running { .. } | Observation::Unknown { .. }
+        ) {
+            let observation = match turn.status {
+                TurnStatus::Running | TurnStatus::WaitingForInput => Some(Observation::Running {
+                    run_id: None,
+                    native_session_id: None,
+                }),
+                TurnStatus::Completed if !turn.unknown_effect => {
+                    let text = turn
+                        .final_answer
+                        .as_deref()
+                        .filter(|text| !text.trim().is_empty())
+                        .context("completed native Turn has no candidate answer")?;
+                    let report = crate::goal_artifacts::put(
+                        &crate::goal_artifacts::root(&self.workspaces, &goal.id),
+                        text.as_bytes(),
+                    )
+                    .await?;
+                    Some(Observation::Candidate {
+                        run_id: None,
+                        native_session_id: None,
+                        report,
+                    })
+                }
+                TurnStatus::Failed | TurnStatus::Cancelled | TurnStatus::Interrupted
+                    if !turn.unknown_effect =>
+                {
+                    Some(Observation::Failed {
+                        run_id: None,
+                        reason: turn
+                            .detail
+                            .unwrap_or_else(|| format!("Native Turn {:?}", turn.status)),
+                    })
+                }
+                TurnStatus::RecoveryRequired
+                | TurnStatus::Completed
+                | TurnStatus::Failed
+                | TurnStatus::Cancelled
+                | TurnStatus::Interrupted => Some(Observation::Unknown {
+                    run_id: None,
+                    reason: "Native execution requires effect recovery; no automatic replay".into(),
+                }),
+                _ => None,
+            };
+            if let Some(observation) = observation
+                && observation != execution.observation
+            {
+                self.change(
+                    goal,
+                    Change::ObserveExecution {
+                        execution_id: execution.id.clone(),
+                        observation,
+                    },
+                )
+                .await?;
+            }
+        } else if let Observation::Candidate { report, .. } = &execution.observation
+            && matches!(execution.stop, Some(StopState::Confirmed { .. }))
+            && goal.run_intent == RunIntent::Run
+            && task.run_intent == RunIntent::Run
+            && !execution
+                .handoff
+                .as_ref()
+                .is_some_and(|handoff| handoff.task_revision == task.requirements_revision)
+        {
+            self.review(goal, task, execution, report).await?;
+        }
+        Ok(())
+    }
+}

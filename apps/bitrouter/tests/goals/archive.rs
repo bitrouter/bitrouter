@@ -57,7 +57,7 @@ async fn settle_and_edit(
             Change::ObserveExecution {
                 execution_id: execution_id.into(),
                 observation: Observation::Candidate {
-                    run_id: format!("domain-{execution_id}"),
+                    run_id: Some(format!("domain-{execution_id}")),
                     native_session_id: Some(format!("session-{execution_id}")),
                     report: report(
                         workspace,
@@ -238,7 +238,7 @@ async fn execution_archive_is_atomic_idempotent_cold_and_owner_scoped() -> Resul
         .push(bitrouter_orchestrator::goal::decision::PermissionDecision {
             id: "retired-permission".into(),
             execution_id: "original".into(),
-            run_id: "domain-original".into(),
+            run_id: Some("domain-original".into()),
             permission_id: "old-request".into(),
             requirements_revision: 1,
             task_revision: 1,
@@ -274,6 +274,7 @@ async fn execution_archive_is_atomic_idempotent_cold_and_owner_scoped() -> Resul
         Change::Accounting {
             event: bitrouter_orchestrator::goal::accounting::Event::Begin {
                 work: bitrouter_orchestrator::goal::accounting::Work {
+                    source: None,
                     id: "recorded-work".into(),
                     kind: bitrouter_orchestrator::goal::accounting::WorkKind::Preparation,
                     requirements_revision: 2,
@@ -413,6 +414,7 @@ async fn archive_keeps_unknown_effects_active_work_permissions_and_delivery_sour
                 id: "old-source-work".into(),
                 kind: WorkKind::ProviderAttempt,
                 requirements_revision: 1,
+                source: None,
                 request_id: Some("old-provider-request".into()),
                 intent: proof.clone(),
                 token_reservation: None,
@@ -420,7 +422,7 @@ async fn archive_keeps_unknown_effects_active_work_permissions_and_delivery_sour
             2 => head.workflow.decisions.push(PermissionDecision {
                 id: "old-permission".into(),
                 execution_id: "original".into(),
-                run_id: "domain-original".into(),
+                run_id: Some("domain-original".into()),
                 permission_id: "actual-request".into(),
                 requirements_revision: 1,
                 task_revision: 1,

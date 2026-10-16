@@ -12,8 +12,8 @@ use bitrouter_orchestrator::goal::{GoalCommand, GoalReply, GoalSnapshot, budget:
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use tokio::process::Command;
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
-mod example_binary;
+#[path = "../../../crates/bitrouter-orchestrator/tests/support/fixture_binary.rs"]
+mod fixture_binary;
 #[path = "support/goal_provider.rs"]
 mod provider;
 
@@ -200,7 +200,15 @@ impl Terminal {
     }
 
     fn wait_fresh_text(&mut self, previous: usize, text: &str) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        self.wait_fresh_text_until(previous, text, Instant::now() + Duration::from_secs(10))
+    }
+
+    fn wait_fresh_text_until(
+        &mut self,
+        previous: usize,
+        text: &str,
+        deadline: Instant,
+    ) -> Result<()> {
         loop {
             self.receive();
             let begin = self.raw[previous..]
@@ -223,6 +231,75 @@ impl Terminal {
             );
         }
         Ok(())
+    }
+
+    async fn external_editor(
+        &mut self,
+        capture: &Path,
+        release: &Path,
+        original: &str,
+        failed: bool,
+    ) -> Result<()> {
+        // A queued frame can contain the previous editor's identical notice.
+        // Bind this wait to this invocation's captured bytes and actual input
+        // modes, with the same ten-second completion bound.
+        for path in [capture, release] {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let raw_modes = terminal_modes(
+            self.master
+                .get_termios()
+                .context("editor input modes unavailable")?,
+        );
+        ensure!(
+            raw_modes.c_lflag & (nix::libc::ICANON | nix::libc::ECHO) == 0,
+            "editor invocation must begin in raw UI input mode"
+        );
+        let previous = self.raw.len();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        self.send(b"\x07")?;
+        loop {
+            match std::fs::read(capture) {
+                Ok(bytes) if bytes == original.as_bytes() => break,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "this editor did not capture its exact input"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // The real editor is held until startup is observed. It cannot finish
+        // before this check, so an old raw frame cannot satisfy the barrier.
+        self.assert_modes_restored()?;
+        std::fs::write(release, "release")?;
+        while terminal_modes(
+            self.master
+                .get_termios()
+                .context("editor return modes unavailable")?,
+        ) != raw_modes
+        {
+            ensure!(
+                Instant::now() < deadline,
+                "UI input did not resume after editor exit"
+            );
+            self.receive();
+        }
+        self.wait_fresh_text_until(
+            previous,
+            if failed {
+                "External editor failed"
+            } else {
+                "External editor returned"
+            },
+            deadline,
+        )
     }
 
     fn wait_alternate(&mut self, expected: bool) -> Result<()> {
@@ -497,8 +574,7 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
         Mock, MockServer,
         matchers::{method, path},
     };
-    let binary =
-        example_binary::build("bitrouter", "goal_acp_fixture").map_err(anyhow::Error::msg)?;
+    let binary = fixture_binary::build("goal_acp_fixture").map_err(anyhow::Error::msg)?;
     let home = tempfile::tempdir()?;
     let workspace = home.path().join("original");
     let controls = home.path().join("controls");
@@ -834,8 +910,7 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
 async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal() -> Result<()>
 {
     use bitrouter_orchestrator::goal::OperationKind;
-    let binary =
-        example_binary::build("bitrouter", "pty_acp_fixture").map_err(anyhow::Error::msg)?;
+    let binary = fixture_binary::build("pty_acp_fixture").map_err(anyhow::Error::msg)?;
     let home = tempfile::tempdir()?;
     let config = home.path().join("bitrouter.yaml");
     let temporary = home.path().join("tmp");
@@ -886,6 +961,7 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
                 ("TMPDIR", temporary.as_os_str()),
                 ("BITROUTER_PTY_EDITOR_CAPTURE", capture.as_os_str()),
                 ("BITROUTER_PTY_EDITOR_CONTENT", replacement.as_os_str()),
+                ("BITROUTER_PTY_EDITOR_HOLD", release.as_os_str()),
             ];
             if fail { environment.push(("BITROUTER_PTY_EDITOR_FAIL", std::ffi::OsStr::new("1"))); }
             let mut terminal = Terminal::open_with_environment(home.path(), true, &environment)?;
@@ -896,9 +972,7 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
             terminal.send(format!("\x1b[200~{original}\x1b[201~").as_bytes())?;
             terminal.wait_fresh_text(pasted,"second original line")?;
             let count = directory(&socket).await?;
-            let editing = terminal.raw.len();
-            terminal.send(b"\x07")?;
-            terminal.wait_fresh_text(editing,if fail { "External editor failed" } else { "External editor returned" })?;
+            terminal.external_editor(&capture, &release, original, fail).await?;
             terminal.wait(if fail { "second original line" } else { "second edited line" })?;
             ensure!(std::fs::read_to_string(&capture)? == original, "new editor changed original bytes");
             ensure!(directory(&socket).await? == count, "editor delegated a new Goal");
@@ -923,9 +997,7 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
             terminal.send(format!("\x1b[200~{goal_draft}\x1b[201~").as_bytes())?;
             terminal.wait_fresh_text(pasted,"current Goal original draft")?;
             let before = head(&socket, &id).await?;
-            let editing = terminal.raw.len();
-            terminal.send(b"\x07")?;
-            terminal.wait_fresh_text(editing,if fail { "External editor failed" } else { "External editor returned" })?;
+            terminal.external_editor(&capture, &release, &goal_draft, fail).await?;
             terminal.wait(if fail { "second original line" } else { "second edited line" })?;
             let captured = std::fs::read_to_string(&capture)?;
             ensure!(captured == goal_draft, "Goal editor changed original bytes: expected {goal_draft:?}, actual {captured:?}");
@@ -944,12 +1016,15 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
                     let current = head(&socket, &id).await?;
                     let inputs = history(&socket, &id, current.revision).await?;
                     if inputs.iter().any(|operation| matches!(&operation.kind, OperationKind::Input { text, task_reference:None } if text == expected)) { break; }
+                    terminal.receive();
+                    ensure!(terminal.child.try_wait()?.is_none(), "Goal UI exited before submitting editor input");
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 Ok::<_,anyhow::Error>(())
             }).await.with_context(||format!("editor input was not persisted for Goal {id}, failed editor={fail}, expected {expected:?}; current screen: {:?}",terminal.screen.screen().contents()))??;
             terminal.detach()?;
         }
+        std::fs::remove_file(&release)?;
         let environment = [
             ("VISUAL", std::ffi::OsStr::new(&editor)),
             ("TMPDIR", temporary.as_os_str()),
@@ -984,6 +1059,11 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
     let release_result = std::fs::write(&release, "release");
     let stop = send_command(&socket, &DaemonCommand::Stop).await;
     let status = tokio::time::timeout(Duration::from_secs(10), server.wait()).await;
+    if result.is_err() {
+        let retained = home.keep();
+        return result
+            .with_context(|| format!("editor fixture retained at {}", retained.display()));
+    }
     result?;
     release_result?;
     ensure!(matches!(stop?, DaemonResponse::Ok));
@@ -1005,8 +1085,7 @@ async fn bare_and_code_open_goals_without_work_and_preserve_unsent_drafts() -> R
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal_directory_resize_defers_backlog_and_isolates_native_inspection() -> Result<()> {
-    let binary =
-        example_binary::build("bitrouter", "pty_acp_fixture").map_err(anyhow::Error::msg)?;
+    let binary = fixture_binary::build("pty_acp_fixture").map_err(anyhow::Error::msg)?;
     let home = tempfile::tempdir()?;
     let config = home.path().join("bitrouter.yaml");
     std::fs::write(

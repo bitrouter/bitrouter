@@ -3,6 +3,16 @@
 use std::sync::Mutex;
 use tokio::sync::watch;
 
+/// Host-owned source/aggregate-budget controls. Model and tool dispatch share
+/// this live gate; outcomes still settle after the gate closes.
+#[async_trait::async_trait]
+pub trait WorkControl: bitrouter_sdk::language_model::native::NativeExecutionControl {
+    async fn authorize(&self) -> bitrouter_sdk::Result<()> {
+        Ok(())
+    }
+    fn outcome_acknowledged(&self) -> bool;
+}
+
 pub(crate) struct LaunchFence {
     sealed: Mutex<bool>,
     changed: watch::Sender<bool>,

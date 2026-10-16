@@ -10,6 +10,42 @@ const CONTEXT_FIELD: &str = "earlier_tool_context";
 const MAX_CONTEXT_BYTES: usize = 64 * 1024;
 const MAX_DECLARATIONS: usize = 32;
 mod failures;
+pub(crate) mod native;
+
+pub(crate) fn decision_value(
+    bytes: &[u8],
+    decision: &bitrouter_orchestrator::goal::decision::PermissionDecision,
+) -> Result<Value> {
+    match decision.run_id.as_deref() {
+        Some(run_id) => {
+            let request: PendingPermissionSnapshot = serde_json::from_slice(bytes)?;
+            anyhow::ensure!(
+                request.permission_id == decision.permission_id,
+                "permission material has a different request identity"
+            );
+            checked_value(bytes, Some(run_id))
+        }
+        None => {
+            let request = native::Request::decode(bytes)?;
+            anyhow::ensure!(
+                request.input.request_id == decision.permission_id,
+                "native permission material has a different request identity"
+            );
+            serde_json::to_value(request).context("serialize native permission material")
+        }
+    }
+}
+
+pub(crate) fn decision_tool(
+    bytes: &[u8],
+    decision: &bitrouter_orchestrator::goal::decision::PermissionDecision,
+) -> Result<Option<Value>> {
+    decision_value(bytes, decision)?;
+    match decision.run_id.as_deref() {
+        Some(run_id) => effective_tool(bytes, run_id),
+        None => Ok(native::Request::decode(bytes)?.tool()),
+    }
+}
 
 pub(crate) fn failed_without_requests(replay: &ReplayBatch) -> Result<Vec<Value>> {
     failures::collect(replay)
@@ -152,6 +188,14 @@ pub(crate) fn original_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
 
 pub(crate) fn checked_value(bytes: &[u8], run_id: Option<&str>) -> Result<Value> {
     let value: Value = serde_json::from_slice(bytes)?;
+    if value.get("native").is_some() {
+        anyhow::ensure!(
+            run_id.is_none(),
+            "native material cannot identify an ACP run"
+        );
+        return serde_json::to_value(native::Request::decode(bytes)?)
+            .context("serialize native permission");
+    }
     let request: PendingPermissionSnapshot = serde_json::from_slice(bytes)?;
     if let Some(reason) = value.get("tool_context_unavailable") {
         anyhow::ensure!(

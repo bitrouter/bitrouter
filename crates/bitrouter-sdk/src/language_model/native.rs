@@ -457,6 +457,31 @@ pub struct NativeOutputUsage {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
+    /// Admit a typed routing/context decision separately from generation.
+    /// Hosts enforcing aggregate budgets must reserve its frozen price here.
+    async fn before_typed_decision(
+        &self,
+        _attempt_id: &str,
+        _request: &crate::decision_model::types::DecisionRequest,
+        _pricing: Option<&crate::decision_model::policy::DecisionPricing>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Record decision usage even after cancellation or rejected admission.
+    /// A no-dispatch outcome may settle an intent committed before rejection.
+    async fn after_typed_decision(
+        &self,
+        _attempt_id: &str,
+        _outcome: &std::result::Result<
+            crate::decision_model::types::DecisionResponse,
+            crate::decision_model::types::DecisionError,
+        >,
+        _pricing: Option<&crate::decision_model::policy::DecisionPricing>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Supply acknowledged semantic evidence and authorized context candidates
     /// after entry authentication and checks, before the shared policy planner.
     async fn prepare_routing(

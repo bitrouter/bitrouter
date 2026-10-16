@@ -21,6 +21,13 @@ The `extensions/` directory expresses ownership and delivery boundaries; it does
 For the native runtime module map, execution reading order and test layout, see
 the [orchestrator source guide](../crates/bitrouter-orchestrator/README.md).
 
+Protocol/process tests build real peers from the unpublished
+[`bitrouter-test-fixtures`](../helpers/bitrouter-test-fixtures/Cargo.toml)
+helper package. These fixtures depend only on ACP types and JSON; they do not
+pull application/model/storage libraries into a test-time build. Fixture
+construction still uses Cargo's reported executable, with no interpreter or
+stale prebuilt-binary shortcut.
+
 ### External interfaces
 
 Clients reach BitRouter through its external **interfaces** — the ways *in*. These are distinct from AI's three internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
@@ -31,10 +38,24 @@ Clients reach BitRouter through its external **interfaces** — the ways *in*. T
 | **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
 | **ACP**                   | `bitrouter-orchestrator` `acp` feature (`crates/bitrouter-orchestrator/src/acp/`): controller, transport-generic client, agent-process transport and typed updates. The transparent stdio bridge, headless runner and Goal workers share these contracts. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve <agent>`; `bro run` |
 | **Native ACP** | `bitrouter-orchestrator::acp::native`: negotiated v1/v2 handlers over the host's ThreadService. App `native_acp.rs` owns the local endpoint and stdio bridge; EOF detaches. | bare `bro acp serve` |
-| **BRO Goals** | `bitrouter-tui::goals` draws Goals/current Goal/read-only Workflow; app `goal_code` submits identified local operations. Daemon `goal_runtime` owns parallel ACP execution, input interpretation, permissions, handoff and verification; `GoalService` and app `goal_store` commit versioned state and receipts. Superseded reconciled executions without active references move atomically to immutable operation history. | Bare `bro`; `bro code [--config PATH] [--workspace PATH]`; local Goal protocol v4 |
+| **BRO Goals** | `bitrouter-tui::goals` draws Goals/current Goal/read-only Workflow; app `goal_code` submits identified local operations. Daemon `goal_runtime` coordinates Goal input, native workers through ThreadService and the retained ACP worker path; `GoalService` and app `goal_store` commit versioned requirements, arrangements and receipts. Superseded reconciled executions without active references move atomically to immutable operation history. | Bare `bro`; `bro code [--config PATH] [--workspace PATH]`; local Goal protocol v5 |
 | **Native harness interface** | App `spawn` injects per-process router settings and starts the harness's own interface. | `bro claude`; `bro codex`; `bro launch <agent>` |
-| **BRO native agent** | `bitrouter-orchestrator::service::ThreadService` owns retained Thread/Turn execution, durable context, FIFO/steering and owner/workspace fencing. Native records and transports remain separate from Goals. | `bro task run`; local v17 native socket; opt-in `/agent/v2` HTTP API |
+| **BRO native agent** | `bitrouter-orchestrator::service::ThreadService` owns retained Thread/Turn execution, durable context, FIFO/steering and owner/workspace fencing for standalone native work and linked Goal workers. Standalone native APIs do not automatically create Goals or bypass managed work controls. | `bro task run`; local v17 native socket; opt-in `/agent/v2` HTTP API |
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
+
+The [BRO refactor](BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md) has begun with
+Goal-owner/input Thread links over the daemon's existing ThreadService. Planning,
+input generation, review and completion evaluation now enter tool-free Turns
+through its shared admission, runner, writer fencing and shutdown authority,
+retaining the existing Goal model-control accounting. Native Goal workers now have an app dispatch path and explicit Thread/Turn
+links. Native permission replies use the shared approval transaction; stopped
+local effects use original-history/workspace reconciliation. Shared generation
+admission and native worker admission share bounded capacity waiting; active cold recovery and worker quote
+waiting still need closure. The ACP worker loop still needs
+migration. The ledger tracks these paths and
+their remaining acceptance gates. Migration 000030 records the minimum database
+writer compatibility required by the new Goal execution links; it adds no table
+and does not migrate persistence into core.
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,
@@ -122,7 +143,7 @@ checkpoint recovery preserve identities and budgets without replaying completed
 effects; lost owners, unknown effects and uncertain accounting remain blocked.
 
 Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
-requirements, including root format 2 and local v17/HTTP v2. The
+requirements, including root format 8 (reading formats 2–7) and local v17/HTTP v2. The
 [runtime acceptance index](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) separates local
 fixtures, historical provider/platform checks and remaining product gates.
 [Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and

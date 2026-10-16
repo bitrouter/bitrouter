@@ -67,6 +67,19 @@ mod wait_output;
 /// delivery before ACK. Report actual outcomes separately through `tool_result`.
 #[async_trait]
 pub trait HarnessPort: Send + Sync {
+    /// Optional aggregate host admission/accounting. Core retains model/context
+    /// routing, native checkpoints and tool scheduling; the host may only
+    /// narrow admitted routes and veto work under its own live contract.
+    fn model_control(&self) -> Option<Arc<dyn NativeExecutionControl>> {
+        None
+    }
+
+    /// Outcome callbacks have completed, including billed calls after cancel.
+    /// A missing host ACK must prevent output adoption and subsequent tools.
+    async fn model_result_acknowledged(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
+
     /// Local owner cancellation also interrupts a provider stream while Core
     /// waits for its next scheduling boundary. Remote ports use Core's token.
     async fn model_cancelled(&self) {
@@ -2650,6 +2663,7 @@ impl CoreSession {
         })
         .await?;
         let control = Arc::new(StepControl {
+            host: self.shared.harness.model_control(),
             canonical_output_bytes: model_output::allowance(&run.limits)?,
             provider_response_bytes: run
                 .limits
@@ -2713,6 +2727,10 @@ impl CoreSession {
                 control.clone(),
             )
             .await;
+        if let Err(error) = self.shared.harness.model_result_acknowledged().await {
+            self.fail(agent_id, &error.message).await?;
+            return Err(error);
+        }
         let context_replan = control
             .routing_stale
             .load(std::sync::atomic::Ordering::Acquire);
@@ -3801,6 +3819,7 @@ fn cancellation_start_fences(
 }
 
 struct StepControl {
+    host: Option<Arc<dyn NativeExecutionControl>>,
     provider_response_bytes: u64,
     canonical_output_bytes: u64,
     validation_gate_time: super::activity::GateTime,
@@ -3842,6 +3861,40 @@ impl Drop for StepControl {
 
 #[async_trait]
 impl NativeExecutionControl for StepControl {
+    async fn before_typed_decision(
+        &self,
+        attempt_id: &str,
+        request: &bitrouter_sdk::decision_model::types::DecisionRequest,
+        pricing: Option<&bitrouter_sdk::decision_model::policy::DecisionPricing>,
+    ) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.before_typed_decision(attempt_id, request, pricing)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn after_typed_decision(
+        &self,
+        attempt_id: &str,
+        outcome: &Result<
+            bitrouter_sdk::decision_model::types::DecisionResponse,
+            bitrouter_sdk::decision_model::types::DecisionError,
+        >,
+        pricing: Option<&bitrouter_sdk::decision_model::policy::DecisionPricing>,
+    ) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.after_typed_decision(attempt_id, outcome, pricing)
+                .await?;
+        }
+        self.session
+            .shared
+            .harness
+            .model_result_acknowledged()
+            .await
+            .map_err(sdk_error)
+    }
+
     async fn prepare_routing(
         &self,
         prompt: &Prompt,
@@ -3889,11 +3942,23 @@ impl NativeExecutionControl for StepControl {
     }
 
     fn provider_response_byte_limit(&self) -> Option<u64> {
-        Some(self.provider_response_bytes)
+        Some(
+            self.host
+                .as_ref()
+                .and_then(|host| host.provider_response_byte_limit())
+                .unwrap_or(self.provider_response_bytes)
+                .min(self.provider_response_bytes),
+        )
     }
 
     fn canonical_output_byte_limit(&self) -> Option<u64> {
-        Some(self.canonical_output_bytes)
+        Some(
+            self.host
+                .as_ref()
+                .and_then(|host| host.canonical_output_byte_limit())
+                .unwrap_or(self.canonical_output_bytes)
+                .min(self.canonical_output_bytes),
+        )
     }
 
     fn auxiliary_report_byte_limit(&self, request_id: &str) -> bitrouter_sdk::Result<Option<u64>> {
@@ -3921,6 +3986,9 @@ impl NativeExecutionControl for StepControl {
         &self,
         work: &bitrouter_sdk::language_model::native_preparation::NativePreparationWork,
     ) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.before_preparation_work(work).await?;
+        }
         self.admit_preparation_work(work).await
     }
 
@@ -3928,7 +3996,12 @@ impl NativeExecutionControl for StepControl {
         &self,
         report: bitrouter_sdk::language_model::native_preparation::NativePreparationWorkReport,
     ) -> bitrouter_sdk::Result<()> {
-        self.record_preparation_work(report).await
+        let local = self.record_preparation_work(report.clone()).await;
+        let host = match &self.host {
+            Some(host) => host.after_preparation_work(report).await,
+            None => Ok(()),
+        };
+        local.and(host)
     }
 
     fn model_selection(&self) -> NativeModelSelection {
@@ -3940,6 +4013,9 @@ impl NativeExecutionControl for StepControl {
         plan: &NativePlan,
         route_index: u32,
     ) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.before_input_count(plan, route_index).await?;
+        }
         let step_id = self.step_id.lock().await.clone();
         self.session
             .transition_for(
@@ -4040,10 +4116,17 @@ impl NativeExecutionControl for StepControl {
         if recorded.is_err() {
             self.session.disconnect().await;
         }
-        recorded.map_err(sdk_error)
+        let host = match &self.host {
+            Some(host) => host.after_input_count(report).await,
+            None => Ok(()),
+        };
+        recorded.map_err(sdk_error).and(host)
     }
 
     async fn before_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.before_context_validation(request_id).await?;
+        }
         self.validation_gate_time.reset();
         let step_id = self.step_id.lock().await.clone();
         self.session
@@ -4093,6 +4176,9 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn check_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.check_context_validation(request_id).await?;
+        }
         let _gate_time = self.validation_gate_time.measure();
         // Pause between guards before waiting for another checkpoint's ACK.
         // ensure_dispatch resumes activity only after its live gate succeeds.
@@ -4186,13 +4272,60 @@ impl NativeExecutionControl for StepControl {
         if result.is_err() {
             self.session.disconnect().await;
         }
-        result.map_err(sdk_error)
+        let host = match &self.host {
+            Some(host) => host.after_context_validation(report).await,
+            None => Ok(()),
+        };
+        result.map_err(sdk_error).and(host)
     }
 
     async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<NativePlanAdmission> {
+        self.plan_with_token_reservations(plan, Vec::new()).await
+    }
+
+    async fn plan_with_token_reservations(
+        &self,
+        plan: NativePlan,
+        reservations: Vec<
+            Option<bitrouter_sdk::language_model::native_accounting::NativeTokenReservation>,
+        >,
+    ) -> bitrouter_sdk::Result<NativePlanAdmission> {
+        let host = match &self.host {
+            Some(host) => Some(
+                host.plan_with_token_reservations(plan.clone(), reservations)
+                    .await?,
+            ),
+            None => None,
+        };
+        if let Some(admission) = &host
+            && (admission.route_indices.is_empty()
+                || admission
+                    .route_indices
+                    .iter()
+                    .any(|index| *index as usize >= plan.routes.len())
+                || admission
+                    .route_indices
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1]))
+        {
+            return Err(bitrouter_sdk::error::BitrouterError::bad_request(
+                "host admission must narrow the frozen route order",
+            ));
+        }
         let step_id = self.step_id.lock().await.clone();
         let mut rejection = None;
-        let routes = super::routing::assess_routes(&plan).map_err(sdk_error)?;
+        let mut routes = super::routing::assess_routes(&plan).map_err(sdk_error)?;
+        if let Some(host) = host {
+            // Preserve Core route order and record the host restriction in the
+            // same decision later checked by before_attempt, including fallback.
+            for route in &mut routes {
+                if !host.route_indices.contains(&route.route_index) {
+                    route
+                        .rejection_reasons
+                        .push("host_admission_rejected".into());
+                }
+            }
+        }
         let route_indices = routes
             .iter()
             .filter(|route| route.rejection_reasons.is_empty())
@@ -4520,6 +4653,22 @@ impl NativeExecutionControl for StepControl {
         request_id: &str,
         attempt_index: u32,
     ) -> bitrouter_sdk::Result<()> {
+        self.before_attempt_with_token_reservation(request_id, attempt_index, None)
+            .await
+    }
+
+    async fn before_attempt_with_token_reservation(
+        &self,
+        request_id: &str,
+        attempt_index: u32,
+        reservation: Option<
+            &bitrouter_sdk::language_model::native_accounting::NativeTokenReservation,
+        >,
+    ) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.before_attempt_with_token_reservation(request_id, attempt_index, reservation)
+                .await?;
+        }
         let step_id = self.step_id.lock().await.clone();
         self.session.transition_for(Some(&self.agent_id), "model.attempt.intent", |state, _| {
             validate_step_source(state,&self.agent_id,&step_id)?;
@@ -4558,6 +4707,9 @@ impl NativeExecutionControl for StepControl {
         &self,
         work: &bitrouter_sdk::language_model::native_work::NativeProviderWork,
     ) -> bitrouter_sdk::Result<()> {
+        if let Some(host) = &self.host {
+            host.before_provider_work(work).await?;
+        }
         self.admit_provider_work(work).await
     }
 
@@ -4565,7 +4717,10 @@ impl NativeExecutionControl for StepControl {
         &self,
         report: bitrouter_sdk::language_model::native_work::NativeProviderWorkReport,
     ) {
-        self.record_provider_work(report).await
+        self.record_provider_work(report.clone()).await;
+        if let Some(host) = &self.host {
+            host.after_provider_work(report).await;
+        }
     }
 
     async fn after_attempt(&self, report: NativeAttemptReport) {
@@ -4630,9 +4785,12 @@ impl NativeExecutionControl for StepControl {
             })
             .await;
         if recorded.is_err() {
-            self.retain_provider_evidence(&step_id, report, active_ms)
+            self.retain_provider_evidence(&step_id, report.clone(), active_ms)
                 .await;
             self.session.disconnect().await;
+        }
+        if let Some(host) = &self.host {
+            host.after_attempt(report).await;
         }
     }
 }

@@ -1,9 +1,76 @@
-//! Credentialed runtime input evaluation. Workflow state is a labeled domain fixture.
+//! Offline transport regressions and opt-in provider input evaluation.
+//! Workflow state is a labeled domain fixture, never harness-adoption evidence.
 use super::*;
 use bitrouter_orchestrator::goal::{GoalOperation, GoalStore, OperationKind};
 mod corpus;
+mod offline_faults;
 mod sequences;
 use corpus::{bootstrap_input_state, effect_violations, model_evidence, seed_state};
+
+async fn input_coordinator(
+    id: &str,
+    config_path: &Path,
+    workspaces: PathBuf,
+    seed: GoalSnapshot,
+    creation: GoalOperation,
+) -> Result<(
+    Coordinator,
+    Arc<crate::goal_store::DatabaseGoalStore>,
+    sea_orm::DatabaseConnection,
+)> {
+    let source = crate::paths::ConfigSource::File(config_path.into());
+    let config = crate::paths::load_config(&source).await?;
+    let assembled = crate::assemble::build_app_with_path(&config, Some(config_path)).await?;
+    let store = Arc::new(crate::goal_store::DatabaseGoalStore::new(
+        assembled.db.clone(),
+    ));
+    store.commit(None, seed.clone(), creation).await?;
+    let goals = Arc::new(GoalService::new(store.clone()));
+    let routing = Arc::new(ConfigRoutingTable::from_config(config));
+    let supervisor = Supervisor::open(source, routing.clone()).await?;
+    let SessionResponse::Authorized { grant } = supervisor
+        .dispatch(SessionRequest::authorize(
+            id.into(),
+            BTreeSet::from([
+                SessionScope::Start,
+                SessionScope::Peek,
+                SessionScope::Transcript,
+                SessionScope::Respond,
+                SessionScope::Stop,
+            ]),
+        ))
+        .await?
+    else {
+        anyhow::bail!("input fixture owner authorization missing")
+    };
+    let app = Arc::new(assembled.app);
+    let threads = bitrouter_orchestrator::service::ThreadService::with_store(
+        app.clone(),
+        &[],
+        Arc::new(crate::agent_store::DatabaseExecutionStore::new(
+            assembled.db.clone(),
+        )),
+    )?;
+    let coordinator = Coordinator {
+        id: id.into(),
+        app,
+        goals,
+        threads,
+        supervisor,
+        routing,
+        workspaces,
+        home: config_path
+            .parent()
+            .context("input fixture config has no home")?
+            .into(),
+        grant,
+        workspace_gate: tokio::sync::Mutex::new(()),
+        stop_gate: tokio::sync::Mutex::new(()),
+        gate: crate::daemon_handoff::HandoffGate::default(),
+    };
+    coordinator.claim_owner(&seed).await?;
+    Ok((coordinator, store, assembled.db))
+}
 
 async fn keep_owner(coordinator: &Coordinator, goal_id: &str) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -171,49 +238,17 @@ chat: {{ model: reasoning }}
                 decision
             );
             tokio::fs::write(&config_path, configuration).await?;
-            let source = crate::paths::ConfigSource::File(config_path.clone());
-            let config = crate::paths::load_config(&source).await?;
-            let assembled =
-                crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
-            let store = Arc::new(crate::goal_store::DatabaseGoalStore::new(
-                assembled.db.clone(),
-            ));
             // Each lane receives the exact same persisted snapshot and creation receipt.
-            store
-                .commit(None, serde_json::from_slice(&seed_bytes)?, creation.clone())
-                .await?;
-            let goals = Arc::new(GoalService::new(store.clone()));
-            let routing = Arc::new(ConfigRoutingTable::from_config(config));
-            let supervisor = Supervisor::open(source, routing.clone()).await?;
-            let SessionResponse::Authorized { grant } = supervisor
-                .dispatch(SessionRequest::authorize(
-                    "live-input-eval".into(),
-                    BTreeSet::from([
-                        SessionScope::Start,
-                        SessionScope::Peek,
-                        SessionScope::Transcript,
-                        SessionScope::Respond,
-                        SessionScope::Stop,
-                    ]),
-                ))
-                .await?
-            else {
-                anyhow::bail!("input evaluation owner authorization missing")
-            };
-            let coordinator = Arc::new(Coordinator {
-                id: "live-input-eval".into(),
-                app: Arc::new(assembled.app),
-                goals: goals.clone(),
-                supervisor,
-                routing,
-                workspaces: shared_workspaces.clone(),
-                home: home.clone(),
-                grant,
-                workspace_gate: tokio::sync::Mutex::new(()),
-                stop_gate: tokio::sync::Mutex::new(()),
-                gate: crate::daemon_handoff::HandoffGate::default(),
-            });
-            coordinator.claim_owner(&seed).await?;
+            let (coordinator, store, db) = input_coordinator(
+                "live-input-eval",
+                &config_path,
+                shared_workspaces.clone(),
+                serde_json::from_slice(&seed_bytes)?,
+                creation.clone(),
+            )
+            .await?;
+            let coordinator = Arc::new(coordinator);
+            let goals = coordinator.goals.clone();
             bootstrap_input_state(&goals, &coordinator.id, &seed.id, state).await?;
             for (step_index, message) in messages.iter().enumerate() {
                 let step_case = if definition.get("messages").is_some() {
@@ -387,8 +422,7 @@ chat: {{ model: reasoning }}
                         .map(|violation| format!("{case}/{lane}: {violation}")),
                     );
                 }
-                let count = assembled
-                    .db
+                let count = db
                     .query_one(sea_orm::Statement::from_string(
                         sea_orm::DatabaseBackend::Sqlite,
                         "SELECT COUNT(*) AS count FROM bro_managed_sessions".to_owned(),
