@@ -3055,6 +3055,20 @@
             }
           },
           "provider_model_id": "anthropic/claude-haiku-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-4-argon",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "google/gemini-4-argon"
         }
       ],
       "name": "bitrouter",

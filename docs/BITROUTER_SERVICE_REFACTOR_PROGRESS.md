@@ -2416,7 +2416,14 @@ by this stage record; SDK harness coverage, artifact identity/updates, historica
 profile transitions, packaging/independent consumer, final matrix/full-suite and
 performance evidence remain.
 
-Remote `main` was refreshed during this stage to `eafa838` (registry updates
-#980/#982). Integration follows this validated stage commit. The upstream changes include catalog data,
-one policy-lock test model ID, PTY synchronization and native worker test timing;
-the retired orchestrator test changes must be applied at their harness owner.
+The validated stage is committed as `12439bf`. Remote `main` was refreshed to
+`eafa838`. Merge-base inspection confirmed that #980 and its policy-lock, PTY and
+relocated harness test fixes were already integrated by `6256262`; they require
+no repeat migration. The #982 merge adds one provider model and its four registry
+snapshots, with no implementation or package-layout changes. Registry validation,
+build and the complete distribution check all passed; generated schema and
+registry artifacts are current. Independent review verified that the five
+incoming files exactly match upstream, both artifact copies agree, and none of
+the retired implementation packages or paths is restored. Existing catalog
+coverage/conformance warnings remain warnings, not new test failures. Logs use
+`/tmp/bitrouter-p0-upstream-982-*`.
