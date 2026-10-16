@@ -200,6 +200,8 @@ Linux 还证明三个 worker 已完成但根验收未结束时，总 45 秒的�
 
 本地 full final31 的 help 用例报告一次输出 LEAK，原记录保留；随后同源码以两个外层测试槽运行完整回归，工作流内部并行与检测器保持原值，help 另作三次复核。完整回归、严格检查与原始 CI 失败分别保存在 `CI_PORTABILITY_INDEX.md` 及 `ci-portability-final36`。
 
+最终覆盖核对发现上游 Linux 清单只选择 36 个集成测试目标中的 26 个。本轮增加 `native-goals` 分片运行其余 10 个，涵盖 Goals、Goal TUI 和相关 native/ACP 接口；新分片仅串行编译以限制链接内存，保留原测试并发与零自动重试。Rust、夹具、Cargo 与 nextest 配置均与 final36 相同；这项 CI 选择变化单独记在最终摘要，不能称全部仓库输入完全未变。新增选择由最终提交的 hosted CI 验证。
+
 ## 8 阶段结论与后续边界
 
 | 阶段 | 本轮结论 |
