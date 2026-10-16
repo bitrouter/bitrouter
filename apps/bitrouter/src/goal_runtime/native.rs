@@ -81,6 +81,10 @@ impl Coordinator {
             Some(thread) => thread,
             None => {
                 let config = self.routing.snapshot_config();
+                super::resources::verify_mcp_configuration(
+                    execution,
+                    &super::resources::servers(&config, &task.spec.resources)?,
+                )?;
                 let model = task
                     .spec
                     .resources
