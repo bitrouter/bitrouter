@@ -145,6 +145,8 @@ rustix = { workspace = true, features = ["process"] }
 # Reads the committed registry artifacts to generate the ACP harness catalog.
 serde_json.workspace = true
 sha2.workspace = true
+# Derives artifact capabilities from this package's manifest, including archives.
+toml.workspace = true
 
 [dev-dependencies]
 # Differential stored-history tests use the pinned schema without activating

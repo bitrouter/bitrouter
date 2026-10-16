@@ -2499,3 +2499,85 @@ new owners and separate transport semantics. Logs use
 `/tmp/bitrouter-p0-harness-sdk-*`. All final A01–A16 gates remain open; packaging,
 profile identity/updates/transitions, historical compatibility, performance and
 the complete candidate matrix/review remain required.
+
+## P0 5 Artifact identity, updates and daemon profiles (2026-10-16)
+
+Stage base: `b545738`. The application generates one compiled artifact identity:
+version, available source revision, target, normalized effective features,
+distribution profile and the existing handoff/migration fingerprint extended by
+that metadata. `default` and the `otel` alias do not become capabilities. The
+manifest's default closure is `full`, an empty selection is `gateway`, and other
+selections are `custom`. AI owns only the serialized contract. Build provenance
+comes from an explicit release override, packaged VCS data or the tracked Git
+checkout; unknown archive provenance remains null. Build dependencies track
+worktree pointers, symbolic/packed refs and creation of previously absent files.
+
+`bro build-info` performs no configuration or storage discovery. Local status,
+handoff and remote control capability reports expose artifact identity separately
+from authorization. Handoff protocol 2 prevents older clients from treating the
+additive metadata as proof that unlike distributions can replace one another.
+Common inspection works across profiles; automatic replacement requires matching
+profile, effective features and target. An explicit profile transition retains
+launcher ownership, idle admission, configuration/SQLite preflight and recovery
+backup requirements. The existing native core+harness lifetime guard still blocks
+such a transition; no new claim of atomic native-runtime handoff is made.
+
+Full installations retain their updater/package-manager paths. Gateway and custom
+profiles delegate to source commands preserving the exact feature selection;
+they do not consume the full distribution's installer, receipt or update cache.
+Self-update validates actual receipt ownership before forced tag selection and
+checks the canonical executable name. The post-install probe uses the pathname
+captured before replacement, avoiding Linux's deleted-inode `current_exe` result.
+An older target without `build-info` still yields an honest completed-install
+report, with unknown target identity and automatic handoff deferred. This stage
+does not yet supply gateway release archives or a matching binary installer.
+
+Independent source review found three defects and the stage repaired them:
+looking up the executable after replacement, failing to report a completed legacy
+rollback, and probing the old control socket after a configured endpoint change.
+Focused repair review found no remaining issue. Candidate preflight now records
+the new endpoint, refuses an occupied endpoint before stopping the resident, and
+verifies readiness, artifact identity and locator at the replacement endpoint.
+
+Validation so far:
+
+- AI all-feature tests: **56 passed**, including four new artifact contract tests.
+- Initial full-workspace/all-feature/all-target compilation passed in 1m06s.
+- After review repairs, the minimum gateway selection passed **186/186** in
+  2.759s; 2,150 unrelated tests were outside this selection. It covers update
+  policy/reports, metadata generation, daemon/upgrade/preflight, status, command
+  dispatch, configuration state and actual feature-ingress processes.
+- The separately preserved default-full and minimum-gateway executables report
+  the same version, revision and target with distinct features/fingerprints.
+  The explicitly selected two-artifact process test passed in 0.99s. It exercises
+  common reads, both directions of automatic replacement rejection, full native
+  lifetime refusal, missing-feature preflight without stopping the resident,
+  occupied replacement endpoint refusal, and an idle gateway-to-full restart at
+  a changed socket. Private process cleanup completed; no resident user daemon
+  was targeted. This is current-data lifecycle evidence, not a historical
+  checkpoint or packaged-release acceptance result.
+- The full-product selection passed **200/200** in 47.353s, including all three
+  native TUI process cases; 3,407 unrelated tests were outside this selection.
+- Strict Rust 1.97 all-target Clippy passed for the complete workspace with all
+  features (1m06s) and minimum gateway (30.77s). It first found one collapsible
+  conditional in Git watch setup and two unnecessary fixture clones; these were
+  corrected without suppressions or changing behavior.
+- Full-workspace strict Rustdoc passed in 55.35s. Formatting, patch whitespace
+  and CI YAML validation pass. Sources remained fixed during each build/test;
+  the final lint-only changes preserve the exercised conditions and assertions.
+
+The two development candidates were built from the reviewed stage working tree
+atop `b545738`, with debug symbols disabled. Retained artifact hashes identify the
+actual files used by the process test; these are not release-size measurements.
+
+| Candidate | Bytes | SHA-256 |
+| --- | --- | --- |
+| Minimum gateway | 119,489,680 | `30f8a3f860a436cfc365d67f68cc9aa425189dd4d6ffd694f865508743368d4d` |
+| Default full | 316,961,504 | `9688a2c388db16afc83006c9984d6b32029828dacf7fa2b731fa0da720117e3f` |
+
+CI runs the actual two-artifact scenario on Linux and macOS and includes metadata
+tests in the explicit Linux integration shard. Local results are macOS arm64;
+hosted cross-platform execution remains separate evidence. Logs use
+`/tmp/bitrouter-p0-artifact-*`. All final A01–A16 gates remain open pending the
+complete candidate, historical transitions, packaging/independent consumer,
+performance evidence and final review.

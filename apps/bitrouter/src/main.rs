@@ -234,6 +234,8 @@ enum TaskAction {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report this executable's compiled features, profile and source identity.
+    BuildInfo,
     /// Run a BRO-owned native coding task through the Thread server.
     Task {
         #[command(subcommand)]
@@ -2116,6 +2118,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         return bitrouter::onboarding::entry(output).await;
     };
 
+    if matches!(&command, Command::BuildInfo)
+        && cli.context.as_deref().is_some_and(|name| name != "local")
+    {
+        return Err(bitrouter::gateway::error::BitrouterError::bad_request(
+            "build-info describes the local executable; use remote status for daemon identity",
+        )
+        .into());
+    }
     let remote_context = if matches!(&command, Command::Context { .. }) {
         if cli.context.as_deref().is_some_and(|name| name != "local") {
             return Err(
@@ -2137,6 +2147,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     validate_remote_invocation(&command, remote_context.is_some())?;
 
     match command {
+        Command::BuildInfo => {
+            output.emit(&bitrouter::artifact::current())?;
+            Ok(())
+        }
         #[cfg(not(feature = "harness"))]
         Command::Run { .. }
         | Command::Spawn { .. }
@@ -2760,7 +2774,17 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 restart: restart_after,
                 yes,
             };
+            // Preserve the installation pathname before its inode is replaced.
+            // Linux current_exe then refers to the old, deleted executable:
+            // https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html
+            let candidate = std::env::current_exe()?.canonicalize()?;
             let mut outcome = bitrouter::update::run(opts, &socket).await?;
+            if outcome.report.status == "updated" {
+                let verification = read_candidate_artifact(&candidate)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                outcome.record_target_verification(verification);
+            }
             if outcome.restart_needed {
                 let before_pid = match daemon::send_command(&socket, &DaemonCommand::Status).await {
                     Ok(DaemonResponse::Status { pid, .. }) => Some(pid),
@@ -2769,8 +2793,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 // The binary on disk now contains the new migrator. Run its
                 // harness-independent handoff path so the old in-memory
                 // binary cannot preflight with a stale migration list.
-                let candidate = std::env::current_exe()?;
-                let mut handoff = tokio::process::Command::new(candidate);
+                let mut handoff = tokio::process::Command::new(&candidate);
                 handoff
                     .args(["--json", "__daemon-handoff", "--socket"])
                     .arg(&socket);
@@ -2783,11 +2806,12 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                         let hello =
                             daemon::send_command(&socket, &DaemonCommand::HandoffHello).await;
                         let matches_target = matches!(hello,
-                            Ok(DaemonResponse::HandoffHello { ref version, protocol: 1, .. })
-                                if Some(version.as_str()) == outcome.report.target_version.as_deref());
+                            Ok(DaemonResponse::HandoffHello { ref version, protocol: bitrouter::upgrade::HANDOFF_PROTOCOL, ref artifact, .. })
+                                if Some(version.as_str()) == outcome.report.target_version.as_deref()
+                                    && artifact.is_some() && artifact == &outcome.report.target_artifact);
                         (
                             matches_target,
-                            "replacement daemon version was not verified".to_string(),
+                            "replacement daemon artifact was not verified".to_string(),
                         )
                     }
                     Ok(result) => {
@@ -2846,6 +2870,20 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn read_candidate_artifact(path: &Path) -> Result<bitrouter_ai::artifact::ArtifactIdentity> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new(path)
+            .args(["--json", "build-info"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("replacement build-info timed out")??;
+    anyhow::ensure!(output.status.success(), "replacement build-info failed");
+    serde_json::from_slice(&output.stdout).context("decoding replacement build-info")
 }
 
 #[cfg(all(feature = "core", feature = "harness"))]
@@ -4178,7 +4216,34 @@ async fn restart(
 ) -> Result<DaemonActionReport> {
     bitrouter::host::validate_startup_features()?;
     bitrouter::paths::ensure_home_directory(source.home())?;
-    let _lock = bitrouter::upgrade::lock(source).await?;
+    let restart_lock = bitrouter::upgrade::prepare_restart(source, socket, log_path).await?;
+    let Some(_lock) = restart_lock else {
+        let replacement = bitrouter::daemon_locator::locate_source(source)
+            .await?
+            .context("replacement daemon locator disappeared after restart")?;
+        let DaemonResponse::Status {
+            pid,
+            listen,
+            models,
+            artifact: Some(artifact),
+            ..
+        } = daemon::send_command(replacement.socket(), &DaemonCommand::Status).await?
+        else {
+            anyhow::bail!("replacement daemon status was not verified");
+        };
+        anyhow::ensure!(
+            artifact == bitrouter::artifact::current() && pid == replacement.pid(),
+            "replacement daemon artifact changed after restart"
+        );
+        return Ok(DaemonActionReport::started(
+            "restart",
+            "started",
+            pid,
+            listen,
+            models,
+            log_path.display().to_string(),
+        ));
+    };
     if daemon::endpoint_in_use(socket) {
         let cfg = bitrouter::paths::load_config(source).await?;
         if cfg.database.url.starts_with("sqlite:") && !cfg.database.url.contains(":memory:") {
@@ -7297,6 +7362,7 @@ mod tests {
                     Ok(DaemonResponse::Status {
                         pid: 4_249,
                         daemon_version: None,
+                        artifact: None,
                         handoff_protocol: None,
                         handoff_build_id: None,
                         handoff_activity: None,
@@ -7341,6 +7407,7 @@ mod tests {
                     Ok(DaemonResponse::Status {
                         pid: 4_250,
                         daemon_version: None,
+                        artifact: None,
                         handoff_protocol: None,
                         handoff_build_id: None,
                         handoff_activity: None,
@@ -7376,6 +7443,7 @@ mod tests {
                 Ok(DaemonResponse::Status {
                     pid: 0,
                     daemon_version: None,
+                    artifact: None,
                     handoff_protocol: None,
                     handoff_build_id: None,
                     handoff_activity: None,

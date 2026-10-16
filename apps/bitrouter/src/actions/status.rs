@@ -19,6 +19,7 @@ pub(crate) trait StatusReportRuntime: Sized {
         build_id: Option<String>,
         activity: Option<bitrouter_ai::control::status::HandoffActivity>,
         cli_owned: Option<bool>,
+        artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
     ) -> Self;
 }
 
@@ -30,12 +31,24 @@ impl StatusReportRuntime for StatusReport {
         build_id: Option<String>,
         activity: Option<bitrouter_ai::control::status::HandoffActivity>,
         cli_owned: Option<bool>,
+        artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
     ) -> Self {
         self.installed_version = Some(crate::VERSION.to_string());
+        let installed = crate::artifact::current();
         self.compatibility = if !self.running {
             None
-        } else if protocol != Some(1) || daemon_version.is_none() || build_id.is_none() {
+        } else if protocol != Some(crate::upgrade::HANDOFF_PROTOCOL)
+            || !artifact.as_ref().is_some_and(|artifact| {
+                Some(artifact.version.as_str()) == daemon_version.as_deref()
+                    && Some(artifact.handoff_build_id.as_str()) == build_id.as_deref()
+            })
+        {
             Some("legacy_unknown".to_string())
+        } else if !artifact
+            .as_ref()
+            .is_some_and(|resident| crate::upgrade::same_capabilities(&installed, resident))
+        {
+            Some("profile_mismatch".to_string())
         } else if daemon_version.as_deref() == Some(crate::VERSION)
             && build_id.as_deref() == Some(crate::HANDOFF_BUILD_ID)
         {
@@ -60,6 +73,8 @@ impl StatusReportRuntime for StatusReport {
         self.handoff_build_id = build_id;
         self.handoff_activity = activity;
         self.daemon_cli_owned = cli_owned;
+        self.installed_artifact = Some(installed);
+        self.daemon_artifact = artifact;
         self
     }
 }
@@ -129,6 +144,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
         Ok(DaemonResponse::Status {
             pid,
             daemon_version,
+            artifact,
             handoff_protocol,
             handoff_build_id,
             handoff_activity,
@@ -156,6 +172,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             handoff_build_id,
             handoff_activity,
             cli_owned,
+            artifact,
         )),
         Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
         Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
@@ -176,7 +193,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             Ok(StatusReport::stopped(socket.display().to_string(), spend)
                 .with_router_views(saved_routers, None, None)
                 .with_config_state(config_state)
-                .with_local_versions(None, None, None, None, None))
+                .with_local_versions(None, None, None, None, None, None))
         }
         Err(e) => Err(e),
     }
@@ -252,30 +269,55 @@ mod tests {
                 None,
             )
         };
-        let legacy = base().with_local_versions(None, None, None, None, None);
+        let legacy = base().with_local_versions(None, None, None, None, None, None);
         assert_eq!(legacy.compatibility.as_deref(), Some("legacy_unknown"));
         let matching = base().with_local_versions(
             Some(crate::VERSION.into()),
-            Some(1),
+            Some(crate::upgrade::HANDOFF_PROTOCOL),
             Some(crate::HANDOFF_BUILD_ID.into()),
             None,
             Some(true),
+            Some(crate::artifact::current()),
         );
         assert_eq!(matching.compatibility.as_deref(), Some("compatible"));
+        let mut different = crate::artifact::current();
+        different.features.push("future-capability".into());
+        different.features.sort();
+        different.profile = bitrouter_ai::artifact::DistributionProfile::Custom;
+        let mismatch = base().with_local_versions(
+            Some(crate::VERSION.into()),
+            Some(crate::upgrade::HANDOFF_PROTOCOL),
+            Some(crate::HANDOFF_BUILD_ID.into()),
+            None,
+            Some(true),
+            Some(different.clone()),
+        );
+        assert!(mismatch.running);
+        assert_eq!(mismatch.compatibility.as_deref(), Some("profile_mismatch"));
+        assert_eq!(mismatch.daemon_artifact, Some(different));
+        assert_eq!(
+            mismatch.installed_artifact,
+            Some(crate::artifact::current())
+        );
+        let mut earlier = crate::artifact::current();
+        earlier.version = "1.0.0-alpha.1".into();
+        earlier.handoff_build_id = "another-build".into();
         let older = base().with_local_versions(
             Some("1.0.0-alpha.1".into()),
-            Some(1),
+            Some(crate::upgrade::HANDOFF_PROTOCOL),
             Some("another-build".into()),
             None,
             Some(true),
+            Some(earlier.clone()),
         );
         assert_eq!(older.compatibility.as_deref(), Some("handoff_required"));
         let external = base().with_local_versions(
             Some("1.0.0-alpha.1".into()),
-            Some(1),
+            Some(crate::upgrade::HANDOFF_PROTOCOL),
             Some("another-build".into()),
             None,
             Some(false),
+            Some(earlier),
         );
         assert_eq!(
             external.compatibility.as_deref(),

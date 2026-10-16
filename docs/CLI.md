@@ -28,6 +28,16 @@ replay and pruning remain available without the learning runtime.
 
 `bro <subcommand> [flags]`
 
+## Executable identity
+
+`bro build-info` reports the local executable's version, source revision (or
+`null` when unavailable), target platform, sorted effective features, distribution
+profile and handoff fingerprint. It reads no configuration or service storage.
+Use `--human` for a text view. The profile is `gateway` for no optional features,
+`full` for the manifest's default capability set, and `custom` for other sets.
+Aliases and transitive features are normalized at build time; `--all-features`
+is a custom selection, not the official full profile.
+
 ## Output format
 
 Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags:
@@ -448,12 +458,27 @@ Stops the running daemon (waiting up to 30s for in-flight requests to drain), th
 For a file SQLite database, restart first validates migration lineage and runs
 pending migrations on a private snapshot. It retains a recovery backup before
 stopping the daemon. The explicit restart may interrupt active agent runs.
+When both executables report different compiled distributions, restart instead
+requires verified launcher ownership and the atomic idle handoff gate before
+stopping anything. Unsupported configuration, active work or unknown idleness
+leaves the resident unchanged. The same-profile explicit restart retains its
+existing interruption behavior.
+
+A profile transition can also apply a saved control-socket change. Preflight
+checks the candidate endpoint before stopping the resident, and readiness,
+artifact identity and locator verification use that new endpoint.
 
 ### Local daemon after an update
 
 `bro status` reports the installed and running daemon versions when the daemon
 supports that metadata. Its JSON also includes `compatibility`, launcher
 ownership, and observed active-work counts when the daemon can report them.
+`installed_artifact` and `daemon_artifact` identify the corresponding compiled
+distributions. Missing legacy metadata remains unknown. A `profile_mismatch`
+allows common inspection but prevents automatic replacement by a different
+feature set or target; use a matching executable for execution or request an
+explicit profile transition. Control HTTP capabilities also report the server's
+artifact separately from the caller's authorized actions.
 These counts are a passive snapshot; the daemon checks them again behind its
 drain gate before stopping. A new `bro` probes the local daemon before supervised
 session commands. When the daemon has the handoff protocol, is idle, and its
@@ -468,6 +493,10 @@ The standalone BRO runtime holds a daemon admission for its endpoint lifetime.
 Until native requests, queue runners and recovery participate in an atomic
 handoff, even an idle BRO daemon defers automatic replacement. Finish its work
 and use the explicit `bro restart` when changing binaries.
+That exception applies to the same compiled distribution. A cross-profile
+restart still requires atomic idle evidence and is refused by the native
+lifetime guard; plan an explicit stop after finishing work before starting the
+other profile. No command silently removes that guard to change profiles.
 
 `bro update` attempts the same safe handoff after a self-managed installation.
 Package-manager installs still delegate the binary update; the next

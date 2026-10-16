@@ -50,6 +50,10 @@ pub struct CapabilitiesReport {
     pub protocol: String,
     pub protocol_version: u32,
     pub server_version: String,
+    /// Compiled server distribution, independent of this caller's permissions.
+    /// Missing on older peers; absence is not evidence of a gateway profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<crate::artifact::ArtifactIdentity>,
     pub actions: Vec<String>,
     #[serde(default)]
     pub action_descriptors: std::collections::BTreeMap<String, ActionDescriptor>,

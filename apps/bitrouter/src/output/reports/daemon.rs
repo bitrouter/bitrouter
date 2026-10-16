@@ -136,6 +136,13 @@ impl CliReport for StatusReport {
         if let Some(version) = &self.installed_version {
             h.field("installed version", version)?;
         }
+        if let Some(artifact) = &self.installed_artifact {
+            h.field("installed profile", artifact.profile.as_str())?;
+        }
+        if let Some(artifact) = &self.daemon_artifact {
+            h.field("daemon profile", artifact.profile.as_str())?;
+            h.field("daemon features", artifact.features.join(", "))?;
+        }
         if self.socket.is_some() {
             h.field(
                 "daemon version",
@@ -180,6 +187,7 @@ impl CliReport for StatusReport {
                 "externally_managed" => h.note("Restart this daemon with its service manager after active work finishes.")?,
                 "handoff_required" => h.note("The next supervised command attempts a safe handoff if idle and the database preflight passes.")?,
                 "daemon_newer" => h.note("Install a matching or newer bro binary before using this daemon.")?,
+                "profile_mismatch" => h.note("Common inspection remains available. Use the matching binary for execution, or explicitly restart with the intended profile after its work finishes.")?,
                 _ => {}
             }
         }

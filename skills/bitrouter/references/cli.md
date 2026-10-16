@@ -1,5 +1,17 @@
 # CLI reference
 
+`bro build-info` reports the installed executable's compiled profile, effective
+features, source revision, target and handoff fingerprint without opening config
+or service state. `full` means the default capability set, `gateway` means no
+optional features, and other combinations are `custom`. Compare it with
+`bro status`'s `daemon_artifact`; an absent artifact is unknown. Common inspection
+works across profiles, but execution never automatically replaces a daemon with
+a different feature set. An explicit cross-profile restart requires candidate
+preflight, launcher ownership and proven idleness; a native core+harness daemon
+retains its lifetime handoff blocker. Finish its work before a planned stop and
+start with the other profile. See the updating reference for profile-preserving
+installation instructions.
+
 BitRouter's terminal views require `tui`, which includes `harness` but does not
 enable `core`. Without TUI, `code`, the `tui` alias, interactive `chat`, the
 agent deck/attach view and the onboarding wizard report the missing feature.

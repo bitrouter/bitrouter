@@ -144,9 +144,15 @@ pub struct StatusReport {
     /// Version of this CLI, only for local status queries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_version: Option<String>,
+    /// Compiled identity of the local CLI; absent for an unknown client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_artifact: Option<crate::artifact::ArtifactIdentity>,
     /// Version reported by the local daemon, if supported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_version: Option<String>,
+    /// Compiled identity reported by the daemon, never inferred from its version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_artifact: Option<crate::artifact::ArtifactIdentity>,
     /// Safe handoff protocol advertised by the local daemon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff_protocol: Option<u32>,
@@ -160,7 +166,7 @@ pub struct StatusReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_cli_owned: Option<bool>,
     /// `compatible`, `handoff_required`, `legacy_unknown`,
-    /// `externally_managed`, or `daemon_newer`.
+    /// `externally_managed`, `profile_mismatch`, or `daemon_newer`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compatibility: Option<String>,
 }
@@ -198,7 +204,9 @@ impl StatusReport {
             router_restart_required: None,
             config_state: None,
             installed_version: None,
+            installed_artifact: None,
             daemon_version: None,
+            daemon_artifact: None,
             handoff_protocol: None,
             handoff_build_id: None,
             handoff_activity: None,
@@ -229,7 +237,9 @@ impl StatusReport {
             router_restart_required: None,
             config_state: None,
             installed_version: None,
+            installed_artifact: None,
             daemon_version: None,
+            daemon_artifact: None,
             handoff_protocol: None,
             handoff_build_id: None,
             handoff_activity: None,
@@ -255,7 +265,9 @@ impl StatusReport {
             router_restart_required: None,
             config_state: None,
             installed_version: None,
+            installed_artifact: None,
             daemon_version: None,
+            daemon_artifact: None,
             handoff_protocol: None,
             handoff_build_id: None,
             handoff_activity: None,

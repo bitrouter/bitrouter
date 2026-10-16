@@ -33,6 +33,7 @@ pub mod agent_sessions;
 pub mod agent_store;
 #[cfg(feature = "harness")]
 pub mod agents;
+pub mod artifact;
 pub mod assemble;
 pub mod auth;
 #[cfg(feature = "harness")]

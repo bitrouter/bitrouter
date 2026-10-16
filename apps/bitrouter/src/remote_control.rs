@@ -68,6 +68,7 @@ fn current_capabilities(state: &ControlState, caller: &ControlCaller) -> Capabil
         })
         .collect::<Vec<_>>();
     CapabilitiesReport {
+        artifact: Some(crate::artifact::current()),
         resources: inventory::RESOURCES
             .iter()
             .filter(|row| {

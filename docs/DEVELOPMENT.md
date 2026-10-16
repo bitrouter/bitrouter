@@ -461,6 +461,17 @@ AI observation declarations are ungated. Its pure conformance helpers use the
 default-off `testing` feature. The [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
 defines the final feature graph and isolated validation matrix.
 
+The application build script derives one normalized artifact identity from its
+manifest and Cargo's effective features. `bro build-info`, local daemon status
+and HTTP control capabilities expose that identity using AI data contracts.
+Build-time revision lookup prefers an explicit release revision, then packaged
+VCS metadata, then the enclosing tracked checkout; unknown remains `null`.
+The SDK carries these values without discovering a client-local installation.
+Handoff protocol 2 binds this identity to the daemon version/build fingerprint;
+automatic replacement requires the same distribution selection. Explicit profile
+transitions use the existing ownership, idle and SQLite preflight checks. Package
+artifacts and cross-profile execution evidence remain separate delivery gates.
+
 ### Application telemetry feature flags
 
 | Feature | Purpose |

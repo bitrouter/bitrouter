@@ -20,6 +20,31 @@ fn command(directory: &Path) -> tokio::process::Command {
 }
 
 #[tokio::test]
+async fn build_info_reports_the_executable_without_opening_configuration() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let config = directory.path().join("bitrouter.yaml");
+    let bytes = b"invalid: [must not be parsed";
+    std::fs::write(&config, bytes)?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        command(directory.path()).arg("build-info").output(),
+    )
+    .await??;
+    ensure!(
+        output.status.success(),
+        "build-info failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifact: bitrouter_ai::artifact::ArtifactIdentity =
+        serde_json::from_slice(&output.stdout)?;
+    ensure!(artifact == bitrouter::artifact::current());
+    ensure!(!artifact.target.is_empty() && !artifact.handoff_build_id.is_empty());
+    ensure!(std::fs::read(&config)? == bytes);
+    ensure!(std::fs::read_dir(directory.path())?.count() == 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn offline_skills_commands_preserve_valid_and_invalid_entries() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let created = tokio::time::timeout(

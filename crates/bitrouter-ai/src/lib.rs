@@ -18,6 +18,7 @@ macro_rules! redacted_contract_debug {
     )+};
 }
 
+pub mod artifact;
 pub mod catalog;
 pub mod control;
 pub mod conversion;

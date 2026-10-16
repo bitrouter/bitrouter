@@ -512,6 +512,7 @@ mod tests {
         DaemonResponse::Status {
             pid,
             daemon_version: None,
+            artifact: None,
             handoff_protocol: None,
             handoff_build_id: None,
             handoff_activity: None,

@@ -301,6 +301,8 @@ pub enum DaemonResponse {
         instance_id: String,
         build_id: String,
         cli_owned: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
     },
     HandoffReady {
         token: String,
@@ -315,6 +317,9 @@ pub enum DaemonResponse {
         /// Binary version. Missing on legacy daemons.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         daemon_version: Option<String>,
+        /// Compiled artifact evidence; absent for legacy daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
         /// Handoff protocol; missing means idle cannot be proven.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handoff_protocol: Option<u32>,
@@ -1035,10 +1040,11 @@ async fn dispatch(
         DaemonCommand::Stop => DaemonResponse::Ok,
         DaemonCommand::HandoffHello => DaemonResponse::HandoffHello {
             version: crate::VERSION.to_string(),
-            protocol: 1,
+            protocol: crate::upgrade::HANDOFF_PROTOCOL,
             instance_id: services.handoff_instance_id.clone(),
             build_id: crate::HANDOFF_BUILD_ID.to_string(),
             cli_owned: services.cli_owned,
+            artifact: Some(crate::artifact::current()),
         },
         DaemonCommand::HandoffPrepare => {
             if !services.cli_owned {
@@ -1192,7 +1198,8 @@ async fn dispatch(
             DaemonResponse::Status {
                 pid: std::process::id(),
                 daemon_version: Some(crate::VERSION.to_string()),
-                handoff_protocol: Some(1),
+                artifact: Some(crate::artifact::current()),
+                handoff_protocol: Some(crate::upgrade::HANDOFF_PROTOCOL),
                 handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
                 handoff_activity: Some(handoff_activity),
                 cli_owned: Some(services.cli_owned),
@@ -2368,7 +2375,8 @@ mod tests {
         let resp = DaemonResponse::Status {
             pid: 42,
             daemon_version: Some(crate::VERSION.to_string()),
-            handoff_protocol: Some(1),
+            artifact: Some(crate::artifact::current()),
+            handoff_protocol: Some(crate::upgrade::HANDOFF_PROTOCOL),
             handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
             handoff_activity: None,
             cli_owned: Some(true),
