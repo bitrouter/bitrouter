@@ -12,6 +12,7 @@ use bitrouter_sdk::language_model::native_work::{NativeProviderWork, NativeProvi
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) mod activity;
+mod quote_wait;
 
 pub(super) struct ModelControl {
     goals: Arc<GoalService>,
@@ -368,49 +369,12 @@ impl ModelControl {
         let provider_attempt =
             matches!(&event, Event::Begin { work } if work.kind == WorkKind::ProviderAttempt);
         let change = Change::Accounting { event };
-        let mut result = self
-            .goals
-            .workflow_change(
-                WorkflowActor {
-                    owner: "local",
-                    coordinator_id: &self.coordinator_id,
-                },
-                &self.goal.id,
-                operation,
-                requirements_revision,
-                change.clone(),
-                now().map_err(|_| unavailable())?,
-            )
+        let result = self
+            .commit_fact(operation, requirements_revision, change.clone())
             .await;
-        // Retry only this exact durable fact. The SDK does not repeat any
-        // preparation, provider call or tool effect during this confirmation.
-        // Every retry rechecks the current source/lease or replays its matching
-        // receipt, so competing updates and a lost reply cannot poison the
-        // acknowledgement before the bounded confirmation has finished.
-        for retry in 0..3 {
-            if !matches!(
-                &result,
-                Err(bitrouter_orchestrator::goal::GoalError::Conflict
-                    | bitrouter_orchestrator::goal::GoalError::Storage { .. })
-            ) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5 << retry)).await;
-            result = self
-                .goals
-                .workflow_change(
-                    WorkflowActor {
-                        owner: "local",
-                        coordinator_id: &self.coordinator_id,
-                    },
-                    &self.goal.id,
-                    operation,
-                    requirements_revision,
-                    change.clone(),
-                    now().map_err(|_| unavailable())?,
-                )
-                .await;
-        }
+        let result = self
+            .wait_for_quote(operation, requirements_revision, &change, result)
+            .await?;
         if matches!(
             &result,
             Err(bitrouter_orchestrator::goal::GoalError::BudgetExceeded { .. })
@@ -627,22 +591,35 @@ impl NativeExecutionControl for ModelControl {
         };
         let indices = (0..plan.routes.len())
             .filter(|index| {
-                goal.budget
-                    .can_reserve(
-                        goal.accounting.estimated_model_tokens_micro_usd,
-                        reservations.get(*index).and_then(Option::as_ref),
-                    )
-                    .is_ok()
+                let quote = reservations.get(*index).and_then(Option::as_ref);
+                if self.worker.is_some() {
+                    bitrouter_orchestrator::goal::budget::waiting_on_workers(&goal, quote).is_ok()
+                } else {
+                    goal.budget
+                        .can_reserve(goal.accounting.estimated_model_tokens_micro_usd, quote)
+                        .is_ok()
+                }
             })
             .map(u32::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|_| unavailable())?;
-        self.observe(
-            &key,
-            serde_json::json!({"accepted_routes":indices,"token_reservations":reservations}),
-            None,
-        )
-        .await?;
+        // Replayed admission retains its original routes and quotes even if
+        // another worker has since settled or consumed budget.
+        let indices = match self.plan_outcome(&key).await? {
+            Some(saved) => {
+                if saved["token_reservations"]
+                    != serde_json::to_value(&reservations).map_err(|_| unavailable())?
+                {
+                    return Err(diagnostic("frozen plan reservation changed on replay"));
+                }
+                serde_json::from_value::<Vec<u32>>(saved["accepted_routes"].clone())
+                    .map_err(|_| unavailable())?
+            }
+            None => {
+                self.observe(&key, serde_json::json!({"accepted_routes":indices,"token_reservations":reservations}), None).await?;
+                indices
+            }
+        };
         if indices.is_empty() {
             if self.worker.is_some() {
                 return Err(diagnostic(
@@ -677,14 +654,39 @@ impl NativeExecutionControl for ModelControl {
         attempt_index: u32,
         reservation: Option<&NativeTokenReservation>,
     ) -> bitrouter_sdk::Result<()> {
-        let plans = self.plans.lock().await;
-        let plan = plans.get(request_id).ok_or_else(unavailable)?;
+        let plan = self
+            .plans
+            .lock()
+            .await
+            .get(request_id)
+            .cloned()
+            .ok_or_else(unavailable)?;
         let route = plan
             .routes
             .get(attempt_index as usize)
             .ok_or_else(unavailable)?;
+        let saved = self
+            .plan_outcome(&format!("{request_id}/plan/{}", plan_digest(&plan)?))
+            .await?
+            .ok_or_else(unavailable)?;
+        let frozen_quote = saved["token_reservations"]
+            .get(attempt_index as usize)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if frozen_quote != serde_json::to_value(reservation).map_err(|_| unavailable())? {
+            return Err(diagnostic("attempt quote differs from its frozen plan"));
+        }
         self.begin_with_reservation(WorkKind::ProviderAttempt, &format!("{request_id}/attempt/{attempt_index}"), Some(request_id), serde_json::json!({"request_id":request_id,"attempt_index":attempt_index,"route":route}), reservation.cloned()).await
     }
+    async fn admission_aborted(&self, request_id: &str, attempt_index: u32) {
+        if let Err(error) = self.abort_admission(request_id, attempt_index).await {
+            self.fail_ack(&format!(
+                "undispatched admission could not be reconciled: {error}"
+            ))
+            .await;
+        }
+    }
+
     async fn before_provider_work(&self, work: &NativeProviderWork) -> bitrouter_sdk::Result<()> {
         self.begin(
             WorkKind::ProviderIntegration,

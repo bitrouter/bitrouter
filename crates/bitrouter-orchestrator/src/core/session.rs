@@ -4703,6 +4703,12 @@ impl NativeExecutionControl for StepControl {
             .map_err(sdk_error)
     }
 
+    async fn admission_aborted(&self, request_id: &str, index: u32) {
+        if let Some(host) = &self.host {
+            host.admission_aborted(request_id, index).await;
+        }
+    }
+
     async fn before_provider_work(
         &self,
         work: &bitrouter_sdk::language_model::native_work::NativeProviderWork,

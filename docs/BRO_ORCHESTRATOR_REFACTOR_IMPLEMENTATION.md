@@ -316,7 +316,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
 | --- | --- |
 | S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
 | S1 | In progress: owner/input association, model/worker Turn links, stable binding operations and original-key lookup implemented. New ACP dispatches with no accepted Thread stay on common admission; original supervisor starts keep reconciliation priority. Managed refusals now reconcile absence under the shared admission lock, preserve intent, and permit bounded new preparation. Full interruption/compatibility proof remains. |
-| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and bounded capacity waiting are connected. Current native Goal work can resume a safe accepted checkpoint through existing recovery without replacing its Thread/Turn or resetting accounting. Controlled SQLite images qualify this bridge; abrupt-owner takeover is blocked. Worker quote waiting, remaining recovery coverage and full wait/effect projection remain pending. |
+| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and bounded capacity waiting are connected. Current native Goal work can resume a safe accepted checkpoint through existing recovery without replacing its Thread/Turn or resetting accounting. Controlled SQLite images qualify this bridge; abrupt-owner takeover is blocked. Native workers now persist cancellable quote waits, retain frozen admission and block settled unknown-cost holds. Remaining recovery coverage and final evidence qualification remain pending. |
 | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
 | S4 | In progress: generation/native SDK reports, prepared-input/router facts and actual content receipt intervals link to original work/Thread/Turn sources. ACP public session/route limits remain explicit. Complete historical qualification and final evidence/UI closure remain. |
 | S5 | In progress: native and managed ACP dependencies/review consume common Turn facts. The native three-node fixture proves actual overlap, isolated conflicting local writes and checked dependency consumption through verified completion. Full coordinated/recovery/live closure remains. |
@@ -1186,3 +1186,154 @@ two fixture-setup/assertion failures remain archived, including three independen
 verified SQLite/filesystem fixture images. Raw logs, exact source tars and the
 checksum index remain outside the feature PR in `NATIVE_COLD_RECOVERY_INDEX.md`.
 The whole refactor, live gates and final source/hosted-CI verification remain open.
+
+
+## Native worker token-reservation waiting
+
+Current native worker provider admission distinguishes a releasable reservation
+held by another current worker from spent budget and settled unknown-cost holds.
+Only active provider-attempt reservations are treated as potential releases;
+unknown outcomes, stale sources and typed-decision holds do not grant this wait.
+The same accounting action/key, route and original token quote are retried, with
+fresh source/lease/budget checks. This is admission waiting, not another business
+execution attempt, repricing or permission. Shared commits retain one bounded
+confirmation policy for conflicts/lost replies.
+
+ResourceWait begin/end facts use existing Goal accounting/history. The read-only
+Workflow displays only a wait belonging to the current worker source. Paused or
+superseded sources do not continue to appear as waiting. No new store, queue or
+scheduler is introduced. Goal IPC is now **8**, and writer fence **000033** keeps
+old binaries from dropping unfamiliar wait facts; old history is retained and
+older outboxes remain rejected without replay. Native/HTTP/runtime formats are
+unchanged.
+
+The SDK races attempt admission against its existing cancellation signal. Before
+polling a provider executor, refusal/cancellation invokes the exact admission
+abort callback. Original observed reservations can settle known no-dispatch;
+missing/unconfirmed receipts remain conservative. This does not prove an earlier
+provider request, an external harness or all external fees cost zero. Native
+evidence labels aborts/waits separately from actual SDK provider outcomes.
+
+The first failing regression (token-wait-red1) and the initial focused passing
+run (green2: accounting/old-writer and SDK quote/cancel matrices, strict Clippy,
+fmt) are independently retained with source hashes. Later source adds frozen
+quote/replay checks, pause/UI coverage and stricter evidence projection; final
+qualification of that source is pending. No real provider or harness ability
+is established by these domain/SDK fixtures. S0–S6 and A01–A22 remain active.
+
+The final3 full-workspace run retained **4,749 passes, one failure, 24 skipped,
+eight slow and no LEAK markers** without source drift. Strict Clippy/fmt/rustdoc
+jobs scheduled after that run were not executed. The failing unknown-effect
+worker-switch fixture recorded an isolation-preparation timeout/retry; RIGHT's
+actual start marker came 30.408 seconds after LEFT's completed-write marker,
+straddling the peer's 30-second release-phase timer. Its complete 116-file
+filesystem/database image was independently extracted and hash/mode checked.
+The preserved failure is not called a passing whole-workspace qualification.
+
+The Rust peer now synchronizes LEFT with RIGHT startup in the missing-tool-result
+scenario before starting the separate release-phase timer. Cancellation releases
+that parent-owned fixture barrier. The 30-second release timer, 45-second state
+wait, product limits, assertions and unknown-effect safeguards are retained.
+Fresh same-source checks are pending; no blanket cause/fix claim is made for
+older nextest output-handle reports or external harness behavior.
+
+Final4 preserves five passing worker-switch stress iterations and a passing
+worker-switch case in the full run. The full run has **4,749 passes, one failure,
+24 skipped, six slow and no LEAK markers** with unchanged source. The failure
+is a different pre-existing PTY evolution case: its stub transport closed during
+ACP `initialize`, before session selection or the review/restore action. Its
+cause is unconfirmed. That fixture's normal Result-error path deleted its temp
+directory, so this run retains raw logs and reproduction source, not a recovered
+filesystem image. Later Clippy/fmt/rustdoc jobs were not executed.
+
+The specific PTY case now opts into failure/panic directory retention under the
+existing private validation setting and removes its directory on success. The
+Cargo-built PTY peer writes a PID-scoped startup/EOF/error diagnostic beside its
+owned capture file, without adding protocol stdout or changing behavior. These
+are diagnostic changes, not a claimed fix for the unexplained startup closure.
+The budget label now explicitly counts admitted generation attempts; it does
+not imply the SDK polled an executor. Further local qualification is pending.
+
+Diag5 retained 20 passing PTY startup/review iterations, strict workspace Clippy,
+fmt and six passing workspace doctests (one ignored), with no source drift or
+LEAK markers. This does not establish or fix the earlier startup closure. A
+separate controlled Rust-peer probe verifies protocol-pure initialize/EOF and a
+recorded local socket-bind error. Its first probe used an overlong macOS socket
+path (108 bytes); that probe-layout error, runner and diagnostics are retained.
+The corrected short-path probe preserves both expected process outcomes. Neither
+probe qualifies a real harness or model.
+
+The final accounting matrix additionally drops the actual waiting admission
+future and invokes the SDK abort callback with the canonical request/attempt
+key. It must close only that wait, retain the other worker's reservation and
+admit no provider attempt. A stale wait alone no longer marks a stopped source
+as currently running in the read-only projection. Qualification of this last
+source is pending.
+
+Final6 preserves five passing accounting/cancellation/evidence boundaries and a
+full run of **4,748 passes, two failures, 24 skipped, ten slow and no LEAK
+markers**, with unchanged source. Later strict checks did not run. One failure
+was the stale PTY expectation after the budget copy changed to “Generation
+attempts admitted”; its expected label is now synchronized. The other assumed
+RIGHT had exactly one historical attempt. Its preserved supervisor facts show a
+confirmed failure before session opening, followed by one actual RIGHT prompt;
+LEFT ran two business prompts and JOIN one. The 349-file panic-retained image
+was independently extracted and hash/mode verified. Its in-memory Goal/Execution
+database was not captured after the assertion unwound.
+
+The repair check now compares against the actually running snapshot: one new
+LEFT repair, the failed LEFT's exact evidence, and RIGHT's unchanged accepted
+execution/Thread/Turn. A deliberate first-initialize failure exercises this
+combination, rather than weakening the no-work-replay condition or raising the
+three-attempt business bound. Fixture-specific macOS logs also contain AMFI
+signature warnings, including during passing executions; both current binaries
+pass strict signature verification. Those warnings alone do not establish why
+the earlier transports closed. No system security setting was changed.
+
+Final7 passes five accounting boundaries, four repair/TUI regressions and
+4,749 full-workspace tests, with one editor-input CAS conflict, 24 skipped,
+seven slow and no LEAK markers. Source stayed unchanged. Strict checks after
+the failed workspace job did not run. The 15-file editor image was separately
+extracted and hash/mode verified. Its SQLite history contains repeated elapsed
+observations after the time limit was already recorded; the rejected request
+body is unavailable, so these records do not identify its exact conflicting
+update. Red8 deterministically reproduces that redundant write (revision 3 to 4)
+with a logical past checkpoint and real SQLite; its three-file image is retained.
+
+The control path now avoids repeated elapsed-limit observations after the
+recorded limit is exhausted. Admission still computes actual age from creation;
+a raised limit and explicit resume do not reset that clock. This reduces
+unnecessary revision contention without weakening CAS or automatically retrying
+a user mutation. Qualification of the changed production source is pending.
+
+Green9 passes 87 Goal/component boundaries, 735 SDK unit tests and all four
+Goal PTY tests. Its first editor stress iteration still hits a definite input
+CAS rejection during initialization; the 17-file image is separately verified.
+Thus removing elapsed churn does not eliminate all concurrent version changes.
+The editor regression now models one explicit user Enter after a displayed
+rejection and a matching refreshed Goal snapshot. Within the original deadline
+it must retain the draft, find no saved input before that retry, and ultimately
+find exactly one Input operation with the original exact bytes. Unknown
+acceptance never triggers that retry. Production CAS and outbox behavior are
+unchanged; current-source qualification remains pending.
+
+Green10 passes all four Goal PTY cases and ten editor stress iterations, strict
+workspace/all-target/all-feature Clippy, fmt and six doctests (one ignored).
+There is no source drift or LEAK marker. Between green9 and green10, only this
+ledger and the editor test changed; the 87 Goal/component and 735 SDK results
+therefore apply to identical production source. The independent applicability
+audit verifies this boundary. This is a focused local checkpoint: final7 is
+still the latest full workspace run and includes its preserved editor failure;
+a fresh full run remains required before delivery of the completed refactor.
+
+All ten campaign source tars and the final source tar are independently
+extracted and checked under NATIVE_QUOTE_WAIT_INDEX.md. Earlier failed runs,
+verified filesystem images, protocol diagnostic probes and the wrong-path
+probe are retained outside the feature PR. The current fixture barrier waits
+for RIGHT actual startup before LEFT begins its separate release clock; parent
+deadlines, business retry bounds and no-work-replay checks are unchanged. The
+PTY test explicitly models a second user action only after a definite CAS
+rejection; unknown acceptance retains its original identity. Source comments,
+Goal IPC 8, writer fence 000033, CLI references and the 199-line shipped skill
+remain synchronized. Full S0–S6, live qualification and publication gates stay
+open, and PR #981 is not pushed by this checkpoint.

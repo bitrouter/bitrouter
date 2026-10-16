@@ -660,6 +660,9 @@ impl NativeExecutionControl for Control {
             .await?;
         self.gate().await
     }
+    async fn admission_aborted(&self, request_id: &str, index: u32) {
+        self.parent.admission_aborted(request_id, index).await;
+    }
     async fn before_provider_work(&self, work: &NativeProviderWork) -> bitrouter_sdk::Result<()> {
         self.gate().await?;
         self.parent.before_provider_work(work).await?;

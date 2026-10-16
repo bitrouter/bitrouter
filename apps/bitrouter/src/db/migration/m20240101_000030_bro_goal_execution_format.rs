@@ -72,6 +72,17 @@ mod tests {
         }
     }
 
+    struct BeforeResourceWaitMigrator;
+    #[async_trait::async_trait]
+    impl MigratorTrait for BeforeResourceWaitMigrator {
+        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+            Migrator::migrations()
+                .into_iter()
+                .take_while(|migration| migration.name() != "m20240101_000033_bro_resource_wait")
+                .collect()
+        }
+    }
+
     #[tokio::test]
     async fn legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals()
     -> anyhow::Result<()> {
@@ -135,6 +146,18 @@ mod tests {
         );
         assert!(
             crate::db::migration::m20240101_000032_bro_admission_verdict::Migration
+                .down(&SchemaManager::new(&db))
+                .await
+                .is_err()
+        );
+        assert!(
+            BeforeResourceWaitMigrator::up(&db, None)
+                .await
+                .err()
+                .is_some_and(|error| error.to_string().contains("000033_bro_resource_wait"))
+        );
+        assert!(
+            crate::db::migration::m20240101_000033_bro_resource_wait::Migration
                 .down(&SchemaManager::new(&db))
                 .await
                 .is_err()
