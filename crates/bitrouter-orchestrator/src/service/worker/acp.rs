@@ -25,6 +25,19 @@ pub struct Binding {
     pub agent_id: String,
     pub confirmed_model_route: Option<String>,
     pub capabilities: Option<serde_json::Value>,
+    /// Previous owned run of this same private session; never a new session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_from: Option<String>,
+}
+
+/// Derived only from a complete accepted journal before the first prompt intent.
+/// Loading this description does not confirm private session continuity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Continuation {
+    pub owner: Owner,
+    pub binding: Binding,
+    pub prompt: String,
+    pub accepted_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +97,11 @@ impl Action {
 pub trait Driver: Send + Sync {
     /// Start/select a session without submitting its first prompt.
     async fn start(&self, owner: &Owner, action_id: &str) -> Result<Binding, String>;
+    /// Load the exact stopped session, without submitting any prompt. Drivers
+    /// that cannot prove this capability refuse; no fallback to session/new.
+    async fn restore(&self, _: &Owner, _: &str, _: &Continuation) -> Result<Binding, String> {
+        Err("ACP same-session restoration is unsupported".into())
+    }
     async fn prompt(
         &self,
         owner: &Owner,
@@ -119,6 +137,7 @@ pub(in crate::service) struct Job {
     pub(in crate::service) source: GoalWork,
     pub(in crate::service) control: Arc<dyn WorkControl>,
     pub(in crate::service) driver: Arc<dyn Driver>,
+    pub(in crate::service) continuation: Option<Continuation>,
 }
 
 pub struct Approval {
@@ -246,9 +265,78 @@ impl ThreadService {
                 source,
                 control,
                 driver,
+                continuation: None,
             }))),
         )
         .await
+    }
+    /// Continue only an already accepted, inspected pre-prompt session. The
+    /// original durable input/key remain authoritative; no new Turn is accepted.
+    pub async fn resume_goal_acp_turn(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        source: GoalWork,
+        key: &str,
+        control: Arc<dyn WorkControl>,
+        driver: Arc<dyn Driver>,
+    ) -> Result<TurnReceipt, ServiceError> {
+        control
+            .authorize()
+            .await
+            .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
+        let view = self.load_thread(target, caller).await?;
+        if view.thread.goal_work.as_ref() != Some(&source)
+            || !matches!(view.config, crate::thread::executor::Config::Acp { .. })
+        {
+            return Err(ServiceError::new(
+                ErrorCode::Unauthorized,
+                "ACP continuation source mismatch",
+            ));
+        }
+        let original = self
+            .find_goal_worker_turn(target, caller, key)
+            .await?
+            .ok_or_else(|| {
+                ServiceError::new(ErrorCode::UnknownTurn, "original ACP action missing")
+            })?;
+        if let Some(report) = view.recovery {
+            if report
+                .turn
+                .as_ref()
+                .is_none_or(|turn| turn.turn_id != original.turn_id)
+            {
+                return Err(ServiceError::new(
+                    ErrorCode::RecoveryRequired,
+                    "original ACP checkpoint missing",
+                ));
+            }
+            self.recover_thread_with_acp(
+                target,
+                caller,
+                crate::thread::ThreadRecoveryRequest {
+                    source_server_instance_id: report.source_server_instance_id,
+                    source_cursor: report.source_cursor,
+                    idempotency_key: format!("{key}-restore-{}", report.source_cursor),
+                },
+                Some(control.clone()),
+                Some(Job {
+                    source,
+                    control,
+                    driver,
+                    continuation: None,
+                }),
+            )
+            .await?;
+        }
+        self.find_goal_worker_turn(target, caller, key)
+            .await?
+            .ok_or_else(|| {
+                ServiceError::new(
+                    ErrorCode::StorageUnavailable,
+                    "original ACP receipt disappeared",
+                )
+            })
     }
 }
 

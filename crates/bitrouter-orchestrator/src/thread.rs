@@ -162,6 +162,8 @@ pub struct ThreadRecoveryRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryTurn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_continuation: Option<crate::service::worker::acp::Continuation>,
     #[serde(default)]
     pub resources: Option<crate::harness::HarnessInventory>,
     pub turn_id: String,

@@ -29,6 +29,7 @@ impl ThreadService {
                 source,
                 control,
                 driver,
+                continuation: None,
             })),
         ))
         .await
