@@ -1,0 +1,166 @@
+{
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "b524ab8e82c8dc4a28e1ad9f07e9f2b5c06d2763",
+  "files": {
+    "UNIX_TTY_INDEX.md": {
+      "bytes": 929,
+      "sha256": "41b0346506d5977e74161c17e3ea74a3a9e347f6956c287505bec5e42da3a49c",
+      "mode": 420
+    },
+    "refactor-local-checkpoint-b3460031.bundle": {
+      "bytes": 417004,
+      "sha256": "1f8c009106dfaf058126d8a78e7f196b36a6d5e5f499b0aeab8f286fcbed12f1",
+      "mode": 420
+    },
+    "refactor-local-checkpoint-b3460031.bundle.verify.log": {
+      "bytes": 340,
+      "sha256": "80305d8a261a36e06401086ccf043dc87bf06d68b4eeeaa1796a6b1c7ee0e0f0",
+      "mode": 420
+    },
+    "unix-tty-applicability89.json": {
+      "bytes": 1019,
+      "sha256": "f8b28cfaa8116866032809a6d6279a5b3221eb59ad1cd9a45b5dacc8184494c3",
+      "mode": 420
+    },
+    "unix-tty-archive91-runner.mjs": {
+      "bytes": 5519,
+      "sha256": "c36bcb9513bff5baa94f5a825080d9215b894dd365ad8a1e3bdcf61585df9418",
+      "mode": 420
+    },
+    "unix-tty-checkpoint90-runner.mjs": {
+      "bytes": 2387,
+      "sha256": "cb98d3165c80809a72b489e87903a0979258fb9e018f2cf71edd77b1d255b73c",
+      "mode": 420
+    },
+    "unix-tty-checkpoint90.json": {
+      "bytes": 1073,
+      "sha256": "0b05ab21b26e56f6861c6b042d61aa8c1693a025e18bbe8c4ab5334c628f4081",
+      "mode": 420
+    },
+    "unix-tty-finish89-runner.mjs": {
+      "bytes": 7372,
+      "sha256": "efc4a9f480ae4eeaef01bf6e42f97ce46072d4d135637b01dca51007a62b1e09",
+      "mode": 420
+    },
+    "unix-tty-focused88-acp-features.log": {
+      "bytes": 60,
+      "sha256": "1b06c206522a9ad6653edd56b1bb9e19254f4cd592480fbc8b10cbddc2b994e9",
+      "mode": 420
+    },
+    "unix-tty-focused88-audit.json": {
+      "bytes": 90,
+      "sha256": "f5cada1dc65ab70081cfbd13ba6da93d368e31e000b5775ea642dcb3fe86842c",
+      "mode": 420
+    },
+    "unix-tty-focused88-clippy.log": {
+      "bytes": 315,
+      "sha256": "50040cf7cfea1e718769f4d35ec55291c9c62df27eaa96d843e0bdc287dc488e",
+      "mode": 420
+    },
+    "unix-tty-focused88-config.json": {
+      "bytes": 2202,
+      "sha256": "e8c2715303202cf632173622c67a1604fba6040542debaa9297d1804ea42ed15",
+      "mode": 420
+    },
+    "unix-tty-focused88-doctest.log": {
+      "bytes": 2054,
+      "sha256": "6f21cad621624addaa74637cc28aba18476de316d4ea4316c923ec35f2dc874e",
+      "mode": 420
+    },
+    "unix-tty-focused88-files.tar.gz": {
+      "bytes": 2357,
+      "sha256": "5796c370e5c9b3804d83c2fb349c72d80baf8a798fa86f161ed5c955768c0f00",
+      "mode": 420
+    },
+    "unix-tty-focused88-fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 420
+    },
+    "unix-tty-focused88-goal-pty.log": {
+      "bytes": 1849,
+      "sha256": "757e12ef36d3cc7f9ce61f19d2c5bc0529fe093bc473a57032e1596bff57f7fd",
+      "mode": 420
+    },
+    "unix-tty-focused88-msrv-native.log": {
+      "bytes": 60,
+      "sha256": "2447604722be766dc4e29325d52364dad83978b8633350c3ed30d280b609c7a1",
+      "mode": 420
+    },
+    "unix-tty-focused88-native-features.log": {
+      "bytes": 60,
+      "sha256": "f694a9e074374d315f58b8a63ce849858b1b8708cf56b3d194218605bd2a9d6e",
+      "mode": 420
+    },
+    "unix-tty-focused88-native-tree.log": {
+      "bytes": 9787,
+      "sha256": "c7a71886190cec61260cd4c75c3f6ddc3725e70bd3d20d88ec995fbef947e1cf",
+      "mode": 420
+    },
+    "unix-tty-focused88-registry.log": {
+      "bytes": 300,
+      "sha256": "dfed4e27037fa529257d13d933f78d919cdf2289723b90052a1c94288eafb6ba",
+      "mode": 420
+    },
+    "unix-tty-focused88-results.json": {
+      "bytes": 5415,
+      "sha256": "05d45118a268ddfb80a8b67f1e8d3e19d2fbe660b1aeac4af0c2b1dbe176afc6",
+      "mode": 420
+    },
+    "unix-tty-focused88-runner.mjs": {
+      "bytes": 4277,
+      "sha256": "5ee485524b531241cb884fb6e28e908ff851023f291d72021dac49979c637175",
+      "mode": 420
+    },
+    "unix-tty-focused88-source-archive.json": {
+      "bytes": 175,
+      "sha256": "53ad5d33f634984a06de136c4ce9b0d372075a50bb58d79065ab3db931105ac3",
+      "mode": 420
+    },
+    "unix-tty-focused88-source.json": {
+      "bytes": 161101,
+      "sha256": "fb8972699d33b8c09638780833d70c688368e980e4a9478bfe61c4e96c2ee010",
+      "mode": 420
+    },
+    "unix-tty-focused88-source.patch": {
+      "bytes": 1027,
+      "sha256": "3aa00effab91a189a24ddc4791f822a80dbd282a10186185387b267e3727398c",
+      "mode": 420
+    },
+    "unix-tty-git-scan91.json": {
+      "bytes": 321,
+      "sha256": "78e0e515ea1618766c5f459f796d16f1ef9c8eace2ebed8ad79e8cf59eb65833",
+      "mode": 420
+    },
+    "unix-tty-macos-tree-after87.log": {
+      "bytes": 115739,
+      "sha256": "c36fb3eb1aee15179b5d63847574d323a3e153911521a36653fbb8dbb9739349",
+      "mode": 420
+    },
+    "unix-tty-macos-tree-before87.log": {
+      "bytes": 115739,
+      "sha256": "c36fb3eb1aee15179b5d63847574d323a3e153911521a36653fbb8dbb9739349",
+      "mode": 420
+    },
+    "unix-tty-original-ci-d0da-native-goals.log": {
+      "bytes": 109582,
+      "sha256": "926665458c261a725063d6aa3297843ff0d67fcdf5ca763507527aa7237b7a19",
+      "mode": 420
+    },
+    "unix-tty-pin92-runner.mjs": {
+      "bytes": 3233,
+      "sha256": "1fcd7c7ce5d43c582baaee0d79c7afa0e8e3fac5dd28913cb8ed688060d2cc7a",
+      "mode": 420
+    },
+    "unix-tty-pr93-runner.mjs": {
+      "bytes": 6348,
+      "sha256": "5b5120060760d17fba3ffb8aab69be74961d2c72fb0b608a155ec7a1947fa90a",
+      "mode": 420
+    },
+    "unix-tty-raw-scan91.json": {
+      "bytes": 380,
+      "sha256": "da83a10af54e344eb97f8677ce377140ff5ee58d8d0835cc535106f967b842c6",
+      "mode": 420
+    }
+  }
+}

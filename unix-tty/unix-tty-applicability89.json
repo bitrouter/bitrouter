@@ -1,0 +1,19 @@
+{
+  "run": "unix-tty-focused88",
+  "evaluatedHead": "d0da0ac37fb4cb4005ee284fdb6abd1faf0fddb1",
+  "changesSinceFinal77": [
+    "apps/bitrouter/Cargo.toml"
+  ],
+  "macosFeatureTreeSha256": "c36fb3eb1aee15179b5d63847574d323a3e153911521a36653fbb8dbb9739349",
+  "postTestMetadataDelta": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json"
+  ],
+  "finalFiles": {
+    "apps/bitrouter/Cargo.toml": "1e072b752ca732dd8cecac98c6e3023917ec65616e6539147c5c7667af19b1d6",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "b05ae4a1a477f6d552b82a9d74b27c138de654115500cd8c953348c88b65ed92",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md": "e11d96ffa8d4828753f4ae0268fae9f91377c9be3589223d3ac0bf546570069f",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json": "82a41dd7ff4cc8659c1d610d88820fa58114a92edf819b4d654b9fc2bcbaae4a"
+  }
+}

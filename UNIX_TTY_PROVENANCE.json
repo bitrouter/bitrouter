@@ -1,0 +1,10 @@
+{
+  "createdAt": "2026-10-16T23:21:02.355Z",
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "b524ab8e82c8dc4a28e1ad9f07e9f2b5c06d2763",
+  "featureSource": "b3460031343400c465211ec1b17c3e933e8209b1",
+  "finalLocalRun": "unix-tty-focused88",
+  "originalAddedFiles": 32,
+  "originalAddedBytes": 978114,
+  "scope": "Manifest-only Unix input-source selection. Focused88 is not a fresh full4757 run; full77 Rust/test bytes and macOS feature tree remain unchanged. Original d0da Linux212 result retained; next exact-head hosted result separately qualifies Linux. Prior raw evidence is unchanged; original failures and source applicability remain retained. Actual vendor/provider live gate is unpassed; expanded final hostedCI follows separately."
+}

@@ -1,5 +1,7 @@
 # PR #981 BRO refactor evidence
 
+Latest local source: [Unix input-source selection and verification](unix-tty/UNIX_TTY_INDEX.md), [provenance](UNIX_TTY_PROVENANCE.json), [additional original files](UNIX_TTY_PAYLOAD.json). Earlier archives stay pinned at their own commits. SHA256SUMS covers this whole tree.
+
 Latest local source: [Terminal continuation ordering and verification](terminal-continue/TERMINAL_CONTINUE_INDEX.md), [provenance](TERMINAL_CONTINUE_PROVENANCE.json), [additional original files](TERMINAL_CONTINUE_PAYLOAD.json). Earlier archives stay pinned at their own commits. SHA256SUMS covers this whole tree.
 
 Latest local source: [Linux PTY and complete integration coverage](linux-pty/LINUX_PTY_INDEX.md), [provenance](LINUX_PTY_PROVENANCE.json), [additional original files](LINUX_PTY_PAYLOAD.json). Earlier archives stay pinned at their own commits. SHA256SUMS covers this whole tree.
