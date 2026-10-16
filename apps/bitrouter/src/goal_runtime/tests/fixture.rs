@@ -115,6 +115,34 @@ impl Setup {
         );
     }
 
+    pub fn worker_alias(&mut self, id: &str) -> Result<()> {
+        let config = bitrouter_sdk::config::parse_with(&self.config_text, |_| None)?;
+        let mut agent = config
+            .agents
+            .get("goal-peer")
+            .cloned()
+            .context("fixture peer missing")?;
+        agent.name = id.into();
+        let bitrouter_sdk::config::agent::AcpTransport::Stdio { env, .. } = &mut agent.transport;
+        env.insert("BRO_GOAL_FIXTURE_REQUIRE_HANDOFF_LEFT".into(), "1".into());
+        let (_, section) = self
+            .config_text
+            .split_once("\nagents:\n")
+            .context("fixture agent block missing")?;
+        anyhow::ensure!(
+            section
+                .lines()
+                .all(|line| line.is_empty() || line.starts_with("  ")),
+            "worker alias requires the final fixture agent block"
+        );
+        self.config_text.push_str(&format!(
+            "  {}: {}\n",
+            serde_json::to_string(id)?,
+            serde_json::to_string(&agent)?
+        ));
+        Ok(())
+    }
+
     pub fn review_api(&mut self, uri: &str) {
         self.config_text = self.config_text.replace(
             &format!("api_base: {}/v1", self.backend.uri()),

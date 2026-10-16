@@ -102,8 +102,12 @@ workspace grants, permissions, verification and checkpoints. The app's built-in
 worker dispatch links real Thread/Turn identities and original-key lookup is
 non-executing. Native Goal permissions reuse shared approval transactions;
 stopped local-effect reconciliation reads the original Thread history. Active
-cold recovery, worker quote waiting and managed ACP migration remain incomplete.
-Generation and native worker capacity waits share one implementation, the same admission authority and stable key,
+cold recovery and worker quote waiting remain incomplete. Managed ACP uses
+`service/worker/acp.rs` with actual session/permission/stop observations; the
+supervisor does not own a second managed lifecycle. Requested worker changes
+retain old execution sources and transfer reconciled local results before a new
+Thread starts. Full session recovery and interruption qualification are pending.
+Generation, native and managed ACP capacity waits share one implementation, the same admission authority and stable key,
 with live source checks and a recorded-duration bound; see the
 [implementation ledger](../../docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md).
 

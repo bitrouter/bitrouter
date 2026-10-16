@@ -146,6 +146,7 @@ async fn prepared_native_attempt(original: &Coordinator, home: &Path) -> Result<
         Change::PrepareResources {
             execution_id: "original-work".into(),
             resources: Prepared {
+                worker_handoff: None,
                 selection: Default::default(),
                 prompt,
                 materials: vec![],

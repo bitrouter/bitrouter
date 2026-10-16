@@ -458,15 +458,23 @@ It does not undo committed requirements, cancel worker/tool effects, resume
 work or increase a cap; other accepted/in-flight inputs remain ordered.
 Additional words, quotes and hypothetical discussion use normal understanding.
 The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 5; older outboxes are retained and rejected without replay
+Goal IPC is version 6; older outboxes are retained and rejected without replay
 or reinterpretation. Native/ACP protocol versions are separate.
-The managed Goal refactor also records database migration 000030: older app
+The managed Goal refactor records database migrations 000030/000031: older app
 versions reject that database at startup. Do not remove the version marker or
 run old and new Goal writers concurrently; it preserves existing history.
 Superseded reconciled executions without active references are archived into
 immutable Goal operation history. The current snapshot retains the archive count;
 history queries preserve full execution/source records without restarting work.
 Current-version attempt limits and cumulative budget/accounting are retained.
+
+Middle input can request a different configured ACP worker or built-in BRO
+execution for an existing task. This saves a versioned selection and invalidates
+dependent work. Old attempts retain their original requested worker and actual
+Thread/Turn/session references. New work needs the existing confirmed stop and
+effect reconciliation, and a new session has a new Thread. Unknown effects stay
+blocked; an unavailable worker or incompatible model-route control is clarified
+without dispatch. A paused Goal remains paused unless explicitly resumed.
 
 | Key in the current Goal | Effect |
 | --- | --- |
