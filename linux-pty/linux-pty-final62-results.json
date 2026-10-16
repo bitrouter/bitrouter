@@ -1,0 +1,306 @@
+{
+  "source": "linux-pty-final62-source.json",
+  "scope": "Final qualified source includes the complete Linux CI integration inventory (36/36, no dropped targets) and a portable PTY fixture stdin fix: save FD3 before the asynchronous shell list, redirect BRO from it and close the spare FD in child/parent. Bro terminal checks and test assertions/bounds are unchanged. Original newly covered Linux failure at80c0 is retained. Two outer test slots preserve internal workflow concurrency and strict reported-LEAK rejection; actual vendor/provider live gate remains unpassed.",
+  "startedAt": "2026-10-16T22:04:09.105Z",
+  "runs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "linux-pty-final62-native-features.log",
+      "startedAt": "2026-10-16T22:04:09.105Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:04:09.570Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "linux-pty-final62-acp-features.log",
+      "startedAt": "2026-10-16T22:04:09.570Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:04:09.788Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "linux-pty-final62-native-tree.log",
+      "startedAt": "2026-10-16T22:04:09.788Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:04:09.895Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "linux-pty-final62-msrv-native.log",
+      "startedAt": "2026-10-16T22:04:09.895Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:04:10.327Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "help-output-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "linux-pty-final62-help-output-1.log",
+      "startedAt": "2026-10-16T22:04:10.328Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:04:21.711Z",
+      "summaries": [
+        "     Summary [   4.111s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "help-output-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "linux-pty-final62-help-output-2.log",
+      "startedAt": "2026-10-16T22:04:21.711Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:04:26.540Z",
+      "summaries": [
+        "     Summary [   4.133s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "help-output-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "linux-pty-final62-help-output-3.log",
+      "startedAt": "2026-10-16T22:04:26.540Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:04:31.902Z",
+      "summaries": [
+        "     Summary [   4.787s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "goal-pty",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(goal_tui_pty)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "linux-pty-final62-goal-pty.log",
+      "startedAt": "2026-10-16T22:04:31.903Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:05:27.759Z",
+      "summaries": [
+        "     Summary [  54.765s] 4 tests run: 4 passed, 0 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "linux-pty-final62-typed-startup.log",
+      "startedAt": "2026-10-16T22:05:27.759Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:05:29.220Z",
+      "summaries": [
+        "     Summary [   0.675s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ],
+      "log": "linux-pty-final62-workspace.log",
+      "startedAt": "2026-10-16T22:05:29.220Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:25:09.964Z",
+      "summaries": [
+        "     Summary [1176.131s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "linux-pty-final62-clippy.log",
+      "startedAt": "2026-10-16T22:25:09.967Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:25:12.978Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "linux-pty-final62-fmt.log",
+      "startedAt": "2026-10-16T22:25:12.978Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:25:40.909Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "linux-pty-final62-doctest.log",
+      "startedAt": "2026-10-16T22:25:40.910Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:25:49.189Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ],
+      "log": "linux-pty-final62-registry.log",
+      "startedAt": "2026-10-16T22:25:49.189Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:25:50.026Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T22:25:50.167Z",
+  "changed": [],
+  "passed": true
+}

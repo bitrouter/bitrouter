@@ -1,0 +1,10 @@
+{
+  "createdAt": "2026-10-16T22:26:57.496Z",
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "d20f5ca7833dd10618dee7137fe297f6ef23ddf2",
+  "featureSource": "a338943cb32e09722fad7c6edf6123fad7f4ba64",
+  "finalLocalRun": "linux-pty-final62",
+  "originalAddedFiles": 41,
+  "originalAddedBytes": 1345958,
+  "scope": "Complete source verification after POSIX PTY launcher correction, with all36Linuxintegrationtargets inventoried. Prior raw evidence is unchanged; original failures and source applicability remain retained. Actual vendor/provider live gate is unpassed; expanded final hostedCI follows separately."
+}

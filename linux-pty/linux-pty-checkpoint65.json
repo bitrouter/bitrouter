@@ -1,0 +1,14 @@
+{
+  "createdAt": "2026-10-16T22:26:26.769Z",
+  "head": "a338943cb32e09722fad7c6edf6123fad7f4ba64",
+  "base": "fe9df6f8157945d3559789926326a7effb468db1",
+  "bundle": "refactor-local-checkpoint-a338943c.bundle",
+  "bundleSha256": "fcb49d1ba51e686af86d6c6717ede436feb835a6ba783a267262e7bda3ee56ef",
+  "bundleVerification": "refactor-local-checkpoint-a338943c.bundle.verify.log",
+  "run": "linux-pty-final62",
+  "resultSha256": "e00e811b33f36956b3f5476f9360c32620bb83632332a9f938ed64100e35daea",
+  "verifiedCommittedFiles": 4,
+  "workingTreeClean": true,
+  "pushed": false,
+  "scope": "Complete local PTY correction checkpoint; original first-head and expanded Linux80c0 failures remain preserved. Native/ACP feature isolation, ACP-free native tree, Rust1.93 and complete no-LEAK local regression passed. Aggregate native parallel fixture allowance is explicitly two45s phase waits. Live vendor/provider gate unpassed; archive annex and exact next hosted head follow separately."
+}

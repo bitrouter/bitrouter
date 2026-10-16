@@ -1,0 +1,7 @@
+{
+  "head": "80c0aad0f1bccfcffdb0903659d94478fd4d484a",
+  "dirtyFiles": [
+    "apps/bitrouter/tests/goal_tui_pty.rs"
+  ],
+  "scope": "Dirty files supplement the exact committed HEAD."
+}

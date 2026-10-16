@@ -1,0 +1,211 @@
+{
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "d20f5ca7833dd10618dee7137fe297f6ef23ddf2",
+  "files": {
+    "LINUX_PTY_INDEX.md": {
+      "bytes": 1369,
+      "sha256": "8928a479dffe1401fd5216dda7e34e515089eebfa37288759c80711647f83758",
+      "mode": 420
+    },
+    "bro-linux-integration-coverage53.json": {
+      "bytes": 2024,
+      "sha256": "cfa2d557749e8aec3ba7a3780bda19d02aef3fb2b2b1d03c90276600040c29e5",
+      "mode": 420
+    },
+    "bro-linux-pty-archive-scan69.json": {
+      "bytes": 380,
+      "sha256": "af578780588c0952bbaf767da578d6d4f9dbdd1586d992d74682487dac723e31",
+      "mode": 420
+    },
+    "bro-linux-pty-archive66.mjs": {
+      "bytes": 5229,
+      "sha256": "632eea2792ae017d602ab44eb3a0fe54380248881884531c876c8ebf6fec551a",
+      "mode": 420
+    },
+    "bro-linux-pty-git-scan69.json": {
+      "bytes": 321,
+      "sha256": "27db1da6cf5925948de9fe6c51a3a01a175590995154a8805f8e03297cbf9ab1",
+      "mode": 420
+    },
+    "bro-linux-pty-pin67.mjs": {
+      "bytes": 3075,
+      "sha256": "ca0f23d30ef9672c9548390f1cf48290e5e4b38e2ab91cbecc75a42ae6a2e9f1",
+      "mode": 420
+    },
+    "bro-linux-pty-pr68.mjs": {
+      "bytes": 6940,
+      "sha256": "6bf9455e6f56eeada37f8d63dc1a521b2574e83dd3924697799807d48b983bf8",
+      "mode": 420
+    },
+    "linux-ci-coverage-checkpoint55.json": {
+      "bytes": 1458,
+      "sha256": "9ad63181a45e28ca42e0486b26948ffec5ae2977480cf1c53bc3b48bad2c8b07",
+      "mode": 420
+    },
+    "linux-ci-coverage-delta54.json": {
+      "bytes": 1342,
+      "sha256": "e3f0531d20a4c0e04fae08137002de2874800b9ecc5dcc96857e2c72ebc61258",
+      "mode": 420
+    },
+    "linux-ci-coverage-final55.patch": {
+      "bytes": 1472,
+      "sha256": "23f5666733e9217d1495585dc48f94b4b8c9bb547dba00523e5fd31672ad7105",
+      "mode": 420
+    },
+    "linux-ci-coverage54.patch": {
+      "bytes": 1344,
+      "sha256": "c8b0c348f4d85ee0253dc5354ac5477d9fe2eb6d1434fdc8f690eb32e231a294",
+      "mode": 420
+    },
+    "linux-ci-scope54-runner.mjs": {
+      "bytes": 4650,
+      "sha256": "67326497adf2c3d89db94dd24b8122673a19cf8e76fea7b84d255d8559ce1662",
+      "mode": 420
+    },
+    "linux-pty-applicability64.json": {
+      "bytes": 1007,
+      "sha256": "83ef47d4adfb752e898054ff13d1944a54b70558c3eb1089ed235d02d6debab4",
+      "mode": 420
+    },
+    "linux-pty-checkpoint65-runner.mjs": {
+      "bytes": 2294,
+      "sha256": "4fc01df972bcdbd41e31b4da50c05945e6cd7c9573c5fc48430e20f92d09540d",
+      "mode": 420
+    },
+    "linux-pty-checkpoint65.json": {
+      "bytes": 978,
+      "sha256": "7a742cf7f5b4c8b15fa68be3676f1e0b545cc84b3183772761800d1e7a44a4f3",
+      "mode": 420
+    },
+    "linux-pty-final62-acp-features.log": {
+      "bytes": 60,
+      "sha256": "f694a9e074374d315f58b8a63ce849858b1b8708cf56b3d194218605bd2a9d6e",
+      "mode": 420
+    },
+    "linux-pty-final62-audit.json": {
+      "bytes": 89,
+      "sha256": "218d024b4e0f3a6d301e9c3d04b08896cd585f1f360b2f6d6598409eb232cb60",
+      "mode": 420
+    },
+    "linux-pty-final62-clippy.log": {
+      "bytes": 417,
+      "sha256": "ea0b38298c15c1953258ee2f05a4d171bc293394d30ea33bbaf0c31945bd59c1",
+      "mode": 420
+    },
+    "linux-pty-final62-config.json": {
+      "bytes": 3706,
+      "sha256": "6d2026ebe127b6f6bb4791b532fb42a2d968f4761abdded90e939fa6cbc112b3",
+      "mode": 420
+    },
+    "linux-pty-final62-doctest.log": {
+      "bytes": 2054,
+      "sha256": "675b6fd3a7567357ff77f3096886ebe386555a67ffff21258dd54b8b9bd46cea",
+      "mode": 420
+    },
+    "linux-pty-final62-files.tar.gz": {
+      "bytes": 15449,
+      "sha256": "508e582671922d0f618f2952812f80ad38b062847a21178965d976f51eebef91",
+      "mode": 420
+    },
+    "linux-pty-final62-fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 420
+    },
+    "linux-pty-final62-goal-pty.log": {
+      "bytes": 1849,
+      "sha256": "1f0d547120a3971b9c618f8cc3fd8803160f832acb43a6ede9b2ce4efb227f61",
+      "mode": 420
+    },
+    "linux-pty-final62-help-output-1.log": {
+      "bytes": 1554,
+      "sha256": "b5ec8cb7d8fcaaa69c4b69e623bfaa1eef44ac7cad63692ea4cde903a1f7721d",
+      "mode": 420
+    },
+    "linux-pty-final62-help-output-2.log": {
+      "bytes": 1452,
+      "sha256": "2dd7fc3509d12be7794d3ad6c9a0004eba77e6cdb620a9bafd59083c8f36f3c7",
+      "mode": 420
+    },
+    "linux-pty-final62-help-output-3.log": {
+      "bytes": 1452,
+      "sha256": "3dd91353be6e8718d22a79cb9b9424cde8c2f43d60c18be10251abca82448aa9",
+      "mode": 420
+    },
+    "linux-pty-final62-msrv-native.log": {
+      "bytes": 60,
+      "sha256": "e7db2afc8e897632ef0fc418b8593aa427e974dd923dcc14c5e1d5d6e9cff786",
+      "mode": 420
+    },
+    "linux-pty-final62-native-features.log": {
+      "bytes": 60,
+      "sha256": "970c742910792bfbe48abef0e530c79a74dbeaab153744556de13c44dbdb2074",
+      "mode": 420
+    },
+    "linux-pty-final62-native-tree.log": {
+      "bytes": 9787,
+      "sha256": "c7a71886190cec61260cd4c75c3f6ddc3725e70bd3d20d88ec995fbef947e1cf",
+      "mode": 420
+    },
+    "linux-pty-final62-registry.log": {
+      "bytes": 300,
+      "sha256": "dfed4e27037fa529257d13d933f78d919cdf2289723b90052a1c94288eafb6ba",
+      "mode": 420
+    },
+    "linux-pty-final62-results.json": {
+      "bytes": 8567,
+      "sha256": "e00e811b33f36956b3f5476f9360c32620bb83632332a9f938ed64100e35daea",
+      "mode": 420
+    },
+    "linux-pty-final62-runner.mjs": {
+      "bytes": 4277,
+      "sha256": "5ee485524b531241cb884fb6e28e908ff851023f291d72021dac49979c637175",
+      "mode": 420
+    },
+    "linux-pty-final62-source-archive.json": {
+      "bytes": 186,
+      "sha256": "af896c60e3e2b4752e71a30093cd165491287320ae84ff172c36fa610843ef73",
+      "mode": 420
+    },
+    "linux-pty-final62-source.json": {
+      "bytes": 161101,
+      "sha256": "a3ad9b38e7a25d2f1cae9e4983f0dfb3263ba61471e5a7878b426c0fcf147dec",
+      "mode": 420
+    },
+    "linux-pty-final62-source.patch": {
+      "bytes": 1401,
+      "sha256": "fd3b783b2aab910517f30b70b8ebcc601a1a21872502413ed4daba10528c92d5",
+      "mode": 420
+    },
+    "linux-pty-final62-typed-startup.log": {
+      "bytes": 1162,
+      "sha256": "3479072709dd92fe77bf9dff65328225afe5482a8cbc774f65c804c70af7b710",
+      "mode": 420
+    },
+    "linux-pty-final62-workspace.log": {
+      "bytes": 619150,
+      "sha256": "133f9e4ae2aa44acd751acd29df60562e13b069909f6e952bdd391317b6b19db",
+      "mode": 420
+    },
+    "linux-pty-finish64-runner.mjs": {
+      "bytes": 8529,
+      "sha256": "b73c3ce6505f56c45cbd618c1ea553c0de19bddb21e41b2b661667a3b339b91e",
+      "mode": 420
+    },
+    "linux-pty-original-ci80-native-goals.log": {
+      "bytes": 60614,
+      "sha256": "3c9c0ef0d5f257901c49f54d79d076c3ac8bbdb9434557a2a500b2f6614ecf54",
+      "mode": 420
+    },
+    "refactor-local-checkpoint-a338943c.bundle": {
+      "bytes": 408459,
+      "sha256": "fcb49d1ba51e686af86d6c6717ede436feb835a6ba783a267262e7bda3ee56ef",
+      "mode": 420
+    },
+    "refactor-local-checkpoint-a338943c.bundle.verify.log": {
+      "bytes": 340,
+      "sha256": "c18cfa0bd7cd8bcf2aa4873ce2e16ecf7ec18586b2153d4297c8dc0a0680a78f",
+      "mode": 420
+    }
+  }
+}

@@ -1,0 +1,31 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index c5001044..3d20374e 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -180,6 +180,14 @@ jobs:
+               --test managed_native --test onboarding --test smithers_reward_loop
+               --test terminus_2_workflow_state
+               --test trajectory_progress_control
++          - shard: native-goals
++            retries: "0"
++            build_jobs: "1"
++            targets: >-
++              --test code_tui_pty --test goal_tui_pty --test goals
++              --test harness_mcp_check --test invocation --test native_agent_process
++              --test native_agent_tui --test native_harness_resources
++              --test orchestrator_core --test skill_cli_contract
+     runs-on: ubuntu-latest
+     timeout-minutes: 45
+     steps:
+@@ -195,9 +203,10 @@ jobs:
+         env:
+           TEST_RETRIES: ${{ matrix.retries }}
+           TEST_TARGETS: ${{ matrix.targets }}
++          TEST_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
+         run: |
+           read -r -a test_targets <<< "$TEST_TARGETS"
+-          cargo nextest run -p bitrouter --all-features --build-jobs 2 \
++          cargo nextest run -p bitrouter --all-features --build-jobs "$TEST_BUILD_JOBS" \
+             --retries "$TEST_RETRIES" \
+             "${test_targets[@]}"
+ 

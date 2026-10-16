@@ -1,0 +1,8 @@
+{
+  "createdAt": "2026-10-16T22:26:51.467Z",
+  "base": "fe9df6f8157945d3559789926326a7effb468db1",
+  "head": "a338943cb32e09722fad7c6edf6123fad7f4ba64",
+  "scope": "Decompressed blobs and commit messages introduced by the final recoverable bundle range; token values are never emitted.",
+  "checked": 413,
+  "hits": []
+}

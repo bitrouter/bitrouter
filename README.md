@@ -1,5 +1,7 @@
 # PR #981 BRO refactor evidence
 
+Latest local source: [Linux PTY and complete integration coverage](linux-pty/LINUX_PTY_INDEX.md), [provenance](LINUX_PTY_PROVENANCE.json), [additional original files](LINUX_PTY_PAYLOAD.json). Earlier archives stay pinned at their own commits. SHA256SUMS covers this whole tree.
+
 Latest correction: [CI portability and final regression](ci-portability/CI_PORTABILITY_INDEX.md), [provenance](CORRECTION_PROVENANCE.json), [additional original file manifest](CORRECTION_PAYLOAD.json). The initial archive below remains unchanged at its own pinned commit. SHA256SUMS covers this complete archive tree.
 
 Feature checkpoint: 6a72cfb1da0e2d4641a96097e09a507d7d032189. Final local verification: acp-continuation-final15. This separate branch preserves original failures, superseded runs, retained fixtures, source bindings, exact configurations, runners and recoverable Git bundles. Actual vendor harness/provider requalification remains unpassed.

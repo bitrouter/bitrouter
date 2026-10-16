@@ -1,0 +1,20 @@
+{
+  "run": "linux-pty-final62",
+  "evaluatedHead": "80c0aad0f1bccfcffdb0903659d94478fd4d484a",
+  "sourceTarFilesVerified": 1,
+  "changesSinceFinal36": [
+    ".github/workflows/ci.yml",
+    "apps/bitrouter/tests/goal_tui_pty.rs"
+  ],
+  "postTestMetadataDelta": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json"
+  ],
+  "finalFiles": {
+    "apps/bitrouter/tests/goal_tui_pty.rs": "fb5fadb8773e75d4fdf8dcef16e4156242b7af9a7fcb71265ed3312c0a9331dc",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "9b9acdb4bf6919dc29aef7473eb6786c574b152236342a5cf3c8f4b0e55d0dcc",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md": "73f433d5a69136c6dae0c462d58ad69e1eb01b8f382ef76a2f82278432a18f88",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json": "1c678295096db59986320552593b3974ea77c4b340bf6bc75d63e2bc32655c3c"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "createdAt": "2026-10-16T21:53:41.106Z",
+  "precedingHead": "d1094555c9a2bdc016317b6c8a8b577763b2dfe2",
+  "sourceMap": "ci-portability-final36-source.json",
+  "compiledInputsSha256": "ceea84b299af00103e1abb0bd4ba00f2dc0989ed5fc19e847f507300a267a755",
+  "compiledInputChanges": [],
+  "ciChange": {
+    "path": ".github/workflows/ci.yml",
+    "evaluatedSha256": "a88563d45201b3301078e23660497370396a5e3bfd010ee0c227af7cdc8b9062",
+    "currentSha256": "c3fbfa8f62dc7212a6c1e48ecb8addd9cfb88244dd22e3ae500e1f46e24378d2",
+    "kind": "CI selection only; all Rust, fixtures, Cargo inputs and nextest configuration match final36",
+    "integrationTargetsBefore": 26,
+    "integrationTargetsAfter": 36,
+    "newShard": "native-goals",
+    "newShardBuildJobs": 1,
+    "newShardRetries": 0,
+    "newTargets": [
+      "code_tui_pty",
+      "goal_tui_pty",
+      "goals",
+      "harness_mcp_check",
+      "invocation",
+      "native_agent_process",
+      "native_agent_tui",
+      "native_harness_resources",
+      "orchestrator_core",
+      "skill_cli_contract"
+    ],
+    "coverageReport": "bro-linux-integration-coverage53.json",
+    "coverageReportSha256": "cfa2d557749e8aec3ba7a3780bda19d02aef3fb2b2b1d03c90276600040c29e5"
+  },
+  "yamlSyntax": "Ruby Psych parse passed",
+  "coverage": "36 discovered integration targets selected exactly once"
+}
