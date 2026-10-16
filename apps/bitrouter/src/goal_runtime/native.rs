@@ -25,7 +25,11 @@ pub(super) fn turn_key(execution_id: &str) -> String {
 }
 
 impl Coordinator {
-    fn native_workspace(&self, goal: &GoalSnapshot, execution: &Execution) -> Result<PathBuf> {
+    pub(super) fn native_workspace(
+        &self,
+        goal: &GoalSnapshot,
+        execution: &Execution,
+    ) -> Result<PathBuf> {
         let expected = self.workspaces.join(&goal.id).join(&execution.id);
         let workspace = execution.workspace.canonicalize()?;
         anyhow::ensure!(
@@ -211,7 +215,7 @@ impl Coordinator {
         Ok(())
     }
 
-    pub(super) async fn drive_native(
+    pub(super) async fn drive_worker(
         &self,
         goal: &GoalSnapshot,
         task: &Task,
@@ -290,7 +294,23 @@ impl Coordinator {
                     )
                     .await?,
                 )?;
-                return self.launch_native(goal, task, &execution.id, prompt).await;
+                return match &task.spec.harness {
+                    Some(harness) => {
+                        Box::pin(self.launch_acp(
+                            goal,
+                            task,
+                            &execution.id,
+                            prompt,
+                            harness,
+                            super::resources::servers(
+                                &self.routing.snapshot_config(),
+                                &prepared.selection,
+                            )?,
+                        ))
+                        .await
+                    }
+                    None => Box::pin(self.launch_native(goal, task, &execution.id, prompt)).await,
+                };
             }
             if matches!(execution.observation, Observation::Requested) {
                 self.change(goal, Change::ObserveExecution { execution_id: execution.id.clone(),
@@ -306,6 +326,46 @@ impl Coordinator {
             .threads
             .read_stored_turn(&target, &caller, &binding.turn_id)
             .await?;
+        let external = task.spec.harness.is_some();
+        if let Some(session) = &turn.acp {
+            anyhow::ensure!(
+                task.spec.harness.as_ref() == Some(&session.agent_id),
+                "worker session belongs to another harness"
+            );
+            if execution.confirmed_model_route.is_none()
+                && let Some(route) = execution
+                    .resources
+                    .as_ref()
+                    .and_then(|prepared| prepared.selection.model_route.as_ref())
+                && session.confirmed_model_route.as_ref() == Some(route)
+                && match &execution.observation {
+                    Observation::Running { run_id, .. }
+                    | Observation::Candidate { run_id, .. }
+                    | Observation::Failed { run_id, .. }
+                    | Observation::Unknown { run_id, .. } => {
+                        run_id.as_ref() == Some(&session.run_id)
+                    }
+                    _ => false,
+                }
+            {
+                return self
+                    .change(
+                        goal,
+                        Change::ConfirmModelRoute {
+                            execution_id: execution.id.clone(),
+                            run_id: session.run_id.clone(),
+                            route: route.clone(),
+                        },
+                    )
+                    .await;
+            }
+        }
+        let run_id = turn
+            .acp
+            .as_ref()
+            .map(|session| session.run_id.clone())
+            .or_else(|| turn.acp_stop.as_ref().and_then(|stop| stop.run_id.clone()));
+        let session_id = turn.acp.as_ref().map(|session| session.session_id.clone());
         let terminal = matches!(
             turn.status,
             TurnStatus::Completed
@@ -351,7 +411,11 @@ impl Coordinator {
                 .context("native stop source disappeared")?;
             let operation_id = match &current_execution.stop {
                 None => {
-                    let operation_id = format!("native-stop-{}", execution.id);
+                    let operation_id = format!(
+                        "{}-stop-{}",
+                        if external { "acp" } else { "native" },
+                        execution.id
+                    );
                     self.change(
                         &current,
                         Change::RequestStop {
@@ -368,15 +432,20 @@ impl Coordinator {
                 Some(_) => return Ok(()),
             };
             let was_unknown = matches!(current_execution.stop, Some(StopState::Unknown { .. }));
+            let stopped = if external {
+                turn.acp_stop.as_ref().is_some_and(|stop| stop.confirmed)
+            } else {
+                terminal && !turn.unknown_effect
+            };
             if (terminal || turn.status == TurnStatus::RecoveryRequired)
-                && (!was_unknown || terminal && !turn.unknown_effect)
+                && (!was_unknown || stopped)
             {
                 self.change(
                     &current,
                     Change::ObserveStop {
                         execution_id: execution.id.clone(),
                         operation_id,
-                        confirmed: terminal && !turn.unknown_effect,
+                        confirmed: stopped,
                         detail: format!(
                             "Native Turn {:?}; unknown_effect={}",
                             turn.status, turn.unknown_effect
@@ -408,10 +477,14 @@ impl Coordinator {
             Observation::Requested | Observation::Running { .. } | Observation::Unknown { .. }
         ) {
             let observation = match turn.status {
-                TurnStatus::Running | TurnStatus::WaitingForInput => Some(Observation::Running {
-                    run_id: None,
-                    native_session_id: None,
-                }),
+                TurnStatus::Running | TurnStatus::WaitingForInput
+                    if !external || run_id.is_some() =>
+                {
+                    Some(Observation::Running {
+                        run_id: run_id.clone(),
+                        native_session_id: session_id.clone(),
+                    })
+                }
                 TurnStatus::Completed if !turn.unknown_effect => {
                     let text = turn
                         .final_answer
@@ -424,8 +497,8 @@ impl Coordinator {
                     )
                     .await?;
                     Some(Observation::Candidate {
-                        run_id: None,
-                        native_session_id: None,
+                        run_id: run_id.clone(),
+                        native_session_id: session_id.clone(),
                         report,
                     })
                 }
@@ -433,7 +506,7 @@ impl Coordinator {
                     if !turn.unknown_effect =>
                 {
                     Some(Observation::Failed {
-                        run_id: None,
+                        run_id: run_id.clone(),
                         reason: turn
                             .detail
                             .unwrap_or_else(|| format!("Native Turn {:?}", turn.status)),
@@ -444,8 +517,9 @@ impl Coordinator {
                 | TurnStatus::Failed
                 | TurnStatus::Cancelled
                 | TurnStatus::Interrupted => Some(Observation::Unknown {
-                    run_id: None,
-                    reason: "Native execution requires effect recovery; no automatic replay".into(),
+                    run_id: run_id.clone(),
+                    reason: "Shared worker execution requires effect recovery; no automatic replay"
+                        .into(),
                 }),
                 _ => None,
             };

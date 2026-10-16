@@ -363,7 +363,7 @@ async fn input_generation_overlaps_owner_work_without_bypassing_thread_or_global
             crate::thread::ThreadRequest {
                 caller: CallerContext::local(),
                 workspace: directory.path().into(),
-                config: view.config,
+                config: view.config.native()?.clone(),
                 permission_profile: PermissionProfile::ReadOnly,
                 verification_command: None,
                 idempotency_key: crate::goal::workflow::input_thread_key("goal"),

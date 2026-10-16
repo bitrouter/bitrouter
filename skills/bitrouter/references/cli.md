@@ -119,7 +119,7 @@ Startup claims one database owner and completes bounded cold discovery before
 admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New/updated roots use runtime format 8; formats 2/3/4/5/6/7 remain readable without history rewriting. Migration adds metadata with
+or prompts. New/updated roots use runtime format 9; formats 2/3/4/5/6/7/8 remain readable without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.
@@ -718,8 +718,15 @@ Turns, including an empty snapshot. A new Thread discovers again. After server
 restart, authorized continuation refreshes instructions only at a settled model
 boundary and records replacements/removals explicitly; known effects are never
 replayed. Completing an already settled outcome and cold browsing reread no
-instruction files. Runtime format 8 retains snapshots, private ACP bindings/close
-results and explicit Goal execution associations; formats 2–7 remain readable.
+instruction files. Runtime format 9 retains snapshots, private ACP bindings/close
+results and explicit native/managed ACP Goal execution associations; formats 2–8 remain readable.
+
+Managed ACP Goal workers share native Thread/Turn admission, workspace exclusion,
+permission commits and shutdown ownership. Their current Turn duration is 600
+seconds. Generic supervisor lease/control commands cannot take over those Turns.
+Actual session/model-route acknowledgements and public observations are retained;
+private context/provider/model usage remains unreported. Cold inspection alone
+does not resume a session; confirmed session recovery remains under qualification.
 
 The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
 use the existing approval, exclusive execution and durable result barriers;

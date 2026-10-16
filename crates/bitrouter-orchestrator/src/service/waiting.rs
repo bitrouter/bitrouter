@@ -12,6 +12,28 @@ use crate::thread::{GoalWork, ThreadStatus, ThreadTarget};
 use crate::turn::{TurnReceipt, TurnRequest};
 
 impl ThreadService {
+    pub async fn wait_goal_acp_turn(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        source: GoalWork,
+        request: TurnRequest,
+        control: Arc<dyn WorkControl>,
+        driver: Arc<dyn super::worker::acp::Driver>,
+    ) -> Result<TurnReceipt, ServiceError> {
+        Box::pin(self.wait_managed_turn(
+            target,
+            caller,
+            request,
+            Managed::Acp(Box::new(super::worker::acp::Job {
+                source,
+                control,
+                driver,
+            })),
+        ))
+        .await
+    }
+
     /// The recorded Thread duration also bounds pre-admission capacity waiting.
     /// Replays inspect the original receipt; only a new acceptance needs live
     /// authorization. No waiting state grants execution or consumes a Turn slot.
@@ -59,7 +81,7 @@ impl ThreadService {
         managed: Managed,
     ) -> Result<TurnReceipt, ServiceError> {
         let view = self.read_stored_thread_view(target, caller).await?;
-        let deadline = tokio::time::Instant::now() + view.config.max_duration;
+        let deadline = tokio::time::Instant::now() + view.config.max_duration();
         let key = &request.idempotency_key;
         let scope =
             admission::key_scope(caller, Some(&target.thread_id), managed.operation(), key)?;
@@ -69,6 +91,7 @@ impl ThreadService {
                 .map_err(|error| error.to_string())?
                 .len(),
             Managed::Native { .. } => request.prompt.len().saturating_mul(2),
+            Managed::Acp(_) => request.prompt.len().saturating_mul(2),
         };
         let mut refusal: Option<ServiceError> = None;
         loop {
@@ -110,6 +133,17 @@ impl ThreadService {
                         source,
                         request.clone(),
                         control,
+                    ))
+                    .await
+                }
+                Managed::Acp(job) => {
+                    Box::pin(self.start_goal_acp_turn(
+                        target,
+                        caller,
+                        job.source,
+                        request.clone(),
+                        job.control,
+                        job.driver,
                     ))
                     .await
                 }
@@ -165,6 +199,10 @@ impl ThreadService {
                 !thread.snapshot.is_goal_coordination()
                     && thread.snapshot.goal_work.as_ref() == Some(source)
             }
+            Managed::Acp(job) => {
+                !thread.snapshot.is_goal_coordination()
+                    && thread.snapshot.goal_work.as_ref() == Some(&job.source)
+            }
         };
         if !source_matches
             || thread.storage_error.is_some()
@@ -174,7 +212,7 @@ impl ThreadService {
             )
             || !thread.queued.is_empty()
             || (matches!(managed, Managed::Generation(_))
-                && extra > thread.config.max_context_bytes)
+                && extra > thread.config.native()?.max_context_bytes)
             || thread.context_bytes().saturating_add(extra)
                 > self.inner.limits.context_bytes_per_thread
             || state
@@ -187,7 +225,7 @@ impl ThreadService {
         {
             return Ok(false);
         }
-        let workspace_owner = if matches!(managed, Managed::Native { .. }) {
+        let workspace_owner = if matches!(managed, Managed::Native { .. } | Managed::Acp(_)) {
             self.workspace_owner_error(&state, &thread.snapshot.workspace)
         } else {
             None

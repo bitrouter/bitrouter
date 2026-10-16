@@ -97,7 +97,9 @@ impl Capacity {
         let mut config = service
             .read_stored_thread_view(&root_target, &CallerContext::local())
             .await?
-            .config;
+            .config
+            .native()?
+            .clone();
         config.max_duration = duration;
         let input = service
             .create_goal_input_thread(

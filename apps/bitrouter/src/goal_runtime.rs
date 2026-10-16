@@ -29,6 +29,7 @@ use crate::supervisor::{
     SessionResponse, SessionScope, StartRunRequest, Supervisor,
 };
 
+mod acp;
 mod checks;
 mod completion;
 mod dependencies;
@@ -1479,8 +1480,24 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
                 .await?;
             return Ok(());
         }
-        if task.spec.harness.is_none() {
-            return self.drive_native(goal, task, execution).await;
+        let admitted_worker = if execution.thread.is_none()
+            && execution.dispatch_requested
+            && goal.workflow.owner_thread_id.is_some()
+        {
+            let source = native::source(goal, task, execution)?;
+            self.native_workspace(goal, execution)?;
+            Box::pin(self.threads.find_thread_admission(
+                &self.threads.capabilities().server_instance_id,
+                &CallerContext::local(),
+                &bitrouter_orchestrator::service::worker::thread_key(&source)?,
+            ))
+            .await?
+            .is_some()
+        } else {
+            false
+        };
+        if task.spec.harness.is_none() || execution.thread.is_some() || admitted_worker {
+            return Box::pin(self.drive_worker(goal, task, execution)).await;
         }
         if execution.dispatch_requested
             && matches!(
@@ -1879,45 +1896,12 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
             )
             .await?;
             let Some(harness) = &task.spec.harness else {
-                return self
-                    .launch_native(&current, task, &id, prompt)
+                return Box::pin(self.launch_native(&current, task, &id, prompt))
                     .await
                     .map(|()| None);
             };
-            let response = Box::pin(self.supervisor.dispatch(SessionRequest::authorized(
-                &self.grant,
-                SessionCommand::Start(Box::new(StartRunRequest {
-                    action_request_id: id.clone(),
-                    client_id: Some(self.grant.client_id.clone()),
-                    label: Some(format!("{} / {}", goal.title, task.spec.title)),
-                    agent_id: harness.clone(),
-                    prompt: Some(prompt),
-                    cwd: workspace,
-                    routing: Default::default(),
-                    launch: crate::acp_cli::LaunchOptions {
-                        required_session_route: task.spec.resources.model_route.clone(),
-                        mcp_servers,
-                        ..Default::default()
-                    },
-                    session: Default::default(),
-                    presentation: crate::supervisor::Presentation::Background,
-                    parent_run_id: None,
-                    allow_shared_directory: false,
-                    permission_policy: Default::default(),
-                    result_schema: None,
-                })),
-            )))
-            .await?;
-            Ok(Some(match response {
-                SessionResponse::Started { snapshot, .. } => Observation::Running {
-                    run_id: Some(snapshot.run_id),
-                    native_session_id: snapshot.native_session_id,
-                },
-                _ => Observation::Unknown {
-                    run_id: None,
-                    reason: "ACP startup returned no run mapping".into(),
-                },
-            }))
+            Box::pin(self.launch_acp(&current, task, &id, prompt, harness, mcp_servers)).await?;
+            Ok(None)
         }
         .await;
         let observation = match result {

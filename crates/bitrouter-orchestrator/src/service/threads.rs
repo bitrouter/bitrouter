@@ -13,10 +13,33 @@ use super::state::{State, ThreadRecord};
 use super::{ErrorCode, ServiceError, ThreadService, unknown_turn};
 use crate::agent::{Agent, ToolMode};
 use crate::store::{AcceptedKey, ExecutionRecord, ExecutionStore};
+use crate::thread::executor::{AcpThreadRequest, Config};
 use crate::thread::{
     GoalWork, PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget,
     WorkspaceGrant,
 };
+
+struct Definition {
+    caller: CallerContext,
+    workspace: std::path::PathBuf,
+    config: Config,
+    permission_profile: PermissionProfile,
+    verification_command: Option<String>,
+    idempotency_key: String,
+}
+
+impl From<ThreadRequest> for Definition {
+    fn from(request: ThreadRequest) -> Self {
+        Self {
+            caller: request.caller,
+            workspace: request.workspace,
+            config: Config::Native(request.config),
+            permission_profile: request.permission_profile,
+            verification_command: request.verification_command,
+            idempotency_key: request.idempotency_key,
+        }
+    }
+}
 
 enum Binding<'a> {
     Ordinary,
@@ -120,10 +143,12 @@ impl ThreadService {
             entries.push(crate::thread::ThreadDirectoryEntry {
                 turn_status: view.latest_turn.as_ref().map(|turn| turn.status),
                 turn_id: view.latest_turn.as_ref().map(|turn| turn.turn_id.clone()),
-                needs_input: view
-                    .latest_turn
-                    .as_ref()
-                    .is_some_and(|turn| turn.pending_input_id.is_some()),
+                needs_input: view.latest_turn.as_ref().is_some_and(|turn| {
+                    turn.pending_input_id.is_some()
+                        || turn.acp_permissions.iter().any(|permission| {
+                            !turn.acp_selected.contains_key(&permission.request_id)
+                        })
+                }),
                 thread: view.thread,
             });
         }
@@ -168,8 +193,13 @@ impl ThreadService {
         request: ThreadRequest,
         servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
     ) -> Result<ThreadSnapshot, ServiceError> {
-        self.create_thread_bound(server_instance_id, request, servers, Binding::Ordinary)
-            .await
+        self.create_thread_bound(
+            server_instance_id,
+            request.into(),
+            servers,
+            Binding::Ordinary,
+        )
+        .await
     }
 
     /// Admit the Goal's owner through the ordinary durable Thread path. Only a
@@ -184,8 +214,13 @@ impl ThreadService {
         if request.idempotency_key != crate::goal::workflow::owner_thread_key(goal_id) {
             return Err("Goal owner requires its stable admission key".into());
         }
-        self.create_thread_bound(server_instance_id, request, None, Binding::Owner(goal_id))
-            .await
+        self.create_thread_bound(
+            server_instance_id,
+            request.into(),
+            None,
+            Binding::Owner(goal_id),
+        )
+        .await
     }
 
     /// The input interpreter has its own sequential Turns, so a long planning
@@ -206,7 +241,7 @@ impl ThreadService {
         }
         self.create_thread_bound(
             &owner.server_instance_id,
-            request,
+            request.into(),
             None,
             Binding::Input(&owner.thread_id),
         )
@@ -230,8 +265,42 @@ impl ThreadService {
         }
         self.create_thread_bound(
             &owner.server_instance_id,
-            request,
+            request.into(),
             servers,
+            Binding::Work(source),
+        )
+        .await
+    }
+
+    /// ACP workers share Thread creation and workspace grants without a dummy
+    /// native Agent. Only the trusted Goal host supplies this association.
+    pub async fn create_goal_acp_thread(
+        &self,
+        owner: &ThreadTarget,
+        source: &GoalWork,
+        request: AcpThreadRequest,
+    ) -> Result<ThreadSnapshot, ServiceError> {
+        source.validate()?;
+        let parent = self.read_stored_thread_view(owner, &request.caller).await?;
+        if parent.thread.owned_goal_id.as_ref() != Some(&source.goal_id)
+            || owner.thread_id != source.owner_thread_id
+            || request.idempotency_key != super::worker::thread_key(source)?
+        {
+            return Err("worker admission requires its original Goal owner and action key".into());
+        }
+        self.create_thread_bound(
+            &owner.server_instance_id,
+            Definition {
+                caller: request.caller,
+                workspace: request.workspace,
+                config: Config::Acp {
+                    acp: request.config,
+                },
+                permission_profile: request.permission_profile,
+                verification_command: None,
+                idempotency_key: request.idempotency_key,
+            },
+            None,
             Binding::Work(source),
         )
         .await
@@ -264,7 +333,7 @@ impl ThreadService {
     async fn create_thread_bound(
         &self,
         server_instance_id: &str,
-        request: ThreadRequest,
+        request: Definition,
         servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
         binding: Binding<'_>,
     ) -> Result<ThreadSnapshot, ServiceError> {
@@ -352,32 +421,55 @@ impl ThreadService {
         } else {
             request.permission_profile
         };
-        let config = if profile == PermissionProfile::ReadOnly {
-            request.config.read_only()
-        } else {
-            request.config
+        let config = match request.config {
+            Config::Native(native) => {
+                let native = if profile == PermissionProfile::ReadOnly {
+                    native.read_only()
+                } else {
+                    native
+                };
+                if native.model.len()
+                    + native.instructions.len()
+                    + request.verification_command.as_ref().map_or(0, String::len)
+                    > self.inner.limits.request_bytes
+                    || native.max_steps > 256
+                    || native.max_tool_calls > 1024
+                    || native.max_context_bytes > self.inner.limits.context_bytes_per_thread
+                    || native.max_duration > Duration::from_secs(86400)
+                {
+                    return Err("Thread settings exceed runtime bounds".into());
+                }
+                if !coordination {
+                    Agent::new(
+                        Arc::clone(&self.inner.app),
+                        request.caller.clone(),
+                        &workspace,
+                        native.clone(),
+                    )?;
+                }
+                Config::Native(native)
+            }
+            Config::Acp { acp } => {
+                crate::goal::identifier(&acp.agent_id).map_err(|error| error.to_string())?;
+                if profile != PermissionProfile::Ask
+                    || request.verification_command.is_some()
+                    || acp.max_duration.is_zero()
+                    || acp.max_duration > Duration::from_secs(86400)
+                    || acp
+                        .requested_model_route
+                        .as_ref()
+                        .is_some_and(|route| route.trim().is_empty() || route.len() > 4096)
+                {
+                    return Err(
+                        "ACP Thread requires bounded settings and explicit permission requests"
+                            .into(),
+                    );
+                }
+                Config::Acp { acp }
+            }
         };
-        if config.model.len()
-            + config.instructions.len()
-            + request.verification_command.as_ref().map_or(0, String::len)
-            > self.inner.limits.request_bytes
-            || config.max_steps > 256
-            || config.max_tool_calls > 1024
-            || config.max_context_bytes > self.inner.limits.context_bytes_per_thread
-            || config.max_duration > Duration::from_secs(86400)
-        {
-            return Err("Thread settings exceed runtime bounds".into());
-        }
         if profile == PermissionProfile::ReadOnly && request.verification_command.is_some() {
             return Err("read-only Threads cannot run verification".into());
-        }
-        if !coordination {
-            Agent::new(
-                Arc::clone(&self.inner.app),
-                request.caller.clone(),
-                &workspace,
-                config.clone(),
-            )?;
         }
         self.reclaim_hot_capacity(0)?;
         {
@@ -416,7 +508,7 @@ impl ThreadService {
             goal_work: goal_work.cloned(),
             status: ThreadStatus::Idle,
             workspace,
-            model: config.model.clone(),
+            model: config.model().into(),
             permission_profile: profile,
             context_version: 0,
             cursor: 2,
