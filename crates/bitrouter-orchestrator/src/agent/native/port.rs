@@ -124,7 +124,18 @@ impl HarnessPort for Port {
         true
     }
 
-    async fn model_stream_part(&self, agent_id: &str, step_id: &str, _: &str, part: &StreamPart) {
+    async fn model_stream_part(
+        &self,
+        agent_id: &str,
+        step_id: &str,
+        request_id: &str,
+        part: &StreamPart,
+    ) {
+        if let Some(control) = &self.work_control {
+            // Observe received content before lossy display delivery. These
+            // callbacks never authorize a tool or replace a settled outcome.
+            control.on_stream_part(request_id, part).await;
+        }
         if self.root_agent.get().is_none_or(|root| root != agent_id) {
             return;
         }

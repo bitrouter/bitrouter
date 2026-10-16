@@ -53,7 +53,7 @@ not claim the target shared-runner architecture is complete.
 | Path | Current acceptance/execution authority | Resource control and evidence boundary |
 | --- | --- | --- |
 | Goal planning/input/review/completion generation | `ThreadService.start_goal_generation`, common admission/runner/commit | Owner or input Thread route selector; exact prompt, SDK plans and attempt reports in ExecutionStore, Root source/budget accounting. Tool-free. Current SDK fallback remains; no full Turn-fixed context guarantee. |
-| Native Goal work | `ThreadService.start_goal_worker_turn`, native Agent/Core driver | Immutable prepared resources, accepted Thread configuration, per-request prepared-input hashes and SDK router bindings, failed candidates/actual serving reports and committed tool observations are read from existing stores. Bounded omissions and missing facts remain explicit. Actual activity intervals and complete native parallel qualification remain pending; selections are not proof of use. |
+| Native Goal work | `ThreadService.start_goal_worker_turn`, native Agent/Core driver | Immutable prepared resources, accepted Thread configuration, prepared-input hashes, SDK router bindings, actual/fallback reports and tool observations are read from existing stores. Actual content receipt intervals use a shared process monotonic clock; local native overlap/isolation and checked dependency join pass. Omissions, physical-provider timing and complete history remain unknown; selections are not proof of use. |
 | Existing standalone native work | Native Thread/Turn entrypoints on that same ThreadService | Existing grants, native context/routing, permissions, verification and recovery remain authoritative. Goal-associated Threads reject the ordinary entrypoint. |
 | Managed external ACP Goal work | Common ThreadService admission/runner/commit; supervisor adapts process/protocol transport | Explicit ACP configuration and actual run/session mapping, bounded sequenced public observations, original permission options and stop receipts. Generic supervisor controls reject managed ownership. Private context, physical provider/model and unsupported controls remain unknown. Cold session continuation and the full failure matrix remain unqualified. |
 | Direct harness and transparent ACP serving | Existing direct/transparent entrypoints | Preserve the original harness interaction and protocol capabilities; do not fabricate Goal/Thread/Turn bindings or turn private harness behavior into native evidence. |
@@ -313,8 +313,8 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
 | S1 | In progress: owner/input association, model and worker Turn source links, stable binding operations and original-key lookup implemented. Full interruption/compatibility proof remains. |
 | S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
 | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
-| S4 | In progress: generation SDK reports, native prepared material/input hashes/router bindings and actual/fallback SDK reports now link to original work/Thread/Turn sources; public ACP session/route limits remain explicit. Native activity intervals, complete historical qualification and final evidence/UI closure remain. |
-| S5 | In progress: native standalone Goal completion and managed ACP dependencies/review consume shared Turn observations in controlled fixtures. Native branch overlap/isolation, adoption and the full coordinated closure remain. |
+| S4 | In progress: generation/native SDK reports, prepared-input/router facts and actual content receipt intervals link to original work/Thread/Turn sources. ACP public session/route limits remain explicit. Complete historical qualification and final evidence/UI closure remain. |
+| S5 | In progress: native and managed ACP dependencies/review consume common Turn facts. The native three-node fixture proves actual overlap, isolated conflicting local writes and checked dependency consumption through verified completion. Full coordinated/recovery/live closure remains. |
 | S6 | In progress: protocol fixtures now have an unpublished minimal Cargo package; repeated test-time app/runtime builds are removed. Old execution-loop removal and final regression/live gates remain. |
 
 ## Acceptance audit
@@ -336,7 +336,7 @@ and green checks for the pre-refactor MVP do not prove the new architecture.
 | A10 | Frozen dependency consumption and rejection of stale/late evidence. |
 | A11 | Downstream invalidation with independent work retained. |
 | A12 | Stable work/requirements/history through edits and replacement. |
-| A13 | Observed execution interval overlap plus real shared-write isolation. |
+| A13 | Local native three-node acceptance now proves same-clock observed overlap, isolated conflicting scratch writes and checked dependency join. Preserve that evidence through the final source and live qualification; do not substitute admission or wall-clock timestamps. |
 | A14 | Confirmed same-session restore retains Thread; new session/harness gets new Thread. |
 | A15 | Replacement waits for confirmed stop/effect boundary. |
 | A16 | Distinct worker/Turn action keys and interruption reconciliation at every specified boundary; owner-link recovery is partial evidence. |
@@ -744,8 +744,8 @@ root Goal's live control and aggregate budget; a full remaining allowance per
 worker is not acceptable. Managed ACP session/process control must have one
 owner, with confirmed stop before conflicting replacement. Replace the old
 worker execution loop only when these consumers and guarantees have real
-substitutes. Prove actual native branch overlap and isolation, dependency
-consumption and current-versus-historical adoption before completing S4/S5.
+substitutes. Retain the newly proved local native overlap/isolation and dependency
+consumption, and complete current-versus-historical adoption before closing S4/S5.
 Run the required fresh source checks for subsequent implementation batches and
 complete live harness/provider gates before the final A01–A22 audit.
 
@@ -907,6 +907,66 @@ by default. This adds no runtime storage or protocol surface.
 Raw failed/passing logs, exact sources and commands remain in the independent
 local archive under `NATIVE_EVIDENCE_INDEX.md`, without adding campaign snapshots
 to the PR. This is a partial S4 checkpoint, not completion of S0–S6/A01–A22.
+
+## Native activity and parallel-work checkpoint
+
+The existing native harness adapter now forwards received content observations
+to its host before lossy display delivery. A bounded buffer holds at most 32
+request summaries per control and retains no content. Completed SDK attempt
+reports carry optional versioned `bro_stream_activity` in their existing Goal
+accounting artifact; no store, table, execution owner or SDK/Core schema is added.
+Coordination generation keeps its existing streaming selection.
+
+Each summary records a process clock ID, first/last monotonic receipt ticks,
+content-fragment count and supplementary wall timestamps. Only strict overlap
+of intervals from the same clock ID supports observed native overlap. Clock
+IDs differ across processes; wall-clock regression is retained explicitly and
+does not substitute for monotonic evidence. Missing/malformed summaries remain
+unavailable without discarding valid serving reports. These are received-content
+intervals, not full execution lifetimes or physical-provider compute timing;
+`timeline_complete` remains false. Partial tool arguments grant no authority.
+
+Repeated provider-outcome callbacks confirm the original report artifact and
+reservation verdict instead of rebuilding them from an empty observation buffer.
+The regression loses an outcome reply, settles the original receipt, pauses the
+Goal and replays the same result without new work or changed accounting. A
+different report under that key is rejected. Original activity bytes remain exact.
+
+The new native three-node fixture sends real HTTP content to both independent
+branches before either final tool-call chunk. Assertions compare actual stored
+receipt intervals, not that server barrier. Both branches write different values
+to the same ignored scratch path in distinct managed workspaces; each value
+remains isolated. The integration worker actually reads both upstream files
+before writing the join, and its frozen checked-dependency records match the
+current exact handoffs. Host checks and separate completion review verify delivery.
+Ignored scratch files are outside the Git-visible handoff, not claimed transferred.
+
+| Source-bound check | Actual result |
+| --- | --- |
+| Source4 strict workspace/all-target/all-feature Clippy and formatting | Passed |
+| Source4 complete Goal runtime selection | **76 passed**, no leak reports |
+| Native overlap and lost-reply replay, five iterations each | **5/5 iterations passed**, no leak reports |
+| Source5 shared worker regressions in the orchestrator crate | **9 passed** |
+| Source6 native Agent regressions, including the long tool loop | **11 passed** |
+| Workspace/all-feature rustdoc | Six passed, one existing ignored |
+| Source4, source5 and source6 before/after manifests | Zero changed files |
+
+Source1 retains the new observation assertion failing against the prior reader.
+An initial runner-copy error happened before Cargo and is not a test failure.
+Source2 passes the basic observation/replay cases; source3 adds monotonic evidence
+and passes the complete native parallel fixture. Source4's app-package filter
+does not select tests in another crate; sources5/6 explicitly validate their
+owning crate. Source5's former native module spelling matches no such tests;
+source6 uses the actual module name. Original command arguments remain preserved.
+The source4 stress log retains its historical `unknown-stress` filename, but
+its recorded arguments and contents are the native overlap/replay selection.
+
+Raw logs, exact source patches/tars and runners remain outside the feature PR
+under `NATIVE_ACTIVITY_INDEX.md` and its checksum manifest. Passing temporary
+fixture directories were not retained; their Cargo-built reproduction source
+remains in the PR. This is local Rust/HTTP qualification. A fresh final full
+workspace run, live harness/provider checks, native archive qualification,
+remaining recovery/resource work and the complete S0–S6 audit are still required.
 
 ## Delivery and evidence
 
