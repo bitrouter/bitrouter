@@ -114,6 +114,14 @@ pub struct TurnEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acp_permissions: Vec<crate::service::worker::acp::Permission>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub acp_selected: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp: Option<crate::service::worker::acp::Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_stop: Option<crate::service::worker::acp::Stop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<GenerationProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,6 +202,25 @@ impl TurnStatus {
 }
 
 impl TurnSnapshot {
+    pub(crate) fn refresh_acp_input_status(&mut self) {
+        if self.acp.is_some()
+            && matches!(
+                self.status,
+                TurnStatus::Running | TurnStatus::WaitingForInput
+            )
+        {
+            self.status = if self
+                .acp_permissions
+                .iter()
+                .any(|permission| !self.acp_selected.contains_key(&permission.request_id))
+            {
+                TurnStatus::WaitingForInput
+            } else {
+                TurnStatus::Running
+            };
+        }
+    }
+
     pub fn apply(&mut self, event: &TurnEvent) {
         if event.server_instance_id != self.server_instance_id
             || event.turn_id != self.turn_id

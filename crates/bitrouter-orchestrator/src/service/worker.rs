@@ -8,6 +8,8 @@ use crate::control::WorkControl;
 use crate::thread::{GoalWork, ThreadTarget};
 use crate::turn::{TurnReceipt, TurnRequest};
 
+pub mod acp;
+
 pub fn thread_key(source: &GoalWork) -> Result<String, ServiceError> {
     super::admission::fingerprint(source).map(|hash| format!("goal-worker-{hash}"))
 }
@@ -19,13 +21,14 @@ pub(super) enum Managed {
         source: GoalWork,
         control: Arc<dyn WorkControl>,
     },
+    Acp(Box<acp::Job>),
 }
 
 impl Managed {
     pub(super) fn operation(&self) -> &'static str {
         match self {
             Self::Generation(_) => "generation",
-            Self::Native { .. } => "goal_work",
+            Self::Native { .. } | Self::Acp(_) => "goal_work",
         }
     }
 
@@ -35,6 +38,7 @@ impl Managed {
                 super::admission::fingerprint(&(&job.request.origin, &job.request.prompt))
             }
             Self::Native { source, .. } => super::admission::fingerprint(&(source, prompt)),
+            Self::Acp(job) => super::admission::fingerprint(&(&job.source, prompt)),
         }
     }
 
@@ -42,6 +46,7 @@ impl Managed {
         match self {
             Self::Generation(job) => &job.control,
             Self::Native { control, .. } => control,
+            Self::Acp(job) => &job.control,
         }
     }
 }

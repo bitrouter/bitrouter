@@ -53,7 +53,7 @@ async fn agents_md_is_durable_user_context_in_both_tool_modes()
             .create_thread(&service.inner.instance_id, request)
             .await?;
         let view = service.read_thread_view(&target(&created), &CallerContext::local())?;
-        assert_eq!(view.config.instructions, base);
+        assert_eq!(view.config.native()?.instructions, base);
         assert!(
             service
                 .lock_state()

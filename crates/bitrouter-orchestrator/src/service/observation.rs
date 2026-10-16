@@ -10,7 +10,6 @@ use tokio::sync::broadcast;
 use super::{
     ErrorCode, MAX_EVENT_PAGE, RuntimeLimits, ServiceError, ThreadService, now_ms, threads,
 };
-use crate::agent::AgentConfig;
 use crate::store::{EffectStatus, ExecutionRecord};
 use crate::thread::{
     ThreadChange, ThreadEvent, ThreadHistoryPage, ThreadHistoryRequest, ThreadObservation,
@@ -403,6 +402,27 @@ pub(super) fn project_with_native(
 ) {
     let turn = turn_id.map_or_else(String::new, str::to_owned);
     let change = match record {
+        ExecutionRecord::AcpObservation { observation } => ThreadChange::AcpPermissions {
+            turn_id: turn,
+            pending: observation.permissions.clone(),
+        },
+        ExecutionRecord::AcpPermissionChoice {
+            request_id,
+            option_id,
+            ..
+        } => ThreadChange::AcpPermissionChoice {
+            turn_id: turn,
+            request_id: request_id.clone(),
+            option_id: option_id.clone(),
+        },
+        ExecutionRecord::AcpProcessStop { observation } => ThreadChange::AcpProcessStop {
+            turn_id: turn,
+            observation: observation.clone(),
+        },
+        ExecutionRecord::AcpSession { binding } => ThreadChange::AcpSession {
+            turn_id: turn,
+            binding: binding.clone(),
+        },
         ExecutionRecord::CoreCheckpoint { batch, limits } => {
             let decoded;
             let snapshot = match native_snapshot {
@@ -611,6 +631,44 @@ impl ThreadView {
         }
         for change in &event.changes {
             match change {
+                ThreadChange::AcpPermissions { turn_id, pending } => {
+                    if let Some(turn) = &mut self.latest_turn
+                        && &turn.turn_id == turn_id
+                    {
+                        turn.acp_permissions = pending.clone();
+                        turn.refresh_acp_input_status();
+                    }
+                }
+                ThreadChange::AcpPermissionChoice {
+                    turn_id,
+                    request_id,
+                    option_id,
+                } => {
+                    if let Some(turn) = &mut self.latest_turn
+                        && &turn.turn_id == turn_id
+                    {
+                        turn.acp_selected
+                            .insert(request_id.clone(), option_id.clone());
+                        turn.refresh_acp_input_status();
+                    }
+                }
+                ThreadChange::AcpProcessStop {
+                    turn_id,
+                    observation,
+                } => {
+                    if let Some(turn) = &mut self.latest_turn
+                        && &turn.turn_id == turn_id
+                    {
+                        turn.acp_stop = Some(observation.clone());
+                    }
+                }
+                ThreadChange::AcpSession { turn_id, binding } => {
+                    if let Some(turn) = &mut self.latest_turn
+                        && &turn.turn_id == turn_id
+                    {
+                        turn.acp = Some(binding.as_ref().clone());
+                    }
+                }
                 ThreadChange::ContextRouting {
                     turn_id,
                     inspection,
@@ -730,10 +788,14 @@ impl ThreadView {
 
 pub(super) fn empty_turn(
     thread: &ThreadSnapshot,
-    config: &AgentConfig,
+    config: &crate::thread::executor::Config,
     turn_id: &str,
 ) -> TurnSnapshot {
     TurnSnapshot {
+        acp_permissions: Vec::new(),
+        acp_selected: Default::default(),
+        acp: None,
+        acp_stop: None,
         generation: None,
         context_routing: None,
         resources: None,
