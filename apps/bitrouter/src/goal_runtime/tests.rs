@@ -29,6 +29,7 @@ mod fixture;
 mod live_input;
 mod managed_acp;
 mod native;
+mod native_parallel;
 mod review_barrier;
 mod start_recovery;
 mod threads;

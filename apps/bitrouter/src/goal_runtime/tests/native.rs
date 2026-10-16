@@ -214,6 +214,8 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
         let evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await?;
         let entries = evidence["entries"].as_array().context("native model entries missing")?;
         assert!(!entries.is_empty());
+        assert!(entries.iter().any(|entry| entry["observation"]["stream_activity"]["content_parts"].as_u64().is_some_and(|count| count > 0)),
+            "native completion lacks actual received content evidence");
         let serialized_source = serde_json::to_value(&source)?;
         assert!(entries.iter().all(|entry| entry["source"] == serialized_source));
         assert!(entries.iter().any(|entry| entry["kind"] == "preparation"
@@ -241,7 +243,7 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
         assert!(rejected["observation"]["actual_provider"].is_null());
         assert_eq!(fixture.backend.received_requests().await.context("request capture unavailable")?.len(), requests.len());
         // Prove the opt-in failure snapshot mechanism can retain both stores
-        // from this real in-memory Goal/Thread run and reopen them read-only.
+        // from this real file-backed Goal/Thread run and reopen them read-only.
         let copy = fixture.controls.join("native-evidence-copy.sqlite");
         fixture::copy_database(&fixture.db, &copy).await?;
         let copied_db = crate::db::connect(&format!("sqlite://{}?mode=ro", copy.display())).await?;

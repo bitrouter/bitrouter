@@ -11,6 +11,8 @@ use bitrouter_sdk::language_model::native_preparation::{
 use bitrouter_sdk::language_model::native_work::{NativeProviderWork, NativeProviderWorkReport};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub(super) mod activity;
+
 pub(super) struct ModelControl {
     goals: Arc<GoalService>,
     goal: GoalSnapshot,
@@ -22,6 +24,7 @@ pub(super) struct ModelControl {
     failed_ack: AtomicBool,
     failure: tokio::sync::Mutex<Option<String>>,
     plans: tokio::sync::Mutex<BTreeMap<String, NativePlan>>,
+    activity: tokio::sync::Mutex<BTreeMap<String, activity::StreamActivity>>,
 }
 
 impl ModelControl {
@@ -67,6 +70,7 @@ impl ModelControl {
             failed_ack: AtomicBool::new(false),
             failure: tokio::sync::Mutex::new(None),
             plans: tokio::sync::Mutex::new(BTreeMap::new()),
+            activity: tokio::sync::Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -461,6 +465,10 @@ impl bitrouter_orchestrator::control::WorkControl for ModelControl {
 
 #[async_trait::async_trait]
 impl NativeExecutionControl for ModelControl {
+    async fn on_stream_part(&self, request_id: &str, part: &bitrouter_ai::types::StreamPart) {
+        self.record_content(request_id, part).await;
+    }
+
     async fn before_typed_decision(
         &self,
         attempt_id: &str,
@@ -702,6 +710,15 @@ impl NativeExecutionControl for ModelControl {
         }
     }
     async fn after_attempt(&self, report: NativeAttemptReport) {
+        match self.replay_attempt(&report).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(_) => {
+                self.fail_ack("original provider attempt outcome could not be confirmed")
+                    .await;
+                return;
+            }
+        }
         let estimate = report.token_cost.estimated_micro_usd();
         let work_id = key_id(&format!(
             "{}/attempt/{}",
@@ -755,11 +772,19 @@ impl NativeExecutionControl for ModelControl {
                 }),
             _ => false,
         };
-        let Ok(value) = serde_json::to_value(&report) else {
+        let Ok(mut value) = serde_json::to_value(&report) else {
             self.fail_ack("provider attempt outcome could not be serialized")
                 .await;
             return;
         };
+        if let Some(activity) = self.activity.lock().await.remove(&report.request_id) {
+            let Ok(observed) = serde_json::to_value(activity) else {
+                self.fail_ack("provider stream observations could not be serialized")
+                    .await;
+                return;
+            };
+            value["bro_stream_activity"] = observed;
+        }
         if self
             .observe_with_reservation(
                 &format!("{}/attempt/{}", report.request_id, report.attempt_index),
