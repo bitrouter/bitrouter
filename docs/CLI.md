@@ -110,7 +110,7 @@ profile, current workspace grant, and instance. Local and HTTP callers have
 distinct ownership. Knowing a Thread ID does not authorize access.
 
 Native task APIs retain Thread/Turn, tools, model/context and recovery contracts.
-Goals use separate persistent state and do not reinterpret native Thread IDs or FIFO input.
+Goal requirements/arrangements retain their existing store and reference accepted native or managed ACP Thread/Turn execution. Managed ACP sessions have no independent supervisor control lease. Cold session continuation remains gated; direct harness and transparent ACP modes retain their original behavior.
 See the Goal interface section below.
 
 The same Thread service can expose an optional HTTP listener:

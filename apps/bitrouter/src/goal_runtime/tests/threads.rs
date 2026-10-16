@@ -399,7 +399,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
             let task = &goal.workflow.tasks[0];
             let mut outside = task.executions[0].clone();
             outside.workspace = home.path().into();
-            assert!(reopened.drive_native(&goal, task, &outside).await.is_err());
+            assert!(reopened.drive_worker(&goal, task, &outside).await.is_err());
             #[cfg(unix)]
             if !accepted_thread && !paused {
                 let moved = home.path().join("outside-worker");
@@ -407,7 +407,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
                 std::os::unix::fs::symlink(&moved, &workspace)?;
                 assert!(
                     reopened
-                        .drive_native(&goal, task, &task.executions[0])
+                        .drive_worker(&goal, task, &task.executions[0])
                         .await
                         .is_err()
                 );
@@ -415,7 +415,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
                 tokio::fs::rename(&moved, &workspace).await?;
             }
             reopened
-                .drive_native(&goal, task, &task.executions[0])
+                .drive_worker(&goal, task, &task.executions[0])
                 .await?;
             let current = read(&reopened, &id).await?;
             assert_eq!(current.workflow.tasks[0].executions.len(), 1);
@@ -465,7 +465,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
                     if turn_id == &receipt.turn_id && prompt == "Original saved worker input")));
             // A stale coordinator snapshot cannot admit another action.
             reopened
-                .drive_native(&goal, task, &task.executions[0])
+                .drive_worker(&goal, task, &task.executions[0])
                 .await?;
             let repeated = reopened
                 .threads

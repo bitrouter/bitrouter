@@ -22,6 +22,7 @@ struct TurnWorker {
 pub(super) enum Driver {
     Native(Agent),
     Generation(super::generation::Job),
+    Acp(super::worker::acp::Job),
 }
 
 impl Drop for TurnWorker {
@@ -57,6 +58,12 @@ impl ThreadService {
         Box::pin(async move {
             let _worker = worker;
             match driver {
+                Driver::Acp(job) => {
+                    service
+                        .run_acp_turn(turn_id, job, prompt.prompt, cancel)
+                        .await;
+                    service.drive_queues().await;
+                }
                 Driver::Native(agent) => {
                     service
                         .run_turn_inner(turn_id, agent, prompt, verification_command, cancel)

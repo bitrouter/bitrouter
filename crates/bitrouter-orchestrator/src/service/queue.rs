@@ -188,7 +188,7 @@ impl ThreadService {
                 Arc::clone(&self.inner.app),
                 caller.clone(),
                 &thread.snapshot.workspace,
-                thread.config.clone(),
+                thread.config.native()?.clone(),
             )?;
             let mut snapshot = thread.snapshot.clone();
             snapshot.waiting_for_capacity = !thread.queued.is_empty()
@@ -328,12 +328,14 @@ impl ThreadService {
                 )
             };
             let (entry, caller, config, workspace, messages, version, verification) = activation;
-            let agent = match Agent::new(
-                Arc::clone(&self.inner.app),
-                caller,
-                &workspace,
-                config.clone(),
-            ) {
+            let agent = match config.native().and_then(|config| {
+                Agent::new(
+                    Arc::clone(&self.inner.app),
+                    caller,
+                    &workspace,
+                    config.clone(),
+                )
+            }) {
                 Ok(agent) => agent.with_tool_workers(
                     Arc::clone(&self.inner.tool_workers),
                     self.inner.limits.tools_per_turn,
@@ -367,7 +369,7 @@ impl ThreadService {
                 user_item_id: entry.user_item_id.clone(),
                 prompt: entry.prompt.clone(),
                 workspace: workspace.clone(),
-                model: config.model.clone(),
+                model: config.model().into(),
                 tool_mode: config.tool_mode(),
                 idempotency_key: None,
                 request_fingerprint: None,

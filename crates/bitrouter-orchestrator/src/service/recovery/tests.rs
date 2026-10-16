@@ -27,7 +27,7 @@ fn recovery_rejects_checkpoint_goal_ownership_changes() -> Result<(), Box<dyn st
         let header = ExecutionRecord::ThreadCreated {
             caller: CallerContext::local(),
             snapshot: snapshot.clone(),
-            config: Box::new(AgentConfig::fixed("model", None).read_only()),
+            config: Box::new(AgentConfig::fixed("model", None).read_only().into()),
             verification_command: None,
         };
         let mut rebuild = Rebuild::new(&header, "thread", RuntimeLimits::default())?;
@@ -76,7 +76,7 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
     let header = ExecutionRecord::ThreadCreated {
         caller: CallerContext::local(),
         snapshot,
-        config: Box::new(AgentConfig::fixed("model", None).read_only()),
+        config: Box::new(AgentConfig::fixed("model", None).read_only().into()),
         verification_command: None,
     };
     let mut audit = StartupAudit::new(&header, "thread", limits.clone())?;
