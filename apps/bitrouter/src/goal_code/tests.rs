@@ -934,3 +934,96 @@ async fn retry_admission_matches_durable_commit_and_projection_at_recovery_bound
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion()
+-> Result<()> {
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
+    let directory = tempfile::tempdir()?;
+    let GoalReply::Accepted { operation } = service
+        .execute(
+            "local",
+            pending(directory.path(), "quote-view").command,
+            100,
+        )
+        .await?
+    else {
+        anyhow::bail!("fixture Goal missing")
+    };
+    let GoalReply::Snapshot { mut goal } = service
+        .execute(
+            "local",
+            GoalCommand::Get {
+                goal_id: operation.goal_id,
+            },
+            101,
+        )
+        .await?
+    else {
+        anyhow::bail!("fixture snapshot missing")
+    };
+    // Presentation fixture only: no worker, Thread, provider or tool ran here.
+    goal.workflow.owner_thread_id = Some("owner".into());
+    goal.workflow.tasks.push(serde_json::from_value(serde_json::json!({
+        "spec":{"id":"left","title":"Left","instruction":"Fixture","harness":null,"dependencies":[],"checks":[]},
+        "requirements_revision":1,"executions":[{"id":"attempt","workspace":directory.path(),
+            "requirements_revision":1,"task_revision":1,"control_source_revision":goal.control_source_revision,
+            "dispatch_requested":true,"observation":{"state":"running","run_id":null,"native_session_id":null}}]
+    }))?);
+    let source = bitrouter_orchestrator::thread::GoalWork {
+        owner_thread_id: "owner".into(),
+        goal_id: goal.id.clone(),
+        task_id: "left".into(),
+        execution_id: "attempt".into(),
+        task_revision: 1,
+        control_source_revision: goal.control_source_revision,
+    };
+    goal.accounting
+        .in_flight
+        .push(bitrouter_orchestrator::goal::accounting::Work {
+            source: Some(Box::new(source)),
+            id: "wait".into(),
+            kind: bitrouter_orchestrator::goal::accounting::WorkKind::ResourceWait,
+            requirements_revision: 1,
+            request_id: Some("request".into()),
+            token_reservation: None,
+            intent: bitrouter_orchestrator::goal::workflow::ArtifactRef {
+                path: directory.path().join("intent"),
+                sha256: "a".repeat(64),
+                bytes: 1,
+            },
+        });
+    let waiting = projection::goal(&goal, &mut projection::Artifacts::new());
+    assert!(
+        waiting.tasks[0]
+            .status
+            .contains("waiting for shared token reservation")
+    );
+    assert!(
+        waiting
+            .execution
+            .contains("Waiting for shared token reservation")
+    );
+    assert!(!waiting.facts.budget_limited);
+    goal.run_intent = RunIntent::Pause;
+    goal.workflow.tasks[0].executions[0].stop = Some(
+        bitrouter_orchestrator::goal::workflow::StopState::Confirmed {
+            operation_id: "stop".into(),
+            detail: "Fixture stopped-owner fact".into(),
+        },
+    );
+    let paused = projection::goal(&goal, &mut projection::Artifacts::new());
+    assert!(
+        !paused.tasks[0]
+            .status
+            .contains("waiting for shared token reservation")
+    );
+    assert!(paused.facts.paused);
+    assert!(
+        !paused.facts.running,
+        "a stale non-executing wait is not current running work"
+    );
+    Ok(())
+}

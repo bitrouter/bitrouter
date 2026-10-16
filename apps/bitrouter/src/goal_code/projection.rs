@@ -61,7 +61,12 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
         completed: complete,
         paused: snapshot.run_intent == RunIntent::Pause,
         budget_limited: snapshot.budget.resume_required || snapshot.budget.halt.is_some(),
-        running: !snapshot.accounting.in_flight.is_empty(),
+        running: snapshot.accounting.in_flight.iter().any(|work| {
+            work.kind != bitrouter_orchestrator::goal::accounting::WorkKind::ResourceWait
+                || work.source.as_ref().is_some_and(|source| {
+                    bitrouter_orchestrator::goal::workflow::worker_requested(snapshot, source)
+                })
+        }),
         blocked: (snapshot.workflow.planning_requirements_revision
             == snapshot.requirements_revision
             && matches!(snapshot.workflow.planning, Planning::Blocked { .. }))
@@ -83,6 +88,17 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 _ => "Continuing within current requirements".into(),
             },
         });
+    let waiting_for_quote = |task_id: &str| {
+        snapshot.accounting.in_flight.iter().any(|work| {
+            work.kind == bitrouter_orchestrator::goal::accounting::WorkKind::ResourceWait
+                && work.source.as_ref().is_some_and(|source| {
+                    source.task_id == task_id
+                        && bitrouter_orchestrator::goal::workflow::worker_requested(
+                            snapshot, source,
+                        )
+                })
+        })
+    };
     let mut execution = if snapshot.workflow.tasks.is_empty() {
         "No worker execution recorded"
     } else {
@@ -212,6 +228,15 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                     execution = "Effects unknown".into();
                     detail.push(reason.clone());
                     "effects unknown"
+                }
+                Observation::Running { .. } | Observation::Requested
+                    if waiting_for_quote(&task.spec.id) =>
+                {
+                    if execution != "Effects unknown" {
+                        execution = "Waiting for shared token reservation".into();
+                    }
+                    detail.push("Provider dispatch has not started for this request. Waiting for other current workers' in-flight quotes to settle; unknown-cost holds cannot release budget. Pause and cancellation remain available.".into());
+                    "waiting for shared token reservation"
                 }
                 Observation::Running { run_id, .. } => {
                     if let Some(run_id) = run_id {
@@ -658,7 +683,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 snapshot.budget.limits, snapshot.budget.resume_required
             ),
             format!(
-                "Managed generation attempts: {} · work observations without token estimates: {} · external harness/tools/bills may be unknown",
+                "Generation attempts admitted: {} · work observations without token estimates: {} · external harness/tools/bills may be unknown",
                 snapshot.accounting.provider_attempts, snapshot.accounting.unpriced_outcomes
             ),
         ],

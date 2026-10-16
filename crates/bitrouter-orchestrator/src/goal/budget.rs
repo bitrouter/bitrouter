@@ -85,6 +85,32 @@ impl Budget {
     }
 }
 
+/// A current worker may wait for other current workers' in-flight quotes.
+/// Settled calls with missing usage retain their bound and cannot release it
+/// merely because another worker wants to proceed.
+pub fn waiting_on_workers(
+    goal: &GoalSnapshot,
+    quote: Option<&NativeTokenReservation>,
+) -> Result<bool, GoalError> {
+    let spent = goal.accounting.estimated_model_tokens_micro_usd;
+    if goal.budget.can_reserve(spent, quote).is_ok() {
+        return Ok(false);
+    }
+    let mut available = goal.budget.clone();
+    available.held.retain(|held| {
+        !goal.accounting.in_flight.iter().any(|work| {
+            work.id == held.work_id
+                && work
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| super::workflow::worker_requested(goal, source))
+                && work.kind == super::accounting::WorkKind::ProviderAttempt
+        })
+    });
+    available.can_reserve(spent, quote)?;
+    Ok(true)
+}
+
 pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Result<(), GoalError> {
     match event {
         Event::ObserveElapsed => {

@@ -1054,7 +1054,7 @@ It does not undo committed requirements, cancel worker/tool effects, resume
 work or increase a cap; other accepted/in-flight inputs remain ordered.
 Additional words, quotes and hypothetical discussion use normal understanding.
 The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 7; older outboxes are retained and rejected without replay
+Goal IPC is version 8; older outboxes are retained and rejected without replay
 or reinterpretation. Native/ACP protocol versions are separate.
 
 A saved dispatch intent does not establish Turn acceptance. Uncertain managed
