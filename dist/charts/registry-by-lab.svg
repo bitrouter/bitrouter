@@ -251,12 +251,12 @@
 <text class="lab" x="38.0" y="723.0">MINIMAX</text>
 <text class="lab-count" x="286.0" y="723.0" text-anchor="end">2</text>
 <rect x="38.0" y="742.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="38.0" y="742.0" width="107.0" height="22.0" rx="4" fill="#d4d4d8"/>
-<text class="model" x="46.0" y="757.0">minimax-m2.7</text>
-<text class="routes" x="286.0" y="757.0" text-anchor="end">10</text>
+<rect x="38.0" y="742.0" width="117.7" height="22.0" rx="4" fill="#d4d4d8"/>
+<text class="model" x="46.0" y="757.0">minimax-m3</text>
+<text class="routes" x="286.0" y="757.0" text-anchor="end">11</text>
 <rect x="38.0" y="768.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
 <rect x="38.0" y="768.0" width="107.0" height="22.0" rx="4" fill="#d4d4d8"/>
-<text class="model" x="46.0" y="783.0">minimax-m3</text>
+<text class="model" x="46.0" y="783.0">minimax-m2.7</text>
 <text class="routes" x="286.0" y="783.0" text-anchor="end">10</text>
 <rect x="320.0" y="704.0" width="268.0" height="30.0" rx="5" fill="#0a0a0a"/>
 <text class="lab" x="330.0" y="723.0">Z.AI</text>
@@ -283,5 +283,5 @@
 <rect x="914.0" y="742.0" width="74.9" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="757.0">grok-4.7</text>
 <text class="routes" x="1162.0" y="757.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="824.0">59 models · 45 providers · 384 model→provider routes · 11 providers billed by subscription</text>
+<text class="caption" x="28.0" y="824.0">59 models · 45 providers · 385 model→provider routes · 11 providers billed by subscription</text>
 </svg>
