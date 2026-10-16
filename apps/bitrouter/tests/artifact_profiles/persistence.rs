@@ -47,32 +47,36 @@ fn identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+pub(super) async fn table_rows(db: &DatabaseConnection, table: &str) -> Result<Vec<String>> {
+    let columns = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            format!("PRAGMA table_info({})", identifier(table)),
+        ))
+        .await?
+        .into_iter()
+        .map(|row| row.try_get::<String>("", "name"))
+        .collect::<Result<Vec<_>, _>>()?;
+    ensure!(!columns.is_empty(), "missing table {table}");
+    strings(
+        db,
+        format!(
+            "SELECT json_array({}) AS value FROM {} ORDER BY value",
+            columns
+                .iter()
+                .map(|name| identifier(name))
+                .collect::<Vec<_>>()
+                .join(","),
+            identifier(table),
+        ),
+    )
+    .await
+}
+
 async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
     let mut rows = Vec::new();
     for (table, count) in TABLES {
-        let columns = db
-            .query_all(Statement::from_string(
-                DbBackend::Sqlite,
-                format!("PRAGMA table_info({})", identifier(table)),
-            ))
-            .await?
-            .into_iter()
-            .map(|row| row.try_get::<String>("", "name"))
-            .collect::<Result<Vec<_>, _>>()?;
-        ensure!(!columns.is_empty(), "missing baseline table {table}");
-        let values = strings(
-            db,
-            format!(
-                "SELECT json_array({}) AS value FROM {} ORDER BY value",
-                columns
-                    .iter()
-                    .map(|name| identifier(name))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                identifier(table),
-            ),
-        )
-        .await?;
+        let values = table_rows(db, table).await?;
         ensure!(values.len() == count, "baseline {table} row count changed");
         rows.push(values);
     }

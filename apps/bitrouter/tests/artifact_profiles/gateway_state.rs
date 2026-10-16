@@ -20,6 +20,9 @@ mod seed;
 #[path = "gateway_judge.rs"]
 mod judge;
 
+#[path = "gateway_trajectory.rs"]
+mod trajectory;
+
 fn selector(named: bool) -> &'static str {
     if named { "@coding" } else { "coding" }
 }

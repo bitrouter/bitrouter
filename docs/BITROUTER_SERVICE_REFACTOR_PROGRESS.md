@@ -3151,3 +3151,58 @@ progress guards and pending outbox delivery across feature transitions. A16
 comparable idle-memory/load measurements, the final feature/runtime/package
 candidate, final independent acceptance review and PR remain outstanding.
 P0 stays active; no P1 shared-state machinery is introduced.
+
+## Trajectory settlement and outbox across profiles (2026-10-16)
+
+Stage base: `91e0c29`. This test-only stage uses the immutable full, minimum and
+harness artifacts recorded above; it makes no production-source or dependency
+change. The new `gateway_state::trajectory` fixture exercises actual HTTP
+requests and persisted rows through full → minimum → full → full processes.
+A private SQLite trigger temporarily rejects evaluation subject insertion, so
+the full gateway's actual publisher fails after the request has committed its
+terminal fact and operational outbox. The test never manufactures settlement
+payloads, route decisions or successful delivery receipts.
+
+The full request selects the cheap route and settles 14 micro-USD. With the
+consumer failure removed and core unavailable, minimum startup preserves the
+complete request/trajectory rows and failed outbox. A subsequent request extends
+the same prompt history, stays in the same episode with the same correlation
+key, and crosses the published 10 micro-USD progress-guard threshold. It selects
+the protected strong route, creates a hold and settles 28 micro-USD; the reduced
+episode records two settled requests and cumulative cost 42 micro-USD. The old
+outbox's attempt count remains unchanged and the new outbox has zero publication
+attempts. No evaluation rows appear, including at minimum shutdown.
+
+Restoring full drains both envelopes before readiness. The test compares all
+columns in request, episode, trajectory-request, event and prefix-index tables,
+plus every outbox field. Only each outbox's attempt count and delivery timestamp
+may change. It requires exactly two evaluation subjects/results/admission rows,
+no additional upstream request, and identical terminal facts/cost/guard state.
+A second full restart must preserve those evaluation and delivery rows exactly,
+proving that this transition does not repeat settlement or publication. The
+shared table snapshot helper also continues to read every baseline column for
+the earlier native-record compatibility fixture.
+
+Validation on macOS arm64:
+
+- Trajectory-only real-artifact test: **1/1 passed in 0.86s**, after a 58.45s
+  Rust/Cargo 1.99.0 build; `/tmp/bitrouter-p0-trajectory-profiles.log`.
+- All five artifact-profile scenarios together: **5/5 passed in 5.89s**,
+  including daemon replacement, historical database transitions, published
+  blocks, judge identity/accounting and trajectory/outbox. Command:
+  `cargo test --locked --offline -p bitrouter --jobs 2 --test artifact_profiles
+  -- --ignored --test-threads=1`, with the three `BITROUTER_TEST_*_BINARY` values
+  pointing to `/tmp/bitrouter-p0-policy-profiles.jmg4el/{full,gateway,harness}/bro`.
+  Log: `/tmp/bitrouter-p0-all-profile-transitions.log`.
+- Strict Rust 1.97.0 all-feature Clippy for the changed artifact test target:
+  passed in 32.39s; `/tmp/bitrouter-p0-trajectory-profile-clippy.log`. The preceding
+  stage's full workspace/all-target strict check remains separate evidence.
+- Formatting and diff checks passed. Independent read-only review found no
+  actionable issue in the fixture or snapshot/readiness ordering.
+
+Existing Linux/macOS CI selection includes the new scenario through the
+`gateway_state::` filter. These fixtures exercise known provider usage and the
+existing operational evaluation contract; they do not establish new distributed
+or external delivery semantics. The remaining P0 work is final-candidate
+reconciliation and broad validation, comparable idle-memory/load measurements,
+packaged delivery validation, final independent acceptance review and PR.
