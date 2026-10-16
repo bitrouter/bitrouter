@@ -416,8 +416,24 @@ async fn observe(
                     serde_json::json!({"status":"pending","actual_provider":null,"actual_model":null}),
                 );
             };
-            let report: NativeAttemptReport =
-                serde_json::from_slice(&read(root, reference).await?)?;
+            let value: serde_json::Value = serde_json::from_slice(&read(root, reference).await?)?;
+            let activity = value
+                .get("bro_stream_activity")
+                .and_then(|value| {
+                    serde_json::from_value::<super::model_control::activity::StreamActivity>(
+                        value.clone(),
+                    )
+                    .ok()
+                })
+                .filter(|activity| activity.valid());
+            let activity_status = if activity.is_some() {
+                "observed"
+            } else if value.get("bro_stream_activity").is_some() {
+                "unavailable"
+            } else {
+                "not_recorded"
+            };
+            let report: NativeAttemptReport = serde_json::from_value(value)?;
             let intent: serde_json::Value =
                 serde_json::from_slice(&read(root, &work.intent).await?)?;
             anyhow::ensure!(
@@ -433,7 +449,10 @@ async fn observe(
                 "actual_provider":report.actual_provider,"actual_model":report.actual_model,
                 "usage":report.result.as_ref().and_then(|result| result.usage.as_ref()),
                 "output_recorded":report.result.is_some(),"output_rejected":report.output_rejection.is_some(),
-                "report_rejected":report.report_rejection.is_some(),"error_reported":report.error.is_some(),"elapsed_ms":report.elapsed_ms}),
+                "report_rejected":report.report_rejection.is_some(),"error_reported":report.error.is_some(),"elapsed_ms":report.elapsed_ms,
+                "stream_activity":activity,
+                "activity_status":activity_status,
+                "activity_scope":"Local receipt of content fragments only. Compare monotonic ticks only within the same clock_id; wall timestamps may regress. Not admission, full execution lifetime, physical provider timing, tool execution or settlement"}),
             )
         }
         _ => Ok(

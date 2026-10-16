@@ -534,6 +534,7 @@ async fn control(root: &Path) -> Result<(Arc<ModelControl>, Arc<FaultStore>, Arc
         failed_ack: AtomicBool::new(false),
         failure: tokio::sync::Mutex::new(None),
         plans: tokio::sync::Mutex::new(BTreeMap::new()),
+        activity: tokio::sync::Mutex::new(BTreeMap::new()),
     });
     Ok((control, store, goals))
 }
@@ -847,6 +848,130 @@ async fn lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work(
     assert_eq!(head.accounting.work_observed, 1);
     assert_eq!(head.accounting.unpriced_outcomes, 1);
     assert!(head.accounting.in_flight.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -> Result<()> {
+    use bitrouter_ai::types::{ApiProtocol, StreamPart};
+    use bitrouter_sdk::language_model::native::NativeRoute;
+    let root = tempfile::tempdir()?;
+    let (control, store, goals) = control(root.path()).await?;
+    let report = NativeAttemptReport {
+        request_id: "streamed-request".into(),
+        attempt_index: 0,
+        route: NativeRoute {
+            provider: "fixture".into(),
+            model: "test-model".into(),
+            protocol: ApiProtocol::ChatCompletions,
+            constraints: Default::default(),
+            output_token_limit_supported: None,
+            input_count: None,
+            protocol_validation: Default::default(),
+            continuation: Default::default(),
+        },
+        actual_provider: None,
+        actual_model: None,
+        result: None,
+        output_rejection: None,
+        report_rejection: None,
+        error: Some("interrupted after partial content".into()),
+        elapsed_ms: 1,
+        token_cost: Default::default(),
+        cache: Default::default(),
+        private_context: Default::default(),
+        continuation: Default::default(),
+    };
+    let key = "streamed-request/attempt/0";
+    control.begin(WorkKind::ProviderAttempt, key, Some(&report.request_id),
+        serde_json::json!({"request_id":report.request_id,"attempt_index":0,"route":report.route})).await?;
+    // Empty markers are not activity. Partial tool arguments count as received
+    // content but never become a permission or completed tool-effect claim.
+    control
+        .on_stream_part(
+            &report.request_id,
+            &StreamPart::TextStart { id: "empty".into() },
+        )
+        .await;
+    control
+        .on_stream_part(
+            &report.request_id,
+            &StreamPart::TextDelta {
+                text: "received".into(),
+            },
+        )
+        .await;
+    control
+        .on_stream_part(
+            &report.request_id,
+            &StreamPart::ToolCallDelta {
+                id: "partial".into(),
+                name: Some("write".into()),
+                arguments: "{".into(),
+                provider_metadata: Default::default(),
+            },
+        )
+        .await;
+    store.inject(Fault::LostAcknowledgement, 1)?;
+    control.after_attempt(report.clone()).await;
+    assert!(control.acknowledged());
+    assert!(control.activity.lock().await.is_empty());
+    let observed = snapshot(&goals, &control.goal.id).await?;
+    assert_eq!(observed.accounting.provider_attempts, 1);
+    assert!(observed.accounting.in_flight.is_empty());
+    let GoalReply::Accepted { operation } = goals
+        .execute(
+            "local",
+            GoalCommand::Operation {
+                operation_id: format!("{}-outcome", key_id(key)),
+            },
+            now()?,
+        )
+        .await?
+    else {
+        anyhow::bail!("outcome missing")
+    };
+    let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind else {
+        anyhow::bail!("outcome operation differs")
+    };
+    let Change::Accounting {
+        event: Event::Observe {
+            report: reference, ..
+        },
+    } = *change
+    else {
+        anyhow::bail!("outcome event differs")
+    };
+    let original = crate::goal_artifacts::read(&control.root, &reference).await?;
+    let value: serde_json::Value = serde_json::from_slice(&original)?;
+    assert_eq!(value["bro_stream_activity"]["content_parts"], 2);
+    assert!(value["actual_provider"].is_null());
+    assert!(value["result"].is_null());
+    goals
+        .execute(
+            "local",
+            GoalCommand::Control {
+                operation_id: "pause-before-outcome-replay".into(),
+                goal_id: control.goal.id.clone(),
+                expected_revision: observed.revision,
+                intent: RunIntent::Pause,
+            },
+            now()?,
+        )
+        .await?;
+    let paused = snapshot(&goals, &control.goal.id).await?;
+    control.after_attempt(report.clone()).await;
+    assert!(control.acknowledged());
+    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
+    assert_eq!(
+        crate::goal_artifacts::read(&control.root, &reference).await?,
+        original
+    );
+    let mut changed = report;
+    changed.error = Some("different outcome cannot reuse the original key".into());
+    control.after_attempt(changed).await;
+    assert!(!control.acknowledged());
+    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
     Ok(())
 }
 
