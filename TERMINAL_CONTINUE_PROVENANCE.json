@@ -1,0 +1,10 @@
+{
+  "createdAt": "2026-10-16T23:07:25.597Z",
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "ea6ddd76cadf3a5f4cedbc965efe440cd82be4a8",
+  "featureSource": "cc9673ab286d11bfbe2373fe9196412a44458d61",
+  "finalLocalRun": "terminal-continue-final77",
+  "originalAddedFiles": 48,
+  "originalAddedBytes": 1627838,
+  "scope": "Complete source verification after shared terminal continuation ordering correction; all four UI callers await SIGCONT and the PTY guard rejects early keyboard reacquisition. Linux CI collects all failures without altering retries. Prior raw evidence is unchanged; original failures and source applicability remain retained. Actual vendor/provider live gate is unpassed; expanded final hostedCI follows separately."
+}

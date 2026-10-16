@@ -1,0 +1,30 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+    --> apps/bitrouter/src/agent_sessions.rs:1029:25
+     |
+1029 |                         crate::chat::signals::suspend_current_process()?;
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `impl futures::Future<Output = std::result::Result<(), std::io::Error>>`
+     |
+     = help: the nightly-only, unstable trait `Try` is not implemented for `impl futures::Future<Output = std::result::Result<(), std::io::Error>>`
+help: consider `await`ing on the `Future`
+     |
+1029 |                         crate::chat::signals::suspend_current_process().await?;
+     |                                                                        ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+   --> apps/bitrouter/src/chat/code.rs:452:25
+    |
+452 |                         super::signals::suspend_current_process()?;
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `impl futures::Future<Output = std::result::Result<(), std::io::Error>>`
+    |
+    = help: the nightly-only, unstable trait `Try` is not implemented for `impl futures::Future<Output = std::result::Result<(), std::io::Error>>`
+help: consider `await`ing on the `Future`
+    |
+452 |                         super::signals::suspend_current_process().await?;
+    |                                                                  ++++++
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `bitrouter` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `bitrouter` (lib test) due to 2 previous errors
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --workspace --all-features` exited with code 101

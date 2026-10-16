@@ -1,0 +1,170 @@
+{
+  "id": "terminal-continue-final77",
+  "scope": "Current final source addresses Linux UI suspend/resume ordering: subscribeSIGCONT beforeSIGSTOP and awaitthatackbefore rawmode is reacquired; Goal+native UI use shared async helper. Existing PTY assertions stay intact with additional no-keyboard-reacquisition-before-CONT guard. The original02fLinuxfailureisretained. The Linux matrix also now collects alltestfailures (--no-fail-fast) ratherthan hiding latercases; selection36/36,retries,andproduct/fixturetimebounds unchanged. Fullsource2outerslots+strictLEAKqualification; actualvendor/providerlivegateunpassed.",
+  "jobs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ]
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ]
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "goal-pty",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(goal_tui_pty)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "help-output-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "help-output-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "help-output-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "run": "terminal-continue-final77",
+  "evaluatedHead": "02f372c9eb979a5fd99e03b2ba4bbb91617bb6a9",
+  "sourceTarFilesVerified": 7,
+  "changesSinceFinal62": [
+    ".github/workflows/ci.yml",
+    "apps/bitrouter/src/agent_sessions.rs",
+    "apps/bitrouter/src/chat/code.rs",
+    "apps/bitrouter/src/chat/signals.rs",
+    "apps/bitrouter/src/goal_code.rs",
+    "apps/bitrouter/src/native_code.rs",
+    "apps/bitrouter/tests/goal_tui_pty.rs"
+  ],
+  "postTestMetadataDelta": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json"
+  ],
+  "finalFiles": {
+    ".github/workflows/ci.yml": "8d0084b5cd961b9cd6c7af0f2c614681e7f7f0add7eba9a8a80734a74d5ce42a",
+    "apps/bitrouter/src/agent_sessions.rs": "50598cc24e1aef8abfcf869560ca570d0743ffc1958adf9c9f31854f3b1b534c",
+    "apps/bitrouter/src/chat/code.rs": "f4bbccd3d3c0c7536d394a22e26c0df86f426f776c81ea334546f574bc4625b8",
+    "apps/bitrouter/src/chat/signals.rs": "5ec52dca41158b42c5db8496665d2da3d9b029ae6d238046662fdb49ed1d81f5",
+    "apps/bitrouter/src/goal_code.rs": "a2bba2b1ee6bf916fad6000cb0b702943e0e4d788b0dbe4a7ea2e525ba4a0e51",
+    "apps/bitrouter/src/native_code.rs": "ca2dc1b438ae4cf408e6fc9526f13bef4ee43cf729ebe58d35482d38d9d831f0",
+    "apps/bitrouter/tests/goal_tui_pty.rs": "e10a99e2d46685405acc9e72a8845e141bf78c0eee952d7efbca010b80701a9e",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "78ba761617a6d3e619104159852673366191bf8c448e5afbd5e14a9be04279f2",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md": "05c4ee2dafb61284fd4b2974e36d3b1d4e68675028ef29a8c4521e85b407fb0b",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json": "24f0f69378bb6538d6f8d341254411796793a93579032c71a6c3f4f053186699"
+  }
+}

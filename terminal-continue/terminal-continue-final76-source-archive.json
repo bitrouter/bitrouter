@@ -1,0 +1,11 @@
+{
+  "head": "02f372c9eb979a5fd99e03b2ba4bbb91617bb6a9",
+  "dirtyFiles": [
+    ".github/workflows/ci.yml",
+    "apps/bitrouter/src/chat/signals.rs",
+    "apps/bitrouter/src/goal_code.rs",
+    "apps/bitrouter/src/native_code.rs",
+    "apps/bitrouter/tests/goal_tui_pty.rs"
+  ],
+  "scope": "Dirty files supplement the exact committed HEAD."
+}

@@ -1,0 +1,7 @@
+{
+  "createdAt": "2026-10-16T23:06:50.596Z",
+  "scope": "Credential-shaped string scan of exact local archive files and safely extracted regular tar payloads. Reports names/counts only; no token values. Git bundle verification/provenance is recorded separately. Fake fixture keys do not use these production token prefixes.",
+  "checked": 11990,
+  "archives": 126,
+  "hits": []
+}

@@ -1,0 +1,306 @@
+{
+  "source": "terminal-continue-final77-source.json",
+  "scope": "Current final source addresses Linux UI suspend/resume ordering: subscribeSIGCONT beforeSIGSTOP and awaitthatackbefore rawmode is reacquired; Goal+native UI use shared async helper. Existing PTY assertions stay intact with additional no-keyboard-reacquisition-before-CONT guard. The original02fLinuxfailureisretained. The Linux matrix also now collects alltestfailures (--no-fail-fast) ratherthan hiding latercases; selection36/36,retries,andproduct/fixturetimebounds unchanged. Fullsource2outerslots+strictLEAKqualification; actualvendor/providerlivegateunpassed.",
+  "startedAt": "2026-10-16T22:41:50.796Z",
+  "runs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "terminal-continue-final77-native-features.log",
+      "startedAt": "2026-10-16T22:41:50.796Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:41:51.128Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "terminal-continue-final77-acp-features.log",
+      "startedAt": "2026-10-16T22:41:51.128Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:41:51.330Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "terminal-continue-final77-native-tree.log",
+      "startedAt": "2026-10-16T22:41:51.331Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:41:51.443Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "terminal-continue-final77-msrv-native.log",
+      "startedAt": "2026-10-16T22:41:51.443Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:41:51.833Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "goal-pty",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(goal_tui_pty)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "terminal-continue-final77-goal-pty.log",
+      "startedAt": "2026-10-16T22:41:51.833Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:44:28.455Z",
+      "summaries": [
+        "     Summary [  55.142s] 4 tests run: 4 passed, 0 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "help-output-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "terminal-continue-final77-help-output-1.log",
+      "startedAt": "2026-10-16T22:44:28.455Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:44:33.729Z",
+      "summaries": [
+        "     Summary [   4.118s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "help-output-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "terminal-continue-final77-help-output-2.log",
+      "startedAt": "2026-10-16T22:44:33.729Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:44:38.446Z",
+      "summaries": [
+        "     Summary [   4.162s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "help-output-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "terminal-continue-final77-help-output-3.log",
+      "startedAt": "2026-10-16T22:44:38.446Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:44:43.233Z",
+      "summaries": [
+        "     Summary [   4.206s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "terminal-continue-final77-typed-startup.log",
+      "startedAt": "2026-10-16T22:44:43.233Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:44:46.839Z",
+      "summaries": [
+        "     Summary [   0.621s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ],
+      "log": "terminal-continue-final77-workspace.log",
+      "startedAt": "2026-10-16T22:44:46.839Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:04:44.158Z",
+      "summaries": [
+        "     Summary [1145.745s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "terminal-continue-final77-clippy.log",
+      "startedAt": "2026-10-16T23:04:44.160Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:05:38.214Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "terminal-continue-final77-fmt.log",
+      "startedAt": "2026-10-16T23:05:38.215Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:05:58.566Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "terminal-continue-final77-doctest.log",
+      "startedAt": "2026-10-16T23:05:58.567Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:06:05.957Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ],
+      "log": "terminal-continue-final77-registry.log",
+      "startedAt": "2026-10-16T23:06:05.957Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:06:06.773Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T23:06:06.879Z",
+  "changed": [],
+  "passed": true
+}

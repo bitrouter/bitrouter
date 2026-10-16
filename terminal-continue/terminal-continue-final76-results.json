@@ -1,0 +1,110 @@
+{
+  "source": "terminal-continue-final76-source.json",
+  "scope": "Current final source addresses Linux UI suspend/resume ordering: subscribeSIGCONT beforeSIGSTOP and awaitthatackbefore rawmode is reacquired; Goal+native UI use shared async helper. Existing PTY assertions stay intact with additional no-keyboard-reacquisition-before-CONT guard. The original02fLinuxfailureisretained. The Linux matrix also now collects alltestfailures (--no-fail-fast) ratherthan hiding latercases; selection36/36,retries,andproduct/fixturetimebounds unchanged. Fullsource2outerslots+strictLEAKqualification; actualvendor/providerlivegateunpassed.",
+  "startedAt": "2026-10-16T22:39:34.932Z",
+  "runs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "terminal-continue-final76-native-features.log",
+      "startedAt": "2026-10-16T22:39:34.932Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:39:35.380Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "terminal-continue-final76-acp-features.log",
+      "startedAt": "2026-10-16T22:39:35.380Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:39:35.593Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "terminal-continue-final76-native-tree.log",
+      "startedAt": "2026-10-16T22:39:35.593Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:39:35.698Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "terminal-continue-final76-msrv-native.log",
+      "startedAt": "2026-10-16T22:39:35.698Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:39:36.162Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "help-output-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "terminal-continue-final76-help-output-1.log",
+      "startedAt": "2026-10-16T22:39:36.162Z",
+      "status": "failed",
+      "code": 101,
+      "signal": null,
+      "finishedAt": "2026-10-16T22:40:12.673Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T22:40:12.881Z",
+  "changed": [],
+  "passed": false
+}
