@@ -254,6 +254,10 @@ pub struct TaskSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
     pub spec: TaskSpec,
+    /// Declared worker of archives written before attempts recorded their own
+    /// selection. Set only on a later worker change; it proves no execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_worker: Option<Worker>,
     pub requirements_revision: u64,
     pub executions: Vec<Execution>,
     /// Full retired records remain in immutable, bounded Goal history pages.
@@ -277,6 +281,67 @@ pub enum ExecutionAdmission {
 }
 
 impl Task {
+    /// One source rule for preparation and durable admission. Preparation-only
+    /// retries keep the original handoff instead of silently dropping results.
+    pub fn worker_handoff(
+        &self,
+        before: usize,
+        goal_control_source: u64,
+    ) -> Result<Option<super::resources::WorkerHandoff>, GoalError> {
+        let previous = self
+            .executions
+            .get(..before)
+            .ok_or_else(|| invalid("worker handoff cutoff is outside the task"))?;
+        for execution in previous.iter().rev() {
+            if self.execution_harness(execution) == self.spec.harness.as_deref() {
+                if execution.task_revision == self.requirements_revision {
+                    if let Some(handoff) = execution
+                        .resources
+                        .as_ref()
+                        .and_then(|resources| resources.worker_handoff.as_ref())
+                    {
+                        return Ok(Some(handoff.clone()));
+                    }
+                    if !execution.dispatch_requested {
+                        continue;
+                    }
+                }
+                return Ok(None);
+            }
+            if !execution.dispatch_requested {
+                continue;
+            }
+            if let Some(LocalReconciliation::Verified {
+                task_revision,
+                control_source_revision,
+                workspace,
+                transcript,
+            }) = &execution.reconciliation
+                && *task_revision == self.requirements_revision
+                && *control_source_revision == goal_control_source.max(self.control_source_revision)
+                && matches!(execution.stop, Some(StopState::Confirmed { .. }))
+            {
+                return Ok(Some(super::resources::WorkerHandoff {
+                    execution_id: execution.id.clone(),
+                    workspace: workspace.clone(),
+                    transcript: transcript.clone(),
+                }));
+            }
+            return Err(invalid(
+                "worker replacement lacks current stopped-effect material",
+            ));
+        }
+        Ok(None)
+    }
+
+    pub fn execution_harness<'a>(&'a self, execution: &'a Execution) -> Option<&'a str> {
+        execution
+            .worker
+            .as_ref()
+            .or(self.legacy_worker.as_ref())
+            .map_or(self.spec.harness.as_deref(), Worker::harness)
+    }
+
     pub fn execution_admission(
         &self,
         goal_revision: u64,
@@ -325,6 +390,10 @@ pub struct Execution {
     /// Accepted execution identity, distinct from any ACP session/run ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadExecution>,
+    /// Requested executor at attempt creation, distinct from its accepted
+    /// Thread/Turn and actual ACP session or model observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<Worker>,
     pub requirements_revision: u64,
     pub task_revision: u64,
     #[serde(default, skip_serializing_if = "zero_revision")]
@@ -357,6 +426,36 @@ pub struct Execution {
 pub struct ThreadExecution {
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Worker {
+    BuiltIn,
+    Acp { harness: String },
+}
+
+impl Worker {
+    pub fn from_harness(harness: Option<String>) -> Self {
+        match harness {
+            Some(harness) => Self::Acp { harness },
+            None => Self::BuiltIn,
+        }
+    }
+
+    pub fn harness(&self) -> Option<&str> {
+        match self {
+            Self::BuiltIn => None,
+            Self::Acp { harness } => Some(harness),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), GoalError> {
+        match self.harness() {
+            Some(harness) => identifier(harness),
+            None => Ok(()),
+        }
+    }
 }
 
 fn zero_revision(revision: &u64) -> bool {
@@ -1318,6 +1417,7 @@ fn apply(
                 .cloned()
                 .map(|spec| Task {
                     spec,
+                    legacy_worker: None,
                     requirements_revision: revision,
                     executions: Vec::new(),
                     archived_executions: 0,
@@ -1393,6 +1493,7 @@ fn apply(
                 workspace: workspace.clone(),
                 observation: Observation::Requested,
                 thread: None,
+                worker: Some(Worker::from_harness(task.spec.harness.clone())),
                 requirements_revision: revision,
                 task_revision: task.requirements_revision,
                 control_source_revision: goal_control_source.max(task.control_source_revision),
@@ -1505,6 +1606,16 @@ fn apply(
                         .any(|execution| &execution.id == execution_id)
                 })
                 .ok_or(GoalError::NotFound)?;
+            let index = task
+                .executions
+                .iter()
+                .position(|execution| &execution.id == execution_id)
+                .ok_or(GoalError::NotFound)?;
+            if resources.worker_handoff != task.worker_handoff(index, goal_control_source)? {
+                return Err(invalid(
+                    "prepared worker handoff differs from the retained source",
+                ));
+            }
             let execution = task
                 .executions
                 .iter_mut()
@@ -1944,6 +2055,14 @@ fn apply(
                 .ok_or(GoalError::NotFound)?;
             let execution = task
                 .executions
+                .iter()
+                .position(|execution| &execution.id == execution_id)
+                .ok_or(GoalError::NotFound)?;
+            let external = task
+                .execution_harness(&task.executions[execution])
+                .is_some();
+            let execution = task
+                .executions
                 .iter_mut()
                 .find(|execution| &execution.id == execution_id)
                 .ok_or(GoalError::NotFound)?;
@@ -1977,7 +2096,7 @@ fn apply(
                 }
                 Observation::Running { .. } => {}
             }
-            if task.spec.harness.is_none()
+            if !external
                 && matches!(
                     observation,
                     Observation::Running {
@@ -2003,7 +2122,7 @@ fn apply(
                 ));
             }
             if let Some(run_id) = observation_run(observation) {
-                if task.spec.harness.is_none() {
+                if !external {
                     return Err(invalid(
                         "built-in execution cannot acquire an ACP run identity",
                     ));
@@ -2012,7 +2131,7 @@ fn apply(
             } else if matches!(
                 observation,
                 Observation::Running { .. } | Observation::Candidate { .. }
-            ) && (task.spec.harness.is_some() || execution.thread.is_none())
+            ) && (external || execution.thread.is_none())
             {
                 return Err(invalid(
                     "built-in execution requires its accepted Thread/Turn identity",

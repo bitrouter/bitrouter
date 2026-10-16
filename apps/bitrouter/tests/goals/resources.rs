@@ -93,6 +93,7 @@ async fn selected_resources_must_be_frozen_before_dispatch_and_survive_reload() 
         .await?;
     let content = report(dir.path(), "selected context bytes")?;
     let prepared = Prepared {
+        worker_handoff: None,
         selection: spec.resources.clone(),
         prompt: report(dir.path(), "actual prepared prompt")?,
         materials: vec![Material::Context {
@@ -256,6 +257,7 @@ fn resource_material_cannot_expand_selection_or_omit_the_selected_bytes() -> Res
     );
     let dir = tempfile::tempdir()?;
     let mut prepared = Prepared {
+        worker_handoff: None,
         selection: Selection {
             context_files: vec!["chosen".into()],
             ..Default::default()

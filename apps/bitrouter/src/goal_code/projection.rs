@@ -286,6 +286,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             "waiting dependencies / not dispatched"
         };
         for attempt in &task.executions {
+            detail.push(format!("Execution {} requested worker: {}. Actual execution requires its recorded Thread/Turn or session evidence.", attempt.id, task.execution_harness(attempt).unwrap_or("built-in")));
             match &attempt.reconciliation {
                 Some(LocalReconciliation::Verified {
                     task_revision,
@@ -355,6 +356,21 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             .last()
             .and_then(|execution| execution.resources.as_ref())
         {
+            if let Some(handoff) = &prepared.worker_handoff {
+                detail.push(format!("Prepared local worker handoff from execution {}. This is supplied result material, not private session transfer or new permission.",handoff.execution_id));
+                artifacts.push(artifact(
+                    &snapshot.id,
+                    "Prepared worker handoff workspace",
+                    &handoff.workspace,
+                    map,
+                ));
+                artifacts.push(artifact(
+                    &snapshot.id,
+                    "Original worker effect evidence",
+                    &handoff.transcript,
+                    map,
+                ));
+            }
             detail.push(format!("Selected BRO model route: {} · controller confirmed: {} · actual provider model identity: unreported",
                 prepared.selection.model_route.as_deref().unwrap_or("harness default / uncontrolled"),
                 task.executions.last().and_then(|execution| execution.confirmed_model_route.as_deref()).unwrap_or("unreported")));
@@ -393,7 +409,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             status: status.into(),
             dependencies: task.spec.dependencies.clone(),
             resource: format!(
-                "Executor: {} · BRO route: {} · MCP selected: {} · skills selected: {} · context selected: {} · actual provider/use: unreported",
+                "Requested worker: {} · BRO route: {} · MCP selected: {} · skills selected: {} · context selected: {} · actual provider/use: unreported",
                 task.spec.harness.as_deref().unwrap_or("built-in"), task.spec.resources.model_route.as_deref().unwrap_or("executor default"), task.spec.resources.mcp_servers.len(), task.spec.resources.skills.len(), task.spec.resources.context_files.len()
             ),
             details: detail,
@@ -422,7 +438,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 label: format!(
                     "Permission for task {} · harness {}",
                     task.map_or("unreported", |task| task.spec.id.as_str()),
-                    task.map_or("unreported", |task| task.spec.harness.as_deref().unwrap_or("built-in"))
+                    task.zip(execution).map_or("unreported", |(task, execution)| task.execution_harness(execution).unwrap_or("built-in"))
                 ),
                 details: vec![
                     match &decision.run_id {
