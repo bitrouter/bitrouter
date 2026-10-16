@@ -395,7 +395,13 @@ resume. Ordinary start rejects a changed body on the original key before
 restoration; a readonly query itself never requests continuation. Local proof
 uses controlled SQLite checkpoint images after actual source shutdown/join;
 it does not qualify forced crash takeover or private ACP continuation.
-Confirmed ACP continuation and worker token-quote waiting remain incomplete. Do not treat
+Native worker token-quote contention waits on provider reservations held by current
+workers, preserving its original attempt key, route order and frozen quote. The
+Workflow distinguishes this wait from exhausted budget. A settled outcome with
+missing usage retains its quote and cannot be treated as a temporary wait. Pause,
+revocation and SDK cancellation close admission; the executor is not polled after
+cancelled admission. A saved wait or reservation is not provider/model execution.
+Confirmed ACP continuation remains incomplete. Do not treat
 controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
 remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
 Both `bro` and `bro code` open Goals; reading the directory does not create or
@@ -467,9 +473,9 @@ It does not undo committed requirements, cancel worker/tool effects, resume
 work or increase a cap; other accepted/in-flight inputs remain ordered.
 Additional words, quotes and hypothetical discussion use normal understanding.
 The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 6; older outboxes are retained and rejected without replay
+Goal IPC is version 8; older outboxes are retained and rejected without replay
 or reinterpretation. Native/ACP protocol versions are separate.
-The managed Goal refactor records database migrations 000030/000031: older app
+The managed Goal refactor records database migrations 000030/000031/000032/000033: older app
 versions reject that database at startup. Do not remove the version marker or
 run old and new Goal writers concurrently; it preserves existing history.
 Superseded reconciled executions without active references are archived into

@@ -53,14 +53,18 @@ local effects use original-history/workspace reconciliation. Shared generation
 admission and native worker admission share bounded capacity waiting. Current native Goal
 sources can request continuation of an accepted checkpoint through the same recovery
 engine, retaining Thread/Turn identity and recorded budgets. Owner/effect uncertainty
-remains blocked; confirmed ACP continuation and worker quote waiting still need closure.
+remains blocked. Native workers retain the same action and frozen quote while waiting
+for current workers' provider reservations; settled unknown-cost holds remain blocked.
+Wait begin/end facts drive the read-only projection. SDK cancellation before executor
+dispatch reconciles the original admission without inventing actual serving evidence.
+Confirmed ACP continuation still needs closure.
 Managed ACP uses the same acceptance/control owner;
 the supervisor supplies protocol/process facts. Historical unbound runs retain
 their reconciliation path. Worker changes version the existing work and create
 a new Thread after old stop/effects are confirmed; known local results are
 transferred before dispatch. The ledger tracks remaining acceptance gates.
-Migrations 000030/000031/000032 fence incompatible database writers for execution links,
-immutable requested-worker sources and no-admission verdicts. They add no table and do not migrate
+Migrations 000030/000031/000032/000033 fence incompatible database writers for execution links,
+immutable requested-worker sources, no-admission verdicts and resource waits. They add no table and do not migrate
 persistence into core.
 
 Saved dispatch intent is distinct from acceptance. An uncertain unbound managed

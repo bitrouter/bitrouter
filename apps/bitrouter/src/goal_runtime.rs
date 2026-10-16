@@ -1343,7 +1343,11 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
             .workflow
             .completion
             .completed_for(goal.requirements_revision)
-            && goal.budget.limits.elapsed_ms.is_some()
+            // Admission still measures actual age. Once this cap is recorded
+            // as exhausted, another identical halt only churns Goal revisions.
+            && goal.budget.limits.elapsed_ms.is_some_and(|limit| {
+                !goal.budget.resume_required || goal.budget.elapsed_ms < limit
+            })
             && (goal
                 .budget
                 .elapsed(goal.created_at_ms, time)
