@@ -1031,6 +1031,50 @@ extraction/SQLite audit, exact source snapshots and green logs remain outside
 the feature PR under `FIXTURE_RETENTION_INDEX.md`. No assertion, product limit,
 timeout or test skip was relaxed in the committed change.
 
+## Frozen MCP configuration checkpoint
+
+Preparation already saved a hash of the selected MCP descriptors, but fresh
+native/ACP admission did not compare it with the descriptors being supplied.
+Source1 reproduces the gap: changing a selected server environment value after
+preparation still returns successful native admission. It does not claim that
+an MCP tool ran. Unselected servers are outside this descriptor hash.
+
+New native Thread creation and ACP Thread/Turn admission now validate the exact
+selected descriptor hash. ACP repeats the check when Thread metadata already
+exists but its Turn does not. Both paths retain original accepted receipts
+after later configuration edits without rewriting the original resources or
+starting another execution. No credential values enter rejection messages.
+The existing preparation hash and stores are reused; no format/API is added.
+The test helper now computes its real descriptor hash instead of a fabricated
+placeholder. Original historical records are not converted or rewritten.
+
+Source5 verifies native/ACP missing-Thread rejection, the ACP metadata-without-Turn
+window, and accepted native/ACP receipt preservation. Eight interruption/boundary
+cases, strict workspace/all-target/all-feature Clippy, formatting and all
+**79 Goal runtime tests** pass with zero source drift and no leak reports.
+Mismatch remains a conservative refusal; complete no-admission reconciliation
+and re-preparation after a failed preflight still belong to the remaining A16
+work. This checkpoint does not claim the entire recovery/resource contract.
+
+Source2 retains a test-only result-inference compile error, fixed in source3.
+Source3 passes all 79 Goal cases but its separate eight-case boundary run has
+one nextest `LEAK` report in the existing native late-stop regression. Under
+[nextest's output-handle rule](https://www.nexte.st/docs/features/leaky-tests/),
+that report can accompany a passing test. A read-only probe samples only its
+owned nextest process tree while repeating three cases five times: all pass,
+no leak is reported, 49 processes are observed, and none remain observed at
+the end. The monitor changes no product/test limits or leak timeout and sends
+no signals. These later passes do not establish the cause or a fix; the earlier
+report remains intact. The probe is an instrumented diagnostic, separate from
+the normal source5 qualification.
+
+Exact failing/green sources, compiler error, raw logs, process samples and
+commands remain in the independent archive under `MCP_BINDING_INDEX.md`.
+Temporary manual-test directories and their memory databases were not retained;
+the reproducible Rust fixtures remain in the PR. Complete native archive and
+session recovery, quote waiting/UI, live qualification and final full checks
+remain open.
+
 ## Delivery and evidence
 
 The requested destination is the existing
