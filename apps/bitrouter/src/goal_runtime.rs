@@ -1,4 +1,4 @@
-//! One daemon-owned Goal coordinator over the existing ACP supervisor.
+//! Goal coordination over shared ThreadService execution and ACP transport.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::path::{Path, PathBuf};

@@ -316,7 +316,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
 | --- | --- |
 | S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
 | S1 | In progress: owner/input association, model/worker Turn links, stable binding operations and original-key lookup implemented. New ACP dispatches with no accepted Thread stay on common admission; original supervisor starts keep reconciliation priority. Managed refusals now reconcile absence under the shared admission lock, preserve intent, and permit bounded new preparation. Full interruption/compatibility proof remains. |
-| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
+| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and bounded capacity waiting are connected. Current native Goal work can resume a safe accepted checkpoint through existing recovery without replacing its Thread/Turn or resetting accounting. Controlled SQLite images qualify this bridge; abrupt-owner takeover is blocked. Worker quote waiting, remaining recovery coverage and full wait/effect projection remain pending. |
 | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
 | S4 | In progress: generation/native SDK reports, prepared-input/router facts and actual content receipt intervals link to original work/Thread/Turn sources. ACP public session/route limits remain explicit. Complete historical qualification and final evidence/UI closure remain. |
 | S5 | In progress: native and managed ACP dependencies/review consume common Turn facts. The native three-node fixture proves actual overlap, isolated conflicting local writes and checked dependency consumption through verified completion. Full coordinated/recovery/live closure remains. |
@@ -344,7 +344,7 @@ and green checks for the pre-refactor MVP do not prove the new architecture.
 | A13 | Local native three-node acceptance now proves same-clock observed overlap, isolated conflicting scratch writes and checked dependency join. Preserve that evidence through the final source and live qualification; do not substitute admission or wall-clock timestamps. |
 | A14 | Confirmed same-session restore retains Thread; new session/harness gets new Thread. |
 | A15 | Replacement waits for confirmed stop/effect boundary. |
-| A16 | Original-key lookup, lost-link recovery and source-revoked no-admission reconciliation are qualified locally, including selected-MCP and saved-input integrity refusals. Accepted unknown effects remain blocked. Preserve these through remaining recovery boundaries and final source qualification. |
+| A16 | Original-key lookup, lost-link recovery and source-revoked no-admission reconciliation are qualified locally, including selected-MCP and saved-input integrity refusals. Safe accepted native checkpoint continuation is connected; changed retry bodies and late source revocation are checked before restoration. Accepted unknown effects remain blocked. Preserve these through remaining recovery boundaries and final source qualification. |
 | A17 | Input/control/modification phase evidence with queries remaining effect-free. |
 | A18 | Negotiated ACP limitations, missing history and unknown private model/context shown accurately. |
 | A19 | Permissions/revocation/root budget/accounting and unknown-effect safeguards across the shared runner. |
@@ -1143,3 +1143,46 @@ and its checksum manifest in the independent local archive.
 The full S0–S6 / A01–A22 objective remains active. Final source regression,
 remaining recovery/resource gates, live qualification, independent archive
 publication and the single update to PR #981 are still required.
+
+## Native Goal checkpoint continuation
+
+The Goal driver now asks the existing ThreadService recovery engine to resume
+an already accepted native Turn when its Goal/work/control source remains current.
+The original admission key, Thread/Turn and durable input remain authoritative;
+no new Thread, Turn, prompt submission or policy override is created. A changed
+retry body is refused before ordinary start can restore a checkpoint, and
+controlled recovery rechecks live authorization under its admission lock.
+
+```mermaid
+flowchart LR
+    G[Current Goal work and run intent] --> R[Shared ThreadService recovery]
+    E[Original admission and checkpoint] --> R
+    P[Stopped owner and effect / budget evidence] --> R
+    R -->|all checks pass| N[Continue original native Turn]
+    R -->|proof missing or source revoked| B[Keep recovery blocked]
+```
+
+The strong local proof uses consistent SQLite images captured at a durable
+native commit acknowledgement boundary. The source actually shuts down and
+joins before its same-epoch/generation stopped proof is affirmed in that image.
+This is controlled checkpoint-image continuation, not abrupt-process retirement,
+an automatic import of private ACP state, or a claim that every ordinary daemon
+restart leaves an active resumable Turn. Legacy unknown attempts stay fenced.
+
+Five cases cover a safe settled read, a live old owner, a pending read result,
+an explicit pause, and revocation after the entry authorization check. The safe
+case retains the original read result after the file changes, records one tool
+intent, and advances cumulative Goal provider attempts from one to two. A
+different body on the original key cannot trigger restoration. The negative
+cases admit no follow-up provider call. These are actual SDK/HTTP and filesystem
+operations with fixture model responses, not live-model or external-harness proof.
+
+The final source passes all **82 Goal runtime tests**, **10 shared worker
+tests**, strict workspace/all-target/all-feature Clippy and formatting, plus
+**43 existing native recovery/generation tests**. Five repeated matrices also
+pass; these runs report no leaks or source drift. They do not establish the
+cause or a fix for earlier output-handle reports. The initial regression and
+two fixture-setup/assertion failures remain archived, including three independently
+verified SQLite/filesystem fixture images. Raw logs, exact source tars and the
+checksum index remain outside the feature PR in `NATIVE_COLD_RECOVERY_INDEX.md`.
+The whole refactor, live gates and final source/hosted-CI verification remain open.

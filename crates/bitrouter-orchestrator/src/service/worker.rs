@@ -141,7 +141,22 @@ impl ThreadService {
                 "worker source does not match this Thread",
             ));
         }
+        let managed = Managed::Native { source, control };
         if let Some(recovery) = view.recovery {
+            // Reject a changed retry body before recovery can dispatch the
+            // original continuation. Reconciliation is a separate entrypoint.
+            let scope = super::admission::key_scope(
+                caller,
+                Some(&target.thread_id),
+                managed.operation(),
+                &request.idempotency_key,
+            )?;
+            self.accepted_key(
+                &scope,
+                &request.idempotency_key,
+                &managed.fingerprint(&request.prompt)?,
+            )
+            .await?;
             self.recover_thread_controlled(
                 target,
                 caller,
@@ -153,18 +168,83 @@ impl ThreadService {
                         request.idempotency_key, recovery.source_cursor
                     ),
                 },
-                Some(control.clone()),
+                Some(managed.control().clone()),
             )
             .await?;
         }
-        self.admit_turn(
-            target,
-            caller,
-            request,
-            true,
-            true,
-            Some(Managed::Native { source, control }),
-        )
-        .await
+        self.admit_turn(target, caller, request, true, true, Some(managed))
+            .await
+    }
+
+    /// Resume one already accepted native Turn from its inspected checkpoint.
+    /// Its durable input is authoritative; no prompt is resubmitted and this
+    /// entrypoint cannot create a Thread or accept another Turn.
+    pub async fn resume_goal_worker_turn(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        source: &GoalWork,
+        turn_id: &str,
+        key: &str,
+        control: Arc<dyn WorkControl>,
+    ) -> Result<TurnReceipt, ServiceError> {
+        control
+            .authorize()
+            .await
+            .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
+        let view = self.load_thread(target, caller).await?;
+        view.config.native()?;
+        if view.thread.goal_work.as_ref() != Some(source) {
+            return Err(ServiceError::new(
+                ErrorCode::Unauthorized,
+                "native continuation belongs to another Goal work source",
+            ));
+        }
+        let receipt = self
+            .find_goal_worker_turn(target, caller, key)
+            .await?
+            .ok_or_else(|| {
+                ServiceError::new(
+                    ErrorCode::UnknownTurn,
+                    "original worker action was not accepted",
+                )
+            })?;
+        if receipt.turn_id != turn_id {
+            return Err(ServiceError::new(
+                ErrorCode::Conflict,
+                "original worker action belongs to another Turn",
+            ));
+        }
+        if let Some(recovery) = view.recovery {
+            if recovery
+                .turn
+                .as_ref()
+                .is_some_and(|turn| turn.turn_id != turn_id)
+            {
+                return Err(ServiceError::new(
+                    ErrorCode::Conflict,
+                    "inspected continuation belongs to another Turn",
+                ));
+            }
+            self.recover_thread_controlled(
+                target,
+                caller,
+                crate::thread::ThreadRecoveryRequest {
+                    source_server_instance_id: recovery.source_server_instance_id,
+                    source_cursor: recovery.source_cursor,
+                    idempotency_key: format!("{key}-restore-{}", recovery.source_cursor),
+                },
+                Some(control),
+            )
+            .await?;
+        }
+        self.find_goal_worker_turn(target, caller, key)
+            .await?
+            .ok_or_else(|| {
+                ServiceError::new(
+                    ErrorCode::StorageUnavailable,
+                    "original worker receipt disappeared after recovery",
+                )
+            })
     }
 }
