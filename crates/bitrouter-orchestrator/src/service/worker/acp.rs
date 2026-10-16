@@ -2,7 +2,6 @@
 //! Public ACP observations are retained without manufacturing native state.
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::{PermissionOption, ToolCallUpdate};
 use bitrouter_sdk::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 
@@ -43,8 +42,10 @@ pub struct Continuation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Permission {
     pub request_id: String,
-    pub tool_call: ToolCallUpdate,
-    pub options: Vec<PermissionOption>,
+    /// Original wire material stays readable without the optional ACP runtime.
+    /// The adapter decodes protocol types; this owner checks the offered IDs.
+    pub tool_call: serde_json::Value,
+    pub options: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
