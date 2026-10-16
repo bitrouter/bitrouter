@@ -23,6 +23,63 @@ fn replay(facts: &[ExecutionRecord]) -> Result<Saved, String> {
     saved.ok_or("fixture has no native checkpoint".into())
 }
 
+fn baseline_facts() -> Result<Vec<ExecutionRecord>, Box<dyn std::error::Error>> {
+    let bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/baseline-runtime-v7/journal.json.zst"
+    ));
+    let journal = zstd::stream::decode_all(bytes.as_slice())?;
+    let records: Vec<ExecutionRecord> = serde_json::from_slice(&journal)?;
+    assert_eq!(records.len(), 284);
+    Ok(records
+        .into_iter()
+        .filter_map(|record| match record {
+            ExecutionRecord::TurnRecord { fact, .. } => Some(*fact),
+            _ => None,
+        })
+        .collect())
+}
+
+#[test]
+fn baseline_v7_native_checkpoints_replay_with_original_payloads() -> TestResult {
+    let facts = baseline_facts()?;
+    assert_eq!(facts.len(), 142);
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, ExecutionRecord::CoreCheckpoint { .. }))
+            .count(),
+        92
+    );
+    let saved = replay(&facts)?;
+    assert!(saved.complete_projection());
+    let batch = saved
+        .journal
+        .checkpoint
+        .as_ref()
+        .ok_or("missing baseline checkpoint")?;
+    let state: crate::storage::checkpoint::snapshot::SessionSnapshot =
+        serde_json::from_value(batch.decode(&saved.journal.limits)?.checkpoint.state)?;
+    assert!(!state.context_store.work.is_empty());
+    assert!(!state.context_store.evidence.is_empty());
+    Ok(())
+}
+
+#[test]
+fn baseline_v7_corrupt_native_payload_is_rejected_without_execution() -> TestResult {
+    let mut facts = baseline_facts()?;
+    let batch = facts
+        .iter_mut()
+        .find_map(|fact| match fact {
+            ExecutionRecord::CoreCheckpoint { batch, .. } => Some(batch),
+            _ => None,
+        })
+        .ok_or("missing baseline checkpoint")?;
+    batch.payload_sha256 = "0".repeat(64);
+    assert!(replay(&facts).is_err());
+    Ok(())
+}
+
 #[test]
 fn native_writer_journal_replays_without_loading_execution_resources() -> TestResult {
     let facts = facts()?;

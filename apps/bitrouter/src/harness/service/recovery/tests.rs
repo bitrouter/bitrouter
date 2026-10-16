@@ -7,6 +7,52 @@ use bitrouter_ai::harness::thread::PermissionProfile;
 use bitrouter_ai::harness::thread::ThreadStatus;
 
 #[test]
+fn baseline_v7_thread_reconstruction_preserves_completed_turn()
+-> Result<(), Box<dyn std::error::Error>> {
+    let compressed = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/baseline-runtime-v7/journal.json.zst"
+    ));
+    let journal = zstd::stream::decode_all(compressed.as_slice())?;
+    let records: Vec<ExecutionRecord> = serde_json::from_slice(&journal)?;
+    let limits = crate::harness::service::default_runtime_limits();
+    let mut rebuild = Rebuild::new(
+        records.first().ok_or("baseline header missing")?,
+        "1149fbda-eb06-43b7-8d0e-108e857d9c2d",
+        limits.clone(),
+    )?;
+    rebuild.authorize(&CallerContext::local())?;
+    // Rebuild is the offline decoder, not the workspace/ownership admission
+    // path. Original paths, model calls and checkpoint bytes remain untouched.
+    for page in records.chunks(17) {
+        rebuild.consume_page(page.to_vec())?;
+    }
+    assert_eq!(rebuild.sequence, 284);
+    let (thread, _) = rebuild.finish("candidate-offline-reader", &limits)?;
+    let view = thread.presentation.view;
+    assert_eq!(view.thread.cursor, 284);
+    assert_eq!(view.thread.context_version, 5);
+    let recovery = view.recovery.ok_or("missing recovery report")?;
+    assert!(recovery.context_valid && recovery.terminal_checkpoint);
+    assert_eq!(recovery.stored_status, ThreadStatus::Idle);
+    assert!(
+        recovery
+            .blockers
+            .iter()
+            .all(|blocker| matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed))
+    );
+    let turn = view.latest_turn.ok_or("completed turn missing")?;
+    assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(
+        turn.final_answer.as_deref(),
+        Some("The evidence says baseline persisted payload.")
+    );
+    assert!(!turn.unknown_effect);
+    assert!(thread.queued.is_empty());
+    Ok(())
+}
+
+#[test]
 fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_epoch()
 -> Result<(), Box<dyn std::error::Error>> {
     let limits = RuntimeLimits {

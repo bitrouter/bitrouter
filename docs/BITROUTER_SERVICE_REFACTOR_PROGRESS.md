@@ -2872,3 +2872,63 @@ The source WAL hashes to
 `fc7c19b510425654658e23dea790d650fe7b4b4f3ffb5a50fbd5d7997d311f28`.
 Retain this consistent snapshot and both source hashes in fixture provenance;
 do not ship the incomplete main file as a standalone database fixture.
+
+## Retained baseline format 7 readers and replay (2026-10-16)
+
+Following `0a12230`, `tests/fixtures/baseline-runtime-v7` retains the consistent
+baseline SQLite snapshot, exact decoded journal, synthetic task/provider inputs,
+original capture generator and checksummed provenance. The offline exporter
+independently reproduces the retained database, journal and compressed-file
+hashes. It reads committed WAL pages and verifies each compressed row's size and
+digest before restoring any packed Base64 field; no checkpoint or format field
+is rewritten. The original generator was reproduced against the unchanged
+baseline executable: two model calls, one real read, completed task and stopped
+foreground owner, again producing 284 records and all 26 migrations.
+
+Four candidate regressions now exercise these actual bytes:
+
+- A disk-backed database test opens two fresh pools, reapplies migrations and
+  checks all original ledger timestamps and raw row payloads remain unchanged.
+  It checks format/version, the discovery head, every decoded record, bounded
+  record pages, all 136 public events, both acceptance keys and stopped-owner
+  evidence through the production store.
+- Native replay validates all 92 original checkpoint batches and the final
+  complete projection, including preserved work/evidence state.
+- Full offline Thread reconstruction consumes the original journal in bounded
+  pages and retains its cursor, completed answer, context and terminal checkpoint
+  without opening the historical workspace or claiming execution authority.
+- Corrupting an original checkpoint digest still fails offline native replay.
+
+The exact four tests passed in both profiles: harness-only **4/4 in 0.730s**
+(2753 other tests excluded), and core+harness **4/4 in 0.734s** (3137 excluded).
+The CI H/C+H selection includes the new reconstruction case as well as the
+existing replay namespace and database target. Workspace/all-target/all-feature
+strict Clippy passed with Rust 1.97.0 in **2m41s**. An initial test compilation
+found that SHA-256's current array type has no LowerHex implementation; the test
+now uses the existing hex encoder. An earlier explicit-toolchain invocation
+failed during rustup setup, before compiling application code; successful runtime
+runs used the already installed default Rust 1.99.0 toolchain.
+
+Independent review found a capture-tool startup race: a fixed sleep could let
+the task CLI autostart a detached daemon before the foreground service was ready.
+The runnable generator now checks bounded private-control replies against its
+owned foreground PID and detects foreground exit. The exact original source,
+manifest and lockfile remain under `provenance/generator-original.*` with their
+original hashes. The repaired generator completed another actual capture; an
+explicit failing executable was rejected before task output/launch. Its separate
+strict Clippy check passed after simplifying one preexisting nested conditional.
+Independent repair review found no remaining actionable issue.
+
+Logs are `/tmp/bitrouter-p0-baseline-v7-*` and
+`/tmp/bitrouter-p0-baseline-generator-*`. The complete post-ownership-repair
+workspace all-feature suite passed **4,676/4,676** tests, with 42 existing
+configuration/platform skips and five slow tests, in **721.614s**. Workspace
+doctests then passed **9**, with the existing protocol sketch ignored. The
+application, library, fixture data and test-source hashes remained unchanged
+through those runs; the separately invoked capture generator and its provenance
+received the reviewed readiness/lint repair described above. The generator is
+not part of the workspace test compilation.
+
+This stage establishes actual format-7 decoding and offline reconstruction, not
+live scheduler restoration, full/minimum/full or full/harness/full process
+transitions, other historical payload formats, or complete A09/P0 acceptance.

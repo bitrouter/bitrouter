@@ -27,6 +27,9 @@ use bitrouter::storage::session_identity::SessionIdentity;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+#[path = "database_capture/baseline_runtime.rs"]
+mod baseline_runtime;
+
 #[tokio::test]
 async fn sqlite_database_capture() -> Result<()> {
     let directory = tempfile::tempdir()?;
