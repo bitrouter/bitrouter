@@ -9,19 +9,20 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request};
 
 #[derive(Clone, Copy)]
-enum Boundary {
+pub(super) enum Boundary {
     SettledRead,
     PendingRead,
     BeforeRestore,
+    AcpSession,
 }
 
-struct BarrierStore {
-    inner: Arc<crate::agent_store::DatabaseExecutionStore>,
-    boundary: Boundary,
-    result_seen: AtomicBool,
-    fired: AtomicBool,
-    ready: Semaphore,
-    release: Semaphore,
+pub(super) struct BarrierStore {
+    pub(super) inner: Arc<crate::agent_store::DatabaseExecutionStore>,
+    pub(super) boundary: Boundary,
+    pub(super) result_seen: AtomicBool,
+    pub(super) fired: AtomicBool,
+    pub(super) ready: Semaphore,
+    pub(super) release: Semaphore,
 }
 
 fn contains(
@@ -94,11 +95,14 @@ impl ExecutionStore for BarrierStore {
                         |fact| matches!(fact, execution::ExecutionRecord::ToolIntent { .. })
                     }
                     Boundary::BeforeRestore => |_| false,
+                    Boundary::AcpSession => {
+                        |fact| matches!(fact, execution::ExecutionRecord::AcpSession { .. })
+                    }
                 },
             )
         });
         if matched
-            && (matches!(self.boundary, Boundary::PendingRead)
+            && (matches!(self.boundary, Boundary::PendingRead | Boundary::AcpSession)
                 || self.result_seen.load(Ordering::SeqCst))
             && self
                 .fired
@@ -191,7 +195,7 @@ fn model_app(routing: Arc<ConfigRoutingTable>) -> Result<Arc<App>> {
     ))
 }
 
-async fn stopped_source(
+pub(super) async fn stopped_source(
     source: &Coordinator,
     barrier: &BarrierStore,
     workspace: &Path,
@@ -223,7 +227,7 @@ async fn stopped_source(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading()
 -> Result<()> {
-    for (label, boundary, retired, paused, revoke_after_check) in [
+    for (label, boundary, shutdown_source, paused, revoke_after_check) in [
         ("safe", Boundary::SettledRead, true, false, false),
         ("live-owner", Boundary::SettledRead, false, false, false),
         ("pending-read", Boundary::PendingRead, true, false, false),
@@ -278,7 +282,9 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
         source.threads = ThreadService::with_store(source.app.clone(), &[], barrier.clone())?;
         let mut destination = None;
         let mut receipt_barrier = None;
-        let result: Result<()> = async {
+        // The case composes several cold readers; keep its future off the
+        // default Tokio worker stack instead of increasing stack limits.
+        let result: Result<()> = Box::pin(async {
             let id = prepared_worker_attempt(
                 &source,
                 home.path(),
@@ -341,41 +347,51 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
             destination = Some((resumed, image_db));
             let (resumed, image_db) = destination.as_ref().context("destination missing")?;
             let source_epoch = source.threads.capabilities().server_instance_id;
-            if retired {
+            if shutdown_source {
                 stopped_source(&source, &barrier, &original.workspace).await?;
                 let stopped = barrier
                     .read_owner(&source_epoch)
                     .await
                     .map_err(anyhow::Error::msg)?
                     .context("source owner proof missing")?;
-                assert!(
-                    stopped.stopped_at_ms.is_some(),
-                    "source did not join cleanly: {label}"
-                );
                 assert_eq!(
                     read(&source, &id).await?.accounting.provider_attempts,
                     saved.accounting.provider_attempts,
                     "source admitted another provider attempt after the checkpoint"
                 );
-                let store = crate::agent_store::DatabaseExecutionStore::new(image_db.clone());
-                let mut snapshot_owner = store
-                    .read_owner(&source_epoch)
-                    .await
-                    .map_err(anyhow::Error::msg)?
-                    .context("copied owner missing")?;
-                assert!(snapshot_owner.stopped_at_ms.is_none());
-                snapshot_owner.stopped_at_ms = stopped.stopped_at_ms;
-                assert_eq!(
-                    snapshot_owner, stopped,
-                    "copied owner identity differs from the joined source"
-                );
-                snapshot_owner.stopped_at_ms = None;
-                // Only after actual source join, affirm that same epoch's
-                // stopped proof in its checkpoint image. Never retire a live owner.
-                store
-                    .stop_owner(&snapshot_owner)
-                    .await
-                    .map_err(anyhow::Error::msg)?;
+                if stopped.stopped_at_ms.is_some() {
+                    let store = crate::agent_store::DatabaseExecutionStore::new(image_db.clone());
+                    let mut snapshot_owner = store
+                        .read_owner(&source_epoch)
+                        .await
+                        .map_err(anyhow::Error::msg)?
+                        .context("copied owner missing")?;
+                    assert!(snapshot_owner.stopped_at_ms.is_none());
+                    snapshot_owner.stopped_at_ms = stopped.stopped_at_ms;
+                    assert_eq!(
+                        snapshot_owner, stopped,
+                        "copied owner identity differs from the joined source"
+                    );
+                    snapshot_owner.stopped_at_ms = None;
+                    // Only after actual source join, affirm that same epoch's
+                    // stopped proof in its checkpoint image. Never retire a live owner.
+                    store
+                        .stop_owner(&snapshot_owner)
+                        .await
+                        .map_err(anyhow::Error::msg)?;
+                } else {
+                    // A cancellation at the durable ToolIntent boundary can
+                    // retain unknown effects. Join alone must not manufacture
+                    // stopped-owner proof or retire that unresolved source.
+                    anyhow::ensure!(matches!(boundary, Boundary::PendingRead),
+                        "safe source did not join cleanly: {label}");
+                    let original_turn = Box::pin(source.threads.read_stored_turn(&ThreadTarget {
+                        thread_id: binding.thread_id.clone(), server_instance_id: source_epoch.clone(),
+                    }, &CallerContext::local(), &binding.turn_id)).await?;
+                    anyhow::ensure!(original_turn.unknown_effect
+                        && original_turn.status == TurnStatus::RecoveryRequired,
+                        "source owner lacks stopped proof without a durable uncertain outcome");
+                }
             }
             if paused {
                 let current = read(resumed, &id).await?;
@@ -406,7 +422,7 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
                 server_instance_id: resumed.threads.capabilities().server_instance_id,
             };
             if matches!(boundary, Boundary::SettledRead)
-                && retired
+                && shutdown_source
                 && !paused
                 && !revoke_after_check
             {
@@ -509,7 +525,7 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
             );
             assert!(!after.workflow.completion.completed_for(1));
             if matches!(boundary, Boundary::SettledRead)
-                && retired
+                && shutdown_source
                 && !paused
                 && !revoke_after_check
             {
@@ -595,6 +611,15 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
                 resumed.drive_task(&after, &after.workflow.tasks[0]).await?;
                 assert_eq!(calls.load(Ordering::SeqCst), 2);
             } else {
+                if matches!(boundary, Boundary::PendingRead) {
+                    let report = Box::pin(resumed.threads.read_stored_thread_view(&target, &CallerContext::local())).await?
+                        .recovery.context("pending-read recovery evidence missing")?;
+                    anyhow::ensure!(report.turn.as_ref().is_some_and(|turn| !turn.unresolved_calls.is_empty())
+                        && report.blockers.iter().any(|blocker| matches!(blocker,
+                            bitrouter_orchestrator::thread::RecoveryBlocker::EffectUnconfirmed { .. }
+                            | bitrouter_orchestrator::thread::RecoveryBlocker::UnsettledCall { .. })),
+                        "pending-read rejection lost its independent effect blocker");
+                }
                 assert_eq!(
                     calls.load(Ordering::SeqCst),
                     1,
@@ -618,7 +643,7 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
                 );
             }
             Ok(())
-        }
+        })
         .await;
         if let Some(gate) = &receipt_barrier {
             gate.release.add_permits(1);

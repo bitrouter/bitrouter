@@ -1,6 +1,7 @@
 //! Durable reconstruction and explicit checkpoint recovery. Loading alone never
 //! grants execution ownership, resolves effects or permits replay.
 
+mod acp;
 mod native;
 
 use std::collections::{HashMap, VecDeque};
@@ -50,6 +51,7 @@ struct Step {
 #[derive(Serialize)]
 struct Active {
     generation: Option<crate::turn::GenerationOrigin>,
+    acp: acp::State,
     native: bool,
     native_runs: std::collections::BTreeMap<String, (u32, u64)>,
     native_unknown_usage: std::collections::BTreeSet<String>,
@@ -95,7 +97,7 @@ struct Rebuild {
 struct RecoveredRun {
     turn_id: String,
     input: RunInput,
-    agent: Agent,
+    driver: super::runner::Driver,
     verification: Option<String>,
     cancel: CancellationToken,
 }
@@ -121,6 +123,18 @@ impl ThreadService {
         request: ThreadRecoveryRequest,
         control: Option<Arc<dyn crate::control::WorkControl>>,
     ) -> Result<ThreadView, ServiceError> {
+        self.recover_thread_with_acp(target, caller, request, control, None)
+            .await
+    }
+
+    pub(super) async fn recover_thread_with_acp(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        request: ThreadRecoveryRequest,
+        control: Option<Arc<dyn crate::control::WorkControl>>,
+        acp: Option<super::worker::acp::Job>,
+    ) -> Result<ThreadView, ServiceError> {
         let (send, receive) = oneshot::channel();
         let service = self.clone();
         let target = target.clone();
@@ -135,7 +149,7 @@ impl ThreadService {
             }
             self.inner.workers.spawn(async move {
                 let result = service
-                    .recover_thread_owned(&target, &caller, request, control)
+                    .recover_thread_owned(&target, &caller, request, control, acp)
                     .await;
                 let _ = send.send(result);
             });
@@ -149,6 +163,7 @@ impl ThreadService {
         caller: &CallerContext,
         request: ThreadRecoveryRequest,
         control: Option<Arc<dyn crate::control::WorkControl>>,
+        acp: Option<super::worker::acp::Job>,
     ) -> Result<ThreadView, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
         let coordination = self
@@ -219,6 +234,12 @@ impl ThreadService {
                     "Goal worker recovery requires its live source and budget control",
                 ));
             }
+            let acp_continuation = acp.is_some()
+                && matches!(thread.config, crate::thread::executor::Config::Acp { .. })
+                && report
+                    .turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.acp_continuation.is_some());
             let settled_generation = coordination
                 && report.terminal_checkpoint
                 && report.turn.as_ref().is_none_or(|turn| {
@@ -236,6 +257,8 @@ impl ThreadService {
                     ))
                 || report.blockers.iter().any(|blocker| {
                     !matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed)
+                        && !(acp_continuation
+                            && matches!(blocker, RecoveryBlocker::AcpSessionUnconfirmed))
                         && !(settled_generation
                             && matches!(
                                 blocker,
@@ -284,6 +307,52 @@ impl ThreadService {
             };
             let continuation = if report.terminal_checkpoint {
                 None
+            } else if let Some(mut job) = acp {
+                let turn = report.turn.as_ref().ok_or("ACP recovery has no Turn")?;
+                let saved = turn.acp_continuation.clone().ok_or_else(|| {
+                    ServiceError::new(
+                        ErrorCode::RecoveryRequired,
+                        "ACP prompt/session continuity is unconfirmed",
+                    )
+                })?;
+                if thread.snapshot.active_turn_id.as_deref() != Some(&turn.turn_id) {
+                    return Err("ACP checkpoint differs from its accepted Turn".into());
+                }
+                if saved.owner.server_instance_id != report.source_server_instance_id
+                    || saved.owner.thread_id != target.thread_id
+                    || saved.owner.turn_id != turn.turn_id
+                {
+                    return Err(ServiceError::new(
+                        ErrorCode::RecoveryRequired,
+                        "ACP binding belongs to another source owner",
+                    ));
+                }
+                let deadline = saved.accepted_at_ms.saturating_add(
+                    u64::try_from(thread.config.max_duration().as_millis()).unwrap_or(u64::MAX),
+                );
+                if super::now_ms() >= deadline {
+                    return Err(ServiceError::new(
+                        ErrorCode::RecoveryRequired,
+                        "original ACP duration expired",
+                    ));
+                }
+                let prompt = saved.prompt.clone();
+                job.continuation = Some(saved);
+                Some(RecoveredRun {
+                    turn_id: turn.turn_id.clone(),
+                    input: RunInput {
+                        prompt,
+                        messages: Vec::new(),
+                        user_item_id: turn.user_item_id.clone(),
+                        context_version: thread.snapshot.context_version,
+                        checkpoint: None,
+                        complete_checkpoint: false,
+                        restored_verification: None,
+                    },
+                    driver: super::runner::Driver::Acp(job),
+                    verification: None,
+                    cancel: CancellationToken::new(),
+                })
             } else {
                 let turn = report
                     .turn
@@ -375,7 +444,7 @@ impl ThreadService {
                             None
                         },
                     },
-                    agent,
+                    driver: super::runner::Driver::Native(agent),
                     verification: thread.verification_command.clone(),
                     cancel,
                 })
@@ -404,12 +473,10 @@ impl ThreadService {
             ));
         }
         let owner = self.initialize_execution().await?;
-        if let Some(run) = &continuation {
-            let checkpoint = run
-                .input
-                .checkpoint
-                .as_ref()
-                .ok_or("recovered completion missing")?;
+        if let Some(checkpoint) = continuation
+            .as_ref()
+            .and_then(|run| run.input.checkpoint.as_ref())
+        {
             messages = checkpoint.messages.clone();
             snapshot.context_version = checkpoint.context_version;
         }
@@ -607,7 +674,7 @@ impl ThreadService {
         if let Some(run) = continuation {
             self.inner.workers.spawn(self.run_turn(
                 run.turn_id,
-                super::runner::Driver::Native(run.agent),
+                run.driver,
                 run.input,
                 run.verification,
                 run.cancel,
@@ -1177,6 +1244,9 @@ impl Rebuild {
             }
             let native_snapshot = self.consume(&record)?;
             if let ExecutionRecord::ThreadEvent { event } = &record {
+                if let Some(active) = &mut self.active {
+                    active.acp.accepted_at_ms.get_or_insert(event.timestamp_ms);
+                }
                 if event.seq != self.sequence || event.thread_id != self.view.thread.thread_id {
                     self.invalid("public Thread event has a mismatched durable cursor or identity");
                 }
@@ -1250,9 +1320,19 @@ impl Rebuild {
                     .remove(position)
                     .ok_or("activation input disappeared")?;
                 let mut messages = self.messages.clone();
-                messages.push(Message::text(Role::User, entry.prompt));
+                messages.push(Message::text(Role::User, entry.prompt.clone()));
                 self.active = Some(Active {
                     generation: None,
+                    acp: acp::State::new(
+                        if matches!(
+                            self.view.config,
+                            crate::thread::executor::Config::Acp { .. }
+                        ) {
+                            entry.prompt.clone()
+                        } else {
+                            String::new()
+                        },
+                    ),
                     native: false,
                     native_runs: Default::default(),
                     native_unknown_usage: Default::default(),
@@ -1329,10 +1409,11 @@ impl Rebuild {
                 if source_server_instance_id != &self.source_epoch
                     || source_cursor.checked_add(1) != Some(self.sequence)
                     || (self.view.thread.active_turn_id.is_some()
-                        && self
-                            .active
-                            .as_ref()
-                            .is_none_or(|active| !active.settled && !active.checkpointed))
+                        && self.active.as_ref().is_none_or(|active| {
+                            !active.settled
+                                && !active.checkpointed
+                                && active.acp_continuation().is_none()
+                        }))
                 {
                     self.invalid("recovery acceptance has the wrong source checkpoint");
                 }
@@ -1552,8 +1633,14 @@ impl Rebuild {
             // Before any Turn was accepted, this is only idle metadata: no
             // harness session could have been started by this Thread. Its
             // ordinary owner/workspace recovery still requires stopped proof.
-            context_valid = false;
             self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
+            if let Some(active) = &mut self.active
+                && active.acp_continuation().is_some()
+            {
+                active.exact_budget = true;
+                active.budget.active_duration_ms =
+                    super::now_ms().saturating_sub(active.acp.accepted_at_ms.unwrap_or(0));
+            }
         }
         let mut report_turn = None;
         if let Some(active) = &mut self.active {
@@ -1638,6 +1725,7 @@ impl Rebuild {
                 self.blockers.push(RecoveryBlocker::BudgetUncertain { detail: "lost execution has unconfirmed active time, call charging or provider usage".into() });
             }
             report_turn = Some(RecoveryTurn {
+                acp_continuation: active.acp_continuation(),
                 resources: active.resources.clone(),
                 turn_id: active.turn_id.clone(),
                 user_item_id: active.user_item_id.clone(),
@@ -1800,6 +1888,19 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
 }
 
 impl Active {
+    fn acp_continuation(&self) -> Option<super::worker::acp::Continuation> {
+        if self.native
+            || self.settled
+            || self.cancel_requested
+            || !self.steps.is_empty()
+            || !self.calls.is_empty()
+            || !self.steering.is_empty()
+        {
+            return None;
+        }
+        self.acp.continuation()
+    }
+
     fn consumed_model_steps(&self) -> Result<u32, String> {
         if self.native {
             // Core charges provider attempts, including fallbacks. A prepared
@@ -1822,6 +1923,7 @@ impl Active {
         if self.native && native::is_projection(fact, &self.calls) {
             return Ok(());
         }
+        self.acp.consume(fact)?;
         match fact {
             ExecutionRecord::GenerationInput { origin, .. } => {
                 if self.generation.is_some() || !self.steps.is_empty() {

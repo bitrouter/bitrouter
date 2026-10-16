@@ -35,6 +35,7 @@ struct Peer {
     fail_first_initialize: bool,
     fail_initialize: bool,
     fail_left_once: bool,
+    persist_session: bool,
 }
 
 fn lock<T>(value: &Mutex<T>) -> FixtureResult<std::sync::MutexGuard<'_, T>> {
@@ -233,10 +234,18 @@ impl Peer {
                         "code":-32603,"message":"fixture startup service unavailable"}}))?;
                 } else {
                     self.respond(id, json!({"protocolVersion":1,
-                        "agentCapabilities":{},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?;
+                        "agentCapabilities":{"loadSession":self.persist_session
+                            && std::env::var_os("BRO_GOAL_FIXTURE_NO_LOAD").is_none()},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?;
                 }
             }
             Some("session/new") => {
+                if self.persist_session {
+                    let mut file = OpenOptions::new().write(true).create_new(true)
+                        .open(self.control.join("private-session.json"))?;
+                    serde_json::to_writer(&mut file, &json!({"session":self.session,
+                        "nonce":format!("private-{}",std::process::id()),"prompts":0}))?;
+                    file.flush()?;
+                }
                 lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing cwd")?);
                 if std::env::var_os("BRO_GOAL_FIXTURE_REQUIRE_HANDOFF_LEFT").is_some() {
                     let cwd = lock(&self.state)?.cwd.clone();
@@ -246,7 +255,25 @@ impl Peer {
                 }
                 self.respond(id, json!({"sessionId":self.session}))?;
             }
+            Some("session/load") if self.persist_session => {
+                let saved: Value = serde_json::from_slice(&std::fs::read(self.control.join("private-session.json"))?)?;
+                if message["params"]["sessionId"] != saved["session"] || saved["session"] != self.session {
+                    return Err("fixture cannot restore the original private session".into());
+                }
+                lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing load cwd")?);
+                std::fs::write(self.control.join("loaded-private-nonce"), saved["nonce"].as_str().ok_or("nonce missing")?)?;
+                self.respond(id, json!({}))?;
+            }
             Some("session/prompt") => {
+                if self.persist_session {
+                    let file = self.control.join("private-session.json");
+                    let mut saved: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+                    if saved["session"] != self.session || saved["prompts"] != 0 {
+                        return Err("fixture private session prompt was replayed".into());
+                    }
+                    saved["prompts"] = json!(1);
+                    std::fs::write(file, serde_json::to_vec(&saved)?)?;
+                }
                 let text = message["params"]["prompt"].as_array().ok_or("missing prompt")?
                     .iter().filter_map(|part| part["text"].as_str()).collect::<String>();
                 let task = text.lines().find_map(|line| line.strip_prefix("Assigned task ")
@@ -339,6 +366,17 @@ fn main() -> FixtureResult {
         std::env::var_os("BRO_GOAL_FIXTURE_CAPTURE").ok_or("fixture capture directory missing")?,
     )
     .join(format!("{}.ndjson", std::process::id()));
+    let persist_session = std::env::var_os("BRO_GOAL_FIXTURE_PERSIST_SESSION").is_some();
+    let session = if persist_session && control.join("private-session.json").exists() {
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(control.join("private-session.json"))?)?;
+        saved["session"]
+            .as_str()
+            .ok_or("persisted session identity missing")?
+            .to_owned()
+    } else {
+        format!("goal-fixture-{}", std::process::id())
+    };
     let peer = Arc::new(Peer {
         state: Mutex::new(State {
             provider: None,
@@ -349,7 +387,8 @@ fn main() -> FixtureResult {
         output: Mutex::new(()),
         cancelled: AtomicBool::new(false),
         control,
-        session: format!("goal-fixture-{}", std::process::id()),
+        session,
+        persist_session,
         right_manual: std::env::var("BRO_GOAL_FIXTURE_RIGHT_MANUAL")
             .is_ok_and(|value| value == "1"),
         right_gate: std::env::var("BRO_GOAL_FIXTURE_RIGHT_GATE").is_ok_and(|value| value == "1"),

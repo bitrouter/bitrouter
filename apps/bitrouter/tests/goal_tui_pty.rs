@@ -575,7 +575,15 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
         matchers::{method, path},
     };
     let binary = fixture_binary::build("goal_acp_fixture").map_err(anyhow::Error::msg)?;
-    let home = tempfile::tempdir()?;
+    let mut home = tempfile::tempdir()?;
+    let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
+    home.disable_cleanup(keep);
+    if keep {
+        eprintln!(
+            "Failure-retention active Goal PTY fixture: {}",
+            home.path().display()
+        );
+    }
     let workspace = home.path().join("original");
     let controls = home.path().join("controls");
     let captures = home.path().join("captures");
@@ -903,6 +911,9 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
     }
     let ended = tokio::time::timeout(Duration::from_secs(15), server.wait()).await;
     ensure!(ended.is_ok(), "fixture daemon did not finish cleanup");
+    if result.is_ok() {
+        home.disable_cleanup(false);
+    }
     result
 }
 
