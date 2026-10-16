@@ -1026,7 +1026,7 @@ async fn run_deck(
                     crate::chat::signals::TerminalSignal::Suspend => {
                         drop(events.take());
                         view.finish()?;
-                        crate::chat::signals::suspend_current_process()?;
+                        crate::chat::signals::suspend_current_process().await?;
                         view = AgentDeckView::open().context("resuming the agent manager")?;
                         events = Some(EventStream::new());
                     }

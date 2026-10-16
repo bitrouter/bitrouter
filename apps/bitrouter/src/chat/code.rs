@@ -449,7 +449,7 @@ impl Runtime {
                         // terminal ownership boundary.
                         drop(events.take());
                         view.suspend()?;
-                        super::signals::suspend_current_process()?;
+                        super::signals::suspend_current_process().await?;
                         view.resume()?;
                         events = Some(EventStream::new());
                         dirty = true;
