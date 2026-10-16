@@ -57,6 +57,33 @@ pub struct SettlementOutcome {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum ExecutionRecord {
+    GenerationInput {
+        context_version: u64,
+        origin: crate::turn::GenerationOrigin,
+        prompt: Box<Prompt>,
+    },
+    GenerationDecisionIntent {
+        attempt_id: String,
+        request: Box<bitrouter_sdk::decision_model::types::DecisionRequest>,
+        pricing: Option<bitrouter_sdk::decision_model::policy::DecisionPricing>,
+    },
+    GenerationDecisionOutcome {
+        attempt_id: String,
+        outcome: Box<
+            Result<
+                bitrouter_sdk::decision_model::types::DecisionResponse,
+                bitrouter_sdk::decision_model::types::DecisionError,
+            >,
+        >,
+    },
+    GenerationAttempt {
+        report: Box<bitrouter_sdk::language_model::native::NativeAttemptReport>,
+    },
+    GenerationPlan {
+        plan: Box<bitrouter_sdk::language_model::native::NativePlan>,
+        /// The host's selected subset; actual calls are GenerationAttempt facts.
+        route_indices: Vec<u32>,
+    },
     /// Last-mile native workspace ownership check after model/tool queue waits.
     /// Execution authority and outcomes remain in the preceding Core facts.
     CoreDispatch,
@@ -235,10 +262,10 @@ pub enum EffectStatus {
     Unknown,
 }
 
-pub const RUNTIME_FORMAT_VERSION: u32 = 7;
+pub const RUNTIME_FORMAT_VERSION: u32 = 8;
 
 pub fn validate_runtime_format(version: u32) -> Result<(), String> {
-    if !matches!(version, 2 | 3 | 4 | 5 | 6 | RUNTIME_FORMAT_VERSION) {
+    if !matches!(version, 2 | 3 | 4 | 5 | 6 | 7 | RUNTIME_FORMAT_VERSION) {
         return Err(format!("unsupported_runtime_format: {version}"));
     }
     Ok(())

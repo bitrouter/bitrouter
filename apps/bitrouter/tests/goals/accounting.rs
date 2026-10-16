@@ -14,6 +14,7 @@ async fn estimates_and_unpriced_work_remain_distinct_and_duplicates_do_not_add()
                     id: key.clone(),
                     kind: WorkKind::ProviderAttempt,
                     requirements_revision: 1,
+                    source: None,
                     request_id: Some("logical-request".into()),
                     intent: report(workspace.path(), &format!("attempt {index} admitted"))?,
                     token_reservation: None,

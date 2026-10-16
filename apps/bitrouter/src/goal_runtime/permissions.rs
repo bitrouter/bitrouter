@@ -21,6 +21,11 @@ impl Coordinator {
             {
                 continue;
             }
+            let Some(run_id) = run_id else {
+                self.observe_native_permission(goal, task, execution)
+                    .await?;
+                continue;
+            };
             let response = self
                 .supervisor
                 .dispatch(SessionRequest::authorized(
@@ -87,32 +92,14 @@ impl Coordinator {
                     else {
                         continue;
                     };
-                    if matches!(execution.stop, Some(StopState::Confirmed { .. })) {
-                        let response = self
-                            .supervisor
-                            .dispatch(SessionRequest::authorized(
-                                &self.grant,
-                                SessionCommand::Snapshot {
-                                    run_id: decision.run_id.clone(),
-                                },
-                            ))
-                            .await?;
-                        let SessionResponse::Snapshot { snapshot } = response else {
-                            anyhow::bail!("stopped permission snapshot is unavailable");
-                        };
-                        if snapshot.run_id == decision.run_id
-                            && snapshot.process == ProcessState::Stopped
-                            && !snapshot
-                                .pending_permissions
-                                .iter()
-                                .any(|pending| pending.permission_id == decision.permission_id)
-                        {
-                            self.change(&current, Change::Decision { event: Event::Obsolete {
-                                decision_id: decision.id.clone(),
-                                reason: "The original owned session is stopped and this request is no longer pending. No user consent or tool completion follows from closing it.".into(),
-                            }}).await?;
-                            continue;
-                        }
+                    if matches!(execution.stop, Some(StopState::Confirmed { .. }))
+                        && self.permission_is_closed(&current, decision).await?
+                    {
+                        self.change(&current, Change::Decision { event: Event::Obsolete {
+                            decision_id: decision.id.clone(),
+                            reason: "The original execution is stopped and this request is no longer pending. Closing it is not consent or tool-completion evidence.".into(),
+                        } }).await?;
+                        continue;
                     }
                     if current.run_intent != RunIntent::Run
                         || task.run_intent != RunIntent::Run
@@ -153,9 +140,34 @@ impl Coordinator {
                             .await?;
                         continue;
                     }
+                    if decision.run_id.is_none() {
+                        let _control = self.stop_gate.lock().await;
+                        let outcome = self
+                            .deliver_native_permission(&current, decision, operation_id, option_id)
+                            .await;
+                        let (submitted, detail) = match outcome {
+                            Ok(recorded) => (recorded, "Original native approval receipt reconciled; actual tool effects require separate evidence".into()),
+                            Err(error) => (false, bounded_error(&error)),
+                        };
+                        self.change(
+                            &current,
+                            Change::Decision {
+                                event: Event::Result {
+                                    decision_id: decision.id.clone(),
+                                    operation_id: operation_id.clone(),
+                                    submitted,
+                                    detail,
+                                },
+                            },
+                        )
+                        .await?;
+                        continue;
+                    }
                     // This job did not admit that response. Recover from actual
                     // resolution events instead of blindly resending approval.
-                    let submitted = self.permission_was_selected(decision, option_id).await?;
+                    let submitted = self
+                        .permission_was_selected(&current, decision, operation_id, option_id)
+                        .await?;
                     self.change(&current, Change::Decision { event: Event::Result { decision_id: decision.id.clone(), operation_id: operation_id.clone(), submitted,
                         detail: if submitted { "Controller event confirms option selection; wire transmission and tool effects remain unconfirmed".into() } else { "Response dispatch survived without a confirmed controller selection; no automatic replay".into() } } }).await?;
                 }
@@ -163,10 +175,14 @@ impl Coordinator {
                     operation_id,
                     option_id,
                     ..
-                } if self.permission_was_selected(decision, option_id).await? => {
+                } if self
+                    .permission_was_selected(&current, decision, operation_id, option_id)
+                    .await? =>
+                {
                     self.change(&current, Change::Decision { event: Event::Result {
                             decision_id: decision.id.clone(), operation_id: operation_id.clone(), submitted: true,
-                            detail: "Late controller selection evidence reconciled the response; tool effects remain unconfirmed".into(),
+                            detail: if decision.run_id.is_some() { "Late controller selection evidence reconciled the response; tool effects remain unconfirmed" }
+                                else { "Late native approval receipt reconciled the response; tool effects remain unconfirmed" }.into(),
                     } }).await?;
                 }
                 _ => {}
@@ -239,7 +255,7 @@ impl Coordinator {
                     decision: PermissionDecision {
                         id,
                         execution_id: execution.id.clone(),
-                        run_id: run_id.into(),
+                        run_id: Some(run_id.into()),
                         permission_id: permission.permission_id.clone(),
                         requirements_revision: goal.requirements_revision,
                         task_revision: task.requirements_revision,
@@ -273,12 +289,17 @@ impl Coordinator {
             )
             .await?;
             self.validate_permission_delivery(goal, decision).await?;
+            let Some(run_id) = decision.run_id.as_ref() else {
+                return self
+                    .deliver_native_permission(goal, decision, operation_id, option_id)
+                    .await;
+            };
             let response = self
                 .supervisor
                 .dispatch(SessionRequest::authorized(
                     &self.grant,
                     SessionCommand::AcquireLease {
-                        run_id: decision.run_id.clone(),
+                        run_id: run_id.clone(),
                         client_id: self.grant.client_id.clone(),
                         mode: LeaseMode::Transient,
                         action_request_id: format!("{operation_id}-lease"),
@@ -295,7 +316,7 @@ impl Coordinator {
                     &self.grant,
                     SessionCommand::Mutate(SessionMutation {
                         fence: ControlFence {
-                            run_id: decision.run_id.clone(),
+                            run_id: run_id.clone(),
                             client_id: self.grant.client_id.clone(),
                             lease_generation: lease.generation,
                             action_request_id: operation_id.into(),
@@ -311,13 +332,15 @@ impl Coordinator {
                 matches!(response, SessionResponse::Action { .. }),
                 "permission response returned no mutation acknowledgement"
             );
-            self.permission_was_selected(decision, option_id).await
+            self.permission_was_selected(goal, decision, operation_id, option_id)
+                .await
         }
         .await;
         let (submitted, detail) = match result {
             Ok(true) => (
                 true,
-                "Controller confirms permission option selection; wire transmission and tool effects remain unconfirmed".into(),
+                if decision.run_id.is_some() { "Controller confirms permission option selection; wire transmission and tool effects remain unconfirmed" }
+                else { "Native runtime durably accepted the choice; tool execution requires separate evidence" }.into(),
             ),
             Ok(false) => (
                 false,
@@ -344,12 +367,15 @@ impl Coordinator {
         goal: &GoalSnapshot,
         decision: &PermissionDecision,
     ) -> Result<()> {
+        let Some(run_id) = decision.run_id.as_ref() else {
+            return self.validate_native_permission(goal, decision).await;
+        };
         let response = self
             .supervisor
             .dispatch(SessionRequest::authorized(
                 &self.grant,
                 SessionCommand::Snapshot {
-                    run_id: decision.run_id.clone(),
+                    run_id: run_id.clone(),
                 },
             ))
             .await?;
@@ -366,7 +392,7 @@ impl Coordinator {
             .dispatch(SessionRequest::authorized(
                 &self.grant,
                 SessionCommand::Events {
-                    run_id: decision.run_id.clone(),
+                    run_id: run_id.clone(),
                     after_seq: 0,
                 },
             ))
@@ -374,24 +400,58 @@ impl Coordinator {
         let SessionResponse::Events { replay } = response else {
             anyhow::bail!("unexpected current permission events");
         };
-        let current =
-            crate::goal_permission_material::capture(permission, &decision.run_id, &replay)?;
+        let current = crate::goal_permission_material::capture(permission, run_id, &replay)?;
         let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
         let saved = crate::goal_artifacts::read(&root, &decision.request).await?;
-        crate::goal_permission_material::validate_current(&saved, &current, &decision.run_id)
+        crate::goal_permission_material::validate_current(&saved, &current, run_id)
+    }
+
+    async fn permission_is_closed(
+        &self,
+        goal: &GoalSnapshot,
+        decision: &PermissionDecision,
+    ) -> Result<bool> {
+        let Some(run_id) = decision.run_id.as_ref() else {
+            return self.native_permission_closed(goal, decision).await;
+        };
+        let response = self
+            .supervisor
+            .dispatch(SessionRequest::authorized(
+                &self.grant,
+                SessionCommand::Snapshot {
+                    run_id: run_id.clone(),
+                },
+            ))
+            .await?;
+        let SessionResponse::Snapshot { snapshot } = response else {
+            anyhow::bail!("stopped permission snapshot is unavailable");
+        };
+        Ok(snapshot.run_id == *run_id
+            && snapshot.process == ProcessState::Stopped
+            && !snapshot
+                .pending_permissions
+                .iter()
+                .any(|pending| pending.permission_id == decision.permission_id))
     }
 
     async fn permission_was_selected(
         &self,
+        goal: &GoalSnapshot,
         decision: &PermissionDecision,
+        operation_id: &str,
         option_id: &str,
     ) -> Result<bool> {
+        let Some(run_id) = decision.run_id.as_ref() else {
+            return self
+                .native_permission_selected(goal, decision, operation_id, option_id)
+                .await;
+        };
         let response = self
             .supervisor
             .dispatch(SessionRequest::authorized(
                 &self.grant,
                 SessionCommand::Events {
-                    run_id: decision.run_id.clone(),
+                    run_id: run_id.clone(),
                     after_seq: 0,
                 },
             ))
@@ -438,8 +498,7 @@ pub(super) async fn allowed_local_option(
     workspace: &Path,
 ) -> Result<Option<String>> {
     let bytes = crate::goal_artifacts::read(root, &decision.request).await?;
-    let Some(tool) = crate::goal_permission_material::effective_tool(&bytes, &decision.run_id)?
-    else {
+    let Some(tool) = crate::goal_permission_material::decision_tool(&bytes, decision)? else {
         return Ok(None);
     };
     if !is_local_tool(&tool, workspace).await? {
@@ -501,10 +560,7 @@ pub(super) async fn is_local_tool(tool: &serde_json::Value, workspace: &Path) ->
         }
         let path = Path::new(path);
         if tool.get("kind").and_then(serde_json::Value::as_str) == Some("edit")
-            && path.components().any(|part| {
-                matches!(part,
-                std::path::Component::Normal(name) if name == ".git" || name == ".bro")
-            })
+            && control_metadata(path)
         {
             return Ok(false);
         }
@@ -525,15 +581,28 @@ pub(super) async fn is_local_tool(tool: &serde_json::Value, workspace: &Path) ->
             };
             target = parent.to_path_buf();
         }
-        if !tokio::fs::canonicalize(target)
-            .await?
-            .starts_with(&workspace)
+        let resolved = tokio::fs::canonicalize(target).await?;
+        let Ok(relative) = resolved.strip_prefix(&workspace) else {
+            return Ok(false);
+        };
+        if tool.get("kind").and_then(serde_json::Value::as_str) == Some("edit")
+            && control_metadata(relative)
         {
             return Ok(false);
         }
     }
     Ok(true)
 }
+
+fn control_metadata(path: &Path) -> bool {
+    path.components().any(|part| {
+        matches!(part,
+        std::path::Component::Normal(name) if name.to_str().is_some_and(|name|
+            name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case(".bro")))
+    })
+}
+
+mod native;
 
 #[cfg(test)]
 mod tests;

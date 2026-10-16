@@ -286,6 +286,7 @@ async fn real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_
         },
         LocalControlOptions {
             administration: None,
+            threads: None,
             goals: Some(service),
             gate: crate::daemon_handoff::HandoffGate::default(),
             cli_owned: false,
@@ -391,6 +392,7 @@ async fn exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt
         },
         LocalControlOptions {
             administration: None,
+            threads: None,
             goals: Some(service.clone()),
             gate: crate::daemon_handoff::HandoffGate::default(),
             cli_owned: false,
@@ -717,5 +719,218 @@ async fn projection_preserves_incomplete_budget_and_unknown_effects_as_separate_
     assert!(!exhausted.tasks[0].status.contains("pending"));
     assert_eq!(exhausted.satisfaction, "incomplete");
     assert_eq!(exhausted.delivery, "None");
+    Ok(())
+}
+
+#[tokio::test]
+async fn retry_admission_matches_durable_commit_and_projection_at_recovery_boundaries() -> Result<()>
+{
+    use bitrouter_orchestrator::goal::workflow::{
+        Change, CoordinatorLease, ExecutionAdmission, LocalReconciliation, Observation, Planning,
+        StopState, Task, WorkflowActor,
+    };
+    use bitrouter_orchestrator::goal::{GoalError, GoalStore};
+    let directory = tempfile::tempdir()?;
+    let seed_db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&seed_db).await?;
+    let seed_store = std::sync::Arc::new(DatabaseGoalStore::new(seed_db));
+    let seed_service = GoalService::new(seed_store.clone());
+    let GoalReply::Accepted {
+        operation: creation,
+    } = seed_service
+        .execute(
+            "local",
+            pending(directory.path(), "retry-matrix").command,
+            100,
+        )
+        .await?
+    else {
+        anyhow::bail!("creation receipt missing")
+    };
+    let mut seed = seed_store.get("local", &creation.goal_id).await?;
+    seed.workflow.planning = Planning::Planned {
+        attempt_id: "fixture-plan".into(),
+    };
+    seed.workflow.coordinator = Some(CoordinatorLease {
+        id: "retry-fixture".into(),
+        expires_at_ms: 30_000,
+    });
+    let task: Task = serde_json::from_value(serde_json::json!({
+        "spec":{"id":"left","title":"Left","instruction":"Keep original contract",
+            "harness":"fixture","dependencies":[],"checks":[]},
+        "requirements_revision":1,"run_intent":"run","executions":[{
+            "id":"prior","workspace":directory.path(),"requirements_revision":1,"task_revision":1,
+            "dispatch_requested":false,"observation":{"state":"failed","run_id":null,
+            "reason":"Known failure before dispatch"}
+        }]
+    }))?;
+    for scenario in [
+        "first",
+        "safe-retry",
+        "unknown-dispatch",
+        "reconciled",
+        "stale-control",
+        "paused",
+        "future-version",
+        "version-limit",
+        "retained-limit",
+    ] {
+        let mut task = task.clone();
+        let mut requirements_revision = seed.requirements_revision;
+        let expected = match scenario {
+            "first" => {
+                task.executions.clear();
+                ExecutionAdmission::Ready
+            }
+            "safe-retry" => ExecutionAdmission::Ready,
+            "unknown-dispatch" => {
+                task.executions[0].dispatch_requested = true;
+                task.executions[0].observation = Observation::Unknown {
+                    run_id: None,
+                    reason: "Dispatch may have taken effect".into(),
+                };
+                ExecutionAdmission::Blocked
+            }
+            "reconciled" | "stale-control" => {
+                let prior = &mut task.executions[0];
+                prior.dispatch_requested = true;
+                prior.observation = Observation::Unknown {
+                    run_id: Some("original-run".into()),
+                    reason: "Original result uncertain".into(),
+                };
+                prior.stop = Some(StopState::Confirmed {
+                    operation_id: "stop".into(),
+                    detail: "owned process exited".into(),
+                });
+                let reference = bitrouter_orchestrator::goal::workflow::ArtifactRef {
+                    path: directory.path().join("proof"),
+                    sha256: "a".repeat(64),
+                    bytes: 1,
+                };
+                prior.reconciliation = Some(LocalReconciliation::Verified {
+                    task_revision: 1,
+                    control_source_revision: seed.control_source_revision,
+                    workspace: reference.clone(),
+                    transcript: reference,
+                });
+                if scenario == "stale-control" {
+                    task.control_source_revision = seed.control_source_revision + 1;
+                    ExecutionAdmission::Blocked
+                } else {
+                    ExecutionAdmission::Ready
+                }
+            }
+            "paused" => {
+                task.run_intent = RunIntent::Pause;
+                ExecutionAdmission::Blocked
+            }
+            "future-version" => {
+                task.requirements_revision = 2;
+                ExecutionAdmission::Blocked
+            }
+            "version-limit" | "retained-limit" => {
+                if scenario == "retained-limit" {
+                    requirements_revision = 16;
+                    task.requirements_revision = 16;
+                    task.executions[0].task_revision = 16;
+                }
+                let prior = task.executions[0].clone();
+                let count = if scenario == "version-limit" { 3 } else { 16 };
+                task.executions = (0..count)
+                    .map(|index| {
+                        let mut execution = prior.clone();
+                        execution.id = format!("retained-{index}");
+                        // Isolate the retained cap from the per-current-version cap.
+                        if scenario == "retained-limit" {
+                            execution.task_revision = index as u64 + 1;
+                            execution.requirements_revision = execution.task_revision;
+                        }
+                        execution
+                    })
+                    .collect();
+                ExecutionAdmission::RetryLimit
+            }
+            other => anyhow::bail!("unknown retry scenario {other}"),
+        };
+        assert_eq!(
+            task.execution_admission(requirements_revision, seed.control_source_revision),
+            expected,
+            "{scenario}"
+        );
+        let mut goal = seed.clone();
+        goal.requirements_revision = requirements_revision;
+        let previous_attempts = task.executions.len();
+        let mut independent = task.clone();
+        independent.spec.id = "right".into();
+        independent.executions.clear();
+        independent.requirements_revision = goal.requirements_revision;
+        independent.run_intent = RunIntent::Run;
+        goal.workflow.tasks = vec![task, independent];
+        let projected = projection::goal(&goal, &mut projection::Artifacts::new());
+        assert_eq!(
+            projected.tasks[0].status.contains("retry limit"),
+            expected == ExecutionAdmission::RetryLimit,
+            "{scenario}"
+        );
+        if expected == ExecutionAdmission::RetryLimit {
+            assert!(projected.needs_you && projected.facts.blocked, "{scenario}");
+        }
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = std::sync::Arc::new(DatabaseGoalStore::new(db));
+        let mut receipt = creation.clone();
+        receipt.requirements_revision = requirements_revision;
+        store.commit(None, goal, receipt).await?;
+        let goals = GoalService::new(store.clone());
+        let result = goals
+            .workflow_change(
+                WorkflowActor {
+                    owner: "local",
+                    coordinator_id: "retry-fixture",
+                },
+                &seed.id,
+                "admit-left",
+                requirements_revision,
+                Change::RequestExecution {
+                    task_id: "left".into(),
+                    execution_id: "replacement".into(),
+                    workspace: directory.path().join("replacement"),
+                },
+                110,
+            )
+            .await;
+        if expected == ExecutionAdmission::Ready {
+            result?;
+        } else {
+            assert!(
+                matches!(result, Err(GoalError::Conflict)),
+                "{scenario}: {result:?}"
+            );
+        }
+        assert_eq!(
+            store.get("local", &seed.id).await?.workflow.tasks[0]
+                .executions
+                .len(),
+            previous_attempts + usize::from(expected == ExecutionAdmission::Ready),
+            "{scenario}"
+        );
+        goals
+            .workflow_change(
+                WorkflowActor {
+                    owner: "local",
+                    coordinator_id: "retry-fixture",
+                },
+                &seed.id,
+                "admit-independent",
+                requirements_revision,
+                Change::RequestExecution {
+                    task_id: "right".into(),
+                    execution_id: "independent".into(),
+                    workspace: directory.path().join("independent"),
+                },
+                110,
+            )
+            .await?;
+    }
     Ok(())
 }

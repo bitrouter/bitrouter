@@ -167,9 +167,11 @@ impl Coordinator {
         inventory.validate(&task.spec.resources)?;
         ensure!(
             task.spec.resources.model_route.is_none()
-                || inventory
-                    .route_control_harnesses
-                    .contains(&task.spec.harness),
+                || task
+                    .spec
+                    .harness
+                    .as_ref()
+                    .is_none_or(|harness| inventory.route_control_harnesses.contains(harness)),
             "selected harness route control configuration changed before dispatch"
         );
         let descriptors = servers(&config, &task.spec.resources)?;

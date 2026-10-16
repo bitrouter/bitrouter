@@ -867,6 +867,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-test-fixtures"
+version = "1.0.0-alpha.33"
+dependencies = [
+ "agent-client-protocol-schema",
+ "serde_json",
+]
+
+[[package]]
 name = "bitrouter-tui"
 version = "1.0.0-alpha.33"
 dependencies = [

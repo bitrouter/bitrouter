@@ -14,8 +14,16 @@ use super::{ErrorCode, ServiceError, ThreadService, unknown_turn};
 use crate::agent::{Agent, ToolMode};
 use crate::store::{AcceptedKey, ExecutionRecord, ExecutionStore};
 use crate::thread::{
-    PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget, WorkspaceGrant,
+    GoalWork, PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget,
+    WorkspaceGrant,
 };
+
+enum Binding<'a> {
+    Ordinary,
+    Owner(&'a str),
+    Input(&'a str),
+    Work(&'a GoalWork),
+}
 use crate::turn::{
     ApprovalAnswer, CancelTurnRequest, TurnEventPayload, TurnReceipt, TurnSnapshot, TurnStatus,
 };
@@ -160,6 +168,112 @@ impl ThreadService {
         request: ThreadRequest,
         servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
     ) -> Result<ThreadSnapshot, ServiceError> {
+        self.create_thread_bound(server_instance_id, request, servers, Binding::Ordinary)
+            .await
+    }
+
+    /// Admit the Goal's owner through the ordinary durable Thread path. Only a
+    /// trusted Goal host supplies this association; transports do not infer it.
+    pub async fn create_goal_owner_thread(
+        &self,
+        server_instance_id: &str,
+        goal_id: &str,
+        request: ThreadRequest,
+    ) -> Result<ThreadSnapshot, ServiceError> {
+        crate::goal::identifier(goal_id).map_err(|error| error.to_string())?;
+        if request.idempotency_key != crate::goal::workflow::owner_thread_key(goal_id) {
+            return Err("Goal owner requires its stable admission key".into());
+        }
+        self.create_thread_bound(server_instance_id, request, None, Binding::Owner(goal_id))
+            .await
+    }
+
+    /// The input interpreter has its own sequential Turns, so a long planning
+    /// or review Turn cannot hide an explicit pause in a concurrent input.
+    pub async fn create_goal_input_thread(
+        &self,
+        owner: &ThreadTarget,
+        request: ThreadRequest,
+    ) -> Result<ThreadSnapshot, ServiceError> {
+        let view = self.read_stored_thread_view(owner, &request.caller).await?;
+        let goal_id = view
+            .thread
+            .owned_goal_id
+            .as_deref()
+            .ok_or("input Thread requires a Goal owner")?;
+        if request.idempotency_key != crate::goal::workflow::input_thread_key(goal_id) {
+            return Err("Goal input requires its stable admission key".into());
+        }
+        self.create_thread_bound(
+            &owner.server_instance_id,
+            request,
+            None,
+            Binding::Input(&owner.thread_id),
+        )
+        .await
+    }
+
+    pub async fn create_goal_worker_thread(
+        &self,
+        owner: &ThreadTarget,
+        source: &GoalWork,
+        request: ThreadRequest,
+        servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
+    ) -> Result<ThreadSnapshot, ServiceError> {
+        source.validate()?;
+        let parent = self.read_stored_thread_view(owner, &request.caller).await?;
+        if parent.thread.owned_goal_id.as_ref() != Some(&source.goal_id)
+            || owner.thread_id != source.owner_thread_id
+            || request.idempotency_key != super::worker::thread_key(source)?
+        {
+            return Err("worker admission requires its original Goal owner and action key".into());
+        }
+        self.create_thread_bound(
+            &owner.server_instance_id,
+            request,
+            servers,
+            Binding::Work(source),
+        )
+        .await
+    }
+
+    /// Find an already accepted create by its original caller-scoped key.
+    /// Reconciliation reads no new request/config and never starts execution.
+    pub async fn find_thread_admission(
+        &self,
+        server_instance_id: &str,
+        caller: &CallerContext,
+        key: &str,
+    ) -> Result<Option<ThreadSnapshot>, ServiceError> {
+        self.ensure_instance(Some(server_instance_id))?;
+        let scope = key_scope(caller, None, "create_thread", key)?;
+        let Some(entry) = self
+            .inner
+            .store
+            .find_key(&scope, key)
+            .await
+            .map_err(ServiceError::storage)?
+        else {
+            return Ok(None);
+        };
+        let snapshot = self.existing_thread_receipt(&entry).await?;
+        self.check_snapshot_grant(&snapshot)?;
+        Ok(Some(snapshot))
+    }
+
+    async fn create_thread_bound(
+        &self,
+        server_instance_id: &str,
+        request: ThreadRequest,
+        servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
+        binding: Binding<'_>,
+    ) -> Result<ThreadSnapshot, ServiceError> {
+        let (owned_goal_id, input_for_thread_id, goal_work) = match binding {
+            Binding::Ordinary => (None, None, None),
+            Binding::Owner(id) => (Some(id), None, None),
+            Binding::Input(id) => (None, Some(id), None),
+            Binding::Work(source) => (None, None, Some(source)),
+        };
         if let Some(servers) = &servers {
             if servers.len() > 32
                 || serde_json::to_vec(servers)
@@ -191,6 +305,15 @@ impl ThreadService {
             request.permission_profile,
             &request.verification_command,
         ))?;
+        if let Some(goal_id) = owned_goal_id {
+            hash = fingerprint(&(&hash, goal_id))?;
+        }
+        if let Some(parent_id) = input_for_thread_id {
+            hash = fingerprint(&(&hash, "goal_input", parent_id))?;
+        }
+        if let Some(source) = goal_work {
+            hash = fingerprint(&(&hash, "goal_work", source))?;
+        }
         if servers.is_some() {
             let mut bindings = serde_json::to_value(&servers).map_err(|error| error.to_string())?;
             bindings.sort_all_objects();
@@ -203,10 +326,27 @@ impl ThreadService {
             drop(admission);
             return self.existing_thread_receipt(&entry).await;
         }
-        let workspace = request
-            .workspace
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
+        let coordination = owned_goal_id.is_some() || input_for_thread_id.is_some();
+        if coordination
+            && (request.config.tool_mode() != ToolMode::ReadOnly
+                || request.permission_profile != PermissionProfile::ReadOnly
+                || request.verification_command.is_some()
+                || !request.workspace.is_absolute())
+        {
+            return Err(
+                "Goal coordination is tool-free and requires read-only metadata settings".into(),
+            );
+        }
+        let workspace = if coordination {
+            // A persisted Goal can outlive its original project directory.
+            // This path is a label, not a filesystem grant to this executor.
+            request.workspace.clone()
+        } else {
+            request
+                .workspace
+                .canonicalize()
+                .map_err(|error| error.to_string())?
+        };
         let profile = if request.config.tool_mode() == ToolMode::ReadOnly {
             PermissionProfile::ReadOnly
         } else {
@@ -231,12 +371,14 @@ impl ThreadService {
         if profile == PermissionProfile::ReadOnly && request.verification_command.is_some() {
             return Err("read-only Threads cannot run verification".into());
         }
-        Agent::new(
-            Arc::clone(&self.inner.app),
-            request.caller.clone(),
-            &workspace,
-            config.clone(),
-        )?;
+        if !coordination {
+            Agent::new(
+                Arc::clone(&self.inner.app),
+                request.caller.clone(),
+                &workspace,
+                config.clone(),
+            )?;
+        }
         self.reclaim_hot_capacity(0)?;
         {
             let state = self.lock_state();
@@ -252,10 +394,11 @@ impl ThreadService {
                     "hot Thread limit reached",
                 ));
             }
-            if !state
-                .workspace_profiles
-                .get(&workspace)
-                .is_some_and(|profiles| profiles.contains(&profile))
+            if !coordination
+                && !state
+                    .workspace_profiles
+                    .get(&workspace)
+                    .is_some_and(|profiles| profiles.contains(&profile))
             {
                 return Err(ServiceError::new(
                     ErrorCode::Unauthorized,
@@ -268,6 +411,9 @@ impl ThreadService {
         let mut snapshot = ThreadSnapshot {
             server_instance_id: self.inner.instance_id.clone(),
             thread_id: thread_id.clone(),
+            owned_goal_id: owned_goal_id.map(str::to_owned),
+            input_for_thread_id: input_for_thread_id.map(str::to_owned),
+            goal_work: goal_work.cloned(),
             status: ThreadStatus::Idle,
             workspace,
             model: config.model.clone(),
@@ -682,6 +828,34 @@ impl ThreadService {
         self.existing_turn_receipt(&key).await
     }
 
+    /// Read the original accepted reply without resolving another input or
+    /// treating cancellation's InputResolved(false) as a user reply.
+    pub async fn find_input_answer(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        answer: &ApprovalAnswer,
+    ) -> Result<Option<TurnReceipt>, ServiceError> {
+        self.read_stored_thread_view(target, caller).await?;
+        let scope = key_scope(
+            caller,
+            Some(&target.thread_id),
+            "answer_approval",
+            &answer.idempotency_key,
+        )?;
+        let hash = fingerprint(&(&answer.turn_id, &answer.request_id, answer.approved))?;
+        let Some(entry) = self
+            .accepted_key(&scope, &answer.idempotency_key, &hash)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if entry.thread_id != target.thread_id || entry.turn_id.as_ref() != Some(&answer.turn_id) {
+            return Err("input reply identity does not match this Thread/Turn".into());
+        }
+        self.existing_turn_receipt(&entry).await.map(Some)
+    }
+
     pub async fn answer_thread_input(
         &self,
         target: &ThreadTarget,
@@ -775,6 +949,9 @@ impl ThreadService {
         state: &State,
         thread: &ThreadRecord,
     ) -> Result<(), ServiceError> {
+        if thread.snapshot.is_goal_coordination() {
+            return Ok(());
+        }
         if state
             .workspace_profiles
             .get(&thread.snapshot.workspace)
@@ -793,6 +970,9 @@ impl ThreadService {
         &self,
         snapshot: &ThreadSnapshot,
     ) -> Result<(), ServiceError> {
+        if snapshot.is_goal_coordination() {
+            return Ok(());
+        }
         if self
             .lock_state()
             .workspace_profiles

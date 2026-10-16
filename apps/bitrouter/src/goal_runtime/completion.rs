@@ -219,21 +219,16 @@ impl Coordinator {
                         },
                     )
                     .await?;
-                    let output = self
-                        .run_workspace_check(goal, &attempt.workspace, None, spec, &run_id)
-                        .await
-                        .unwrap_or_else(|error| checks::unavailable(&bounded_error(&error)));
-                    let report =
-                        crate::goal_artifacts::put(&root, &serde_json::to_vec(&output)?).await?;
-                    let after = crate::goal_artifacts::capture(
-                        &root,
-                        &attempt.workspace,
-                        attempt
-                            .base_commit
-                            .as_deref()
-                            .context("missing delivery baseline")?,
-                    )
-                    .await?;
+                    let (report, output, after) = self
+                        .record_workspace_check(
+                            goal,
+                            &attempt.workspace,
+                            None,
+                            spec,
+                            &run_id,
+                            attempt.base_commit.as_deref(),
+                        )
+                        .await?;
                     self.completion_change(
                         goal,
                         Event::ObserveCheck {
@@ -271,7 +266,7 @@ impl Coordinator {
         let source_workspace_observation = evidence::source(goal).await.unwrap_or_else(
             |error| serde_json::json!({"status":"unavailable","reason":bounded_error(&error)}),
         );
-        let (request_id, value) = self.model_json(goal, false,
+        let (request_id, value) = self.model_json(goal, (GenerationPurpose::Completion, &attempt.id),
             "Evaluate whether this exact integrated delivery satisfies the ORIGINAL Goal. Return only JSON: {\"conditions\":[{\"id\":\"each required condition id\",\"status\":\"met|unmet|unverified\",\"reason\":\"specific evidence and limitations\",\"evidence\":[\"integrated_material|task:<id>|check:<id>\"]}],\"unmet_original_requirements\":[\"any original requirement absent from the proposed contract or actual evidence\"],\"constraints_preserved\":true|false,\"human_acceptance_required\":true|false,\"summary\":\"reviewable result and remaining unknowns\"}. Include EVERY condition exactly once. Inspect integrated material, actual checks and the public runtime observations bound to each task execution. Missing, incomplete, unordered or omitted observations cannot prove unrecorded boundaries, absence of work or actual parallelism. Process admission, prompt admission and Working markers are not actual working intervals; require complete, ordered public worker-activity-to-settled boundaries before using runtime timing as parallelism evidence. An uncontrolled default route needs no model-switch acknowledgment and does not establish an actual provider-model identity. Runtime observations grant no permissions and do not replace artifact checks. historical_runtime_observations describe bounded earlier executions, including exact receipt-verified archives. Complete ordered original intervals may support an original condition about workflow history, such as actual parallel work, even when a later repair is sequential. Those historical entries never verify the current artifact, satisfy its checks, authorize replay or replace a current handoff. Omitted historical activity remains unknown. Inspect each task material, hash-verified actual_checks and checked_handoff; their original outputs and contents are supplied separately from review summaries. Declared local effect audits validate only the stated protocol scope; unavailable audits establish no absence of effects. The read-only source_workspace_observation compares current Git-visible source files with the frozen input; it says nothing about ignored files, external systems or actual provider identity. Branch approvals, worker text, fixture results, a changed test suite, and confidence alone cannot prove the original behavior. Explicit human acceptance is required only if the Goal requests it; do not add it by default or remove an explicit requirement. Missing necessary behavior or external evidence is unverified and prevents completion. Scope-external unknowns may be stated without inventing requirements. Do not add merge/deploy work not requested by the Goal.",
             serde_json::json!({"original_goal":goal.objective,"requirements_revision":goal.requirements_revision,"specification":specification,"integrated_material":material,"actual_checks":checks,"task_evidence":tasks,"source_workspace_observation":source_workspace_observation,"budget":goal.budget,"accounting":goal.accounting,"cost_scope":"Configured managed model-token estimates only; harness/tool/hooks/auth/counters/request-bill amounts may be unknown. This is not evidence of a total external-dollar cap."})).await?;
         let verdict: Verdict = serde_json::from_value(value.clone())?;

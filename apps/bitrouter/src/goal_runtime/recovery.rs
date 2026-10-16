@@ -4,6 +4,8 @@ use crate::supervisor::{ReplayBatch, SessionEventKind};
 use bitrouter_orchestrator::goal::decision::{Event as PermissionEvent, PermissionDecision};
 use bitrouter_orchestrator::goal::workflow::LocalReconciliation;
 
+mod native;
+
 impl Coordinator {
     /// Read committed observations/results at one cutoff; the live head prunes closed cards.
     async fn permission_receipts(
@@ -134,21 +136,9 @@ impl Coordinator {
         task: &Task,
         execution: &Execution,
     ) -> Result<(ArtifactRef, ArtifactRef)> {
-        let run_id = match &execution.observation {
-            Observation::Running { run_id, .. } | Observation::Candidate { run_id, .. } => run_id,
-            Observation::Unknown {
-                run_id: Some(run_id),
-                ..
-            }
-            | Observation::Failed {
-                run_id: Some(run_id),
-                ..
-            } => run_id,
-            _ => anyhow::bail!("the original dispatch has no actual run mapping"),
-        };
         anyhow::ensure!(
             matches!(execution.stop, Some(StopState::Confirmed { .. })),
-            "owned process stop is unconfirmed"
+            "execution stop is unconfirmed"
         );
         anyhow::ensure!(
             !matches!(execution.review, Some(ReviewState::Requested { .. }))
@@ -162,6 +152,30 @@ impl Coordinator {
                 )),
             "BRO check or semantic review is still unresolved"
         );
+        if task.spec.harness.is_none() {
+            return self
+                .native_local_recovery_evidence(goal, task, execution)
+                .await;
+        }
+        let run_id = match &execution.observation {
+            Observation::Running {
+                run_id: Some(run_id),
+                ..
+            }
+            | Observation::Candidate {
+                run_id: Some(run_id),
+                ..
+            } => run_id,
+            Observation::Unknown {
+                run_id: Some(run_id),
+                ..
+            }
+            | Observation::Failed {
+                run_id: Some(run_id),
+                ..
+            } => run_id,
+            _ => anyhow::bail!("the original dispatch has no actual run mapping"),
+        };
         let snapshot = self
             .supervisor
             .dispatch(SessionRequest::authorized(
@@ -230,7 +244,7 @@ impl Coordinator {
             }
             let mut matching = None;
             for (decision, delivery) in &receipts {
-                if decision.run_id == *run_id
+                if decision.run_id.as_ref() == Some(run_id)
                     && decision.permission_id == permission.permission_id
                     && let Some(delivery) = delivery
                     && crate::goal_permission_material::original_bytes(

@@ -35,6 +35,7 @@ async fn archive_inspector_reads_committed_chain_and_rejects_uncommitted_or_fore
         },
         LocalControlOptions {
             administration: None,
+            threads: None,
             goals: Some(goals),
             gate: crate::daemon_handoff::HandoffGate::default(),
             cli_owned: false,
@@ -58,7 +59,7 @@ async fn archive_inspector_reads_committed_chain_and_rejects_uncommitted_or_fore
     let decision = PermissionDecision {
         id: "retired-decision".into(),
         execution_id: "original-1".into(),
-        run_id: "domain-run".into(),
+        run_id: Some("domain-run".into()),
         permission_id: "domain-permission".into(),
         requirements_revision: 1,
         task_revision: 1,

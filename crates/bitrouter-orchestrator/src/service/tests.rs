@@ -1,6 +1,8 @@
 //! Service behavior suites share fixtures without importing other test suites.
 
 mod close;
+mod generation;
+mod goals;
 mod harness;
 mod instructions;
 mod lifecycle;
@@ -16,3 +18,4 @@ mod steering;
 mod support;
 mod thread;
 mod unification;
+mod worker;

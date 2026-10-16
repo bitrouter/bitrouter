@@ -401,6 +401,7 @@ impl Agent {
             None => budget::Budget::new(&self.config, report),
         };
         let port = Arc::new(port::Port {
+            work_control: self.work_control.clone(),
             journal: tokio::sync::Mutex::new(journal),
             budget: tokio::sync::Mutex::new(budget),
             commits: channels.commits,

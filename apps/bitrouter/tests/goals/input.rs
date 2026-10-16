@@ -48,6 +48,45 @@ pub(super) async fn commit_task_update(
 }
 
 #[tokio::test]
+async fn goal_wide_requirement_change_invalidates_task_sources_without_instruction_rewrites()
+-> Result<()> {
+    let goals = service(database().await?);
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    let original = snapshot(&goals, &id).await?;
+    let operation = admit(&goals, &id, "global-constraint", None).await?;
+    begin(&goals, &id, operation).await?;
+    let mut proposal = query("Save the API compatibility constraint for the entire Goal");
+    proposal.objective = Some(format!("{}; preserve the public API", original.objective));
+    finish(&goals, &id, "global-constraint", proposal).await?;
+    let saved = snapshot(&goals, &id).await?;
+    assert_eq!(
+        saved.requirements_revision,
+        original.requirements_revision + 1
+    );
+    for task in &saved.workflow.tasks {
+        let before = original
+            .workflow
+            .tasks
+            .iter()
+            .find(|before| before.spec.id == task.spec.id)
+            .context("missing original task")?;
+        assert_eq!(task.requirements_revision, saved.requirements_revision);
+        assert_eq!(task.spec, before.spec);
+        assert_eq!(task.executions, before.executions);
+    }
+    assert_eq!(
+        saved
+            .inputs
+            .latest
+            .context("missing input result")?
+            .affected_tasks,
+        vec!["integrate", "left", "right"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn task_check_additions_are_atomic_bounded_and_preserve_original_checks() -> Result<()> {
     use bitrouter_orchestrator::goal::verification::{CheckRecipe, CheckSpec};
     let db = database().await?;

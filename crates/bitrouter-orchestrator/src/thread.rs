@@ -42,6 +42,15 @@ pub struct ThreadTarget {
 pub struct ThreadSnapshot {
     pub server_instance_id: String,
     pub thread_id: String,
+    /// Explicit Goal ownership, not inferred from parentage or model activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_goal_id: Option<String>,
+    /// Independent input interpretation while the Goal owner is occupied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_for_thread_id: Option<String>,
+    /// A delegated work attempt, independent of the owning Goal Thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_work: Option<GoalWork>,
     pub status: ThreadStatus,
     pub workspace: PathBuf,
     pub model: String,
@@ -54,11 +63,46 @@ pub struct ThreadSnapshot {
     pub waiting_for_capacity: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoalWork {
+    pub owner_thread_id: String,
+    pub goal_id: String,
+    pub task_id: String,
+    pub execution_id: String,
+    pub task_revision: u64,
+    pub control_source_revision: u64,
+}
+
+impl GoalWork {
+    pub fn validate(&self) -> Result<(), String> {
+        for id in [
+            &self.owner_thread_id,
+            &self.goal_id,
+            &self.task_id,
+            &self.execution_id,
+        ] {
+            crate::goal::identifier(id).map_err(|error| error.to_string())?;
+        }
+        if self.task_revision == 0 {
+            return Err("Goal work requires a positive task revision".into());
+        }
+        Ok(())
+    }
+}
+
 /// A completed close result. Replays must not retire newer attachments or work.
 #[derive(Debug, Clone)]
 pub struct ThreadCloseReceipt {
     pub snapshot: ThreadSnapshot,
     pub replayed: bool,
+}
+
+impl ThreadSnapshot {
+    /// These host-created Threads run explicit, tool-free model inputs. They
+    /// do not grant filesystem access through ordinary native Turn RPCs.
+    pub fn is_goal_coordination(&self) -> bool {
+        self.owned_goal_id.is_some() || self.input_for_thread_id.is_some()
+    }
 }
 
 /// A cold directory projection. Listing does not load context or subscribe.
@@ -242,6 +286,8 @@ pub enum ThreadChange {
         tool_calls: u32,
     },
     ContextAdvanced {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<crate::turn::GenerationOrigin>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<Box<crate::harness::HarnessInventory>>,
         turn_id: String,

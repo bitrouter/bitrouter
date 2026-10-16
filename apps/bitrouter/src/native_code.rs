@@ -1026,6 +1026,7 @@ mod tests {
         };
         show_event(&mut state, &event);
         let snapshot = TurnSnapshot {
+            generation: None,
             context_routing: None,
             resources: None,
             steering: vec![],

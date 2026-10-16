@@ -1,9 +1,9 @@
-//! Build a Cargo example once per test process, including when running only lib tests.
+//! Build the requested protocol fixture without compiling the app/runtime.
 
 use std::path::PathBuf;
 use std::process::Command;
 
-pub fn build(package: &str, example: &str) -> Result<PathBuf, String> {
+pub fn build(fixture: &str) -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let profile = executable
         .parent()
@@ -23,9 +23,9 @@ pub fn build(package: &str, example: &str) -> Result<PathBuf, String> {
             "--jobs=2",
             "--message-format=json-render-diagnostics",
             "--package",
-            package,
-            "--example",
-            example,
+            "bitrouter-test-fixtures",
+            "--bin",
+            fixture,
             "--manifest-path",
         ])
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
@@ -37,7 +37,7 @@ pub fn build(package: &str, example: &str) -> Result<PathBuf, String> {
     let output = command.output().map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(format!(
-            "building {example}: {}\n{}",
+            "building {fixture}: {}\n{}",
             String::from_utf8_lossy(&output.stderr),
             String::from_utf8_lossy(&output.stdout)
         ));
@@ -48,11 +48,11 @@ pub fn build(package: &str, example: &str) -> Result<PathBuf, String> {
             continue;
         };
         if artifact["reason"] == "compiler-artifact"
-            && artifact["target"]["name"] == example
+            && artifact["target"]["name"] == fixture
             && let Some(path) = artifact["executable"].as_str()
         {
             return Ok(PathBuf::from(path));
         }
     }
-    Err(format!("Cargo did not return the {example} executable"))
+    Err(format!("Cargo did not return the {fixture} executable"))
 }
