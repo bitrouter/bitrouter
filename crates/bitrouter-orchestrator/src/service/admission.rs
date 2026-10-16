@@ -317,6 +317,17 @@ impl ThreadService {
             drop(admission);
             return self.existing_turn_receipt(&entry).await;
         }
+        // A caller may have passed its source check before waiting for this
+        // lock. Recheck under the same lock used by original-action recovery:
+        // once a Goal revokes an attempt, a later absent-receipt read can fence
+        // all new acceptances. Existing receipts remain readable above.
+        if let Some(managed) = &managed {
+            managed
+                .control()
+                .authorize()
+                .await
+                .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
+        }
         if request.prompt.trim().is_empty()
             || request.prompt.len() > self.inner.limits.request_bytes
         {

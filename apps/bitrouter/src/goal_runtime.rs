@@ -324,6 +324,7 @@ impl Coordinator {
                 goal.workflow.planning_requirements_revision
             }
             Change::ObserveExecution { execution_id, .. }
+            | Change::RejectWorkerDispatch { execution_id, .. }
             | Change::BindWorkerTurn { execution_id, .. }
             | Change::ConfirmModelRoute { execution_id, .. } => goal
                 .workflow
@@ -1511,12 +1512,14 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
         };
         // An original supervisor start remains authoritative even without a
         // Goal link. New attempts record their worker before any Thread exists.
-        // Keep their original action on the common path even in that gap.
+        // Keep their original action on the common path even in that gap. A
+        // saved managed dispatch retains this provenance after a task edit.
         // Legacy selections frozen by a worker edit belong to an older task
         // version and must retain their original supervisor reconciliation.
-        let current_worker_request = execution.worker.is_some()
-            && execution.task_revision == task.requirements_revision
-            && legacy_start.is_none();
+        let current_worker_request = legacy_start.is_none()
+            && (execution.managed_dispatch
+                || execution.worker.is_some()
+                    && execution.task_revision == task.requirements_revision);
         let admitted_worker = if execution.thread.is_none()
             && execution.dispatch_requested
             && goal.workflow.owner_thread_id.is_some()
@@ -1534,7 +1537,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
             false
         };
         anyhow::ensure!(
-            !(legacy_start.is_some() && admitted_worker),
+            !(legacy_start.is_some() && (admitted_worker || execution.managed_dispatch)),
             "original ACP supervisor and common Thread admissions conflict"
         );
         if current_worker_request
@@ -1587,7 +1590,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
             Observation::Unknown { run_id, .. } | Observation::Failed { run_id, .. } => {
                 run_id.as_deref()
             }
-            Observation::Requested => None,
+            Observation::Requested | Observation::NotAdmitted { .. } => None,
         };
         if let Some(run_id) = run_id
             && execution.confirmed_model_route.is_none()
@@ -1937,7 +1940,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
             );
             self.change(
                 goal,
-                Change::RequestDispatch {
+                Change::RequestWorkerDispatch {
                     execution_id: id.clone(),
                 },
             )

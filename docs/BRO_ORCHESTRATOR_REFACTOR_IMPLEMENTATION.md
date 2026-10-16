@@ -250,8 +250,8 @@ The unchanged assertion passes in the source6 full run below. S3–S6 remain inc
 
 ## Compatibility
 
-- Goal local protocol is **6** because history can contain worker choices in
-  task updates and per-attempt worker provenance as well as owner/input/model
+- Goal local protocol is **7** because history can contain common-dispatch and
+  no-admission verdicts as well as worker choices, provenance and owner/input/model
   execution links. Older clients/outboxes are explicitly rejected
   and retained without replay through the existing version check.
 - Existing Goal snapshots/history remain readable. Missing ownership fields
@@ -274,7 +274,12 @@ The unchanged assertion passes in the source6 full run below. S3–S6 remain inc
   running old writers still require the explicit quiescent cutover in S6;
   a startup marker alone cannot stop a process that initialized earlier.
 - No CLI command, flag, provider credential or listen port changes in this
-  batch. Shipped skill and CLI protocol documentation track version 6.
+  batch. Shipped skill and CLI protocol documentation track version 7.
+
+Migration **000032** fences writers that cannot retain no-admission verdicts.
+It adds no table or history conversion. The current migration-list compatibility
+test covers this boundary while retaining old Goal/history data; it is not a
+released-binary or already-running-writer qualification.
 
 Worker replacement is connected through existing middle-input task
 updates. A requested built-in/ACP worker versions the task and downstream
@@ -310,7 +315,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
 | Stage | Status |
 | --- | --- |
 | S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
-| S1 | In progress: owner/input association, model/worker Turn links, stable binding operations and original-key lookup implemented. New ACP dispatches with no accepted Thread now stay on common admission; existing original supervisor starts keep reconciliation priority. Full interruption/compatibility proof remains. |
+| S1 | In progress: owner/input association, model/worker Turn links, stable binding operations and original-key lookup implemented. New ACP dispatches with no accepted Thread stay on common admission; original supervisor starts keep reconciliation priority. Managed refusals now reconcile absence under the shared admission lock, preserve intent, and permit bounded new preparation. Full interruption/compatibility proof remains. |
 | S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
 | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
 | S4 | In progress: generation/native SDK reports, prepared-input/router facts and actual content receipt intervals link to original work/Thread/Turn sources. ACP public session/route limits remain explicit. Complete historical qualification and final evidence/UI closure remain. |
@@ -339,7 +344,7 @@ and green checks for the pre-refactor MVP do not prove the new architecture.
 | A13 | Local native three-node acceptance now proves same-clock observed overlap, isolated conflicting scratch writes and checked dependency join. Preserve that evidence through the final source and live qualification; do not substitute admission or wall-clock timestamps. |
 | A14 | Confirmed same-session restore retains Thread; new session/harness gets new Thread. |
 | A15 | Replacement waits for confirmed stop/effect boundary. |
-| A16 | Distinct worker/Turn action keys and interruption reconciliation at every specified boundary; owner-link recovery is partial evidence. |
+| A16 | Original-key lookup, lost-link recovery and source-revoked no-admission reconciliation are qualified locally, including selected-MCP and saved-input integrity refusals. Accepted unknown effects remain blocked. Preserve these through remaining recovery boundaries and final source qualification. |
 | A17 | Input/control/modification phase evidence with queries remaining effect-free. |
 | A18 | Negotiated ACP limitations, missing history and unknown private model/context shown accurately. |
 | A19 | Permissions/revocation/root budget/accounting and unknown-effect safeguards across the shared runner. |
@@ -1095,3 +1100,46 @@ retains the final acceptance summary and necessary reproduction material,
 including the Cargo-built Rust protocol fixtures. A local archive or local
 green run is not a pushed PR, hosted CI, live-harness qualification or completed
 refactor.
+
+## Managed refusal reconciliation checkpoint
+
+New `RequestWorkerDispatch` records the common admission path explicitly;
+legacy supervisor requests retain their original reconciliation. This provenance
+survives requirement edits without mistaking a frozen legacy worker choice for
+new common work. The earlier dispatch intent is never cleared or re-keyed.
+
+An unbound uncertain attempt first revokes its source through `Unknown`.
+ThreadService rechecks new managed authorization under its existing admission
+lock and reads original Thread/Turn keys under the same lock. An earlier accepted
+Turn is linked and remains subject to stop/effect evidence. Only confirmed
+absence after revocation permits `NotAdmitted` and bounded new preparation.
+This is scoped managed-Turn evidence, not proof of machine-wide effect absence.
+Selected-MCP refusals, ACP metadata without a Turn, and saved-input integrity
+failures follow this path; damaged input is neither executed nor silently repaired.
+
+The readonly Workflow distinguishes saved intent from Turn acceptance. Completion
+can use later current handoffs without treating a prior no-admission verdict as
+an unresolved execution. That verdict cannot satisfy a task; genuine unknown
+attempts still block completion. Original resources, owner, work identity and
+history remain unchanged. No store, global transaction, permission expansion,
+product limit or test timeout was added or relaxed.
+
+The final checkpoint passes **94 Goal domain assertions**, **81 Goal runtime
+assertions**, five shared admission cases, the writer compatibility case,
+strict workspace/all-target/all-feature Clippy, formatting, and six workspace
+doctests with one ignored. It has two nextest output-handle `LEAK` reports, in
+the owner-transfer model-gate case and the foreign workspace-lock case. Their
+causes are unconfirmed; this is not a fully clean runtime qualification.
+
+An earlier frozen source passes all **4,744 workspace tests**, with 24 skipped,
+eight slow and no leaks; it predates the completion and saved-input handling
+fixes. A read-only probe of that exact source repeats the earlier affected native
+admission case 20 times: all pass, 23 owned processes are observed and none remain
+observed. These passes do not explain or fix any earlier leak. Raw failures,
+both later reports, exact source deltas, eight independently verified source
+tars and reproduction material are retained under `DISPATCH_REJECTION_INDEX.md`
+and its checksum manifest in the independent local archive.
+
+The full S0–S6 / A01–A22 objective remains active. Final source regression,
+remaining recovery/resource gates, live qualification, independent archive
+publication and the single update to PR #981 are still required.
