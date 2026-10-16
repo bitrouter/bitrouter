@@ -36,6 +36,7 @@ mod dependencies;
 mod input_scope;
 mod model_control;
 mod native;
+mod native_evidence;
 mod permissions;
 mod recovery;
 mod repair;
