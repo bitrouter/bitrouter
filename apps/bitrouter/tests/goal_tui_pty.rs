@@ -83,7 +83,10 @@ impl Terminal {
         let ui_pid = tempfile::NamedTempFile::new_in(home)?;
         let mut command = CommandBuilder::new("/bin/sh");
         command.arg("-c");
-        command.arg("\"$@\" <&0 &\npid=$!\nprintf '%s\\n' \"$pid\" > \"$BRO_GOAL_PTY_UI_PID\"\nwait \"$pid\"\nstatus=$?\nprintf '\\nGOAL_UI_EXIT:%s\\n' \"$status\"\nif [ \"$status\" -ne 0 ]; then exit \"$status\"; fi\nprintf 'GOAL_SHELL_READY\\n'\nIFS= read -r input\nprintf 'GOAL_SHELL_OK<%s>\\n' \"$input\"");
+        // POSIX asynchronous lists may assign /dev/null before redirections;
+        // <&0 then duplicates that input on dash. Save the actual PTY first.
+        // https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html
+        command.arg("exec 3<&0\n\"$@\" <&3 3<&- &\npid=$!\nexec 3<&-\nprintf '%s\\n' \"$pid\" > \"$BRO_GOAL_PTY_UI_PID\"\nwait \"$pid\"\nstatus=$?\nprintf '\\nGOAL_UI_EXIT:%s\\n' \"$status\"\nif [ \"$status\" -ne 0 ]; then exit \"$status\"; fi\nprintf 'GOAL_SHELL_READY\\n'\nIFS= read -r input\nprintf 'GOAL_SHELL_OK<%s>\\n' \"$input\"");
         command.arg("goal-shell");
         command.arg(env!("CARGO_BIN_EXE_bro"));
         command.cwd(home);
