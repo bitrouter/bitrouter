@@ -82,7 +82,7 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 
 ### 5. Choose the work interface
 
-BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. See `references/cli.md` for bounded model-admission waiting and remaining recovery/budget-wait limits.
+BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. Safe native checkpoints retain their original Thread/Turn after current-source, owner, effect and budget checks. See `references/cli.md` for evidence scope, bounded admission waiting and remaining ACP recovery/budget-wait limits.
 The Goal directory, current Goal and read-only Workflow have separate navigation;
 viewing never creates work. Enter submits to the current Goal even while workers run.
 Queries and hypotheses do not modify requirements; accepted changes and actual

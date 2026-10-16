@@ -338,11 +338,58 @@ impl Coordinator {
             thread_id: binding.thread_id.clone(),
             server_instance_id: epoch,
         };
-        let turn = self
+        let mut turn = self
             .threads
             .read_stored_turn(&target, &caller, &binding.turn_id)
             .await?;
         let external = task.execution_harness(execution).is_some();
+        if !external && turn.status == TurnStatus::RecoveryRequired {
+            let source = source(goal, task, execution)?;
+            if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
+                let control = model_control::ModelControl::for_worker(self, goal, source.clone());
+                match self
+                    .threads
+                    .resume_goal_worker_turn(
+                        &target,
+                        &caller,
+                        &source,
+                        &binding.turn_id,
+                        &turn_key(&execution.id),
+                        control,
+                    )
+                    .await
+                {
+                    Ok(receipt) => {
+                        anyhow::ensure!(
+                            receipt.thread_id == binding.thread_id
+                                && receipt.turn_id == binding.turn_id,
+                            "native continuation changed its original execution identity"
+                        );
+                        turn = self
+                            .threads
+                            .read_stored_turn(&target, &caller, &binding.turn_id)
+                            .await?;
+                    }
+                    Err(error) => {
+                        return self
+                            .change(
+                                goal,
+                                Change::ObserveExecution {
+                                    execution_id: execution.id.clone(),
+                                    observation: Observation::Unknown {
+                                        run_id: None,
+                                        reason: format!(
+                                            "Native checkpoint continuation was not admitted: {}",
+                                            bounded_error(&anyhow::Error::from(error))
+                                        ),
+                                    },
+                                },
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
         if let Some(session) = &turn.acp {
             anyhow::ensure!(
                 task.execution_harness(execution) == Some(session.agent_id.as_str()),
