@@ -1,0 +1,73 @@
+{
+  "source": "late-stop-source3.json",
+  "startedAt": "2026-10-16T05:38:53.829Z",
+  "runs": [
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "late-stop-full1.log",
+      "startedAt": "2026-10-16T05:38:53.830Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T05:54:31.025Z"
+    },
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "late-stop-clippy2.log",
+      "startedAt": "2026-10-16T05:54:31.026Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T05:55:51.946Z"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "late-stop-fmt3.log",
+      "startedAt": "2026-10-16T05:55:51.947Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T05:56:28.369Z"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "late-stop-doctests1.log",
+      "startedAt": "2026-10-16T05:56:28.369Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T05:56:37.217Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T05:56:37.217Z",
+  "passed": false
+}

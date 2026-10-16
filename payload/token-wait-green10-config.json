@@ -1,0 +1,63 @@
+{
+  "id": "token-wait-green10",
+  "scope": "Native worker quote waits, quiet exhausted elapsed cap, and exact editor bytes across a single explicit user resubmission after a definite CAS rejection and refreshed matching Goal. All prior failures retained; no automatic mutation retry or relaxed deadline. Focused/component and strict workspace checks only; full final refactor remains open.",
+  "jobs": [
+    {
+      "name": "goal-tui",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty"
+      ]
+    },
+    {
+      "name": "editor-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty",
+        "--stress-count",
+        "10",
+        "-E",
+        "test(goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "capturedAt": "2026-10-16T10:32:03.390Z",
+  "head": "867642d95bc5a74e8b777bce2d3bb3f79f11a8a5",
+  "parent": "9d0460696b39b12b8585334b401224fbafde6494",
+  "source": "worker-switch-source10.json",
+  "precommit": "worker-switch-precommit10.json",
+  "broadChecks": "worker-switch-gates9.json",
+  "applicability": "worker-switch-source9-applicability10.json",
+  "focused": "worker-switch-focused10.json",
+  "bundle": "worker-switch-local-checkpoints10.bundle",
+  "bundleSha256": "cf9ab7c03d880686c24a76b8d84cb28099c9302c265b8119c00ba5dd98ad9262",
+  "clean": true,
+  "pushed": false,
+  "remaining": "Full S3-S6 acceptance, live qualification and final published independent archive remain open."
+}

@@ -1,0 +1,32 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "daemon") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 1m 28s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 79df48f6-90fd-438e-a3fd-c891b683fdfc with nextest profile: default
+    Starting 11 tests across 38 binaries (2387 tests skipped)
+        PASS [   0.096s] ( 1/11) bitrouter db::migration::m20240101_000030_bro_goal_execution_format::tests::legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals
+        PASS [   0.114s] ( 2/11) bitrouter goal_runtime::tests::threads::interrupted_owner_link_reconciles_the_original_thread_after_database_reopen
+        PASS [   0.443s] ( 3/11) bitrouter goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume
+        LEAK [   0.588s] ( 4/11) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+        PASS [   0.759s] ( 5/11) bitrouter goal_runtime::tests::start_recovery::initialize_failure_retains_actual_phase_and_reaped_process_receipt
+        PASS [   0.807s] ( 6/11) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   1.173s] ( 7/11) bitrouter goal_runtime::tests::threads::accepted_native_and_acp_receipts_keep_original_resources_after_mcp_config_change
+        PASS [   1.073s] ( 8/11) bitrouter goal_runtime::tests::threads::unknown_dispatch_with_a_lost_goal_link_retains_the_original_accepted_turn
+        PASS [   1.267s] ( 9/11) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration
+        PASS [   1.272s] (10/11) bitrouter goal_runtime::tests::threads::refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent
+        PASS [   3.778s] (11/11) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+────────────
+     Summary [   3.791s] 11 tests run: 11 passed (1 leaky), 2387 skipped

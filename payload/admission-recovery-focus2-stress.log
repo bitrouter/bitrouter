@@ -1,0 +1,38 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.18s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID d1f7a539-fffc-44d5-b1bc-3619e3a751f4 with nextest profile: default
+    Starting 2 tests across 1 binary (1824 tests skipped)
+────────────
+ Stress test iteration 1/5 (00:00:00 elapsed so far, 5 iterations remaining)
+        PASS [   0.367s] [1/5] (1/2) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   3.339s] [1/5] (2/2) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+ Stress test [   3.345s] iteration 1/5: 2 tests run: 2 passed, 1824 skipped
+────────────
+ Stress test iteration 2/5 (00:00:03 elapsed so far, 4 iterations remaining)
+        PASS [   0.422s] [2/5] (1/2) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   3.377s] [2/5] (2/2) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+ Stress test [   3.388s] iteration 2/5: 2 tests run: 2 passed, 1824 skipped
+────────────
+ Stress test iteration 3/5 (00:00:06 elapsed so far, 3 iterations remaining)
+        PASS [   0.389s] [3/5] (1/2) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   3.367s] [3/5] (2/2) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+ Stress test [   3.379s] iteration 3/5: 2 tests run: 2 passed, 1824 skipped
+────────────
+ Stress test iteration 4/5 (00:00:10 elapsed so far, 2 iterations remaining)
+        PASS [   0.395s] [4/5] (1/2) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   3.369s] [4/5] (2/2) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+ Stress test [   3.381s] iteration 4/5: 2 tests run: 2 passed, 1824 skipped
+────────────
+ Stress test iteration 5/5 (00:00:13 elapsed so far, 1 iteration remaining)
+        PASS [   0.400s] [5/5] (1/2) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   3.381s] [5/5] (2/2) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+ Stress test [   3.393s] iteration 5/5: 2 tests run: 2 passed, 1824 skipped
+────────────
+     Summary [  16.887s] 5/5 stress run iterations: 5 passed

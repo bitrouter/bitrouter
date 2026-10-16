@@ -1,0 +1,51 @@
+{
+  "id": "token-wait-diag5",
+  "scope": "Same production reservation-wait behavior plus exact admitted-counter label, unchanged negative worker-switch assertions, and failure-retention/PID startup diagnostics for the unexplained PTY initialize closure. Repeated passing startup does not establish its original cause.",
+  "jobs": [
+    {
+      "name": "pty-startup-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "code_tui_pty",
+        "--stress-count",
+        "20",
+        "-E",
+        "test(evolution_api_restore_reviews_current_identity_and_retains_publication)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.18s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 51bca499-dd45-44f1-8ade-84ebf7907b39 with nextest profile: default
+    Starting 1 test across 1 binary (1822 tests skipped)
+────────────
+ Stress test iteration 1/5 (00:00:00 elapsed so far, 5 iterations remaining)
+        PASS [   3.184s] [1/5] (1/1) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+ Stress test [   3.190s] iteration 1/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 2/5 (00:00:03 elapsed so far, 4 iterations remaining)
+        PASS [   3.205s] [2/5] (1/1) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+ Stress test [   3.211s] iteration 2/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 3/5 (00:00:06 elapsed so far, 3 iterations remaining)
+        PASS [   3.204s] [3/5] (1/1) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+ Stress test [   3.211s] iteration 3/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 4/5 (00:00:09 elapsed so far, 2 iterations remaining)
+        PASS [   3.184s] [4/5] (1/1) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+ Stress test [   3.190s] iteration 4/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 5/5 (00:00:12 elapsed so far, 1 iteration remaining)
+        PASS [   3.186s] [5/5] (1/1) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+ Stress test [   3.193s] iteration 5/5: 1 test run: 1 passed, 1822 skipped
+────────────
+     Summary [  15.995s] 5/5 stress run iterations: 5 passed

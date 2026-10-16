@@ -1,0 +1,43 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+error[E0599]: no method named `clone` found for struct `TurnRequest` in the current scope
+   --> crates/bitrouter-orchestrator/src/service/waiting.rs:100:81
+    |
+100 |                     self.start_goal_worker_turn(target, caller, source, request.clone(), control)
+    |                                                                                 ^^^^^ method not found in `TurnRequest`
+    |
+   ::: crates/bitrouter-orchestrator/src/turn.rs:349:1
+    |
+349 | pub struct TurnRequest {
+    | ---------------------- method `clone` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `clone`, perhaps you need to implement it:
+            candidate #1: `Clone`
+
+error[E0599]: no method named `read` found for struct `std::sync::Arc<store::MemoryExecutionStore>` in the current scope
+   --> crates/bitrouter-orchestrator/src/service/tests/worker/waiting.rs:165:14
+    |
+163 |           let events = self
+    |  ______________________-
+164 | |             .store
+165 | |             .read(&self.worker.thread_id)
+    | |             -^^^^ method not found in `std::sync::Arc<store::MemoryExecutionStore>`
+    | |_____________|
+    |
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `read`, perhaps you need to implement one of them:
+            candidate #1: `NativeCostSource`
+            candidate #2: `XofReader`
+            candidate #3: `futures::AsyncReadExt`
+            candidate #4: `futures_lite::io::AsyncReadExt`
+            candidate #5: `rustls::msgs::codec::Codec`
+            candidate #6: `std::io::Read`
+            candidate #7: `tokio::io::AsyncReadExt`
+            candidate #8: `zerocopy::pointer::invariant::Alignment`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `bitrouter-orchestrator` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `bitrouter-orchestrator` (lib test) due to 2 previous errors
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter-orchestrator --all-features` exited with code 101

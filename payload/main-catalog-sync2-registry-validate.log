@@ -1,0 +1,62 @@
+   Compiling slab v0.4.12
+   Compiling bitflags v2.13.0
+   Compiling tracing v0.1.44
+   Compiling serde_json v1.0.150
+   Compiling hyper v1.10.1
+   Compiling chrono v0.4.45
+   Compiling tokio-stream v0.1.18
+   Compiling futures-util v0.3.32
+   Compiling security-framework v3.7.0
+   Compiling nix v0.31.3
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling schemars v1.2.1
+   Compiling futures-executor v0.3.32
+   Compiling hyper-util v0.1.20
+   Compiling tower v0.5.3
+   Compiling tokio-util v0.7.18
+   Compiling sse-stream v0.2.4
+   Compiling futures v0.3.32
+   Compiling process-wrap v10.0.0
+   Compiling tower-http v0.6.11
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling dist-helper v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/helpers/dist-helper)
+    Finished `dev` profile [unoptimized] target(s) in 15.43s
+     Running `target/debug/dist-helper registry validate`
+registry valid: 59 canonical models, 45 providers, 6 agents, 1 runtimes
+note: 32 advisory(ies) — non-curated provider models (BYOK / BYO-subscription extras) and unpinned agent invocations:
+  - registry/providers/alibaba.yaml: qwen/qwen3.6-plus (provider_model_id=qwen3.6-plus) not in curated registry/models
+  - registry/providers/alibaba_cn.yaml: qwen/qwen3.6-plus (provider_model_id=qwen3.6-plus) not in curated registry/models
+  - registry/providers/alibaba_coding_plan.yaml: qwen/qwen3.6-plus (provider_model_id=qwen3.6-plus) not in curated registry/models
+  - registry/providers/anthropic.yaml: anthropic/claude-sonnet-4.5 (provider_model_id=claude-sonnet-4-5) not in curated registry/models
+  - registry/providers/aws-bedrock.yaml: openai/gpt-oss-120b (provider_model_id=openai.gpt-oss-120b) not in curated registry/models
+  - registry/providers/azure.yaml: anthropic/claude-sonnet-4.5 (provider_model_id=claude-sonnet-4-5) not in curated registry/models
+  - registry/providers/byteplus.yaml: deepseek/deepseek-v3.1 (provider_model_id=deepseek-v3.1) not in curated registry/models
+  - registry/providers/cerebras.yaml: openai/gpt-oss-120b (provider_model_id=gpt-oss-120b) not in curated registry/models
+  - registry/providers/chutes.yaml: xiaomi/mimo-v2-flash (provider_model_id=XiaomiMiMo/MiMo-V2-Flash-TEE) not in curated registry/models
+  - registry/providers/github-copilot.yaml: anthropic/claude-sonnet-4.5 (provider_model_id=claude-sonnet-4.5) not in curated registry/models
+  - registry/providers/google.yaml: google/gemini-2.5-pro-preview (provider_model_id=gemini-2.5-pro) not in curated registry/models
+  - registry/providers/novita.yaml: openai/gpt-oss-120b (provider_model_id=openai/gpt-oss-120b) not in curated registry/models
+  - registry/providers/opencode-go.yaml: qwen/qwen3.6-plus (provider_model_id=qwen3.6-plus) not in curated registry/models
+  - registry/providers/opencode-go.yaml: xiaomi/mimo-v2-omni (provider_model_id=mimo-v2-omni) not in curated registry/models
+  - registry/providers/opencode-go.yaml: xiaomi/mimo-v2-pro (provider_model_id=mimo-v2-pro) not in curated registry/models
+  - registry/providers/opencode-zen.yaml: anthropic/claude-sonnet-4.5 (provider_model_id=claude-sonnet-4-5) not in curated registry/models
+  - registry/providers/opencode-zen.yaml: qwen/qwen3.6-plus (provider_model_id=qwen3.6-plus) not in curated registry/models
+  - registry/providers/openrouter.yaml: anthropic/claude-sonnet-4.5 (provider_model_id=anthropic/claude-sonnet-4.5) not in curated registry/models
+  - registry/providers/openrouter.yaml: google/gemini-2.5-pro-preview (provider_model_id=google/gemini-2.5-pro-preview) not in curated registry/models
+  - registry/providers/openrouter.yaml: openai/gpt-oss-120b (provider_model_id=openai/gpt-oss-120b) not in curated registry/models
+  - registry/providers/openrouter.yaml: qwen/qwen3.6-plus (provider_model_id=qwen/qwen3.6-plus) not in curated registry/models
+  - registry/providers/siliconflow.yaml: openai/gpt-oss-120b (provider_model_id=openai/gpt-oss-120b) not in curated registry/models
+  - registry/providers/xiaomi.yaml: xiaomi/mimo-v2-flash (provider_model_id=mimo-v2-flash) not in curated registry/models
+  - registry/providers/xiaomi.yaml: xiaomi/mimo-v2-omni (provider_model_id=mimo-v2-omni) not in curated registry/models
+  - registry/providers/xiaomi.yaml: xiaomi/mimo-v2-pro (provider_model_id=mimo-v2-pro) not in curated registry/models
+  - registry/runtimes/local.yaml: agent 'claude-acp' has no acp_compat_1 record — run `bro agents conformance local/claude-acp`
+  - registry/runtimes/local.yaml: agent 'codex-acp' has no acp_compat_1 record — run `bro agents conformance local/codex-acp`
+  - registry/runtimes/local.yaml: agent 'hermes-acp' has no acp_compat_1 record — run `bro agents conformance local/hermes-acp`
+  - registry/runtimes/local.yaml: agent 'openclaw' has no acp_compat_1 record — run `bro agents conformance local/openclaw`
+  - registry/runtimes/local.yaml: agent 'opencode' has no acp_compat_1 record — run `bro agents conformance local/opencode`
+  - registry/runtimes/local.yaml: agent 'pi-acp' has no acp_compat_1 record — run `bro agents conformance local/pi-acp`
+  - registry/runtimes/local.yaml: agent 'pi-acp' is unpinned ('pi-acp@latest') — a floating tag lets the fetched catalog choose which code runs, and a conformance record cannot name an agent_version

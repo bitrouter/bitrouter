@@ -1,0 +1,24 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp5VyAYQ",
+  "restored": "/tmp/token-wait-red8-fixture-audit-NZvt6d",
+  "files": {
+    "elapsed.sqlite": {
+      "sha256": "0e726aeb45686877e4b59aa01c3f9f793420ec802ee13d38ebe4967c8ac3a2ae",
+      "bytes": 458752,
+      "mode": 420
+    },
+    "owner.yaml": {
+      "sha256": "e4aff873ed6925b6b6ce4cbcabc876503e6d279e6089846edd76c99f5f47d5f0",
+      "bytes": 201,
+      "mode": 420
+    },
+    "supervisor-runs-v1-1a19fa712a761ef9142a0f114dd03fea2aa5a21b35cca64583775858b2e65e51.json": {
+      "sha256": "54da247d61faf1235db34e198ff222c46525a1174a98f465c30163c203116cdb",
+      "bytes": 32,
+      "mode": 420
+    }
+  },
+  "verifiedFiles": 3,
+  "tarSha256": "2ba1f59752029a83702e97b04166aafa193fc7cc0c17f778724220dda644929f",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}

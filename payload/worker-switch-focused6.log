@@ -1,0 +1,36 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 2.01s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 2cc3d378-104a-4d10-8ba3-808c7515b74b with nextest profile: default
+    Starting 1 test across 2 binaries (1914 tests skipped)
+        FAIL [   0.048s] (1/1) bitrouter::goals input_tests::worker_change_versions_work_without_relabeling_or_replaying_its_old_attempt
+  stdout ───
+
+    running 1 test
+    test input_tests::worker_change_versions_work_without_relabeling_or_replaying_its_old_attempt ... FAILED
+
+    failures:
+
+    failures:
+        input_tests::worker_change_versions_work_without_relabeling_or_replaying_its_old_attempt
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 92 filtered out; finished in 0.04s
+
+  stderr ───
+    Error: reconcile stopped original worker
+
+    Caused by:
+        Goal revision changed; refresh before submitting
+
+────────────
+     Summary [   0.061s] 1 test run: 0 passed, 1 failed, 1914 skipped
+        FAIL [   0.048s] (1/1) bitrouter::goals input_tests::worker_change_versions_work_without_relabeling_or_replaying_its_old_attempt
+error: test run failed

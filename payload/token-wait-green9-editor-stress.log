@@ -1,0 +1,39 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 8105f5ea-c76f-454f-a737-16d22ee2ce12 with nextest profile: default
+    Starting 1 test across 1 binary (3 tests skipped)
+────────────
+ Stress test iteration 1/10 (00:00:00 elapsed so far, 10 iterations remaining)
+        FAIL [  23.836s] [ 1/10] (1/1) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+  stdout ───
+
+    running 1 test
+    test goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal ... FAILED
+
+    failures:
+
+    failures:
+        goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 23.83s
+
+  stderr ───
+    Error: editor fixture retained at /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpsuoaWu
+
+    Caused by:
+        0: editor input was not persisted for Goal b457f8b7-5354-4d80-b6d7-1796e8530136, failed editor=true, expected "current Goal original draft 中文 👩\u{200d}💻\nsecond original line  "; current screen: "BRO / Goals                                                                                         \n/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpsuoaWu / PTY failed editor Goal                \n                                                                                                    \nrevision 1 / requirements 1 / PTY-failed-editor-Goal: Goal accepted; not a claim of execution       \n                                                                                                    \n                                                                                                    \nGoal b457f8b7 · PTY failed editor Goal                                                              \nMutation rejected; draft retained: Goal revision changed; refresh before submitting                 \nPTY failed editor Goal · scope: this Goal · revision 5                                              \nSatisfaction: incomplete · execution: No worker execution recorded                                  \nReason: Total elapsed Goal time reached its limit, including waits and pauses · delivery: None      \nGoal snapshot revision 5 · last durable commit 1792170797159 ms UTC; execution facts may be older   \nObjective: Retain editor inputs without running model or harness work                               \nCompletion conditions: not yet planned; original objective remains required                         \nKnown model-token estimates: 0 micro-USD · held bound: 0                                            \nBudget limits: Limits { elapsed_ms: Some(0), managed_token_estimates_micro_usd: None } · resume     \nrequired: true                                                                                      \nGeneration attempts admitted: 0 · work observations without token estimates: 0 · external           \nharness/tools/bills may be unknown                                                                  \nCtrl-P pause · Ctrl-X stop · Ctrl-R resume · Ctrl-B budget · Ctrl-A decisions/accept · Ctrl-I       \nevidence · Ctrl-O history                                                                           \nEnter submits · Ctrl-J newline · Ctrl-G external editor · Ctrl-←/→ navigate                         \n› current Goal original draft 中文 👩\u{200d}                                                               \n› second original line                                                                              "
+        1: deadline has elapsed
+
+  Cancelling due to test failure: 
+ Stress test [  23.837s] iteration 1/10: 1 test run: 0 passed, 1 failed, 3 skipped
+────────────
+     Summary [  23.837s] 1/10 stress run iterations: 0 passed, 1 failed
+        FAIL [  23.836s] [ 1/10] (1/1) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+error: test run failed

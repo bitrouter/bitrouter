@@ -1,0 +1,19 @@
+{
+  "id": "mcp-binding-red1",
+  "scope": "Regression for selected MCP configuration drift after frozen input but before native/ACP common admission; expected failure before hash revalidation",
+  "jobs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(pending_native_and_acp_dispatch_refuses_changed_selected_mcp)"
+      ]
+    }
+  ]
+}

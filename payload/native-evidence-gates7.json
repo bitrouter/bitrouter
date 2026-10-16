@@ -1,0 +1,103 @@
+{
+  "source": "native-evidence-source7.json",
+  "startedAt": "2026-10-16T10:57:20.136Z",
+  "scope": "S4 bounded native SDK/material projection; full refactor and native activity gates remain open",
+  "runs": [
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "native-evidence-clippy7.log",
+      "startedAt": "2026-10-16T10:57:20.136Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:57:57.646Z"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "native-evidence-fmt7.log",
+      "startedAt": "2026-10-16T10:57:57.646Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:58:17.663Z"
+    },
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ],
+      "log": "native-evidence-goal-runtime7.log",
+      "startedAt": "2026-10-16T10:58:17.664Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:59:03.579Z"
+    },
+    {
+      "id": "stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(requested_new_worker_cannot_bypass)"
+      ],
+      "log": "native-evidence-unknown-stress7.log",
+      "startedAt": "2026-10-16T10:59:03.579Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:59:20.018Z"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "native-evidence-doctests7.log",
+      "startedAt": "2026-10-16T10:59:20.019Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:00:07.073Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T11:00:07.134Z",
+  "changed": [],
+  "passed": true,
+  "nextestSummary": "     Summary [  45.197s] 74 tests run: 74 passed, 1749 skipped",
+  "nextestLeakLines": []
+}

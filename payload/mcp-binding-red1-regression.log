@@ -1,0 +1,33 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 51.80s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 3c36303f-d047-49ed-a5d3-34415a461a65 with nextest profile: default
+    Starting 1 test across 1 binary (1826 tests skipped)
+        FAIL [   0.390s] (1/1) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1826 filtered out; finished in 0.38s
+
+  stderr ───
+    Error: changed frozen MCP configuration was not fenced before None admission: Ok(())
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.401s] 1 test run: 0 passed, 1 failed, 1826 skipped
+        FAIL [   0.390s] (1/1) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration
+error: test run failed

@@ -1,0 +1,94 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpsuoaWu",
+  "restored": "/tmp/token-wait-green9-editor-fixture-audit-OHIofe",
+  "files": {
+    ".bitrouter-daemon-15fe38ad14a340c0b796a596c59264447a54a2b5a181877842ba4b1034f44388.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    ".telemetry-notice-shown": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "bitrouter.acp.sock.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "bitrouter.agent.sock.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "bitrouter.db": {
+      "sha256": "2449789c74e4a8f1614a853c4cffac7f3adfdf7f34b5ee946148f1876bb3cec6",
+      "bytes": 20480,
+      "mode": 384
+    },
+    "bitrouter.db-shm": {
+      "sha256": "a41109dcb41c4a00d624c6027d76a042b741bc02f6fe5c9014c525c4ee4fe569",
+      "bytes": 32768,
+      "mode": 420
+    },
+    "bitrouter.db-wal": {
+      "sha256": "ecbf65d0c5a31d78888c904e677fe541806dd101eef17db5076e43bd9d956cc4",
+      "bytes": 1808712,
+      "mode": 420
+    },
+    "bitrouter.sock.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "bitrouter.yaml": {
+      "sha256": "05a06a0d78bb521586db423004a3d2b2235997e0049ab2249faf8cb637e77f0b",
+      "bytes": 218,
+      "mode": 420
+    },
+    "editor-input": {
+      "sha256": "6dbaa0c823e41b6b95c932a0cd70cb7a2d2e28587a9d41cce541c4b8d1fcf6a5",
+      "bytes": 69,
+      "mode": 420
+    },
+    "editor-release": {
+      "sha256": "a4d451ec23463726f72c43d64c710968f6b602cd653b4de8adee1b556240a829",
+      "bytes": 7,
+      "mode": 420
+    },
+    "editor-replacement": {
+      "sha256": "e43ec484235769267732773ea08aa2e3b94b1c229f7c1e19e26f9bd397b6bf57",
+      "bytes": 51,
+      "mode": 420
+    },
+    "logs/session-20261016T131312-23749.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "logs/session-20261016T131314-23785.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "supervisor-runs-v1-15fe38ad14a340c0b796a596c59264447a54a2b5a181877842ba4b1034f44388.json": {
+      "sha256": "54da247d61faf1235db34e198ff222c46525a1174a98f465c30163c203116cdb",
+      "bytes": 32,
+      "mode": 420
+    },
+    "tmp/bitrouter-draft-NdNTKK.md": {
+      "sha256": "e43ec484235769267732773ea08aa2e3b94b1c229f7c1e19e26f9bd397b6bf57",
+      "bytes": 51,
+      "mode": 384
+    },
+    "tmp/bitrouter-draft-Xtgpaj.md": {
+      "sha256": "e43ec484235769267732773ea08aa2e3b94b1c229f7c1e19e26f9bd397b6bf57",
+      "bytes": 51,
+      "mode": 384
+    }
+  },
+  "verifiedFiles": 17,
+  "tarSha256": "cbc4740c2683e3daa3c170672b74239bbe4be571e800320bf8717523afa4563f",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}

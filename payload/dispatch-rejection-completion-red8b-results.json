@@ -1,0 +1,34 @@
+{
+  "source": "dispatch-rejection-completion-red8b-source.json",
+  "scope": "Locate the no-admission completion regression at the current-handoff source gate; domain receipts only",
+  "startedAt": "2026-10-16T13:48:44.205Z",
+  "runs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goals",
+        "-E",
+        "test(no_admission_history_allows_verified_replacement_sources)"
+      ],
+      "log": "dispatch-rejection-completion-red8b-regression.log",
+      "startedAt": "2026-10-16T13:48:44.205Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:48:47.092Z",
+      "summaries": [
+        "     Summary [   0.062s] 1 test run: 0 passed, 1 failed, 93 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T13:48:47.153Z",
+  "changed": [],
+  "passed": false
+}

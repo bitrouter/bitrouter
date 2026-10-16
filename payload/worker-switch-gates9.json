@@ -1,0 +1,79 @@
+{
+  "source": "worker-switch-source9.json",
+  "startedAt": "2026-10-16T10:13:31.274Z",
+  "scope": "Worker replacement and immutable provenance checkpoint; S3-S6 recovery and coordination gates remain open",
+  "runs": [
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "worker-switch-clippy9.log",
+      "startedAt": "2026-10-16T10:13:31.274Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:14:18.718Z"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "worker-switch-fmt9.log",
+      "startedAt": "2026-10-16T10:14:18.718Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:14:38.855Z"
+    },
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "worker-switch-full9.log",
+      "startedAt": "2026-10-16T10:14:38.856Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:26:34.751Z"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "worker-switch-doctests9.log",
+      "startedAt": "2026-10-16T10:26:34.752Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T10:26:41.520Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T10:26:41.661Z",
+  "changed": [
+    "apps/bitrouter/tests/goals/input.rs"
+  ],
+  "passed": false,
+  "nextestSummary": "     Summary [ 572.290s] 4735 tests run: 4735 passed (6 slow), 24 skipped",
+  "nextestLeakLines": []
+}

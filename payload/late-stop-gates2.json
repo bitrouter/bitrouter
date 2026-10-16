@@ -1,0 +1,62 @@
+{
+  "source": "late-stop-source4.json",
+  "startedAt": "2026-10-16T05:59:39.068Z",
+  "runs": [
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "late-stop-full2.log",
+      "startedAt": "2026-10-16T05:59:39.069Z",
+      "status": "interrupted",
+      "controllerSignal": "SIGINT",
+      "processExitCodeNotCaptured": true
+    },
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "late-stop-clippy3.log",
+      "status": "not_run"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "late-stop-fmt4.log",
+      "status": "not_run"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "late-stop-doctests2.log",
+      "status": "not_run"
+    }
+  ],
+  "finishedAt": "2026-10-16T06:08:24.436Z",
+  "passed": false,
+  "interrupted": true,
+  "reason": "Stopped after two real failures to implement input-ownership correction and improve rejection diagnostics; remaining pressure cases and later gates were not completed in this run."
+}

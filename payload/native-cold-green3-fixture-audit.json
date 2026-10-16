@@ -1,0 +1,119 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpapiV6s",
+  "restored": "/tmp/native-cold-green3-fixture-audit-Q5fugq",
+  "files": {
+    "checkpoint.db": {
+      "sha256": "9183085b8479b5d42ad8aef5109c2c248c7f0c0c1aaf202c36ea2cd7041a8c90",
+      "bytes": 700416,
+      "mode": 384
+    },
+    "owner.yaml": {
+      "sha256": "331576c3c0fc502877a8bd0a7fd9de068a2d2d944479c3338594766b4f864bec",
+      "bytes": 483,
+      "mode": 420
+    },
+    "source.db": {
+      "sha256": "b2b179b3e168c587e637add295f3fd6d83d7d103d199032c85f11756514281ef",
+      "bytes": 638976,
+      "mode": 420
+    },
+    "source.db-shm": {
+      "sha256": "c1cdb0da9fb58928567855d48ec6f2a9593204f769700b449d06fb3524c073d6",
+      "bytes": 32768,
+      "mode": 420
+    },
+    "source.db-wal": {
+      "sha256": "4581d753f3b03ef566253392bcbda2c386a6d4ce64d69b7d9d34940cbd92dade",
+      "bytes": 490312,
+      "mode": 420
+    },
+    "supervisor-runs-v1-ac5af81d8ecefdcbe3276ca02e12fccfbf88b6af1bb3531fb0cbf47ef8859fb6.json": {
+      "sha256": "54da247d61faf1235db34e198ff222c46525a1174a98f465c30163c203116cdb",
+      "bytes": 32,
+      "mode": 420
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/.bro-workspace-2d924ef454f803e3953b0dda72137896ae2f8b1146882b539f291a5ded6e04ab.json": {
+      "sha256": "443201818da45132388fd2d1a15fe0697e35d6a817b10d560a47f68bb122e191",
+      "bytes": 449,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/.bro-workspace-2d924ef454f803e3953b0dda72137896ae2f8b1146882b539f291a5ded6e04ab.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/304ec53d29857fe876ca5a8237d737ae6fb5892b07266def52edd3d776def957.blob": {
+      "sha256": "304ec53d29857fe876ca5a8237d737ae6fb5892b07266def52edd3d776def957",
+      "bytes": 110,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/3843caff8cb88409da66e713ce4e0db5a18e8c01bbea796a38f8b44c3d8d3bb9.blob": {
+      "sha256": "3843caff8cb88409da66e713ce4e0db5a18e8c01bbea796a38f8b44c3d8d3bb9",
+      "bytes": 51,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/3ed96308081deb63a56eaa8109bfc1b72d7c8115273daf0b8fc29eed138302ea.blob": {
+      "sha256": "3ed96308081deb63a56eaa8109bfc1b72d7c8115273daf0b8fc29eed138302ea",
+      "bytes": 133,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/40cdaac66f30077da033d1aaa55a4329286aa88406cd1dc1e7c95189d571484d.blob": {
+      "sha256": "40cdaac66f30077da033d1aaa55a4329286aa88406cd1dc1e7c95189d571484d",
+      "bytes": 133,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/42500a807b6015fadbe26fbc04710daccf5e098d17108ea383fe8e96927e9582.blob": {
+      "sha256": "42500a807b6015fadbe26fbc04710daccf5e098d17108ea383fe8e96927e9582",
+      "bytes": 169,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/5649b2eabc957b1be5d579b92b2be6c4de534647c3346f2aa16d185285bb6ea0.blob": {
+      "sha256": "5649b2eabc957b1be5d579b92b2be6c4de534647c3346f2aa16d185285bb6ea0",
+      "bytes": 27,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/7bcc30a0e55c4e6100d8d2a22dbee4046d5183bcc64acb568964f7f1c221ae7a.blob": {
+      "sha256": "7bcc30a0e55c4e6100d8d2a22dbee4046d5183bcc64acb568964f7f1c221ae7a",
+      "bytes": 10514,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/8b93ffadcf72b419e823549e0b7b59d6b9611727b23c7567a22b9027b90df465.blob": {
+      "sha256": "8b93ffadcf72b419e823549e0b7b59d6b9611727b23c7567a22b9027b90df465",
+      "bytes": 499,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/97f5e156029e75678772bd7a5163d6f1c41250a3fae722612f72fe9c5d5e8584.blob": {
+      "sha256": "97f5e156029e75678772bd7a5163d6f1c41250a3fae722612f72fe9c5d5e8584",
+      "bytes": 109,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/9991c2b1f3a484133d7cbfda709124c8d152bb2f0e459da96601eafec1a37fbe.blob": {
+      "sha256": "9991c2b1f3a484133d7cbfda709124c8d152bb2f0e459da96601eafec1a37fbe",
+      "bytes": 1605,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/afba1ca8f9004e704da140d41ecf5ff6b2b345461490b30c170718edba6c1fb3.blob": {
+      "sha256": "afba1ca8f9004e704da140d41ecf5ff6b2b345461490b30c170718edba6c1fb3",
+      "bytes": 91,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/c5a7b8946e84a896c21ff93613a22f895ceb93978b6166a31d5bc1c715e5a76e.blob": {
+      "sha256": "c5a7b8946e84a896c21ff93613a22f895ceb93978b6166a31d5bc1c715e5a76e",
+      "bytes": 91,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/artifacts/eb385c4cb1f53955d09c88aec2e431c2f3838d2d711b37f93f3f1c7372e66b7a.blob": {
+      "sha256": "eb385c4cb1f53955d09c88aec2e431c2f3838d2d711b37f93f3f1c7372e66b7a",
+      "bytes": 171,
+      "mode": 384
+    },
+    "workspaces/622b8889-e719-4b25-b3fd-ce1fd04fb001/original-work/seed.txt": {
+      "sha256": "5b3ee3788ed0768e490c179574864bf57f659ae15deacdc63446b433a6b7f4ec",
+      "bytes": 23,
+      "mode": 420
+    }
+  },
+  "verifiedFiles": 22,
+  "tarSha256": "cb3d66d38d6b29758394d73e5d1d9a4ec5a7bedcc0a30e3e7b735045c0b1df2f",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}

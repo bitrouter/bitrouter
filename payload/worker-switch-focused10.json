@@ -1,0 +1,25 @@
+{
+  "source": "worker-switch-source10.json",
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "--all-features",
+    "--lib",
+    "--test",
+    "goals",
+    "--no-fail-fast",
+    "-E",
+    "binary(goals) | test(goal_runtime::tests::workflow_edits) | test(changed_protocol_outbox) | test(legacy_startup_rejects_managed_goal_format) | test(goal_code::tests)"
+  ],
+  "startedAt": "2026-10-16T10:28:19.044Z",
+  "log": "worker-switch-focused10.log",
+  "priorRun": "Worker replacement, immutable requested worker provenance, Goal protocol6 and application marker31; partial S3 implementation.",
+  "code": 0,
+  "signal": null,
+  "finishedAt": "2026-10-16T10:29:50.863Z",
+  "changed": [],
+  "summary": "     Summary [  30.656s] 116 tests run: 116 passed, 1799 skipped",
+  "passed": true
+}

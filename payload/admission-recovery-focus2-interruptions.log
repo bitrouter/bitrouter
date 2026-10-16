@@ -1,0 +1,20 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 52.66s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID d32c327c-656f-43bc-92ea-d68ead3dce74 with nextest profile: default
+    Starting 6 tests across 1 binary (1820 tests skipped)
+        PASS [   0.221s] (1/6) bitrouter goal_runtime::tests::threads::interrupted_owner_link_reconciles_the_original_thread_after_database_reopen
+        PASS [   0.583s] (2/6) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+        PASS [   0.614s] (3/6) bitrouter goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume
+        PASS [   0.801s] (4/6) bitrouter goal_runtime::tests::start_recovery::initialize_failure_retains_actual_phase_and_reaped_process_receipt
+        PASS [   0.862s] (5/6) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [   3.829s] (6/6) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+────────────
+     Summary [   3.839s] 6 tests run: 6 passed, 1820 skipped

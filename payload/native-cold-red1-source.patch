@@ -1,0 +1,14 @@
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index d9a47f73..2644ef80 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -12,6 +12,9 @@ use bitrouter_orchestrator::thread::{
+ };
+ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+ 
++#[path = "native_recovery.rs"]
++mod native_recovery;
++
+ async fn coordinator(home: &Path, database_url: &str) -> Result<(Coordinator, DatabaseConnection)> {
+     coordinator_with_config(home, database_url, "").await
+ }

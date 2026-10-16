@@ -1,0 +1,32 @@
+{
+  "source": "dispatch-rejection-red4-source.json",
+  "scope": "Expected regression: an unbound Unknown dispatch with no Turn receipt cannot re-prepare",
+  "startedAt": "2026-10-16T13:19:59.593Z",
+  "runs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "-E",
+        "test(refused_dispatch_without_a_turn)"
+      ],
+      "log": "dispatch-rejection-red4-regression.log",
+      "startedAt": "2026-10-16T13:19:59.593Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:22:00.099Z",
+      "summaries": [
+        "     Summary [   0.429s] 1 test run: 0 passed, 1 failed, 2396 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T13:22:00.262Z",
+  "changed": [],
+  "passed": false
+}

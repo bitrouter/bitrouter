@@ -1,0 +1,67 @@
+{
+  "id": "acp-continuation-final15",
+  "scope": "Complete final required regression under v3 strict output-leak qualification. Same Rust source as final13; only .config/nextest.toml now reserves full coordinator transport fixtures globally. Three leak14 repetitions (12 tests) passed with no LEAK and unchanged detector. All internal workflow concurrency, stack/fixture/product limits, protocol phase/counts, owner/effect and business assertions remain. Actual vendor/provider live requalification remains unpassed.",
+  "jobs": [
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

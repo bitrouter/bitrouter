@@ -1,0 +1,20 @@
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native.rs b/apps/bitrouter/src/goal_runtime/tests/native.rs
+index bee3e03a..a035e3a2 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native.rs
+@@ -123,6 +123,15 @@ fn model(request: &Request) -> ResponseTemplate {
+     } else if state.get("actual_workspace").is_some() {
+         json!({"ready":true,"reason":"Fixture semantic judgment; machine checks are independently required", "missing_checks":[]})
+     } else if state.get("integrated_material").is_some() {
++        let runtime = &state["task_evidence"][0]["runtime_observations"];
++        let provider_observed = runtime["model_work"]["entries"].as_array().is_some_and(|entries| {
++            entries.iter().any(|entry| entry["kind"] == "provider_attempt"
++                && entry["observation"]["actual_provider"] == "fixture"
++                && entry["observation"]["actual_model"] == "test-model")
++        });
++        if runtime["executor"] != "built_in" || !provider_observed {
++            return ResponseTemplate::new(422);
++        }
+         json!({"conditions":[{"id":condition,"status":"met","reason":"Actual read and content-check evidence",
+             "evidence":["integrated_material",format!("check:{final_check}")]}],"unmet_original_requirements":[],
+             "constraints_preserved":true,"human_acceptance_required":false,"summary":"Verified seed inspection fixture"})

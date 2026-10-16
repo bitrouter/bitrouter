@@ -1,0 +1,8 @@
+{
+  "createdAt": "2026-10-16T20:35:58.848Z",
+  "originalFiles": 3966,
+  "originalBytes": 76719035,
+  "packedDirectories": 5,
+  "independentOriginalBytesModesAndHashesVerified": true,
+  "earlierUnpublishedAttempt": "Direct git add interpreted nested fixture workspace pointers as submodules and omitted ignored logs; that local attempt was never pushed. This replacement packages all original directories and force-adds the complete published file set."
+}

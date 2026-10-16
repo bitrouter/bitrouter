@@ -1,0 +1,54 @@
+{
+  "id": "acp-metadata-green3",
+  "scope": "Same production source as green2; add an ACP-specific live-owner negative case. It must neither accept a Turn nor retire the original active owner. Repeated real SQLite shutdown/reopen first-session proof and strict workspace checks; no private-session restore claim.",
+  "jobs": [
+    {
+      "name": "live-owner",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(unopened_acp_metadata_cannot_retire_a_live_execution_owner)"
+      ]
+    },
+    {
+      "name": "metadata-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "3",
+        "-E",
+        "test(unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    }
+  ]
+}

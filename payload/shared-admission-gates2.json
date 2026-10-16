@@ -1,0 +1,76 @@
+{
+  "source": "shared-admission-source2.json",
+  "startedAt": "2026-10-16T07:30:39.449Z",
+  "purpose": "Shared bounded generation/native admission waiting; does not qualify pending S3-S6",
+  "runs": [
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "shared-admission-full2.log",
+      "startedAt": "2026-10-16T07:30:39.449Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T07:42:51.956Z"
+    },
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "shared-admission-clippy2.log",
+      "startedAt": "2026-10-16T07:42:51.957Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T07:43:39.381Z"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "shared-admission-fmt2.log",
+      "startedAt": "2026-10-16T07:43:39.382Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T07:43:59.332Z"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "shared-admission-doctests2.log",
+      "startedAt": "2026-10-16T07:43:59.332Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T07:44:06.406Z"
+    }
+  ],
+  "nextestSummary": "     Summary [ 582.802s] 4725 tests run: 4725 passed (8 slow, 1 leaky), 24 skipped",
+  "nextestCleanExit": false,
+  "finishedAt": "2026-10-16T07:44:06.519Z",
+  "passed": true
+}

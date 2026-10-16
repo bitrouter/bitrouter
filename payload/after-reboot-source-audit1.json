@@ -1,0 +1,20 @@
+{
+  "checked_files": 1286,
+  "changed_documents": [
+    ".agents/plugins/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "crates/bitrouter-orchestrator/README.md",
+    "docs/BRO_AGENT_RUNTIME_SPEC.md",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/CLI.md",
+    "skills/bitrouter/SKILL.md",
+    "skills/bitrouter/references/cli.md"
+  ],
+  "changed_executable_sources": [],
+  "doctests": {
+    "passed": 6,
+    "failed": 0,
+    "ignored": 1
+  }
+}

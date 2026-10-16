@@ -1,0 +1,165 @@
+{
+  "source": "dispatch-rejection-final11-source.json",
+  "scope": "Final batch source: all Goal domain/runtime tests after saved-input fault closure, shared admission and compatibility boundaries, strict workspace checks and doctests; source6 remains the earlier full nextest baseline",
+  "startedAt": "2026-10-16T13:59:37.671Z",
+  "runs": [
+    {
+      "name": "goal-domain",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goals"
+      ],
+      "log": "dispatch-rejection-final11-goal-domain.log",
+      "startedAt": "2026-10-16T13:59:37.671Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:00:19.472Z",
+      "summaries": [
+        "     Summary [   0.933s] 94 tests run: 94 passed, 0 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::)"
+      ],
+      "log": "dispatch-rejection-final11-goal-runtime.log",
+      "startedAt": "2026-10-16T14:00:19.472Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:02:01.013Z",
+      "summaries": [
+        "     Summary [  46.615s] 81 tests run: 81 passed (1 leaky), 1749 skipped"
+      ],
+      "leaks": [
+        "        LEAK [   0.316s] (23/81) bitrouter goal_runtime::model_control::tests::model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability"
+      ]
+    },
+    {
+      "name": "shared-admission",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::worker::waiting) | test(service::tests::worker::acp)"
+      ],
+      "log": "dispatch-rejection-final11-shared-admission.log",
+      "startedAt": "2026-10-16T14:02:01.013Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:02:34.716Z",
+      "summaries": [
+        "     Summary [   2.612s] 5 tests run: 5 passed (1 leaky), 627 skipped"
+      ],
+      "leaks": [
+        "        LEAK [   0.604s] (3/5) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention"
+      ]
+    },
+    {
+      "name": "compatibility",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(legacy_startup_rejects_managed_goal_format)"
+      ],
+      "log": "dispatch-rejection-final11-compatibility.log",
+      "startedAt": "2026-10-16T14:02:34.716Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:02:35.304Z",
+      "summaries": [
+        "     Summary [   0.047s] 1 test run: 1 passed, 1829 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "dispatch-rejection-final11-clippy.log",
+      "startedAt": "2026-10-16T14:02:35.304Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:03:13.786Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "dispatch-rejection-final11-fmt.log",
+      "startedAt": "2026-10-16T14:03:13.786Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:03:33.842Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "dispatch-rejection-final11-rustdoc.log",
+      "startedAt": "2026-10-16T14:03:33.842Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:04:16.344Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T14:04:16.459Z",
+  "changed": [],
+  "passed": true
+}

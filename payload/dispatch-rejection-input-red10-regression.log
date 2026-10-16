@@ -1,0 +1,36 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 52.98s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID b1ef9262-565a-4536-acc4-bff3466b0ba2 with nextest profile: default
+    Starting 1 test across 1 binary (1829 tests skipped)
+        FAIL [   0.709s] (1/1) bitrouter goal_runtime::tests::threads::refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::threads::refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::threads::refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1829 filtered out; finished in 0.70s
+
+  stderr ───
+    Error: pre-admission refusal was not durably recorded
+
+    Caused by:
+        artifact content changed
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.728s] 1 test run: 0 passed, 1 failed, 1829 skipped
+        FAIL [   0.709s] (1/1) bitrouter goal_runtime::tests::threads::refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent
+error: test run failed

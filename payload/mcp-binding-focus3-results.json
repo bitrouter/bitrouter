@@ -1,0 +1,97 @@
+{
+  "source": "mcp-binding-focus3-source.json",
+  "scope": "Frozen selected MCP descriptors before native/ACP admission; original accepted receipt lookup remains valid after later config changes; partial S4 resource binding proof",
+  "startedAt": "2026-10-16T12:23:41.906Z",
+  "runs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime::tests::threads) | test(goal_runtime::tests::start_recovery)"
+      ],
+      "log": "mcp-binding-focus3-boundaries.log",
+      "startedAt": "2026-10-16T12:23:41.906Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:24:40.821Z",
+      "summaries": [
+        "     Summary [   3.700s] 8 tests run: 8 passed (1 leaky), 1820 skipped"
+      ],
+      "leaks": [
+        "        LEAK [   0.660s] (3/8) bitrouter goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "mcp-binding-focus3-clippy.log",
+      "startedAt": "2026-10-16T12:24:40.822Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:25:18.779Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "mcp-binding-focus3-fmt.log",
+      "startedAt": "2026-10-16T12:25:18.780Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:25:39.016Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ],
+      "log": "mcp-binding-focus3-goal-runtime.log",
+      "startedAt": "2026-10-16T12:25:39.016Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:26:26.100Z",
+      "summaries": [
+        "     Summary [  46.182s] 79 tests run: 79 passed, 1749 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T12:26:26.212Z",
+  "changed": [],
+  "passed": true
+}

@@ -1,0 +1,12 @@
+{
+  "capturedAt": "2026-10-16T07:32:18.610Z",
+  "failed": "shared-admission-source1.json",
+  "corrected": "shared-admission-source2.json",
+  "executableDifference": [
+    "crates/bitrouter-orchestrator/src/service/waiting.rs"
+  ],
+  "archivedFailedFile": "shared-admission-unboxed-source1.rs",
+  "sha256": "a477dfab7a4b0dd99b413616a8f0ddc7d1806e04a68910e523007ab3137c0fb8",
+  "provenance": "Reconstructed by reversing only the boxing correction, then formatted and SHA-256 matched to the pre-run manifest. Not represented as an original raw source capture. All other executable/build files are identical between source1 and source2.",
+  "fixtures": "shared-admission-stack-overflow-fixtures1/MANIFEST.json"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "native-history-green2",
+  "scope": "Same native historical boundary with retained production-reader diagnostic output. First failure and 472-file SQLite/artifact image preserved independently; cause not established yet.",
+  "jobs": [
+    {
+      "name": "archive-boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ]
+    }
+  ]
+}

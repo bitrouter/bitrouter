@@ -1,0 +1,362 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error[E0282]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+490 |             Ok(())
+    |             ------ type must be known at this point
+    |
+help: consider giving `result` an explicit type, where the type for type parameter `E` is specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+412 |             let id = prepared_worker_attempt(&coordinator, home.path(), harness, selection).await?;
+    |                                                                                                  - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+413 |             let before = read(&coordinator, &id).await?;
+    |                                                       - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+417 |                 .context("prepared resources missing")?;
+    |                                                       - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+423 |                 .await?,
+    |                       - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+424 |             )?;
+    |              - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<FromUtf8Error>` found in the following crates: `bitrouter_ai`, `der`, `tungstenite`:
+            - impl From<FromUtf8Error> for JwtError;
+            - impl From<FromUtf8Error> for der::error::Error;
+            - impl From<FromUtf8Error> for tungstenite::error::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+428 |             )?;
+    |              - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+440 |                     .await?
+    |                           - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+449 |                     .await?
+    |                           - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+452 |             let accepted = read(&coordinator, &id).await?;
+    |                                                         - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+456 |                 .context("original binding missing")?;
+    |                                                     - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+457 |             change_selected_mcp(&coordinator).await?;
+    |                                                    - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+461 |             )?;
+    |              - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+463 |                 super::super::resources::digest(&serde_json::to_vec(&descriptors)?),
+    |                                                                                  - type must be known at this point
+    |
+note: multiple `impl`s satisfying `_: From<serde_json::Error>` found
+   --> apps/bitrouter/src/cloud/management/error.rs:111:14
+    |
+111 |     Decode(#[from] serde_json::Error),
+    |              ^^^^
+    = note: and more `impl`s found in the following crates: `agent_client_protocol_schema`, `bitrouter_ai`, `jsonschema`, `rmcp`, `serde_json`:
+            - impl From<serde_json::Error> for CredentialStoreError;
+            - impl From<serde_json::Error> for JwtError;
+            - impl From<serde_json::Error> for agent_client_protocol::Error;
+            - impl From<serde_json::Error> for agent_client_protocol::schema::v2::Error;
+            - impl From<serde_json::Error> for jsonschema::canonical::json::Error;
+            - impl From<serde_json::Error> for rmcp::transport::async_rw::JsonRpcMessageCodecError;
+            - impl From<serde_json::Error> for std::io::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+477 |                     .await?
+    |                           - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+481 |                         .await?
+    |                               - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+484 |             let replayed = read(&coordinator, &id).await?;
+    |                                                         - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `_: From<anyhow::Error>` found in the following crates: `agent_client_protocol_schema`, `anyhow`:
+            - impl From<anyhow::Error> for Box<(dyn StdError + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + 'static)>;
+            - impl From<anyhow::Error> for Box<(dyn StdError + std::marker::Send + Sync + 'static)>;
+            - impl From<anyhow::Error> for agent_client_protocol::Error;
+            - impl From<anyhow::Error> for agent_client_protocol::schema::v2::Error;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+error[E0283]: type annotations needed for `std::result::Result<(), _>`
+   --> apps/bitrouter/src/goal_runtime/tests/threads.rs:407:13
+    |
+407 |         let result = async {
+    |             ^^^^^^
+...
+496 |         result?;
+    |               - type must be known at this point
+    |
+    = note: multiple `impl`s satisfying `anyhow::Error: From<_>` found in the following crates: `anyhow`, `core`:
+            - impl<E> From<E> for anyhow::Error
+              where E: StdError, E: std::marker::Send, E: Sync, E: 'static;
+            - impl<T> From<T> for T;
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+407 |         let result: std::result::Result<_, E> = async {
+    |                   +++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0282, E0283.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `bitrouter` (lib test) due to 18 previous errors
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter --lib --all-features` exited with code 101

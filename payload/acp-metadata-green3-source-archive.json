@@ -1,0 +1,12 @@
+{
+  "head": "35a08b319a8240e7816c2d0e78069eef537dcaca",
+  "dirtyFiles": [
+    "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs",
+    "apps/bitrouter/src/goal_runtime/tests/threads.rs",
+    "crates/bitrouter-orchestrator/src/service/recovery.rs",
+    "crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs",
+    "crates/bitrouter-orchestrator/src/service/worker/acp.rs",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md"
+  ],
+  "scope": "Dirty files supplement the exact committed HEAD."
+}

@@ -1,0 +1,15 @@
+{
+  "createdAt": "2026-10-16T17:45:31.140Z",
+  "head": "3c0310d5a156b11a29c4ea9ee4b9ffe3dcc8dc13",
+  "base": "fe9df6f8157945d3559789926326a7effb468db1",
+  "bundle": "refactor-local-checkpoint-3c0310d5.bundle",
+  "bundleSha256": "e022fef27c1495b2139c353427d75e0399ef51b0f64403e73d1dde3293b7f803",
+  "bundleVerification": "refactor-local-checkpoint-3c0310d5.bundle.verify.log",
+  "manifest": "native-history-manifest5.json",
+  "manifestSha256": "d9f2598a38f1fe7d093589b4807ec341895e4dcdab10c3b814baae5b7c18b0cb",
+  "verifiedCommittedFiles": 5,
+  "workingTreeClean": true,
+  "pushed": false,
+  "goalComplete": false,
+  "scope": "Local native-history checkpoint only. Bundle requires its existing public PR base commit. Final full-source, remaining refactor/live, independent publication and hosted CI gates remain open."
+}

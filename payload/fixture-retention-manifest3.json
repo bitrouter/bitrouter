@@ -1,0 +1,140 @@
+{
+  "base": "c32baf8398f2cc1b15963af06636539a32697eea",
+  "files": [
+    {
+      "file": "FIXTURE_RETENTION_INDEX.md",
+      "bytes": 1123,
+      "sha256": "3fe54a8ccf294e1d7419e8215d5734290ff27093c664792e0401d5abf11c3171"
+    },
+    {
+      "file": "fixture-retention-applicability3.json",
+      "bytes": 160498,
+      "sha256": "a664f9aef13932691277254f6d935471cce1d94c646534540937bdc48e556981"
+    },
+    {
+      "file": "fixture-retention-final3-files.tar.gz",
+      "bytes": 33103,
+      "sha256": "3b2d58340b411ca969b4318ed47aa0ed0bdd546365d9c2be9ee2444ebcad1f9d"
+    },
+    {
+      "file": "fixture-retention-final3.patch",
+      "bytes": 5378,
+      "sha256": "583cd767c4cdee8b43eb77961f45954ced299a97bc00c8341c5d371970ac1a00"
+    },
+    {
+      "file": "fixture-retention-green2-audit.json",
+      "bytes": 96,
+      "sha256": "1bc423d04b881823a1d36422a31307a9cab36ba0590d3c26abaa87af7c415e7e"
+    },
+    {
+      "file": "fixture-retention-green2-clippy.log",
+      "bytes": 418,
+      "sha256": "eff735e6523f90820304d14b840dcd0bd3c45fd5758363678d38caa9257d1605"
+    },
+    {
+      "file": "fixture-retention-green2-config.json",
+      "bytes": 839,
+      "sha256": "bbd6f24e1042bc69cd17e5e5e2d7fb8ad60faa6f7a6fc4cca49d2223953290af"
+    },
+    {
+      "file": "fixture-retention-green2-files.tar.gz",
+      "bytes": 6715,
+      "sha256": "648605f8861f322f1b66a8b9d4617f934549581aeaf73ced0106c21cd2cc63bb"
+    },
+    {
+      "file": "fixture-retention-green2-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "fixture-retention-green2-goal-runtime.log",
+      "bytes": 12414,
+      "sha256": "9a675b70f390fbc4585b8a4ed2485557511d5afbf51f07db8956c7f5804ac178"
+    },
+    {
+      "file": "fixture-retention-green2-results.json",
+      "bytes": 1822,
+      "sha256": "5ca33c67455c960653c17c0c5f41d908480076ff34a8e522861d070e23bd665b"
+    },
+    {
+      "file": "fixture-retention-green2-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "fixture-retention-green2-source.json",
+      "bytes": 159997,
+      "sha256": "c5daf924312ce09553fa61d354a69d347b68143030ec6ffdd583601f5238939a"
+    },
+    {
+      "file": "fixture-retention-green2-source.patch",
+      "bytes": 2391,
+      "sha256": "3c28ab2ae4794c526c9d390834673488329b51d89bdd9d8c46b6cf32c7a2e5a1"
+    },
+    {
+      "file": "fixture-retention-index-runner3.mjs",
+      "bytes": 4004,
+      "sha256": "e65b4d95016bbde6debc165630408ba112ebb846beea3dc05ba2667e96e890ec"
+    },
+    {
+      "file": "fixture-retention-original-assertion.json",
+      "bytes": 278,
+      "sha256": "8371b16d1570d87a56e22eac131751c12d3fc0a2858542df14ce1d00bd34cafd"
+    },
+    {
+      "file": "fixture-retention-panic1-archive-runner.mjs",
+      "bytes": 4252,
+      "sha256": "16d65899208430ff13bb727d616c264c15358f26923f431068d5ee4174c98f20"
+    },
+    {
+      "file": "fixture-retention-panic1-audit.json",
+      "bytes": 96,
+      "sha256": "62f98f4b31b420edd9d1e5d28220a4510378b9c423b2e92e34a7aa1080a2e519"
+    },
+    {
+      "file": "fixture-retention-panic1-config.json",
+      "bytes": 477,
+      "sha256": "a6c8673b3d14ba1068f0a61aa0a866b15806e8904a4215dd5213d59eccf84a03"
+    },
+    {
+      "file": "fixture-retention-panic1-files.tar.gz",
+      "bytes": 12970,
+      "sha256": "da1df5205a33723fb5f05f8479c2a2ce2fc9bd0adcb25cf98ffd1cb22b8b0f77"
+    },
+    {
+      "file": "fixture-retention-panic1-filesystem-audit.json",
+      "bytes": 68729,
+      "sha256": "76e1018349114e649489fa86b8724bdc9f37df89e7deeab2f83d1ad6e9f9b1ff"
+    },
+    {
+      "file": "fixture-retention-panic1-filesystem.tar.gz",
+      "bytes": 1699817,
+      "sha256": "f2aeab2597cd72c8e15044ffd7bf734bd8f057c85a67782f30cdecfa71709f66"
+    },
+    {
+      "file": "fixture-retention-panic1-probe.log",
+      "bytes": 2207,
+      "sha256": "0418f65f9c80104461e83fdbd8c27998ee30ca3d2fe250ef01ff640612963453"
+    },
+    {
+      "file": "fixture-retention-panic1-results.json",
+      "bytes": 958,
+      "sha256": "989dd02da1f42f61c6d3bd85ae580c740bccc5b6510b9688e14cb55be3546d9a"
+    },
+    {
+      "file": "fixture-retention-panic1-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "fixture-retention-panic1-source.json",
+      "bytes": 159997,
+      "sha256": "687077d481c5d8434aa209419b5308652e75c2040fe83c2e44cd159561398395"
+    },
+    {
+      "file": "fixture-retention-panic1-source.patch",
+      "bytes": 3684,
+      "sha256": "878373b749c44b8fa5432dd240d77f95b8e6c5d6c676327877937afb946c0ee7"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-16T10:20:28.641Z",
+  "pr": "https://github.com/bitrouter/bitrouter/pull/981",
+  "title": "feat(bro): add goal-oriented workflow orchestration",
+  "state": "open",
+  "merged": false,
+  "base": "main",
+  "baseSha": "eafa838383dcdfa3bd79a74a5be3d3c87c056d72",
+  "head": "codex/bro-goal-workflow-mvp",
+  "headSha": "fe9df6f8157945d3559789926326a7effb468db1",
+  "comments": [],
+  "publishedRefactor": false,
+  "bodyStillHistoricalMvp": true
+}

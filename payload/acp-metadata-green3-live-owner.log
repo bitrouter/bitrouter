@@ -1,0 +1,8 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 40.20s
+────────────
+ Nextest run ID e8586772-2fd2-4427-99ff-082667900d75 with nextest profile: default
+    Starting 1 test across 1 binary (290 tests skipped)
+        PASS [   0.037s] (1/1) bitrouter-orchestrator service::tests::worker::acp::unopened_acp_metadata_cannot_retire_a_live_execution_owner
+────────────
+     Summary [   0.045s] 1 test run: 1 passed, 290 skipped

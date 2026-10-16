@@ -1,0 +1,34 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 26.00s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 99bbf9bf-4522-4b25-bd06-3abdf2674df4 with nextest profile: default
+    Starting 20 tests across 7 binaries (3613 tests skipped)
+        PASS [   0.032s] ( 1/20) bitrouter-orchestrator service::tests::generation::cancelled_provider_work_settles_before_shutdown_releases_ownership
+        PASS [   0.033s] ( 2/20) bitrouter-orchestrator service::tests::generation::generation_replay_cold_reads_and_direct_native_rpcs_preserve_goal_authority
+        PASS [   0.016s] ( 3/20) bitrouter-orchestrator service::tests::generation::owner_changed_during_goal_callback_blocks_provider_dispatch
+        PASS [   0.019s] ( 4/20) bitrouter-orchestrator service::tests::generation::input_generation_overlaps_owner_work_without_bypassing_thread_or_global_capacity
+        PASS [   0.028s] ( 5/20) bitrouter-orchestrator service::tests::generation::routing::policy_decisions_are_durable_and_root_ack_precedes_generation
+        PASS [   0.031s] ( 6/20) bitrouter-orchestrator service::tests::generation::stopped_generation_reopens_without_workspace_or_replaying_the_original_request
+        PASS [   0.023s] ( 7/20) bitrouter-orchestrator service::tests::generation::tool_output_is_retained_as_attempt_evidence_but_never_executed_or_completed
+        PASS [   0.020s] ( 8/20) bitrouter-orchestrator service::tests::generation::unacknowledged_generation_outcome_never_becomes_a_completed_turn
+        PASS [   0.119s] ( 9/20) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_reuses_its_key_and_rejects_conflicting_input
+        PASS [   0.012s] (10/20) bitrouter-orchestrator service::tests::goals::goal_owner_creation_uses_one_key_and_preserves_the_original_request
+        PASS [   0.012s] (11/20) bitrouter-orchestrator service::tests::goals::ordinary_threads_have_no_goal_and_legacy_snapshots_do_not_invent_one
+        PASS [   0.379s] (12/20) bitrouter goal_runtime::tests::threads::interrupted_owner_link_reconciles_the_original_thread_after_database_reopen
+        PASS [   0.409s] (13/20) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_bounds_time_and_honors_revocation_and_input_limits
+        PASS [   0.697s] (14/20) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+        PASS [   4.873s] (15/20) bitrouter goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent
+        PASS [  11.139s] (16/20) bitrouter goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output
+        PASS [  11.175s] (17/20) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+        PASS [  11.175s] (18/20) bitrouter goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery
+        PASS [  12.025s] (19/20) bitrouter goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect
+        PASS [  18.907s] (20/20) bitrouter goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+────────────
+     Summary [  18.927s] 20 tests run: 20 passed, 3613 skipped

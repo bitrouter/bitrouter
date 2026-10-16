@@ -1,0 +1,1765 @@
+diff --git a/.agents/plugins/marketplace.json b/.agents/plugins/marketplace.json
+index 983a8cbd..1a7ef69c 100644
+--- a/.agents/plugins/marketplace.json
++++ b/.agents/plugins/marketplace.json
+@@ -4,7 +4,7 @@
+   "plugins": [
+     {
+       "name": "bitrouter",
+-      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and remaining ACP recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
++      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and remaining ACP recovery limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+       "source": "."
+     }
+   ]
+diff --git a/.claude-plugin/plugin.json b/.claude-plugin/plugin.json
+index 961dc2a6..adcc4c44 100644
+--- a/.claude-plugin/plugin.json
++++ b/.claude-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and remaining ACP recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and remaining ACP recovery limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+   "author": {
+     "name": "BitRouterAI"
+   },
+diff --git a/.codex-plugin/plugin.json b/.codex-plugin/plugin.json
+index e96731ba..8ed1a0ba 100644
+--- a/.codex-plugin/plugin.json
++++ b/.codex-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and remaining ACP recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and remaining ACP recovery limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+   "homepage": "https://bitrouter.ai",
+   "repository": "https://github.com/bitrouter/bitrouter",
+   "license": "Apache-2.0",
+diff --git a/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs b/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
+index 039d2fec..fb2ff539 100644
+--- a/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
++++ b/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
+@@ -72,6 +72,17 @@ mod tests {
+         }
+     }
+ 
++    struct BeforeResourceWaitMigrator;
++    #[async_trait::async_trait]
++    impl MigratorTrait for BeforeResourceWaitMigrator {
++        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
++            Migrator::migrations()
++                .into_iter()
++                .take_while(|migration| migration.name() != "m20240101_000033_bro_resource_wait")
++                .collect()
++        }
++    }
++
+     #[tokio::test]
+     async fn legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals()
+     -> anyhow::Result<()> {
+@@ -139,6 +150,18 @@ mod tests {
+                 .await
+                 .is_err()
+         );
++        assert!(
++            BeforeResourceWaitMigrator::up(&db, None)
++                .await
++                .err()
++                .is_some_and(|error| error.to_string().contains("000033_bro_resource_wait"))
++        );
++        assert!(
++            crate::db::migration::m20240101_000033_bro_resource_wait::Migration
++                .down(&SchemaManager::new(&db))
++                .await
++                .is_err()
++        );
+         drop(store);
+         db.close().await?;
+         let reopened = crate::db::connect(&url).await?;
+diff --git a/apps/bitrouter/src/db/migration/mod.rs b/apps/bitrouter/src/db/migration/mod.rs
+index 186cecdb..0b4ceba4 100644
+--- a/apps/bitrouter/src/db/migration/mod.rs
++++ b/apps/bitrouter/src/db/migration/mod.rs
+@@ -43,6 +43,7 @@ mod m20240101_000029_index_acp_resource_head;
+ mod m20240101_000030_bro_goal_execution_format;
+ mod m20240101_000031_bro_worker_source_format;
+ mod m20240101_000032_bro_admission_verdict;
++mod m20240101_000033_bro_resource_wait;
+ 
+ use sea_orm_migration::{MigrationTrait, MigratorTrait};
+ 
+@@ -85,6 +86,7 @@ impl MigratorTrait for Migrator {
+             Box::new(m20240101_000030_bro_goal_execution_format::Migration),
+             Box::new(m20240101_000031_bro_worker_source_format::Migration),
+             Box::new(m20240101_000032_bro_admission_verdict::Migration),
++            Box::new(m20240101_000033_bro_resource_wait::Migration),
+         ]
+     }
+ }
+diff --git a/apps/bitrouter/src/goal_code/projection.rs b/apps/bitrouter/src/goal_code/projection.rs
+index 947d8df5..90926dac 100644
+--- a/apps/bitrouter/src/goal_code/projection.rs
++++ b/apps/bitrouter/src/goal_code/projection.rs
+@@ -61,7 +61,12 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+         completed: complete,
+         paused: snapshot.run_intent == RunIntent::Pause,
+         budget_limited: snapshot.budget.resume_required || snapshot.budget.halt.is_some(),
+-        running: !snapshot.accounting.in_flight.is_empty(),
++        running: snapshot.accounting.in_flight.iter().any(|work| {
++            work.kind != bitrouter_orchestrator::goal::accounting::WorkKind::ResourceWait
++                || work.source.as_ref().is_some_and(|source| {
++                    bitrouter_orchestrator::goal::workflow::worker_requested(snapshot, source)
++                })
++        }),
+         blocked: (snapshot.workflow.planning_requirements_revision
+             == snapshot.requirements_revision
+             && matches!(snapshot.workflow.planning, Planning::Blocked { .. }))
+@@ -83,6 +88,17 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+                 _ => "Continuing within current requirements".into(),
+             },
+         });
++    let waiting_for_quote = |task_id: &str| {
++        snapshot.accounting.in_flight.iter().any(|work| {
++            work.kind == bitrouter_orchestrator::goal::accounting::WorkKind::ResourceWait
++                && work.source.as_ref().is_some_and(|source| {
++                    source.task_id == task_id
++                        && bitrouter_orchestrator::goal::workflow::worker_requested(
++                            snapshot, source,
++                        )
++                })
++        })
++    };
+     let mut execution = if snapshot.workflow.tasks.is_empty() {
+         "No worker execution recorded"
+     } else {
+@@ -213,6 +229,15 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+                     detail.push(reason.clone());
+                     "effects unknown"
+                 }
++                Observation::Running { .. } | Observation::Requested
++                    if waiting_for_quote(&task.spec.id) =>
++                {
++                    if execution != "Effects unknown" {
++                        execution = "Waiting for shared token reservation".into();
++                    }
++                    detail.push("Provider dispatch has not started for this request. Waiting for other current workers' in-flight quotes to settle; unknown-cost holds cannot release budget. Pause and cancellation remain available.".into());
++                    "waiting for shared token reservation"
++                }
+                 Observation::Running { run_id, .. } => {
+                     if let Some(run_id) = run_id {
+                         detail.push(format!("Supervisor run: {run_id}"));
+@@ -658,7 +683,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+                 snapshot.budget.limits, snapshot.budget.resume_required
+             ),
+             format!(
+-                "Managed generation attempts: {} · work observations without token estimates: {} · external harness/tools/bills may be unknown",
++                "Generation attempts admitted: {} · work observations without token estimates: {} · external harness/tools/bills may be unknown",
+                 snapshot.accounting.provider_attempts, snapshot.accounting.unpriced_outcomes
+             ),
+         ],
+diff --git a/apps/bitrouter/src/goal_code/tests.rs b/apps/bitrouter/src/goal_code/tests.rs
+index b5e81d79..d928eed9 100644
+--- a/apps/bitrouter/src/goal_code/tests.rs
++++ b/apps/bitrouter/src/goal_code/tests.rs
+@@ -934,3 +934,96 @@ async fn retry_admission_matches_durable_commit_and_projection_at_recovery_bound
+     }
+     Ok(())
+ }
++
++#[tokio::test]
++async fn quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion()
++-> Result<()> {
++    let db = crate::db::connect("sqlite::memory:").await?;
++    crate::db::run_migrations(&db).await?;
++    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
++    let directory = tempfile::tempdir()?;
++    let GoalReply::Accepted { operation } = service
++        .execute(
++            "local",
++            pending(directory.path(), "quote-view").command,
++            100,
++        )
++        .await?
++    else {
++        anyhow::bail!("fixture Goal missing")
++    };
++    let GoalReply::Snapshot { mut goal } = service
++        .execute(
++            "local",
++            GoalCommand::Get {
++                goal_id: operation.goal_id,
++            },
++            101,
++        )
++        .await?
++    else {
++        anyhow::bail!("fixture snapshot missing")
++    };
++    // Presentation fixture only: no worker, Thread, provider or tool ran here.
++    goal.workflow.owner_thread_id = Some("owner".into());
++    goal.workflow.tasks.push(serde_json::from_value(serde_json::json!({
++        "spec":{"id":"left","title":"Left","instruction":"Fixture","harness":null,"dependencies":[],"checks":[]},
++        "requirements_revision":1,"executions":[{"id":"attempt","workspace":directory.path(),
++            "requirements_revision":1,"task_revision":1,"control_source_revision":goal.control_source_revision,
++            "dispatch_requested":true,"observation":{"state":"running","run_id":null,"native_session_id":null}}]
++    }))?);
++    let source = bitrouter_orchestrator::thread::GoalWork {
++        owner_thread_id: "owner".into(),
++        goal_id: goal.id.clone(),
++        task_id: "left".into(),
++        execution_id: "attempt".into(),
++        task_revision: 1,
++        control_source_revision: goal.control_source_revision,
++    };
++    goal.accounting
++        .in_flight
++        .push(bitrouter_orchestrator::goal::accounting::Work {
++            source: Some(Box::new(source)),
++            id: "wait".into(),
++            kind: bitrouter_orchestrator::goal::accounting::WorkKind::ResourceWait,
++            requirements_revision: 1,
++            request_id: Some("request".into()),
++            token_reservation: None,
++            intent: bitrouter_orchestrator::goal::workflow::ArtifactRef {
++                path: directory.path().join("intent"),
++                sha256: "a".repeat(64),
++                bytes: 1,
++            },
++        });
++    let waiting = projection::goal(&goal, &mut projection::Artifacts::new());
++    assert!(
++        waiting.tasks[0]
++            .status
++            .contains("waiting for shared token reservation")
++    );
++    assert!(
++        waiting
++            .execution
++            .contains("Waiting for shared token reservation")
++    );
++    assert!(!waiting.facts.budget_limited);
++    goal.run_intent = RunIntent::Pause;
++    goal.workflow.tasks[0].executions[0].stop = Some(
++        bitrouter_orchestrator::goal::workflow::StopState::Confirmed {
++            operation_id: "stop".into(),
++            detail: "Fixture stopped-owner fact".into(),
++        },
++    );
++    let paused = projection::goal(&goal, &mut projection::Artifacts::new());
++    assert!(
++        !paused.tasks[0]
++            .status
++            .contains("waiting for shared token reservation")
++    );
++    assert!(paused.facts.paused);
++    assert!(
++        !paused.facts.running,
++        "a stale non-executing wait is not current running work"
++    );
++    Ok(())
++}
+diff --git a/apps/bitrouter/src/goal_runtime/model_control.rs b/apps/bitrouter/src/goal_runtime/model_control.rs
+index 79432f89..4e428a70 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control.rs
+@@ -12,6 +12,7 @@ use bitrouter_sdk::language_model::native_work::{NativeProviderWork, NativeProvi
+ use std::sync::atomic::{AtomicBool, Ordering};
+ 
+ pub(super) mod activity;
++mod quote_wait;
+ 
+ pub(super) struct ModelControl {
+     goals: Arc<GoalService>,
+@@ -368,49 +369,12 @@ impl ModelControl {
+         let provider_attempt =
+             matches!(&event, Event::Begin { work } if work.kind == WorkKind::ProviderAttempt);
+         let change = Change::Accounting { event };
+-        let mut result = self
+-            .goals
+-            .workflow_change(
+-                WorkflowActor {
+-                    owner: "local",
+-                    coordinator_id: &self.coordinator_id,
+-                },
+-                &self.goal.id,
+-                operation,
+-                requirements_revision,
+-                change.clone(),
+-                now().map_err(|_| unavailable())?,
+-            )
++        let result = self
++            .commit_fact(operation, requirements_revision, change.clone())
+             .await;
+-        // Retry only this exact durable fact. The SDK does not repeat any
+-        // preparation, provider call or tool effect during this confirmation.
+-        // Every retry rechecks the current source/lease or replays its matching
+-        // receipt, so competing updates and a lost reply cannot poison the
+-        // acknowledgement before the bounded confirmation has finished.
+-        for retry in 0..3 {
+-            if !matches!(
+-                &result,
+-                Err(bitrouter_orchestrator::goal::GoalError::Conflict
+-                    | bitrouter_orchestrator::goal::GoalError::Storage { .. })
+-            ) {
+-                break;
+-            }
+-            tokio::time::sleep(Duration::from_millis(5 << retry)).await;
+-            result = self
+-                .goals
+-                .workflow_change(
+-                    WorkflowActor {
+-                        owner: "local",
+-                        coordinator_id: &self.coordinator_id,
+-                    },
+-                    &self.goal.id,
+-                    operation,
+-                    requirements_revision,
+-                    change.clone(),
+-                    now().map_err(|_| unavailable())?,
+-                )
+-                .await;
+-        }
++        let result = self
++            .wait_for_quote(operation, requirements_revision, &change, result)
++            .await?;
+         if matches!(
+             &result,
+             Err(bitrouter_orchestrator::goal::GoalError::BudgetExceeded { .. })
+@@ -627,22 +591,35 @@ impl NativeExecutionControl for ModelControl {
+         };
+         let indices = (0..plan.routes.len())
+             .filter(|index| {
+-                goal.budget
+-                    .can_reserve(
+-                        goal.accounting.estimated_model_tokens_micro_usd,
+-                        reservations.get(*index).and_then(Option::as_ref),
+-                    )
+-                    .is_ok()
++                let quote = reservations.get(*index).and_then(Option::as_ref);
++                if self.worker.is_some() {
++                    bitrouter_orchestrator::goal::budget::waiting_on_workers(&goal, quote).is_ok()
++                } else {
++                    goal.budget
++                        .can_reserve(goal.accounting.estimated_model_tokens_micro_usd, quote)
++                        .is_ok()
++                }
+             })
+             .map(u32::try_from)
+             .collect::<std::result::Result<Vec<_>, _>>()
+             .map_err(|_| unavailable())?;
+-        self.observe(
+-            &key,
+-            serde_json::json!({"accepted_routes":indices,"token_reservations":reservations}),
+-            None,
+-        )
+-        .await?;
++        // Replayed admission retains its original routes and quotes even if
++        // another worker has since settled or consumed budget.
++        let indices = match self.plan_outcome(&key).await? {
++            Some(saved) => {
++                if saved["token_reservations"]
++                    != serde_json::to_value(&reservations).map_err(|_| unavailable())?
++                {
++                    return Err(diagnostic("frozen plan reservation changed on replay"));
++                }
++                serde_json::from_value::<Vec<u32>>(saved["accepted_routes"].clone())
++                    .map_err(|_| unavailable())?
++            }
++            None => {
++                self.observe(&key, serde_json::json!({"accepted_routes":indices,"token_reservations":reservations}), None).await?;
++                indices
++            }
++        };
+         if indices.is_empty() {
+             if self.worker.is_some() {
+                 return Err(diagnostic(
+@@ -677,14 +654,39 @@ impl NativeExecutionControl for ModelControl {
+         attempt_index: u32,
+         reservation: Option<&NativeTokenReservation>,
+     ) -> bitrouter_sdk::Result<()> {
+-        let plans = self.plans.lock().await;
+-        let plan = plans.get(request_id).ok_or_else(unavailable)?;
++        let plan = self
++            .plans
++            .lock()
++            .await
++            .get(request_id)
++            .cloned()
++            .ok_or_else(unavailable)?;
+         let route = plan
+             .routes
+             .get(attempt_index as usize)
+             .ok_or_else(unavailable)?;
++        let saved = self
++            .plan_outcome(&format!("{request_id}/plan/{}", plan_digest(&plan)?))
++            .await?
++            .ok_or_else(unavailable)?;
++        let frozen_quote = saved["token_reservations"]
++            .get(attempt_index as usize)
++            .cloned()
++            .unwrap_or(serde_json::Value::Null);
++        if frozen_quote != serde_json::to_value(reservation).map_err(|_| unavailable())? {
++            return Err(diagnostic("attempt quote differs from its frozen plan"));
++        }
+         self.begin_with_reservation(WorkKind::ProviderAttempt, &format!("{request_id}/attempt/{attempt_index}"), Some(request_id), serde_json::json!({"request_id":request_id,"attempt_index":attempt_index,"route":route}), reservation.cloned()).await
+     }
++    async fn admission_aborted(&self, request_id: &str, attempt_index: u32) {
++        if let Err(error) = self.abort_admission(request_id, attempt_index).await {
++            self.fail_ack(&format!(
++                "undispatched admission could not be reconciled: {error}"
++            ))
++            .await;
++        }
++    }
++
+     async fn before_provider_work(&self, work: &NativeProviderWork) -> bitrouter_sdk::Result<()> {
+         self.begin(
+             WorkKind::ProviderIntegration,
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/tests.rs b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+index 9f8e82ce..f5de0480 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+@@ -145,11 +145,25 @@ async fn worker_change(goals: &GoalService, id: &str, key: &str, change: Change)
+ #[tokio::test]
+ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope()
+ -> Result<()> {
++    for exit in [WaitExit::Release, WaitExit::Pause, WaitExit::SdkAbort] {
++        worker_budget_case(exit).await?;
++    }
++    Ok(())
++}
++
++#[derive(Clone, Copy)]
++enum WaitExit {
++    Release,
++    Pause,
++    SdkAbort,
++}
++
++async fn worker_budget_case(exit: WaitExit) -> Result<()> {
+     use bitrouter_orchestrator::goal::input::{
+         Event as InputEvent, Interpretation, Stage, TaskUpdate,
+     };
+     let directory = tempfile::tempdir()?;
+-    let (mut control, _, goals) = control(directory.path()).await?;
++    let (mut control, store, goals) = control(directory.path()).await?;
+     let id = control.goal.id.clone();
+     // Domain transitions only: no Git work, provider request or execution
+     // adoption is claimed by this source/accounting concurrency regression.
+@@ -376,24 +390,141 @@ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stal
+             Some(quote.clone()),
+         )
+         .await?;
+-    assert!(
+-        control
++    assert!(bitrouter_orchestrator::goal::budget::waiting_on_workers(
++        &snapshot(&goals, &id).await?,
++        Some(&quote)
++    )?);
++    store.inject(Fault::LostAcknowledgement, 1)?;
++    let waiting_control = control.clone();
++    let waiting_quote = quote.clone();
++    let waiter = tokio::spawn(async move {
++        waiting_control
+             .begin_with_reservation(
+                 WorkKind::ProviderAttempt,
+-                "waiting-worker-credit",
++                "waiting-request/attempt/0",
+                 Some("waiting-request"),
+                 serde_json::json!({"fixture":"admission only"}),
+-                Some(quote.clone())
++                Some(waiting_quote),
+             )
+             .await
+-            .is_err()
+-    );
++    });
++    tokio::time::timeout(Duration::from_secs(5), async {
++        loop {
++            if snapshot(&goals, &id)
++                .await?
++                .accounting
++                .in_flight
++                .iter()
++                .any(|work| work.kind == WorkKind::ResourceWait)
++            {
++                return Ok::<_, anyhow::Error>(());
++            }
++            anyhow::ensure!(
++                !waiter.is_finished(),
++                "worker refused transient quote contention instead of waiting"
++            );
++            tokio::time::sleep(Duration::from_millis(10)).await;
++        }
++    })
++    .await??;
++    assert!(!waiter.is_finished());
+     let waiting = snapshot(&goals, &id).await?;
++    assert_eq!(
++        waiting
++            .accounting
++            .in_flight
++            .iter()
++            .filter(|work| work.kind == WorkKind::ResourceWait)
++            .count(),
++        1
++    );
+     assert!(waiting.budget.halt.is_none());
+     assert!(
+         control.acknowledged(),
+         "a known budget rejection is not a lost write acknowledgement"
+     );
++    if matches!(exit, WaitExit::SdkAbort) {
++        // Match the SDK's cancellation boundary: drop the admission future,
++        // then reconcile its exact canonical key without polling an executor.
++        waiter.abort();
++        assert!(waiter.await.err().is_some_and(|error| error.is_cancelled()));
++        control.admission_aborted("waiting-request", 0).await;
++        let aborted = snapshot(&goals, &id).await?;
++        assert!(
++            aborted
++                .accounting
++                .in_flight
++                .iter()
++                .all(|work| work.kind != WorkKind::ResourceWait)
++        );
++        assert_eq!(
++            aborted.accounting.provider_attempts,
++            waiting.accounting.provider_attempts
++        );
++        assert_eq!(aborted.budget.held, waiting.budget.held);
++        control
++            .observe_with_reservation(
++                "held-worker-credit",
++                serde_json::json!({"not_dispatched":true}),
++                Some(0),
++                true,
++            )
++            .await?;
++        control
++            .observe(
++                "right-after-left-edit",
++                serde_json::json!({"settled":true}),
++                None,
++            )
++            .await?;
++        assert!(snapshot(&goals, &id).await?.accounting.in_flight.is_empty());
++        assert!(control.acknowledged());
++        return Ok(());
++    }
++    if matches!(exit, WaitExit::Pause) {
++        goals
++            .execute(
++                "local",
++                GoalCommand::Control {
++                    operation_id: "pause-while-waiting".into(),
++                    goal_id: id.clone(),
++                    expected_revision: waiting.revision,
++                    intent: RunIntent::Pause,
++                },
++                now()?,
++            )
++            .await?;
++        assert!(
++            tokio::time::timeout(Duration::from_secs(3), waiter)
++                .await??
++                .is_err()
++        );
++        control
++            .observe_with_reservation(
++                "held-worker-credit",
++                serde_json::json!({"not_dispatched":true}),
++                Some(0),
++                true,
++            )
++            .await?;
++        control
++            .observe(
++                "right-after-left-edit",
++                serde_json::json!({"settled":true}),
++                None,
++            )
++            .await?;
++        let stopped = snapshot(&goals, &id).await?;
++        assert!(stopped.accounting.in_flight.is_empty());
++        assert_eq!(
++            stopped.accounting.provider_attempts,
++            waiting.accounting.provider_attempts
++        );
++        assert!(stopped.budget.held.is_empty());
++        assert!(stopped.budget.halt.is_none());
++        assert!(control.acknowledged());
++        return Ok(());
++    }
+     // Both calls are domain-only admissions. No provider was dispatched, so
+     // settling zero releases the exact held quote before retrying the same key.
+     control
+@@ -404,23 +535,68 @@ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stal
+             true,
+         )
+         .await?;
++    tokio::time::timeout(Duration::from_secs(5), waiter).await???;
++    let resumed = snapshot(&goals, &id).await?;
++    assert!(
++        resumed
++            .accounting
++            .in_flight
++            .iter()
++            .all(|work| work.kind != WorkKind::ResourceWait)
++    );
++    assert_eq!(
++        resumed.accounting.provider_attempts,
++        waiting.accounting.provider_attempts + 1
++    );
++    control
++        .observe_with_reservation(
++            "waiting-request/attempt/0",
++            serde_json::json!({"not_dispatched":true}),
++            Some(0),
++            true,
++        )
++        .await?;
++    // A settled outcome with missing usage keeps its full quote. It must
++    // refuse promptly rather than wait for an outcome that already arrived.
+     control
+         .begin_with_reservation(
+             WorkKind::ProviderAttempt,
+-            "waiting-worker-credit",
+-            Some("waiting-request"),
+-            serde_json::json!({"fixture":"admission only"}),
+-            Some(quote),
++            "unknown-bill",
++            Some("unknown-request"),
++            serde_json::json!({"fixture":"no actual provider"}),
++            Some(quote.clone()),
+         )
+         .await?;
+     control
+         .observe_with_reservation(
+-            "waiting-worker-credit",
+-            serde_json::json!({"not_dispatched":true}),
+-            Some(0),
+-            true,
++            "unknown-bill",
++            serde_json::json!({"usage_missing":true}),
++            None,
++            false,
+         )
+         .await?;
++    let unknown = snapshot(&goals, &id).await?;
++    assert!(
++        bitrouter_orchestrator::goal::budget::waiting_on_workers(&unknown, Some(&quote)).is_err()
++    );
++    assert!(
++        tokio::time::timeout(
++            Duration::from_secs(2),
++            control.begin_with_reservation(
++                WorkKind::ProviderAttempt,
++                "after-unknown-bill",
++                Some("refused-request"),
++                serde_json::json!({}),
++                Some(quote.clone())
++            )
++        )
++        .await?
++        .is_err()
++    );
++    assert_eq!(
++        snapshot(&goals, &id).await?.budget.held,
++        unknown.budget.held
++    );
+     let current = snapshot(&goals, &id).await?;
+     goals
+         .execute(
+@@ -1092,3 +1268,116 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
+     );
+     Ok(())
+ }
++
++#[tokio::test]
++async fn frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_once() -> Result<()>
++{
++    use bitrouter_ai::types::ApiProtocol;
++    use bitrouter_sdk::language_model::native::NativeRoute;
++    let directory = tempfile::tempdir()?;
++    let (control, _, goals) = control(directory.path()).await?;
++    let id = control.goal.id.clone();
++    let quote = NativeTokenReservation {
++        micro_usd: 10,
++        pricing_version: "frozen".into(),
++        provider: "fixture".into(),
++        model: "fixture-model".into(),
++        input_tokens_bound: 10,
++        output_tokens_bound: 10,
++        evidence: serde_json::json!({"fixture":"no provider dispatched"}),
++    };
++    let current = snapshot(&goals, &id).await?;
++    goals
++        .execute(
++            "local",
++            GoalCommand::SetBudget {
++                operation_id: "cap".into(),
++                goal_id: id.clone(),
++                expected_revision: current.revision,
++                limits: bitrouter_orchestrator::goal::budget::Limits {
++                    elapsed_ms: None,
++                    managed_token_estimates_micro_usd: Some(10),
++                },
++            },
++            now()?,
++        )
++        .await?;
++    let plan = NativePlan {
++        request_id: "frozen-request".into(),
++        original_model: "fixture-model".into(),
++        effective_model: "fixture-model".into(),
++        effort_source: Default::default(),
++        router: None,
++        prompt: Prompt {
++            model: "fixture-model".into(),
++            system: None,
++            system_provider_metadata: Default::default(),
++            messages: vec![Message::text(Role::User, "fixture")],
++            tools: vec![],
++            params: Default::default(),
++            response_format: None,
++            tool_choice: None,
++            stream: false,
++        },
++        routes: vec![NativeRoute {
++            provider: "fixture".into(),
++            model: "fixture-model".into(),
++            protocol: ApiProtocol::ChatCompletions,
++            constraints: Default::default(),
++            output_token_limit_supported: None,
++            input_count: None,
++            protocol_validation: Default::default(),
++            continuation: Default::default(),
++        }],
++    };
++    let first = control
++        .plan_with_token_reservations(plan.clone(), vec![Some(quote.clone())])
++        .await?;
++    control
++        .begin_with_reservation(
++            WorkKind::ProviderAttempt,
++            "other-quote",
++            None,
++            serde_json::json!({}),
++            Some(quote.clone()),
++        )
++        .await?;
++    let replay = control
++        .plan_with_token_reservations(plan.clone(), vec![Some(quote.clone())])
++        .await?;
++    assert_eq!(first.route_indices, replay.route_indices);
++    assert!(snapshot(&goals, &id).await?.budget.halt.is_none());
++    let mut changed = quote.clone();
++    changed.micro_usd = 9;
++    assert!(
++        control
++            .before_attempt_with_token_reservation(&plan.request_id, 0, Some(&changed))
++            .await
++            .is_err()
++    );
++    assert!(
++        control
++            .plan_with_token_reservations(plan.clone(), vec![Some(changed)])
++            .await
++            .is_err()
++    );
++    control
++        .observe_with_reservation(
++            "other-quote",
++            serde_json::json!({"not_dispatched":true}),
++            Some(0),
++            true,
++        )
++        .await?;
++    control
++        .before_attempt_with_token_reservation(&plan.request_id, 0, Some(&quote))
++        .await?;
++    control.admission_aborted(&plan.request_id, 0).await;
++    let stopped = snapshot(&goals, &id).await?;
++    assert!(control.acknowledged());
++    assert!(stopped.budget.held.is_empty());
++    assert!(stopped.accounting.in_flight.is_empty());
++    control.admission_aborted(&plan.request_id, 0).await;
++    assert_eq!(snapshot(&goals, &id).await?, stopped);
++    Ok(())
++}
+diff --git a/apps/bitrouter/src/goal_runtime/native_evidence.rs b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+index 9c379378..5c4eaf7c 100644
+--- a/apps/bitrouter/src/goal_runtime/native_evidence.rs
++++ b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+@@ -360,6 +360,22 @@ async fn observe(
+     report: Option<&ArtifactRef>,
+ ) -> Result<serde_json::Value> {
+     match work.kind {
++        WorkKind::ResourceWait => {
++            let _intent: serde_json::Value =
++                serde_json::from_slice(&read(root, &work.intent).await?)?;
++            if let Some(report) = report {
++                let value: serde_json::Value = serde_json::from_slice(&read(root, report).await?)?;
++                anyhow::ensure!(
++                    value["waiting_finished"] == true,
++                    "resource wait has no confirmed finish"
++                );
++            }
++            Ok(
++                serde_json::json!({"status":"observed", "stage":"token_reservation_wait",
++                "wait_finished":report.is_some(), "actual_provider":null,"actual_model":null,
++                "scope":"A pre-dispatch resource wait is not a provider attempt or evidence of execution."}),
++            )
++        }
+         WorkKind::Preparation => {
+             let value: serde_json::Value =
+                 serde_json::from_slice(&read(root, &work.intent).await?)?;
+@@ -417,6 +433,21 @@ async fn observe(
+                 );
+             };
+             let value: serde_json::Value = serde_json::from_slice(&read(root, reference).await?)?;
++            if value == serde_json::json!({"sdk_admission_aborted":true}) {
++                let intent: serde_json::Value =
++                    serde_json::from_slice(&read(root, &work.intent).await?)?;
++                anyhow::ensure!(
++                    work.request_id
++                        .as_ref()
++                        .is_some_and(|id| intent["request_id"] == *id),
++                    "undispatched admission has a different request"
++                );
++                return Ok(
++                    serde_json::json!({"status":"observed", "stage":"sdk_admission_aborted",
++                    "provider_dispatched":false, "actual_provider":null, "actual_model":null,
++                    "scope":"The SDK did not poll this attempt's provider executor. No claim about earlier requests or external charges."}),
++                );
++            }
+             let activity = value
+                 .get("bro_stream_activity")
+                 .and_then(|value| {
+@@ -461,3 +492,44 @@ async fn observe(
+         ),
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[tokio::test]
++    async fn undispatched_admission_and_resource_wait_never_claim_a_serving_model() -> Result<()> {
++        let root = tempfile::tempdir()?;
++        let intent =
++            crate::goal_artifacts::put(root.path(), br#"{"request_id":"request"}"#).await?;
++        let report =
++            crate::goal_artifacts::put(root.path(), br#"{"sdk_admission_aborted":true}"#).await?;
++        let mut work = Work {
++            id: "fixture".into(),
++            kind: WorkKind::ProviderAttempt,
++            source: None,
++            requirements_revision: 1,
++            request_id: Some("request".into()),
++            intent,
++            token_reservation: None,
++        };
++        let value = observe(root.path(), &work, Some(&report)).await?;
++        assert_eq!(value["provider_dispatched"], false);
++        assert!(value["actual_model"].is_null());
++        assert!(value["actual_provider"].is_null());
++        work.kind = WorkKind::ResourceWait;
++        let pending = observe(root.path(), &work, None).await?;
++        assert_eq!(pending["wait_finished"], false);
++        assert!(pending["actual_model"].is_null());
++        assert!(observe(root.path(), &work, Some(&report)).await.is_err());
++        let finished =
++            crate::goal_artifacts::put(root.path(), br#"{"waiting_finished":true}"#).await?;
++        assert_eq!(
++            observe(root.path(), &work, Some(&finished)).await?["wait_finished"],
++            true
++        );
++        tokio::fs::write(&finished.path, b"changed").await?;
++        assert!(observe(root.path(), &work, Some(&finished)).await.is_err());
++        Ok(())
++    }
++}
+diff --git a/apps/bitrouter/src/goal_runtime/tests/workflow_recovery.rs b/apps/bitrouter/src/goal_runtime/tests/workflow_recovery.rs
+index b0605af4..89f19159 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/workflow_recovery.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/workflow_recovery.rs
+@@ -251,26 +251,58 @@ async fn assert_known_repair(
+         .find(|task| task.spec.id == "left")
+         .context("left missing")?;
+     assert_eq!(left.requirements_revision, 1);
+-    assert_eq!(left.executions.len(), 2);
+-    assert!(left.executions[0].effects_reconciled());
+-    assert!(left.executions[0].handoff.is_none());
+-    assert_eq!(
+-        completed
+-            .workflow
+-            .tasks
+-            .iter()
+-            .find(|task| task.spec.id == "right")
+-            .context("right missing")?
+-            .executions
+-            .len(),
+-        1
+-    );
+-    let prepared = left.executions[1]
++    let before_left = running
++        .workflow
++        .tasks
++        .iter()
++        .find(|task| task.spec.id == "left")
++        .context("running left missing")?;
++    let before_right = running
++        .workflow
++        .tasks
++        .iter()
++        .find(|task| task.spec.id == "right")
++        .context("running right missing")?;
++    let failed_id = &before_left
++        .executions
++        .last()
++        .context("started left missing")?
++        .id;
++    let failed = left
++        .executions
++        .iter()
++        .find(|execution| &execution.id == failed_id)
++        .context("actual failed left was discarded")?;
++    // A confirmed startup failure can precede the two actually running
++    // workers. Require one repair of that LEFT and retain RIGHT's exact
++    // accepted identity; do not confuse startup recovery with repeated work.
++    assert_eq!(left.executions.len(), before_left.executions.len() + 1);
++    assert!(failed.effects_reconciled());
++    assert!(failed.handoff.is_none());
++    let right = completed
++        .workflow
++        .tasks
++        .iter()
++        .find(|task| task.spec.id == "right")
++        .context("right missing")?;
++    assert_eq!(right.executions.len(), before_right.executions.len());
++    let original_right = before_right
++        .executions
++        .last()
++        .context("started right missing")?;
++    let current_right = right.executions.last().context("completed right missing")?;
++    assert_eq!(current_right.id, original_right.id);
++    assert_eq!(current_right.thread, original_right.thread);
++    assert!(current_right.thread.is_some());
++    let prepared = left
++        .executions
++        .last()
++        .context("repair missing")?
+         .resources
+         .as_ref()
+         .context("repair prompt missing")?;
+     let prompt = String::from_utf8(crate::goal_artifacts::read(&root, &prepared.prompt).await?)?;
+-    assert!(prompt.contains(&left.executions[0].id));
++    assert!(prompt.contains(failed_id));
+     assert!(prompt.contains("failed_candidate_material") && prompt.contains("actual_checks"));
+     assert!(prompt.contains(failure_marker));
+     assert_eq!(completed.budget.limits, running.budget.limits);
+@@ -295,6 +327,7 @@ fn is_left_review(request: &wiremock::Request) -> bool {
+ #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+ async fn known_check_failure_repairs_with_actual_evidence_and_same_requirements() -> Result<()> {
+     let mut setup = Setup::new().await?;
++    setup.agent_env("BRO_GOAL_FIXTURE_FAIL_FIRST_INITIALIZE");
+     setup.agent_env("BRO_GOAL_FIXTURE_FAIL_LEFT_ONCE");
+     let fixture = setup.start().await?;
+     let result = async {
+diff --git a/apps/bitrouter/tests/code_tui_pty/evolution.rs b/apps/bitrouter/tests/code_tui_pty/evolution.rs
+index 16c9f5a5..87cffcad 100644
+--- a/apps/bitrouter/tests/code_tui_pty/evolution.rs
++++ b/apps/bitrouter/tests/code_tui_pty/evolution.rs
+@@ -387,11 +387,20 @@ async fn session_api_fresh_session_preserves_direct_routing_and_turn_timeout() -
+ async fn evolution_api_restore_reviews_current_identity_and_retains_publication() -> Result<()> {
+     use bitrouter::evolution::control::restoration::RestoreRequest;
+     use bitrouter::evolution::operator::{EvolutionOperation, EvolutionReport};
+-    let mock = MockAcp::new(MockScenario::Minimal)?;
+-    let mut config_text =
+-        std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
+-    config_text.push_str(
+-        r#"
++    let mut mock = MockAcp::new(MockScenario::Minimal)?;
++    let retain = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
++    mock._directory.disable_cleanup(retain);
++    if retain {
++        eprintln!(
++            "Failure-retention PTY fixture: {}",
++            mock._directory.path().display()
++        );
++    }
++    let result = async {
++        let mut config_text =
++            std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
++        config_text.push_str(
++            r#"
+ server:
+   skip_auth: true
+   control_socket: evolution.sock
+@@ -410,102 +419,113 @@ models:
+   candidate:
+     endpoints: [{provider: fixture, service_id: cheap}]
+ "#,
+-    );
+-    std::fs::write(&mock.config_path, &config_text)?;
+-    let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+-    let (evolution, _, mut server) = serve_control(&mock, &config).await?;
+-    let api = SessionApi::start(&mock, None).await?;
+-    api.prompt("fixture-turn", "Complete this controlled coding turn")
++        );
++        std::fs::write(&mock.config_path, &config_text)?;
++        let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
++        let (evolution, _, mut server) = serve_control(&mock, &config).await?;
++        let api = SessionApi::start(&mock, None).await?;
++        api.prompt("fixture-turn", "Complete this controlled coding turn")
++            .await?;
++        let registered = evolution_operation(
++            &api.socket,
++            EvolutionOperation::Register {
++                definition: Box::new(BlockDefinition {
++                    block_id: "terminal-trial".into(),
++                    source: "stub".into(),
++                    rationale: "Controlled withdrawal fixture".into(),
++                    rules: vec![BlockRule {
++                        selector: "coding".into(),
++                        fingerprint: None,
++                        baseline_route: "coding".into(),
++                        challenger_route: "candidate".into(),
++                    }],
++                    independence_rationale: "One isolated fixture block".into(),
++                    dependencies: Default::default(),
++                    measurement_contract: "api-fixture".into(),
++                    batch_sessions: 16,
++                    bandit: BanditConfig::default(),
++                }),
++            },
++        )
+         .await?;
+-    let registered = evolution_operation(
+-        &api.socket,
+-        EvolutionOperation::Register {
+-            definition: Box::new(BlockDefinition {
+-                block_id: "terminal-trial".into(),
+-                source: "stub".into(),
+-                rationale: "Controlled withdrawal fixture".into(),
+-                rules: vec![BlockRule {
+-                    selector: "coding".into(),
+-                    fingerprint: None,
+-                    baseline_route: "coding".into(),
+-                    challenger_route: "candidate".into(),
+-                }],
+-                independence_rationale: "One isolated fixture block".into(),
+-                dependencies: Default::default(),
+-                measurement_contract: "api-fixture".into(),
+-                batch_sessions: 16,
+-                bandit: BanditConfig::default(),
+-            }),
+-        },
+-    )
+-    .await?;
+-    let EvolutionReport::Status(registered) = registered else {
+-        bail!("registration omitted control state");
+-    };
+-    let block = registered
+-        .control
+-        .blocks
+-        .get("terminal-trial")
+-        .context("block missing")?;
+-    let request = RestoreRequest {
+-        block: block.definition.block_id.clone(),
+-        expected_experiment: block.experiment_id.clone(),
+-        expected_revision: block.revision.clone(),
+-        reason: "Return to the baseline after my review".into(),
+-    };
+-    let generation = registered.control.generation;
+-    let reviewed = evolution_operation(&api.socket, EvolutionOperation::Status).await?;
+-    let EvolutionReport::Status(reviewed) = reviewed else {
+-        bail!("review omitted control state");
+-    };
+-    assert_eq!(reviewed.control.generation, generation);
+-    assert_eq!(mock.captured_prompts()?.len(), 1);
+-    let stale = RestoreRequest {
+-        expected_revision: "outdated-review".into(),
+-        ..request.clone()
+-    };
+-    assert!(
+-        evolution_operation(&api.socket, EvolutionOperation::Restore { request: stale })
+-            .await
+-            .is_err()
+-    );
+-    assert_eq!(
+-        evolution.service("local")?.state().await?.generation,
+-        generation
+-    );
+-    evolution_operation(
+-        &api.socket,
+-        EvolutionOperation::Restore {
+-            request: request.clone(),
+-        },
+-    )
+-    .await?;
+-    evolution_operation(&api.socket, EvolutionOperation::Restore { request }).await?;
+-    let state = evolution.service("local")?.state().await?;
+-    assert_eq!(state.mode, EvolutionMode::Off);
+-    assert_eq!(
+-        state
++        let EvolutionReport::Status(registered) = registered else {
++            bail!("registration omitted control state");
++        };
++        let block = registered
++            .control
+             .blocks
+             .get("terminal-trial")
+-            .context("block missing")?
+-            .status,
+-        BlockStatus::RolledBack
+-    );
+-    assert_eq!(state.generation, generation + 1);
+-    assert_eq!(state.publications.len(), 1);
+-    let receipt = state.publications.last().context("publication missing")?;
+-    assert_eq!(receipt.action, "operator_restore");
+-    assert_eq!(
+-        receipt.operator_reason.as_deref(),
+-        Some("Return to the baseline after my review")
+-    );
+-    assert!(receipt.evidence_digest.is_none());
+-    assert_eq!(
+-        mock.captured_prompts()?.len(),
+-        1,
+-        "review or restore dispatched another turn"
+-    );
+-    server.stop(&api.socket).await
++            .context("block missing")?;
++        let request = RestoreRequest {
++            block: block.definition.block_id.clone(),
++            expected_experiment: block.experiment_id.clone(),
++            expected_revision: block.revision.clone(),
++            reason: "Return to the baseline after my review".into(),
++        };
++        let generation = registered.control.generation;
++        let reviewed = evolution_operation(&api.socket, EvolutionOperation::Status).await?;
++        let EvolutionReport::Status(reviewed) = reviewed else {
++            bail!("review omitted control state");
++        };
++        assert_eq!(reviewed.control.generation, generation);
++        assert_eq!(mock.captured_prompts()?.len(), 1);
++        let stale = RestoreRequest {
++            expected_revision: "outdated-review".into(),
++            ..request.clone()
++        };
++        assert!(
++            evolution_operation(&api.socket, EvolutionOperation::Restore { request: stale })
++                .await
++                .is_err()
++        );
++        assert_eq!(
++            evolution.service("local")?.state().await?.generation,
++            generation
++        );
++        evolution_operation(
++            &api.socket,
++            EvolutionOperation::Restore {
++                request: request.clone(),
++            },
++        )
++        .await?;
++        evolution_operation(&api.socket, EvolutionOperation::Restore { request }).await?;
++        let state = evolution.service("local")?.state().await?;
++        assert_eq!(state.mode, EvolutionMode::Off);
++        assert_eq!(
++            state
++                .blocks
++                .get("terminal-trial")
++                .context("block missing")?
++                .status,
++            BlockStatus::RolledBack
++        );
++        assert_eq!(state.generation, generation + 1);
++        assert_eq!(state.publications.len(), 1);
++        let receipt = state.publications.last().context("publication missing")?;
++        assert_eq!(receipt.action, "operator_restore");
++        assert_eq!(
++            receipt.operator_reason.as_deref(),
++            Some("Return to the baseline after my review")
++        );
++        assert!(receipt.evidence_digest.is_none());
++        assert_eq!(
++            mock.captured_prompts()?.len(),
++            1,
++            "review or restore dispatched another turn"
++        );
++        server.stop(&api.socket).await
++    }
++    .await;
++    if result.is_ok() {
++        mock._directory.disable_cleanup(false);
++    } else if retain {
++        eprintln!(
++            "Retained failed PTY fixture: {}",
++            mock._directory.path().display()
++        );
++    }
++    result
+ }
+ 
+ async fn fixed_history_score(
+diff --git a/apps/bitrouter/tests/goal_tui_pty.rs b/apps/bitrouter/tests/goal_tui_pty.rs
+index 88a97d88..dfd0f1e1 100644
+--- a/apps/bitrouter/tests/goal_tui_pty.rs
++++ b/apps/bitrouter/tests/goal_tui_pty.rs
+@@ -893,7 +893,7 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
+         terminal.send(b"\r")?;
+         terminal.wait("Verified delivery / requirements 1")?;
+         terminal.wait("Satisfaction: complete")?;
+-        terminal.wait("Managed generation attempts:")?;
++        terminal.wait("Generation attempts admitted:")?;
+         terminal.detach()?;
+         Ok::<_,anyhow::Error>(())
+     }.await;
+diff --git a/crates/bitrouter-orchestrator/src/core/session.rs b/crates/bitrouter-orchestrator/src/core/session.rs
+index 68528471..95242a6a 100644
+--- a/crates/bitrouter-orchestrator/src/core/session.rs
++++ b/crates/bitrouter-orchestrator/src/core/session.rs
+@@ -4703,6 +4703,12 @@ impl NativeExecutionControl for StepControl {
+             .map_err(sdk_error)
+     }
+ 
++    async fn admission_aborted(&self, request_id: &str, index: u32) {
++        if let Some(host) = &self.host {
++            host.admission_aborted(request_id, index).await;
++        }
++    }
++
+     async fn before_provider_work(
+         &self,
+         work: &bitrouter_sdk::language_model::native_work::NativeProviderWork,
+diff --git a/crates/bitrouter-orchestrator/src/goal.rs b/crates/bitrouter-orchestrator/src/goal.rs
+index 97677b5d..18330063 100644
+--- a/crates/bitrouter-orchestrator/src/goal.rs
++++ b/crates/bitrouter-orchestrator/src/goal.rs
+@@ -22,7 +22,7 @@ pub const MAX_PAGE_ITEMS: usize = 16;
+ /// Bound on a serialized snapshot, operation or query page.
+ pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
+ /// Goal requests are a separate local protocol from native Thread operations.
+-pub const PROTOCOL_VERSION: u32 = 7;
++pub const PROTOCOL_VERSION: u32 = 8;
+ 
+ #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "snake_case")]
+diff --git a/crates/bitrouter-orchestrator/src/goal/accounting.rs b/crates/bitrouter-orchestrator/src/goal/accounting.rs
+index a25d272b..18e38477 100644
+--- a/crates/bitrouter-orchestrator/src/goal/accounting.rs
++++ b/crates/bitrouter-orchestrator/src/goal/accounting.rs
+@@ -20,6 +20,8 @@ pub struct Accounting {
+ #[serde(rename_all = "snake_case")]
+ pub enum WorkKind {
+     Preparation,
++    /// Waiting for other current workers' quotes, before provider dispatch.
++    ResourceWait,
+     InputCount,
+     ContextValidation,
+     ProviderAttempt,
+diff --git a/crates/bitrouter-orchestrator/src/goal/budget.rs b/crates/bitrouter-orchestrator/src/goal/budget.rs
+index 5bb9d0f9..19f135c3 100644
+--- a/crates/bitrouter-orchestrator/src/goal/budget.rs
++++ b/crates/bitrouter-orchestrator/src/goal/budget.rs
+@@ -85,6 +85,32 @@ impl Budget {
+     }
+ }
+ 
++/// A current worker may wait for other current workers' in-flight quotes.
++/// Settled calls with missing usage retain their bound and cannot release it
++/// merely because another worker wants to proceed.
++pub fn waiting_on_workers(
++    goal: &GoalSnapshot,
++    quote: Option<&NativeTokenReservation>,
++) -> Result<bool, GoalError> {
++    let spent = goal.accounting.estimated_model_tokens_micro_usd;
++    if goal.budget.can_reserve(spent, quote).is_ok() {
++        return Ok(false);
++    }
++    let mut available = goal.budget.clone();
++    available.held.retain(|held| {
++        !goal.accounting.in_flight.iter().any(|work| {
++            work.id == held.work_id
++                && work
++                    .source
++                    .as_ref()
++                    .is_some_and(|source| super::workflow::worker_requested(goal, source))
++                && work.kind == super::accounting::WorkKind::ProviderAttempt
++        })
++    });
++    available.can_reserve(spent, quote)?;
++    Ok(true)
++}
++
+ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Result<(), GoalError> {
+     match event {
+         Event::ObserveElapsed => {
+diff --git a/crates/bitrouter-orchestrator/src/service/generation.rs b/crates/bitrouter-orchestrator/src/service/generation.rs
+index 503350b3..284b29db 100644
+--- a/crates/bitrouter-orchestrator/src/service/generation.rs
++++ b/crates/bitrouter-orchestrator/src/service/generation.rs
+@@ -660,6 +660,9 @@ impl NativeExecutionControl for Control {
+             .await?;
+         self.gate().await
+     }
++    async fn admission_aborted(&self, request_id: &str, index: u32) {
++        self.parent.admission_aborted(request_id, index).await;
++    }
+     async fn before_provider_work(&self, work: &NativeProviderWork) -> bitrouter_sdk::Result<()> {
+         self.gate().await?;
+         self.parent.before_provider_work(work).await?;
+diff --git a/crates/bitrouter-sdk/src/app.rs b/crates/bitrouter-sdk/src/app.rs
+index 02202097..a282910b 100644
+--- a/crates/bitrouter-sdk/src/app.rs
++++ b/crates/bitrouter-sdk/src/app.rs
+@@ -535,6 +535,9 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
+             .before_attempt_with_token_reservation(request_id, index, reservation)
+             .await
+     }
++    async fn admission_aborted(&self, request_id: &str, index: u32) {
++        self.inner.admission_aborted(request_id, index).await;
++    }
+     async fn after_attempt(&self, report: crate::language_model::native::NativeAttemptReport) {
+         self.inner.after_attempt(report).await
+     }
+diff --git a/crates/bitrouter-sdk/src/language_model/native.rs b/crates/bitrouter-sdk/src/language_model/native.rs
+index 48ccb74c..04caf16f 100644
+--- a/crates/bitrouter-sdk/src/language_model/native.rs
++++ b/crates/bitrouter-sdk/src/language_model/native.rs
+@@ -658,6 +658,11 @@ pub trait NativeExecutionControl: Send + Sync {
+         self.before_attempt(request_id, attempt_index).await
+     }
+ 
++    /// The SDK did not poll the provider executor: attempt admission was
++    /// rejected or cancelled. Reconcile only this exact pre-dispatch intent;
++    /// this callback says nothing about earlier attempts or external charges.
++    async fn admission_aborted(&self, _request_id: &str, _attempt_index: u32) {}
++
+     /// Persist integration work before any actual authentication or HTTP I/O.
+     /// Implementations recheck live dispatch gates and reserve internal retries.
+     async fn before_provider_work(
+diff --git a/crates/bitrouter-sdk/src/language_model/pipeline.rs b/crates/bitrouter-sdk/src/language_model/pipeline.rs
+index 1e0a4a0e..3f9fcf41 100644
+--- a/crates/bitrouter-sdk/src/language_model/pipeline.rs
++++ b/crates/bitrouter-sdk/src/language_model/pipeline.rs
+@@ -2386,23 +2386,23 @@ impl Pipeline {
+             self.wait_before_fallback(dispatched).await;
+             dispatched += 1;
+             self.observe_hop_start(ctx, target).await;
+-            if let Some((control, route)) = attempt_control
+-                && let Err(error) = control
+-                    .before_attempt_with_token_reservation(
+-                        ctx.request_id(),
+-                        index,
+-                        self.native_cost_estimator
+-                            .as_ref()
+-                            .and_then(|estimator| {
+-                                estimator.reservation_for_attempt(route, prompt, ctx, target)
+-                            })
+-                            .as_ref(),
+-                    )
+-                    .await
+-            {
+-                self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
+-                    .await;
+-                return Err(error);
++            if let Some((control, route)) = attempt_control {
++                let reservation = self.native_cost_estimator.as_ref().and_then(|estimator| {
++                    estimator.reservation_for_attempt(route, prompt, ctx, target)
++                });
++                let admitted = tokio::select! {
++                    biased;
++                    () = control.provider_cancelled() => Err(BitrouterError::internal(
++                        "managed attempt admission cancelled before provider dispatch")),
++                    result = control.before_attempt_with_token_reservation(
++                        ctx.request_id(), index, reservation.as_ref()) => result,
++                };
++                if let Err(error) = admitted {
++                    control.admission_aborted(ctx.request_id(), index).await;
++                    self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
++                        .await;
++                    return Err(error);
++                }
+             }
+             let private_context =
+                 ctx.extension::<super::native_context::NativePrivateContextRuntime>();
+diff --git a/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs b/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs
+index d8ffb04e..e91e15b6 100644
+--- a/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs
++++ b/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs
+@@ -41,9 +41,14 @@ impl native_accounting::NativeCostEstimator for QuotedEstimator {
+     }
+ }
+ 
++#[derive(Default)]
+ struct QuotedControl {
+     reject: bool,
+     attempts: AtomicUsize,
++    wait: bool,
++    deny_attempt: bool,
++    cancellation: CancellationToken,
++    aborted: AtomicUsize,
+ }
+ 
+ struct QuotedExecutor {
+@@ -104,8 +109,22 @@ impl native::NativeExecutionControl for QuotedControl {
+         assert_eq!(index, 0);
+         assert_eq!(quote, Some(&fixture_quote()));
+         self.attempts.fetch_add(1, Ordering::SeqCst);
++        if self.wait {
++            std::future::pending::<()>().await;
++        }
++        if self.deny_attempt {
++            return Err(BitrouterError::bad_request("fixture rejects admission"));
++        }
+         Ok(())
+     }
++    async fn provider_cancelled(&self) {
++        self.cancellation.cancelled().await;
++    }
++    async fn admission_aborted(&self, request: &str, index: u32) {
++        assert!(!request.is_empty());
++        assert_eq!(index, 0);
++        self.aborted.fetch_add(1, Ordering::SeqCst);
++    }
+     async fn after_attempt(&self, _: native::NativeAttemptReport) {}
+ }
+ 
+@@ -126,7 +145,7 @@ async fn app_preserves_budget_quotes_for_plan_and_attempt_admission() -> Result<
+             .build()?;
+         let control = Arc::new(QuotedControl {
+             reject,
+-            attempts: AtomicUsize::new(0),
++            ..Default::default()
+         });
+         let result = app
+             .execute_native_controlled(prompt(), CallerContext::local(), control.clone())
+@@ -141,6 +160,53 @@ async fn app_preserves_budget_quotes_for_plan_and_attempt_admission() -> Result<
+     Ok(())
+ }
+ 
++#[tokio::test]
++async fn cancelled_or_refused_attempt_admission_reports_no_dispatch_without_polling_executor()
++-> Result<()> {
++    for waiting in [false, true] {
++        let executor = Arc::new(QuotedExecutor {
++            inner: MockExecutor::always_text("must not run"),
++            calls: AtomicUsize::new(0),
++        });
++        let app = crate::App::builder()
++            .language_model(|builder| {
++                builder
++                    .routing_table(routing_table(&["first"]))
++                    .executor(executor.clone())
++                    .native_cost_estimator(Arc::new(QuotedEstimator));
++            })
++            .build()?;
++        let control = Arc::new(QuotedControl {
++            wait: waiting,
++            deny_attempt: !waiting,
++            ..Default::default()
++        });
++        let running_control = control.clone();
++        let task = tokio::spawn(async move {
++            app.execute_native_controlled(prompt(), CallerContext::local(), running_control)
++                .await
++        });
++        tokio::time::timeout(std::time::Duration::from_secs(3), async {
++            while control.attempts.load(Ordering::SeqCst) == 0 {
++                tokio::task::yield_now().await;
++            }
++        })
++        .await
++        .map_err(|_| BitrouterError::internal("admission did not start"))?;
++        if waiting {
++            control.cancellation.cancel();
++        }
++        let result = tokio::time::timeout(std::time::Duration::from_secs(3), task)
++            .await
++            .map_err(|_| BitrouterError::internal("admission cancellation did not settle"))?
++            .map_err(|error| BitrouterError::internal(error.to_string()))?;
++        assert!(result.is_err());
++        assert_eq!(control.aborted.load(Ordering::SeqCst), 1);
++        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
++    }
++    Ok(())
++}
++
+ #[derive(Default)]
+ struct SemanticFixture(Mutex<Vec<serde_json::Value>>);
+ 
+diff --git a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+index 5eff45aa..d7ca975d 100644
+--- a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
++++ b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+@@ -316,7 +316,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
+ | --- | --- |
+ | S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
+ | S1 | In progress: owner/input association, model/worker Turn links, stable binding operations and original-key lookup implemented. New ACP dispatches with no accepted Thread stay on common admission; original supervisor starts keep reconciliation priority. Managed refusals now reconcile absence under the shared admission lock, preserve intent, and permit bounded new preparation. Full interruption/compatibility proof remains. |
+-| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and bounded capacity waiting are connected. Current native Goal work can resume a safe accepted checkpoint through existing recovery without replacing its Thread/Turn or resetting accounting. Controlled SQLite images qualify this bridge; abrupt-owner takeover is blocked. Worker quote waiting, remaining recovery coverage and full wait/effect projection remain pending. |
++| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and bounded capacity waiting are connected. Current native Goal work can resume a safe accepted checkpoint through existing recovery without replacing its Thread/Turn or resetting accounting. Controlled SQLite images qualify this bridge; abrupt-owner takeover is blocked. Native workers now persist cancellable quote waits, retain frozen admission and block settled unknown-cost holds. Remaining recovery coverage and final evidence qualification remain pending. |
+ | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
+ | S4 | In progress: generation/native SDK reports, prepared-input/router facts and actual content receipt intervals link to original work/Thread/Turn sources. ACP public session/route limits remain explicit. Complete historical qualification and final evidence/UI closure remain. |
+ | S5 | In progress: native and managed ACP dependencies/review consume common Turn facts. The native three-node fixture proves actual overlap, isolated conflicting local writes and checked dependency consumption through verified completion. Full coordinated/recovery/live closure remains. |
+@@ -1186,3 +1186,106 @@ two fixture-setup/assertion failures remain archived, including three independen
+ verified SQLite/filesystem fixture images. Raw logs, exact source tars and the
+ checksum index remain outside the feature PR in `NATIVE_COLD_RECOVERY_INDEX.md`.
+ The whole refactor, live gates and final source/hosted-CI verification remain open.
++
++
++## Native worker token-reservation waiting
++
++Current native worker provider admission distinguishes a releasable reservation
++held by another current worker from spent budget and settled unknown-cost holds.
++Only active provider-attempt reservations are treated as potential releases;
++unknown outcomes, stale sources and typed-decision holds do not grant this wait.
++The same accounting action/key, route and original token quote are retried, with
++fresh source/lease/budget checks. This is admission waiting, not another business
++execution attempt, repricing or permission. Shared commits retain one bounded
++confirmation policy for conflicts/lost replies.
++
++ResourceWait begin/end facts use existing Goal accounting/history. The read-only
++Workflow displays only a wait belonging to the current worker source. Paused or
++superseded sources do not continue to appear as waiting. No new store, queue or
++scheduler is introduced. Goal IPC is now **8**, and writer fence **000033** keeps
++old binaries from dropping unfamiliar wait facts; old history is retained and
++older outboxes remain rejected without replay. Native/HTTP/runtime formats are
++unchanged.
++
++The SDK races attempt admission against its existing cancellation signal. Before
++polling a provider executor, refusal/cancellation invokes the exact admission
++abort callback. Original observed reservations can settle known no-dispatch;
++missing/unconfirmed receipts remain conservative. This does not prove an earlier
++provider request, an external harness or all external fees cost zero. Native
++evidence labels aborts/waits separately from actual SDK provider outcomes.
++
++The first failing regression (token-wait-red1) and the initial focused passing
++run (green2: accounting/old-writer and SDK quote/cancel matrices, strict Clippy,
++fmt) are independently retained with source hashes. Later source adds frozen
++quote/replay checks, pause/UI coverage and stricter evidence projection; final
++qualification of that source is pending. No real provider or harness ability
++is established by these domain/SDK fixtures. S0–S6 and A01–A22 remain active.
++
++The final3 full-workspace run retained **4,749 passes, one failure, 24 skipped,
++eight slow and no LEAK markers** without source drift. Strict Clippy/fmt/rustdoc
++jobs scheduled after that run were not executed. The failing unknown-effect
++worker-switch fixture recorded an isolation-preparation timeout/retry; RIGHT's
++actual start marker came 30.408 seconds after LEFT's completed-write marker,
++straddling the peer's 30-second release-phase timer. Its complete 116-file
++filesystem/database image was independently extracted and hash/mode checked.
++The preserved failure is not called a passing whole-workspace qualification.
++
++The Rust peer now synchronizes LEFT with RIGHT startup in the missing-tool-result
++scenario before starting the separate release-phase timer. Cancellation releases
++that parent-owned fixture barrier. The 30-second release timer, 45-second state
++wait, product limits, assertions and unknown-effect safeguards are retained.
++Fresh same-source checks are pending; no blanket cause/fix claim is made for
++older nextest output-handle reports or external harness behavior.
++
++Final4 preserves five passing worker-switch stress iterations and a passing
++worker-switch case in the full run. The full run has **4,749 passes, one failure,
++24 skipped, six slow and no LEAK markers** with unchanged source. The failure
++is a different pre-existing PTY evolution case: its stub transport closed during
++ACP `initialize`, before session selection or the review/restore action. Its
++cause is unconfirmed. That fixture's normal Result-error path deleted its temp
++directory, so this run retains raw logs and reproduction source, not a recovered
++filesystem image. Later Clippy/fmt/rustdoc jobs were not executed.
++
++The specific PTY case now opts into failure/panic directory retention under the
++existing private validation setting and removes its directory on success. The
++Cargo-built PTY peer writes a PID-scoped startup/EOF/error diagnostic beside its
++owned capture file, without adding protocol stdout or changing behavior. These
++are diagnostic changes, not a claimed fix for the unexplained startup closure.
++The budget label now explicitly counts admitted generation attempts; it does
++not imply the SDK polled an executor. Further local qualification is pending.
++
++Diag5 retained 20 passing PTY startup/review iterations, strict workspace Clippy,
++fmt and six passing workspace doctests (one ignored), with no source drift or
++LEAK markers. This does not establish or fix the earlier startup closure. A
++separate controlled Rust-peer probe verifies protocol-pure initialize/EOF and a
++recorded local socket-bind error. Its first probe used an overlong macOS socket
++path (108 bytes); that probe-layout error, runner and diagnostics are retained.
++The corrected short-path probe preserves both expected process outcomes. Neither
++probe qualifies a real harness or model.
++
++The final accounting matrix additionally drops the actual waiting admission
++future and invokes the SDK abort callback with the canonical request/attempt
++key. It must close only that wait, retain the other worker's reservation and
++admit no provider attempt. A stale wait alone no longer marks a stopped source
++as currently running in the read-only projection. Qualification of this last
++source is pending.
++
++Final6 preserves five passing accounting/cancellation/evidence boundaries and a
++full run of **4,748 passes, two failures, 24 skipped, ten slow and no LEAK
++markers**, with unchanged source. Later strict checks did not run. One failure
++was the stale PTY expectation after the budget copy changed to “Generation
++attempts admitted”; its expected label is now synchronized. The other assumed
++RIGHT had exactly one historical attempt. Its preserved supervisor facts show a
++confirmed failure before session opening, followed by one actual RIGHT prompt;
++LEFT ran two business prompts and JOIN one. The 349-file panic-retained image
++was independently extracted and hash/mode verified. Its in-memory Goal/Execution
++database was not captured after the assertion unwound.
++
++The repair check now compares against the actually running snapshot: one new
++LEFT repair, the failed LEFT's exact evidence, and RIGHT's unchanged accepted
++execution/Thread/Turn. A deliberate first-initialize failure exercises this
++combination, rather than weakening the no-work-replay condition or raising the
++three-attempt business bound. Fixture-specific macOS logs also contain AMFI
++signature warnings, including during passing executions; both current binaries
++pass strict signature verification. Those warnings alone do not establish why
++the earlier transports closed. No system security setting was changed.
+diff --git a/docs/CLI.md b/docs/CLI.md
+index ffc307be..a0bcfcc9 100644
+--- a/docs/CLI.md
++++ b/docs/CLI.md
+@@ -1054,7 +1054,7 @@ It does not undo committed requirements, cancel worker/tool effects, resume
+ work or increase a cap; other accepted/in-flight inputs remain ordered.
+ Additional words, quotes and hypothetical discussion use normal understanding.
+ The receipt records your explicit action without claiming model use or adoption.
+-Goal IPC is version 7; older outboxes are retained and rejected without replay
++Goal IPC is version 8; older outboxes are retained and rejected without replay
+ or reinterpretation. Native/ACP protocol versions are separate.
+ 
+ A saved dispatch intent does not establish Turn acceptance. Uncertain managed
+diff --git a/docs/DEVELOPMENT.md b/docs/DEVELOPMENT.md
+index 9745a679..977b4d84 100644
+--- a/docs/DEVELOPMENT.md
++++ b/docs/DEVELOPMENT.md
+@@ -53,14 +53,18 @@ local effects use original-history/workspace reconciliation. Shared generation
+ admission and native worker admission share bounded capacity waiting. Current native Goal
+ sources can request continuation of an accepted checkpoint through the same recovery
+ engine, retaining Thread/Turn identity and recorded budgets. Owner/effect uncertainty
+-remains blocked; confirmed ACP continuation and worker quote waiting still need closure.
++remains blocked. Native workers retain the same action and frozen quote while waiting
++for current workers' provider reservations; settled unknown-cost holds remain blocked.
++Wait begin/end facts drive the read-only projection. SDK cancellation before executor
++dispatch reconciles the original admission without inventing actual serving evidence.
++Confirmed ACP continuation still needs closure.
+ Managed ACP uses the same acceptance/control owner;
+ the supervisor supplies protocol/process facts. Historical unbound runs retain
+ their reconciliation path. Worker changes version the existing work and create
+ a new Thread after old stop/effects are confirmed; known local results are
+ transferred before dispatch. The ledger tracks remaining acceptance gates.
+-Migrations 000030/000031/000032 fence incompatible database writers for execution links,
+-immutable requested-worker sources and no-admission verdicts. They add no table and do not migrate
++Migrations 000030/000031/000032/000033 fence incompatible database writers for execution links,
++immutable requested-worker sources, no-admission verdicts and resource waits. They add no table and do not migrate
+ persistence into core.
+ 
+ Saved dispatch intent is distinct from acceptance. An uncertain unbound managed
+diff --git a/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs b/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
+index 9c53787c..bb1c4332 100644
+--- a/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
++++ b/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
+@@ -175,6 +175,18 @@ impl Peer {
+                 self.control.join(format!("completed-{task}")),
+                 b"actual fixture write ended",
+             )?;
++            // The unknown-effect scenarios pause only after both branches
++            // exist. A slow/retried right workspace must not consume the
++            // left branch's separate release-phase deadline during startup.
++            // The parent test owns this barrier and cancels it on teardown.
++            if self.omit_tool_completion && task == "left" {
++                while !self.control.join("started-right").exists() {
++                    if self.cancelled.load(Ordering::Acquire) {
++                        return self.respond(&prompt, json!({"stopReason":"cancelled"}));
++                    }
++                    std::thread::sleep(Duration::from_millis(10));
++                }
++            }
+             let deadline = Instant::now() + Duration::from_secs(30);
+             while !self.control.join("release").exists() {
+                 if self.cancelled.load(Ordering::Acquire) {
+diff --git a/helpers/bitrouter-test-fixtures/src/pty_acp_fixture.rs b/helpers/bitrouter-test-fixtures/src/pty_acp_fixture.rs
+index bfb96dfa..8b0b4b4a 100644
+--- a/helpers/bitrouter-test-fixtures/src/pty_acp_fixture.rs
++++ b/helpers/bitrouter-test-fixtures/src/pty_acp_fixture.rs
+@@ -297,7 +297,27 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--editor")) {
+         return editor_fixture();
+     }
+-    fixture::run()
++    diagnose("process_started", None);
++    let result = fixture::run();
++    match &result {
++        Ok(()) => diagnose("input_closed", None),
++        Err(error) => diagnose("failed", Some(&error.to_string())),
++    }
++    result
++}
++
++#[cfg(unix)]
++fn diagnose(phase: &str, error: Option<&str>) {
++    let Some(capture) = std::env::var_os("BITROUTER_PTY_CAPTURE") else {
++        return;
++    };
++    let path = std::path::PathBuf::from(capture)
++        .with_extension(format!("startup-{}.json", std::process::id()));
++    let value = serde_json::json!({"pid":std::process::id(),"phase":phase,"error":error,
++        "scope":"Fixture startup/EOF diagnosis only; not a session or execution verdict"});
++    if let Err(error) = std::fs::write(path, value.to_string()) {
++        eprintln!("PTY fixture could not preserve startup diagnosis: {error}");
++    }
+ }
+ 
+ #[cfg(unix)]
+diff --git a/skills/bitrouter/SKILL.md b/skills/bitrouter/SKILL.md
+index 200d3666..caa696e8 100644
+--- a/skills/bitrouter/SKILL.md
++++ b/skills/bitrouter/SKILL.md
+@@ -82,7 +82,7 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
+ 
+ ### 5. Choose the work interface
+ 
+-BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. Safe native checkpoints retain their original Thread/Turn after current-source, owner, effect and budget checks. See `references/cli.md` for evidence scope, bounded admission waiting and remaining ACP recovery/budget-wait limits.
++BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. Safe native checkpoints retain their original Thread/Turn after current-source, owner, effect and budget checks. Native workers record cancellable quote waits; settled unknown-cost holds remain blocked. See `references/cli.md` for evidence scope and remaining ACP recovery limits.
+ The Goal directory, current Goal and read-only Workflow have separate navigation;
+ viewing never creates work. Enter submits to the current Goal even while workers run.
+ Queries and hypotheses do not modify requirements; accepted changes and actual
+@@ -101,7 +101,7 @@ available. BRO requires controller confirmation before sending work; requested
+ and confirmed routes remain distinct from an actual upstream model identity.
+ Current-Goal input versions a task's requested worker/resources. BRO confirms old
+ execution/effect boundaries before a new Thread adopts that selection.
+-Unresolved input survives queries; `/input <id> <reply>` references it, and exact `/input <id> /withdraw` cancels only that uncommitted request without a model/budget increase. Query-only clarification adds no completion condition. Goal IPC v7 preserves older outboxes without replay. Superseded reconciled executions can leave the current snapshot; their complete records remain in immutable Goal history without resetting current attempts or budget.
++Unresolved input survives queries; `/input <id> <reply>` references it, and exact `/input <id> /withdraw` cancels only that uncommitted request without a model/budget increase. Query-only clarification adds no completion condition. Goal IPC v8 preserves older outboxes without replay. Superseded reconciled executions can leave the current snapshot; their complete records remain in immutable Goal history without resetting current attempts or budget.
+ 
+ ```bash
+ bro                         # Goals; no Goal or agent starts from a directory read
+diff --git a/skills/bitrouter/references/cli.md b/skills/bitrouter/references/cli.md
+index 3fbb6694..99154901 100644
+--- a/skills/bitrouter/references/cli.md
++++ b/skills/bitrouter/references/cli.md
+@@ -395,7 +395,13 @@ resume. Ordinary start rejects a changed body on the original key before
+ restoration; a readonly query itself never requests continuation. Local proof
+ uses controlled SQLite checkpoint images after actual source shutdown/join;
+ it does not qualify forced crash takeover or private ACP continuation.
+-Confirmed ACP continuation and worker token-quote waiting remain incomplete. Do not treat
++Native worker token-quote contention waits on provider reservations held by current
++workers, preserving its original attempt key, route order and frozen quote. The
++Workflow distinguishes this wait from exhausted budget. A settled outcome with
++missing usage retains its quote and cannot be treated as a temporary wait. Pause,
++revocation and SDK cancellation close admission; the executor is not polled after
++cancelled admission. A saved wait or reservation is not provider/model execution.
++Confirmed ACP continuation remains incomplete. Do not treat
+ controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
+ remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
+ Both `bro` and `bro code` open Goals; reading the directory does not create or
+@@ -467,9 +473,9 @@ It does not undo committed requirements, cancel worker/tool effects, resume
+ work or increase a cap; other accepted/in-flight inputs remain ordered.
+ Additional words, quotes and hypothetical discussion use normal understanding.
+ The receipt records your explicit action without claiming model use or adoption.
+-Goal IPC is version 6; older outboxes are retained and rejected without replay
++Goal IPC is version 8; older outboxes are retained and rejected without replay
+ or reinterpretation. Native/ACP protocol versions are separate.
+-The managed Goal refactor records database migrations 000030/000031: older app
++The managed Goal refactor records database migrations 000030/000031/000032/000033: older app
+ versions reject that database at startup. Do not remove the version marker or
+ run old and new Goal writers concurrently; it preserves existing history.
+ Superseded reconciled executions without active references are archived into

@@ -1,0 +1,37 @@
+{
+  "id": "acp-continuation-fix9",
+  "scope": "Focused proof after test-only future boxing (no stack limit increase), failure-image retention and full-session fixture resource weights. Runtime production unchanged from final4. Original timeouts, internal branch overlap, owner/effect and output assertions remain.",
+  "jobs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading) | binary(goal_tui_pty) | binary(native_harness_resources)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    }
+  ]
+}

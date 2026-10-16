@@ -1,0 +1,25 @@
+{
+  "source": "native-evidence-source5.json",
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "--all-features",
+    "--lib",
+    "--test",
+    "goals",
+    "--no-fail-fast",
+    "-E",
+    "test(goal_runtime::tests::native) | test(goal_runtime::tests::workflow_edits) | test(goal_runtime::tests::threads)"
+  ],
+  "startedAt": "2026-10-16T10:50:04.926Z",
+  "log": "native-evidence-focused5.log",
+  "priorRun": "Native read-only resource/SDK evidence projection from existing stores; S4 in progress.",
+  "code": 100,
+  "signal": null,
+  "finishedAt": "2026-10-16T10:51:44.485Z",
+  "changed": [],
+  "summary": "     Summary [  39.417s] 19 tests run: 18 passed, 1 failed, 1897 skipped",
+  "passed": false
+}

@@ -1,0 +1,114 @@
+{
+  "source": "native-cold-green4-source.json",
+  "scope": "Five controlled SQLite native checkpoint cases including revocation after first authorization, exact-input conflict, no confirmed read replay, and cumulative Goal provider accounting",
+  "startedAt": "2026-10-16T14:48:16.546Z",
+  "runs": [
+    {
+      "name": "boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint)"
+      ],
+      "log": "native-cold-green4-boundary.log",
+      "startedAt": "2026-10-16T14:48:16.546Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:49:16.231Z",
+      "summaries": [
+        "     Summary [   4.849s] 1 test run: 1 passed, 1830 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "native-cold-green4-clippy.log",
+      "startedAt": "2026-10-16T14:49:16.232Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:50:04.486Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "native-cold-green4-fmt.log",
+      "startedAt": "2026-10-16T14:50:04.486Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:50:24.573Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::)"
+      ],
+      "log": "native-cold-green4-goal-runtime.log",
+      "startedAt": "2026-10-16T14:50:24.573Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:51:12.665Z",
+      "summaries": [
+        "     Summary [  47.205s] 82 tests run: 82 passed, 1749 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "shared-worker",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::worker)"
+      ],
+      "log": "native-cold-green4-shared-worker.log",
+      "startedAt": "2026-10-16T14:51:12.665Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:51:45.989Z",
+      "summaries": [
+        "     Summary [   2.745s] 10 tests run: 10 passed, 622 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T14:51:46.159Z",
+  "changed": [],
+  "passed": true
+}

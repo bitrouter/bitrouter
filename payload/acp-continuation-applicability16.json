@@ -1,0 +1,168 @@
+{
+  "head": "ebbbc000a500486889be80dfc87bf180cc0d7a69",
+  "extracts": [
+    {
+      "id": "acp-continuation-green1",
+      "passed": false,
+      "files": 13,
+      "leaks": [],
+      "tarSha256": "185dd84ab216e56b679785a99601c25aeda6fbf8131c5bf33fec32908db2c838"
+    },
+    {
+      "id": "acp-continuation-green2",
+      "passed": true,
+      "files": 13,
+      "leaks": [],
+      "tarSha256": "1eebaa15946f193b23c484ad37b6efaf34fb367e496c9ea10ca511ca2245e6e6"
+    },
+    {
+      "id": "acp-continuation-green3",
+      "passed": true,
+      "files": 14,
+      "leaks": [],
+      "tarSha256": "279335f833a80351cc467c2b51bab3d20d590625e0da5eea297cf4bef1ab5ce0"
+    },
+    {
+      "id": "acp-continuation-final4",
+      "passed": false,
+      "files": 14,
+      "leaks": [],
+      "tarSha256": "52349d56447317be4314d9fc9a0746ffdf914103eb495691fcb371a99fcd3377"
+    },
+    {
+      "id": "acp-continuation-isolation5",
+      "passed": true,
+      "files": 14,
+      "leaks": [],
+      "tarSha256": "462c266a07efd84f21f3d470fc02896befd2b1f8d09a2e13115543a484794d0a"
+    },
+    {
+      "id": "acp-continuation-isolation6",
+      "passed": true,
+      "files": 14,
+      "leaks": [],
+      "tarSha256": "644cd2a17700a3b3ff004b21c938afa4d6ae62ac866add0a4ed6974f50be633d"
+    },
+    {
+      "id": "acp-continuation-final7",
+      "passed": false,
+      "files": 15,
+      "leaks": [],
+      "tarSha256": "f89c31ec6d3fda6b1703ee6a8e300ccf47ba91dbed1fff2ea3f0735ed89c43d4"
+    },
+    {
+      "id": "acp-continuation-final8",
+      "passed": false,
+      "files": 15,
+      "leaks": [],
+      "tarSha256": "c831a839c495359b651123b39dcfdab48e1b924974972ea4ff829d450d3845a2"
+    },
+    {
+      "id": "acp-continuation-fix9",
+      "passed": true,
+      "files": 17,
+      "leaks": [],
+      "tarSha256": "1611c6e0a5c9f5b981b8604c4f07dead91713d07c5fc95dd9ea3fbfe41b52355"
+    },
+    {
+      "id": "acp-continuation-final10",
+      "passed": false,
+      "files": 17,
+      "leaks": [],
+      "tarSha256": "f476fe63665de3d5afb393af869af9a63e99afafa447cfd9cffcb81a582c4df4"
+    },
+    {
+      "id": "acp-continuation-startup11",
+      "passed": true,
+      "files": 18,
+      "leaks": [],
+      "tarSha256": "f547a07ecf3c41b2a5e96dcd55fc7ef5eee025af7cd72951f9d3c2fac72802c9"
+    },
+    {
+      "id": "acp-continuation-final12",
+      "passed": false,
+      "files": 18,
+      "leaks": [],
+      "tarSha256": "f61a4fdb898105c582252dafe5ec199eff28da1a2727e47dc19ed8d71d7fcc75"
+    },
+    {
+      "id": "acp-continuation-final13",
+      "passed": true,
+      "files": 18,
+      "leaks": [
+        "        LEAK [   2.277s] ( 766/4757) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration",
+        "        LEAK [   4.476s] ( 767/4757) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action",
+        "        LEAK [   5.294s] ( 768/4757) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause",
+        "        LEAK [  17.066s] ( 775/4757) bitrouter goal_runtime::tests::workflow_edits::active_branch_edit_preserves_independent_run_and_renews_pending_permission"
+      ],
+      "tarSha256": "e67d6e99599179fa37c3eba8380208c62d9138190ab0aa97b0f95125da8bfe77"
+    },
+    {
+      "id": "acp-continuation-leak14",
+      "passed": true,
+      "files": 18,
+      "leaks": [],
+      "tarSha256": "bdd6a95d823ceeee8926ec275aa10827bba87e1873db9e6f6d0e9b0c5e003b9b"
+    },
+    {
+      "id": "acp-continuation-final15",
+      "passed": true,
+      "files": 18,
+      "leaks": [],
+      "tarSha256": "8a060dad8ba35e979e0f305953cddb3990c9b7d69a2ba3e096755bed639b3508"
+    }
+  ],
+  "productionUnchangedAfterFinal4": true,
+  "changesAfterFinal4": [
+    ".config/nextest.toml",
+    "apps/bitrouter/src/goal_runtime/resources/tests.rs",
+    "apps/bitrouter/src/goal_runtime/tests/native_recovery.rs",
+    "apps/bitrouter/tests/goal_tui_pty.rs",
+    "apps/bitrouter/tests/native_harness_resources.rs"
+  ],
+  "postTestDelta": [
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json",
+    ".agents/plugins/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/DEVELOPMENT.md",
+    "docs/evidence/bro-goal-workflow/README.md",
+    "docs/evidence/bro-goal-workflow/REPRODUCE.md",
+    "skills/bitrouter/SKILL.md",
+    "skills/bitrouter/references/cli.md"
+  ],
+  "finalFiles": {
+    "crates/bitrouter-orchestrator/src/service/recovery/acp.rs": "e1084ce4b3fdad4a58238e32955bc748c700cb4d7d67857b309aa3f4185bfab5",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md": "6461f1ff89ec54bd0ae7a3c7a09ff4a9a01632c99ca1850ef3eaa6bf18768391",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json": "d97d53e8d2b29cf699889c19de174086a5e46de2ca86a43b6f34229152f8b2eb",
+    ".agents/plugins/marketplace.json": "7cd4e99d59d97d5f9cbb781af140f6862ac2af0459d56af4907b478e7f80f2cf",
+    ".claude-plugin/plugin.json": "b946b3490cf5bb5855cb20559990b12f6cee125c3300a992456507f57aec8a29",
+    ".codex-plugin/plugin.json": "d2e4b8f25612cd28756652e50e38c6528329793c1bf4d20ab81ac4c304ccccbf",
+    ".config/nextest.toml": "9244847c31c887cadeb8cd081013396d4b15482aee68be0dc47cb1ec4552424d",
+    "apps/bitrouter/src/goal_runtime/acp.rs": "9a2f2c8f3326514880859f18d6030535efc72e77a2e8506bae5769d16b492098",
+    "apps/bitrouter/src/goal_runtime/native.rs": "8ca057b3225d6e9b8d84de539c3832ec9ea01e888a680dc0528d7cd3769250b6",
+    "apps/bitrouter/src/goal_runtime/resources/tests.rs": "819094c59a4acf415bedda459859f3bc804e775c540e93ea023d80cbfce21d0c",
+    "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs": "da7dfbd0702b28ac8c081f61e48934c46b2d924e48c79c59f259522ac7c03b02",
+    "apps/bitrouter/src/goal_runtime/tests/native_recovery.rs": "2f19d1a4bdd3a3633200aeb2ae631b9f9e223ea8a025179929f954206e54fd18",
+    "apps/bitrouter/src/supervisor.rs": "46032953bdfa9b2e2c076852f01658b1eb362a3c97051a59af236a2e3cbcc64b",
+    "apps/bitrouter/tests/goal_tui_pty.rs": "64046582be9b9a063f4ef44ff239dae0f1e75a68720f894428cf51e3ea016238",
+    "apps/bitrouter/tests/native_harness_resources.rs": "d90de3105b8b473fd36e5ceb73bed45fe05f724b8873b908bcbae9f386bb27ca",
+    "crates/bitrouter-orchestrator/src/service/recovery.rs": "470431e030bea1c759f255dea9ed7da48f57139e3def4132761666f661fdc9ec",
+    "crates/bitrouter-orchestrator/src/service/recovery/tests.rs": "a186d031f823c1fd6aa9bad3bf732e771b19ac792c4e3d07fcae53ead8bfbd3e",
+    "crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs": "7192941431428e801c9672f5b56992befa62ac7a778a5c77eeef983989b50976",
+    "crates/bitrouter-orchestrator/src/service/waiting.rs": "cc09d29963fad765f65c746e4b1410b5fffcdc6b129b7ad1fbe3ca65820e3eda",
+    "crates/bitrouter-orchestrator/src/service/worker/acp.rs": "779157d6d5424609059ca375ebc89a54cf8d8aa1c8822627c02d03c5c86aaf61",
+    "crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs": "00fd73cd73ec26b5e74b93b3e94f4b3ee915417905d922781eab01d7cb62fe9a",
+    "crates/bitrouter-orchestrator/src/thread.rs": "f75dba33d2a4a8031d6505d424a4d7b93ff18b1c657ce6a67dcf8beec9c76e76",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "05cbdaefcb503873388744389c3515ce94c966a2b27df1dcb5cc287be1b374e9",
+    "docs/DEVELOPMENT.md": "cab7037496090320538ffa4dd4fc0d7b6b02437fc868d86e398830c1022d1184",
+    "docs/evidence/bro-goal-workflow/README.md": "4d43b1343b9bf06f03fed6d73f1f634b790a9719ae4c72dda5c86b969bb04689",
+    "docs/evidence/bro-goal-workflow/REPRODUCE.md": "ca021b882e9e5bd7d52bad718a2ac7abfc4953d756cc2e79d9347cea43c45074",
+    "helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs": "a193fe5963e431831f3008c91f7750204a461086f3e282a058701dae4a8c6767",
+    "skills/bitrouter/SKILL.md": "3d5e1fa9023ff59357c9ef1922ebfab5912c15cd5bacd88ab8ffb5a9d0b30a4b",
+    "skills/bitrouter/references/cli.md": "4f1a76b6cf1c47a62b5aee6a928d8feb8136863fa00918ec87aa32ef495757a4"
+  },
+  "finalTarSha256": "cc5bfa6c00d02871c6911245e76682822e71a7eb23a9c64db354f0955ba03d3d"
+}

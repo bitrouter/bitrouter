@@ -1,0 +1,61 @@
+    Checking ring v0.17.14
+   Compiling rustls v0.23.41
+    Checking tracing-subscriber v0.3.23
+   Compiling rustix v0.38.44
+    Checking agent-client-protocol-schema v1.10.2
+    Checking agent-client-protocol-trace-viewer v3.3.0
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+    Checking rustls-webpki v0.103.13
+    Checking crossterm v0.28.1
+    Checking tracing-opentelemetry v0.33.0
+    Checking ratatui v0.29.0
+    Checking tokio-rustls v0.26.4
+    Checking rustls-platform-verifier v0.7.0
+    Checking sqlx-core v0.8.6
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.13.4
+    Checking ratatui-markdown v0.3.6
+    Checking bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+    Checking rmcp v3.3.0
+    Checking opentelemetry-http v0.32.0
+    Checking axoasset v2.0.1
+    Checking opentelemetry-otlp v0.32.0
+    Checking axoupdater v0.10.0
+    Checking sqlx-mysql v0.8.6
+    Checking sqlx-postgres v0.8.6
+    Checking sqlx-sqlite v0.8.6
+    Checking sqlx v0.8.6
+    Checking sea-query-binder v0.7.0
+    Checking sea-orm v1.1.20
+    Checking sea-schema v0.16.2
+    Checking bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Checking sea-orm-migration v1.1.20
+    Checking agent-client-protocol v3.0.0
+    Checking bitrouter-tui v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-tui)
+    Checking agent-client-protocol-conductor v3.0.0
+    Checking bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Checking bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+error[E0382]: borrow of moved value: `epoch`
+    --> apps/bitrouter/src/goal_runtime/native.rs:251:21
+     |
+ 186 |         let epoch = self.threads.capabilities().server_instance_id;
+     |             ----- move occurs because `epoch` has type `std::string::String`, which does not implement the `Copy` trait
+...
+ 222 |                     server_instance_id: epoch,
+     |                                         ----- value moved here
+...
+ 251 |                     &epoch, &caller, &source, &turn_key(&execution.id),
+     |                     ^^^^^^ value borrowed here after move
+     |
+     = note: borrow occurs due to deref coercion to `str`
+note: deref defined here
+    --> /Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/string.rs:2832:5
+     |
+2832 |     type Target = str;
+     |     ^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `bitrouter` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `bitrouter` (lib test) due to 1 previous error

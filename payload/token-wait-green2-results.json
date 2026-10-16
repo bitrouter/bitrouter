@@ -1,0 +1,91 @@
+{
+  "source": "token-wait-green2-source.json",
+  "scope": "Native worker quote contention, unknown-cost holds, SDK admission cancellation with zero executor polls, and writer compatibility; focused first integration run",
+  "startedAt": "2026-10-16T15:23:55.506Z",
+  "runs": [
+    {
+      "name": "budget",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ],
+      "log": "token-wait-green2-budget.log",
+      "startedAt": "2026-10-16T15:23:55.506Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:25:09.744Z",
+      "summaries": [
+        "     Summary [   0.260s] 2 tests run: 2 passed, 1829 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "sdk-admission",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-sdk",
+        "--all-features",
+        "-E",
+        "test(app_preserves_budget_quotes_for_plan_and_attempt_admission) | test(cancelled_or_refused_attempt_admission_reports_no_dispatch_without_polling_executor)"
+      ],
+      "log": "token-wait-green2-sdk-admission.log",
+      "startedAt": "2026-10-16T15:25:09.745Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:25:33.597Z",
+      "summaries": [
+        "     Summary [   0.025s] 2 tests run: 2 passed, 768 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "token-wait-green2-clippy.log",
+      "startedAt": "2026-10-16T15:25:33.598Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:26:28.647Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "token-wait-green2-fmt.log",
+      "startedAt": "2026-10-16T15:26:28.647Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:26:48.698Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T15:26:48.818Z",
+  "changed": [],
+  "passed": true
+}

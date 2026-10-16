@@ -1,0 +1,14 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.32s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 11a1b996-a483-4ad7-a08a-5fb73a3c0cb9 with nextest profile: default
+    Starting 1 test across 1 binary (1837 tests skipped)
+        PASS [   0.021s] (1/1) bitrouter supervisor::tests::stopped_history_is_hash_bound_and_cannot_cross_run_or_live_state
+────────────
+     Summary [   0.027s] 1 test run: 1 passed, 1837 skipped

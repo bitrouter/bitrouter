@@ -1,0 +1,57 @@
+{
+  "source": "native-cold-follow5-source.json",
+  "scope": "Same frozen source as green4: shared native recovery/generation regressions and five repeated controlled Goal checkpoint matrices",
+  "startedAt": "2026-10-16T15:00:19.811Z",
+  "runs": [
+    {
+      "name": "native-recovery-generation",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::recovery) | test(service::tests::generation) | test(agent::tests::native)"
+      ],
+      "log": "native-cold-follow5-native-recovery-generation.log",
+      "startedAt": "2026-10-16T15:00:19.811Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:03:14.565Z",
+      "summaries": [
+        "     Summary [ 174.374s] 43 tests run: 43 passed (1 slow), 589 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "matrix-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint)"
+      ],
+      "log": "native-cold-follow5-matrix-stress.log",
+      "startedAt": "2026-10-16T15:03:14.565Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:03:38.883Z",
+      "summaries": [
+        "     Summary [  23.788s] 5/5 stress run iterations: 5 passed"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T15:03:38.943Z",
+  "changed": [],
+  "passed": true
+}

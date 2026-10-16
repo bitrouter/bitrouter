@@ -1,0 +1,33 @@
+{
+  "source": "mcp-binding-red1-source.json",
+  "scope": "Regression for selected MCP configuration drift after frozen input but before native/ACP common admission; expected failure before hash revalidation",
+  "startedAt": "2026-10-16T12:18:33.562Z",
+  "runs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(pending_native_and_acp_dispatch_refuses_changed_selected_mcp)"
+      ],
+      "log": "mcp-binding-red1-regression.log",
+      "startedAt": "2026-10-16T12:18:33.562Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:19:28.579Z",
+      "summaries": [
+        "     Summary [   0.401s] 1 test run: 0 passed, 1 failed, 1826 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T12:19:28.788Z",
+  "changed": [],
+  "passed": false
+}

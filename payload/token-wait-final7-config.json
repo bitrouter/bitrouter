@@ -1,0 +1,70 @@
+{
+  "id": "token-wait-final7",
+  "scope": "Native worker quote wait source after exact running-attempt recovery assertions, deterministic first-initialize failure and synchronized PTY admission label. Preserve previous failures. Full refactor and live gates remain open.",
+  "jobs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope) | test(frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_once) | test(quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion) | test(undispatched_admission_and_resource_wait_never_claim_a_serving_model) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ]
+    },
+    {
+      "name": "repair-boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "-E",
+        "test(known_check_failure_repairs_with_actual_evidence_and_same_requirements) | test(known_review_failure) | test(active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution) | test(evolution_api_restore_reviews_current_identity_and_retains_publication)"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

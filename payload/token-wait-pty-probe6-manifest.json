@@ -1,0 +1,40 @@
+{
+  "files": {
+    "token-wait-pty-probe6/fixtures/initialize-then-eof/capture.ndjson": {
+      "sha256": "c47276749d9fb94cd449a1592f97713d1e74b04fa7c3684a64bcedb2b8f6b80c",
+      "bytes": 102
+    },
+    "token-wait-pty-probe6/fixtures/initialize-then-eof/capture.startup-74152.json": {
+      "sha256": "387cbd0bdb3bbde3649460ec203b0e8ab1cf39f059db8a5540f376877b02c722",
+      "bytes": 130
+    },
+    "token-wait-pty-probe6/fixtures/initialize-then-eof/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "token-wait-pty-probe6/fixtures/initialize-then-eof/stdout.log": {
+      "sha256": "4af864bd7d38590e546512615284457da2095b70f6b88ca919f06cbe2048af97",
+      "bytes": 128
+    },
+    "token-wait-pty-probe6/fixtures/missing-control-parent/capture.startup-74153.json": {
+      "sha256": "fc0fc44928c1fa50603c866be2dc446d006eb41e944e2520eb3213d812622e9b",
+      "bytes": 160
+    },
+    "token-wait-pty-probe6/fixtures/missing-control-parent/stderr.log": {
+      "sha256": "4a4d3759cbff626df0fa07f9349b9a7de58ccfaa96fbbffbbffc939d55a4d5c8",
+      "bytes": 76
+    },
+    "token-wait-pty-probe6/fixtures/missing-control-parent/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "token-wait-pty-probe6/results.json": {
+      "sha256": "bd7ec7bdd0ced085e3ea62c7ececaca52a7eeca00a8fc6da6f08f356dc4fe6f3",
+      "bytes": 1150
+    },
+    "token-wait-pty-probe6/runner.mjs": {
+      "sha256": "700b460bd594d348537dc2bb7216ef9e66c66da5ee97ff9040b017be8fdabbb6",
+      "bytes": 3795
+    }
+  }
+}

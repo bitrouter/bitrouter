@@ -1,0 +1,93 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.30s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 64973242-6de7-415b-be28-3b57aff501fb with nextest profile: default
+    Starting 1 test across 1 binary (1829 tests skipped)
+────────────
+ Stress test iteration 1/20 (00:00:00 elapsed so far, 20 iterations remaining)
+        PASS [   0.581s] [ 1/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.586s] iteration 1/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 2/20 (00:00:00 elapsed so far, 19 iterations remaining)
+        PASS [   0.287s] [ 2/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.292s] iteration 2/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 3/20 (00:00:00 elapsed so far, 18 iterations remaining)
+        PASS [   0.295s] [ 3/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.301s] iteration 3/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 4/20 (00:00:01 elapsed so far, 17 iterations remaining)
+        PASS [   0.295s] [ 4/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.300s] iteration 4/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 5/20 (00:00:01 elapsed so far, 16 iterations remaining)
+        PASS [   0.293s] [ 5/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.298s] iteration 5/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 6/20 (00:00:01 elapsed so far, 15 iterations remaining)
+        PASS [   0.292s] [ 6/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.297s] iteration 6/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 7/20 (00:00:02 elapsed so far, 14 iterations remaining)
+        PASS [   0.294s] [ 7/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.299s] iteration 7/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 8/20 (00:00:02 elapsed so far, 13 iterations remaining)
+        PASS [   0.293s] [ 8/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.298s] iteration 8/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 9/20 (00:00:02 elapsed so far, 12 iterations remaining)
+        PASS [   0.298s] [ 9/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.304s] iteration 9/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 10/20 (00:00:02 elapsed so far, 11 iterations remaining)
+        PASS [   0.294s] [10/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.299s] iteration 10/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 11/20 (00:00:03 elapsed so far, 10 iterations remaining)
+        PASS [   0.294s] [11/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.299s] iteration 11/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 12/20 (00:00:03 elapsed so far, 9 iterations remaining)
+        PASS [   0.298s] [12/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.303s] iteration 12/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 13/20 (00:00:03 elapsed so far, 8 iterations remaining)
+        PASS [   0.298s] [13/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.303s] iteration 13/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 14/20 (00:00:04 elapsed so far, 7 iterations remaining)
+        PASS [   0.305s] [14/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.310s] iteration 14/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 15/20 (00:00:04 elapsed so far, 6 iterations remaining)
+        PASS [   0.332s] [15/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.337s] iteration 15/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 16/20 (00:00:04 elapsed so far, 5 iterations remaining)
+        PASS [   0.292s] [16/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.297s] iteration 16/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 17/20 (00:00:05 elapsed so far, 4 iterations remaining)
+        PASS [   0.296s] [17/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.301s] iteration 17/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 18/20 (00:00:05 elapsed so far, 3 iterations remaining)
+        PASS [   0.336s] [18/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.342s] iteration 18/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 19/20 (00:00:05 elapsed so far, 2 iterations remaining)
+        PASS [   0.296s] [19/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.301s] iteration 19/20: 1 test run: 1 passed, 1829 skipped
+────────────
+ Stress test iteration 20/20 (00:00:06 elapsed so far, 1 iteration remaining)
+        PASS [   0.296s] [20/20] (1/1) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+ Stress test [   0.301s] iteration 20/20: 1 test run: 1 passed, 1829 skipped
+────────────
+     Summary [   6.370s] 20/20 stress run iterations: 20 passed

@@ -1,0 +1,18 @@
+{
+  "id": "dispatch-rejection-red4",
+  "scope": "Expected regression: an unbound Unknown dispatch with no Turn receipt cannot re-prepare",
+  "jobs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "-E",
+        "test(refused_dispatch_without_a_turn)"
+      ]
+    }
+  ]
+}

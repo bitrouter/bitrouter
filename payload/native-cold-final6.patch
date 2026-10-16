@@ -1,0 +1,389 @@
+diff --git a/.agents/plugins/marketplace.json b/.agents/plugins/marketplace.json
+index 0748efde..983a8cbd 100644
+--- a/.agents/plugins/marketplace.json
++++ b/.agents/plugins/marketplace.json
+@@ -4,7 +4,7 @@
+   "plugins": [
+     {
+       "name": "bitrouter",
+-      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
++      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and remaining ACP recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
+       "source": "."
+     }
+   ]
+diff --git a/.claude-plugin/plugin.json b/.claude-plugin/plugin.json
+index 02a1ed54..961dc2a6 100644
+--- a/.claude-plugin/plugin.json
++++ b/.claude-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and remaining ACP recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
+   "author": {
+     "name": "BitRouterAI"
+   },
+diff --git a/.codex-plugin/plugin.json b/.codex-plugin/plugin.json
+index a9f008f3..e96731ba 100644
+--- a/.codex-plugin/plugin.json
++++ b/.codex-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and remaining ACP recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v7 does not replay older outboxes.",
+   "homepage": "https://bitrouter.ai",
+   "repository": "https://github.com/bitrouter/bitrouter",
+   "license": "Apache-2.0",
+diff --git a/apps/bitrouter/src/goal_runtime.rs b/apps/bitrouter/src/goal_runtime.rs
+index 03d58e04..5d1d1d2c 100644
+--- a/apps/bitrouter/src/goal_runtime.rs
++++ b/apps/bitrouter/src/goal_runtime.rs
+@@ -1,4 +1,4 @@
+-//! One daemon-owned Goal coordinator over the existing ACP supervisor.
++//! Goal coordination over shared ThreadService execution and ACP transport.
+ 
+ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+ use std::path::{Path, PathBuf};
+diff --git a/apps/bitrouter/src/goal_runtime/native.rs b/apps/bitrouter/src/goal_runtime/native.rs
+index 85f7cd02..bfa97dbd 100644
+--- a/apps/bitrouter/src/goal_runtime/native.rs
++++ b/apps/bitrouter/src/goal_runtime/native.rs
+@@ -338,11 +338,58 @@ impl Coordinator {
+             thread_id: binding.thread_id.clone(),
+             server_instance_id: epoch,
+         };
+-        let turn = self
++        let mut turn = self
+             .threads
+             .read_stored_turn(&target, &caller, &binding.turn_id)
+             .await?;
+         let external = task.execution_harness(execution).is_some();
++        if !external && turn.status == TurnStatus::RecoveryRequired {
++            let source = source(goal, task, execution)?;
++            if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
++                let control = model_control::ModelControl::for_worker(self, goal, source.clone());
++                match self
++                    .threads
++                    .resume_goal_worker_turn(
++                        &target,
++                        &caller,
++                        &source,
++                        &binding.turn_id,
++                        &turn_key(&execution.id),
++                        control,
++                    )
++                    .await
++                {
++                    Ok(receipt) => {
++                        anyhow::ensure!(
++                            receipt.thread_id == binding.thread_id
++                                && receipt.turn_id == binding.turn_id,
++                            "native continuation changed its original execution identity"
++                        );
++                        turn = self
++                            .threads
++                            .read_stored_turn(&target, &caller, &binding.turn_id)
++                            .await?;
++                    }
++                    Err(error) => {
++                        return self
++                            .change(
++                                goal,
++                                Change::ObserveExecution {
++                                    execution_id: execution.id.clone(),
++                                    observation: Observation::Unknown {
++                                        run_id: None,
++                                        reason: format!(
++                                            "Native checkpoint continuation was not admitted: {}",
++                                            bounded_error(&anyhow::Error::from(error))
++                                        ),
++                                    },
++                                },
++                            )
++                            .await;
++                    }
++                }
++            }
++        }
+         if let Some(session) = &turn.acp {
+             anyhow::ensure!(
+                 task.execution_harness(execution) == Some(session.agent_id.as_str()),
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index d9a47f73..2644ef80 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -12,6 +12,9 @@ use bitrouter_orchestrator::thread::{
+ };
+ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+ 
++#[path = "native_recovery.rs"]
++mod native_recovery;
++
+ async fn coordinator(home: &Path, database_url: &str) -> Result<(Coordinator, DatabaseConnection)> {
+     coordinator_with_config(home, database_url, "").await
+ }
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery.rs b/crates/bitrouter-orchestrator/src/service/recovery.rs
+index 4e3ef5c2..24d695a5 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery.rs
+@@ -172,6 +172,14 @@ impl ThreadService {
+         {
+             return self.read_thread_view(target, caller);
+         }
++        // A live Goal gate may have been revoked while this restoration waited
++        // for admission. Existing recovery receipts above remain readable.
++        if let Some(control) = &control {
++            control
++                .authorize()
++                .await
++                .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
++        }
+         let (report, mut snapshot, mut messages, fence, continuation) = {
+             let state = self.lock_state();
+             let thread = state
+diff --git a/crates/bitrouter-orchestrator/src/service/worker.rs b/crates/bitrouter-orchestrator/src/service/worker.rs
+index d7f99f01..7aa79dfa 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker.rs
+@@ -141,7 +141,22 @@ impl ThreadService {
+                 "worker source does not match this Thread",
+             ));
+         }
++        let managed = Managed::Native { source, control };
+         if let Some(recovery) = view.recovery {
++            // Reject a changed retry body before recovery can dispatch the
++            // original continuation. Reconciliation is a separate entrypoint.
++            let scope = super::admission::key_scope(
++                caller,
++                Some(&target.thread_id),
++                managed.operation(),
++                &request.idempotency_key,
++            )?;
++            self.accepted_key(
++                &scope,
++                &request.idempotency_key,
++                &managed.fingerprint(&request.prompt)?,
++            )
++            .await?;
+             self.recover_thread_controlled(
+                 target,
+                 caller,
+@@ -153,18 +168,83 @@ impl ThreadService {
+                         request.idempotency_key, recovery.source_cursor
+                     ),
+                 },
+-                Some(control.clone()),
++                Some(managed.control().clone()),
++            )
++            .await?;
++        }
++        self.admit_turn(target, caller, request, true, true, Some(managed))
++            .await
++    }
++
++    /// Resume one already accepted native Turn from its inspected checkpoint.
++    /// Its durable input is authoritative; no prompt is resubmitted and this
++    /// entrypoint cannot create a Thread or accept another Turn.
++    pub async fn resume_goal_worker_turn(
++        &self,
++        target: &ThreadTarget,
++        caller: &CallerContext,
++        source: &GoalWork,
++        turn_id: &str,
++        key: &str,
++        control: Arc<dyn WorkControl>,
++    ) -> Result<TurnReceipt, ServiceError> {
++        control
++            .authorize()
++            .await
++            .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
++        let view = self.load_thread(target, caller).await?;
++        view.config.native()?;
++        if view.thread.goal_work.as_ref() != Some(source) {
++            return Err(ServiceError::new(
++                ErrorCode::Unauthorized,
++                "native continuation belongs to another Goal work source",
++            ));
++        }
++        let receipt = self
++            .find_goal_worker_turn(target, caller, key)
++            .await?
++            .ok_or_else(|| {
++                ServiceError::new(
++                    ErrorCode::UnknownTurn,
++                    "original worker action was not accepted",
++                )
++            })?;
++        if receipt.turn_id != turn_id {
++            return Err(ServiceError::new(
++                ErrorCode::Conflict,
++                "original worker action belongs to another Turn",
++            ));
++        }
++        if let Some(recovery) = view.recovery {
++            if recovery
++                .turn
++                .as_ref()
++                .is_some_and(|turn| turn.turn_id != turn_id)
++            {
++                return Err(ServiceError::new(
++                    ErrorCode::Conflict,
++                    "inspected continuation belongs to another Turn",
++                ));
++            }
++            self.recover_thread_controlled(
++                target,
++                caller,
++                crate::thread::ThreadRecoveryRequest {
++                    source_server_instance_id: recovery.source_server_instance_id,
++                    source_cursor: recovery.source_cursor,
++                    idempotency_key: format!("{key}-restore-{}", recovery.source_cursor),
++                },
++                Some(control),
+             )
+             .await?;
+         }
+-        self.admit_turn(
+-            target,
+-            caller,
+-            request,
+-            true,
+-            true,
+-            Some(Managed::Native { source, control }),
+-        )
+-        .await
++        self.find_goal_worker_turn(target, caller, key)
++            .await?
++            .ok_or_else(|| {
++                ServiceError::new(
++                    ErrorCode::StorageUnavailable,
++                    "original worker receipt disappeared after recovery",
++                )
++            })
+     }
+ }
+diff --git a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+index c45245b2..5eff45aa 100644
+--- a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
++++ b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+@@ -316,7 +316,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
+ | --- | --- |
+ | S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
+ | S1 | In progress: owner/input association, model/worker Turn links, stable binding operations and original-key lookup implemented. New ACP dispatches with no accepted Thread stay on common admission; original supervisor starts keep reconciliation priority. Managed refusals now reconcile absence under the shared admission lock, preserve intent, and permit bounded new preparation. Full interruption/compatibility proof remains. |
+-| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
++| S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and bounded capacity waiting are connected. Current native Goal work can resume a safe accepted checkpoint through existing recovery without replacing its Thread/Turn or resetting accounting. Controlled SQLite images qualify this bridge; abrupt-owner takeover is blocked. Worker quote waiting, remaining recovery coverage and full wait/effect projection remain pending. |
+ | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
+ | S4 | In progress: generation/native SDK reports, prepared-input/router facts and actual content receipt intervals link to original work/Thread/Turn sources. ACP public session/route limits remain explicit. Complete historical qualification and final evidence/UI closure remain. |
+ | S5 | In progress: native and managed ACP dependencies/review consume common Turn facts. The native three-node fixture proves actual overlap, isolated conflicting local writes and checked dependency consumption through verified completion. Full coordinated/recovery/live closure remains. |
+@@ -344,7 +344,7 @@ and green checks for the pre-refactor MVP do not prove the new architecture.
+ | A13 | Local native three-node acceptance now proves same-clock observed overlap, isolated conflicting scratch writes and checked dependency join. Preserve that evidence through the final source and live qualification; do not substitute admission or wall-clock timestamps. |
+ | A14 | Confirmed same-session restore retains Thread; new session/harness gets new Thread. |
+ | A15 | Replacement waits for confirmed stop/effect boundary. |
+-| A16 | Original-key lookup, lost-link recovery and source-revoked no-admission reconciliation are qualified locally, including selected-MCP and saved-input integrity refusals. Accepted unknown effects remain blocked. Preserve these through remaining recovery boundaries and final source qualification. |
++| A16 | Original-key lookup, lost-link recovery and source-revoked no-admission reconciliation are qualified locally, including selected-MCP and saved-input integrity refusals. Safe accepted native checkpoint continuation is connected; changed retry bodies and late source revocation are checked before restoration. Accepted unknown effects remain blocked. Preserve these through remaining recovery boundaries and final source qualification. |
+ | A17 | Input/control/modification phase evidence with queries remaining effect-free. |
+ | A18 | Negotiated ACP limitations, missing history and unknown private model/context shown accurately. |
+ | A19 | Permissions/revocation/root budget/accounting and unknown-effect safeguards across the shared runner. |
+@@ -1143,3 +1143,46 @@ and its checksum manifest in the independent local archive.
+ The full S0–S6 / A01–A22 objective remains active. Final source regression,
+ remaining recovery/resource gates, live qualification, independent archive
+ publication and the single update to PR #981 are still required.
++
++## Native Goal checkpoint continuation
++
++The Goal driver now asks the existing ThreadService recovery engine to resume
++an already accepted native Turn when its Goal/work/control source remains current.
++The original admission key, Thread/Turn and durable input remain authoritative;
++no new Thread, Turn, prompt submission or policy override is created. A changed
++retry body is refused before ordinary start can restore a checkpoint, and
++controlled recovery rechecks live authorization under its admission lock.
++
++```mermaid
++flowchart LR
++    G[Current Goal work and run intent] --> R[Shared ThreadService recovery]
++    E[Original admission and checkpoint] --> R
++    P[Stopped owner and effect / budget evidence] --> R
++    R -->|all checks pass| N[Continue original native Turn]
++    R -->|proof missing or source revoked| B[Keep recovery blocked]
++```
++
++The strong local proof uses consistent SQLite images captured at a durable
++native commit acknowledgement boundary. The source actually shuts down and
++joins before its same-epoch/generation stopped proof is affirmed in that image.
++This is controlled checkpoint-image continuation, not abrupt-process retirement,
++an automatic import of private ACP state, or a claim that every ordinary daemon
++restart leaves an active resumable Turn. Legacy unknown attempts stay fenced.
++
++Five cases cover a safe settled read, a live old owner, a pending read result,
++an explicit pause, and revocation after the entry authorization check. The safe
++case retains the original read result after the file changes, records one tool
++intent, and advances cumulative Goal provider attempts from one to two. A
++different body on the original key cannot trigger restoration. The negative
++cases admit no follow-up provider call. These are actual SDK/HTTP and filesystem
++operations with fixture model responses, not live-model or external-harness proof.
++
++The final source passes all **82 Goal runtime tests**, **10 shared worker
++tests**, strict workspace/all-target/all-feature Clippy and formatting, plus
++**43 existing native recovery/generation tests**. Five repeated matrices also
++pass; these runs report no leaks or source drift. They do not establish the
++cause or a fix for earlier output-handle reports. The initial regression and
++two fixture-setup/assertion failures remain archived, including three independently
++verified SQLite/filesystem fixture images. Raw logs, exact source tars and the
++checksum index remain outside the feature PR in `NATIVE_COLD_RECOVERY_INDEX.md`.
++The whole refactor, live gates and final source/hosted-CI verification remain open.
+diff --git a/docs/DEVELOPMENT.md b/docs/DEVELOPMENT.md
+index dfdb812b..9745a679 100644
+--- a/docs/DEVELOPMENT.md
++++ b/docs/DEVELOPMENT.md
+@@ -50,8 +50,11 @@ through its shared admission, runner, writer fencing and shutdown authority,
+ retaining the existing Goal model-control accounting. Native Goal workers now have an app dispatch path and explicit Thread/Turn
+ links. Native permission replies use the shared approval transaction; stopped
+ local effects use original-history/workspace reconciliation. Shared generation
+-admission and native worker admission share bounded capacity waiting; active cold recovery and worker quote
+-waiting still need closure. Managed ACP uses the same acceptance/control owner;
++admission and native worker admission share bounded capacity waiting. Current native Goal
++sources can request continuation of an accepted checkpoint through the same recovery
++engine, retaining Thread/Turn identity and recorded budgets. Owner/effect uncertainty
++remains blocked; confirmed ACP continuation and worker quote waiting still need closure.
++Managed ACP uses the same acceptance/control owner;
+ the supervisor supplies protocol/process facts. Historical unbound runs retain
+ their reconciliation path. Worker changes version the existing work and create
+ a new Thread after old stop/effects are confirmed; known local results are
+diff --git a/skills/bitrouter/SKILL.md b/skills/bitrouter/SKILL.md
+index 7a8c0a6b..200d3666 100644
+--- a/skills/bitrouter/SKILL.md
++++ b/skills/bitrouter/SKILL.md
+@@ -82,7 +82,7 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
+ 
+ ### 5. Choose the work interface
+ 
+-BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. See `references/cli.md` for bounded model-admission waiting and remaining recovery/budget-wait limits.
++BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. Safe native checkpoints retain their original Thread/Turn after current-source, owner, effect and budget checks. See `references/cli.md` for evidence scope, bounded admission waiting and remaining ACP recovery/budget-wait limits.
+ The Goal directory, current Goal and read-only Workflow have separate navigation;
+ viewing never creates work. Enter submits to the current Goal even while workers run.
+ Queries and hypotheses do not modify requirements; accepted changes and actual
+diff --git a/skills/bitrouter/references/cli.md b/skills/bitrouter/references/cli.md
+index 1c84b2fa..3fbb6694 100644
+--- a/skills/bitrouter/references/cli.md
++++ b/skills/bitrouter/references/cli.md
+@@ -386,7 +386,16 @@ Waiting alone accepts no Turn or model call. Foreign OS locks without a known
+ local owner and unresolved effects are refused directly. Native cold receipt lookup restores
+ only the exact managed Goal/attempt directory registration; outside paths and
+ symlink escapes fail, and existing revoked profiles remain revoked.
+-Active cold recovery and worker token-quote waiting remain incomplete. Do not treat
++For current Goal/work/control sources, the coordinator can request continuation
++of an already accepted native checkpoint through ThreadService. Original
++Thread/Turn, input and budgets are retained. The runtime requires stopped-owner,
++effect and checkpoint evidence and rechecks authorization before restoration.
++Unconfirmed old owners, pending tool results and paused/revoked sources do not
++resume. Ordinary start rejects a changed body on the original key before
++restoration; a readonly query itself never requests continuation. Local proof
++uses controlled SQLite checkpoint images after actual source shutdown/join;
++it does not qualify forced crash takeover or private ACP continuation.
++Confirmed ACP continuation and worker token-quote waiting remain incomplete. Do not treat
+ controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
+ remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
+ Both `bro` and `bro code` open Goals; reading the directory does not create or

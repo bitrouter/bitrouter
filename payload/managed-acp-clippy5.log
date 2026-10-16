@@ -1,0 +1,28 @@
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error: this `if` statement can be collapsed
+   --> apps/bitrouter/src/goal_runtime/permissions.rs:509:9
+    |
+509 | /         if let Some((target, answer)) = self
+510 | |             .managed_permission_answer(goal, decision, operation_id, option_id)
+511 | |             .await?
+...   |
+521 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+511 ~             .await?
+512 ~             && self
+513 |                 .threads
+...
+518 |                 return Ok(true);
+519 ~             }
+    |
+
+error: could not compile `bitrouter` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `bitrouter` (lib test) due to 1 previous error

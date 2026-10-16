@@ -1,0 +1,60 @@
+{
+  "id": "token-wait-final4",
+  "scope": "Frozen reservation-wait source plus explicit two-branch startup barrier in the missing-tool-result Rust fixture; retain final3 failed full suite and its independently verified 116-file image. Local source qualification, not the complete refactor/live/CI exit.",
+  "jobs": [
+    {
+      "name": "worker-switch-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause)"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+
+running 1 test
+test goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen ... Error: workspace permission profile is no longer granted
+FAILED
+
+failures:
+
+failures:
+    goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1815 filtered out; finished in 0.30s
+

@@ -1,0 +1,21 @@
+{
+  "source": "managed-acp-source5.json",
+  "args": [
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--all-features",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "startedAt": "2026-10-16T09:08:18.891Z",
+  "log": "managed-acp-clippy5.log",
+  "priorRun": "source3 ran 74 tests: 53 passed and 21 stack overflows. Source4 boxes measured startup and receipt-query boundaries; stack limits unchanged.",
+  "code": 101,
+  "signal": null,
+  "finishedAt": "2026-10-16T09:09:04.819Z",
+  "changed": [],
+  "summary": null,
+  "passed": false
+}

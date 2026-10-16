@@ -1,0 +1,38 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.18s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 67dc1f11-bc16-4dbf-8fee-19152c25ddb3 with nextest profile: default
+    Starting 2 tests across 1 binary (1823 tests skipped)
+────────────
+ Stress test iteration 1/5 (00:00:00 elapsed so far, 5 iterations remaining)
+        PASS [   0.053s] [1/5] (1/2) bitrouter goal_runtime::model_control::tests::received_content_survives_lost_outcome_reply_and_replay_after_pause
+        PASS [  24.250s] [1/5] (2/2) bitrouter goal_runtime::tests::native_parallel::native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies
+ Stress test [  24.255s] iteration 1/5: 2 tests run: 2 passed, 1823 skipped
+────────────
+ Stress test iteration 2/5 (00:00:24 elapsed so far, 4 iterations remaining)
+        PASS [   0.049s] [2/5] (1/2) bitrouter goal_runtime::model_control::tests::received_content_survives_lost_outcome_reply_and_replay_after_pause
+        PASS [  23.769s] [2/5] (2/2) bitrouter goal_runtime::tests::native_parallel::native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies
+ Stress test [  23.774s] iteration 2/5: 2 tests run: 2 passed, 1823 skipped
+────────────
+ Stress test iteration 3/5 (00:00:48 elapsed so far, 3 iterations remaining)
+        PASS [   0.048s] [3/5] (1/2) bitrouter goal_runtime::model_control::tests::received_content_survives_lost_outcome_reply_and_replay_after_pause
+        PASS [  23.768s] [3/5] (2/2) bitrouter goal_runtime::tests::native_parallel::native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies
+ Stress test [  23.773s] iteration 3/5: 2 tests run: 2 passed, 1823 skipped
+────────────
+ Stress test iteration 4/5 (00:01:11 elapsed so far, 2 iterations remaining)
+        PASS [   0.054s] [4/5] (1/2) bitrouter goal_runtime::model_control::tests::received_content_survives_lost_outcome_reply_and_replay_after_pause
+        PASS [  23.769s] [4/5] (2/2) bitrouter goal_runtime::tests::native_parallel::native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies
+ Stress test [  23.775s] iteration 4/5: 2 tests run: 2 passed, 1823 skipped
+────────────
+ Stress test iteration 5/5 (00:01:35 elapsed so far, 1 iteration remaining)
+        PASS [   0.048s] [5/5] (1/2) bitrouter goal_runtime::model_control::tests::received_content_survives_lost_outcome_reply_and_replay_after_pause
+        PASS [  24.268s] [5/5] (2/2) bitrouter goal_runtime::tests::native_parallel::native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies
+ Stress test [  24.274s] iteration 5/5: 2 tests run: 2 passed, 1823 skipped
+────────────
+     Summary [ 119.851s] 5/5 stress run iterations: 5 passed

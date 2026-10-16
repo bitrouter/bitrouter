@@ -1,0 +1,35 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 56.71s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID fab6bd02-f0bd-4670-9aa2-67813de11241 with nextest profile: default
+    Starting 2 tests across 2 binaries (1914 tests skipped)
+        FAIL [   8.804s] (1/2) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1822 filtered out; finished in 8.79s
+
+  stderr ───
+    Retained failed Goal fixture: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp5NxJti
+    Error: internal error: connecting to database sqlite:///var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp5NxJti/controls/native-evidence-copy.sqlite?mode=ro: Connection Error: error returned from database: (code: 14) unable to open database file
+
+        PASS [  10.893s] (2/2) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+────────────
+     Summary [  10.904s] 2 tests run: 1 passed, 1 failed, 1914 skipped
+        FAIL [   8.804s] (1/2) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+error: test run failed

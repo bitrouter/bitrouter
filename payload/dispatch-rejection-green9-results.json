@@ -1,0 +1,116 @@
+{
+  "source": "dispatch-rejection-green9-source.json",
+  "scope": "Post-completion-fix qualification: all Goal domain tests, all Goal runtime fixtures, strict workspace lint/format and workspace doctests. Earlier full nextest belongs to source green6",
+  "startedAt": "2026-10-16T13:50:32.205Z",
+  "runs": [
+    {
+      "name": "goal-domain",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goals"
+      ],
+      "log": "dispatch-rejection-green9-goal-domain.log",
+      "startedAt": "2026-10-16T13:50:32.205Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:51:24.399Z",
+      "summaries": [
+        "     Summary [   1.013s] 94 tests run: 94 passed, 0 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::)"
+      ],
+      "log": "dispatch-rejection-green9-goal-runtime.log",
+      "startedAt": "2026-10-16T13:51:24.399Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:53:06.888Z",
+      "summaries": [
+        "     Summary [  47.044s] 81 tests run: 81 passed, 1749 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "dispatch-rejection-green9-clippy.log",
+      "startedAt": "2026-10-16T13:53:06.889Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:53:55.152Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "dispatch-rejection-green9-fmt.log",
+      "startedAt": "2026-10-16T13:53:55.152Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:54:15.272Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "dispatch-rejection-green9-rustdoc.log",
+      "startedAt": "2026-10-16T13:54:15.272Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:55:07.227Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T13:55:07.341Z",
+  "changed": [],
+  "passed": true
+}

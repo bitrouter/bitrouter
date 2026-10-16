@@ -1,0 +1,32 @@
+{
+  "source": "mcp-binding-focus2-source.json",
+  "scope": "Frozen selected MCP descriptors before native/ACP admission; original accepted receipt lookup remains valid after later config changes; partial S4 resource binding proof",
+  "startedAt": "2026-10-16T12:21:00.329Z",
+  "runs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime::tests::threads) | test(goal_runtime::tests::start_recovery)"
+      ],
+      "log": "mcp-binding-focus2-boundaries.log",
+      "startedAt": "2026-10-16T12:21:00.329Z",
+      "status": "failed",
+      "code": 101,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:21:29.736Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T12:21:29.788Z",
+  "changed": [],
+  "passed": false
+}

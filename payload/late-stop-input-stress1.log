@@ -1,0 +1,44 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (test "daemon") generated 1 warning
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 0.38s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 96392ea7-6a06-4146-b4fd-fdaf6458ae9e with nextest profile: default
+    Starting 2 tests across 71 binaries (4744 tests skipped)
+────────────
+ Stress test iteration 1/5 (00:00:00 elapsed so far, 5 iterations remaining)
+        PASS [   3.973s] [1/5] (1/2) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        PASS [  10.516s] [1/5] (2/2) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+ Stress test [  10.528s] iteration 1/5: 2 tests run: 2 passed, 4744 skipped
+────────────
+ Stress test iteration 2/5 (00:00:10 elapsed so far, 4 iterations remaining)
+        PASS [   0.276s] [2/5] (1/2) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        PASS [   6.814s] [2/5] (2/2) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+ Stress test [   6.829s] iteration 2/5: 2 tests run: 2 passed, 4744 skipped
+────────────
+ Stress test iteration 3/5 (00:00:17 elapsed so far, 3 iterations remaining)
+        PASS [   0.270s] [3/5] (1/2) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        PASS [   6.747s] [3/5] (2/2) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+ Stress test [   6.763s] iteration 3/5: 2 tests run: 2 passed, 4744 skipped
+────────────
+ Stress test iteration 4/5 (00:00:24 elapsed so far, 2 iterations remaining)
+        PASS [   0.277s] [4/5] (1/2) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        PASS [   6.759s] [4/5] (2/2) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+ Stress test [   6.775s] iteration 4/5: 2 tests run: 2 passed, 4744 skipped
+────────────
+ Stress test iteration 5/5 (00:00:30 elapsed so far, 1 iteration remaining)
+        PASS [   0.275s] [5/5] (1/2) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        PASS [   6.798s] [5/5] (2/2) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+ Stress test [   6.814s] iteration 5/5: 2 tests run: 2 passed, 4744 skipped
+────────────
+     Summary [  37.709s] 5/5 stress run iterations: 5 passed

@@ -1,0 +1,94 @@
+{
+  "date": "2026-10-16",
+  "workspace": "/Users/kelsen/.codex/worktrees/d91b/bitrouter",
+  "baselineHead": "fe9df6f8157945d3559789926326a7effb468db1",
+  "results": {
+    "nextest": {
+      "passed": 4720,
+      "skipped": 24,
+      "failed": 0,
+      "timeouts": 0,
+      "seconds": 772.663,
+      "exitCode": 0
+    },
+    "clippy": {
+      "allTargets": true,
+      "allFeatures": true,
+      "warningsDenied": true,
+      "exitCode": 0
+    },
+    "format": {
+      "exitCode": 0
+    },
+    "rustdoc": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "exitCode": 0
+    },
+    "affectedTests": {
+      "passed": 20,
+      "failed": 0,
+      "exitCode": 0
+    }
+  },
+  "limits": [
+    "Pre-reboot temporary raw evidence was cleared by reboot; historical chat observations only.",
+    "Not hosted CI, live provider or real external harness qualification.",
+    "S3-S6 and final acceptance audit remain incomplete."
+  ],
+  "files": {
+    "after-reboot-clippy1.log": {
+      "bytes": 548,
+      "sha256": "3c1a4821f8d31306e1a5dff19302561385ded5f9dd4766f13c1a53cec9e066ec"
+    },
+    "after-reboot-doctests1.log": {
+      "bytes": 2054,
+      "sha256": "c61843da1996969a43e36252a5ef28d27fc5d0053096fc2f78874cc0484b2071"
+    },
+    "after-reboot-fmt1.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "after-reboot-full1-source.json": {
+      "bytes": 235431,
+      "sha256": "e27eff7f628eaf676232d157464c682c52dafab707446ef9095d38b5423b6deb"
+    },
+    "after-reboot-full1.log": {
+      "bytes": 614957,
+      "sha256": "f7b84480018e7659f2d8133654a095e2c06d49b505d47d87b8b40008f9b2ec12"
+    },
+    "after-reboot-list1.json": {
+      "bytes": 242,
+      "sha256": "b398640595b2398063cfcaee9f60247b8c93701c3534b51438435927285200cc"
+    },
+    "after-reboot-list1.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "after-reboot-list1.stdout": {
+      "bytes": 156327,
+      "sha256": "999a27cdb44edf180e6c4ec2ef47e495fc0992ec1a5f64b88470f187f1f9baef"
+    },
+    "after-reboot-source-audit1.json": {
+      "bytes": 507,
+      "sha256": "443412c32b85d1ad21402dbb24ebcb8b2bfd308a31b1af7801fae6cb6706047b"
+    },
+    "capacity-and-reopen-tests1.log": {
+      "bytes": 5210,
+      "sha256": "0c293255d959c0bbf1fb8287e00b35baa221572544ad26ec5d140ef402e0042f"
+    },
+    "capacity-and-reopen-tests2.log": {
+      "bytes": 4097,
+      "sha256": "83be1dda6bca5668f294749d3047d3be69d2ebf00f81f768f8591694d705b65e"
+    },
+    "capacity-source1.json": {
+      "bytes": 235409,
+      "sha256": "7a0fc4fed0274a2de11c2d20b3860db96e4b86ad931329423f089bd25e2844d4"
+    },
+    "native-admission-compiled-repro1.log": {
+      "bytes": 440,
+      "sha256": "e859d1aa795e1c5abedbd65fe3c9c7ad9d4ab7364ff931f3b0fc5d592720cafc"
+    }
+  }
+}

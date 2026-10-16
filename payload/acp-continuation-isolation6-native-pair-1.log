@@ -1,0 +1,21 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (test "extension_host") generated 1 warning
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "daemon") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 0.28s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 8a49c555-6b88-4c95-818e-45d8604705a2 with nextest profile: default
+    Starting 2 tests across 71 binaries (4779 tests skipped)
+        PASS [  16.216s] (1/2) bitrouter goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+        PASS [  27.770s] (2/2) bitrouter goal_runtime::tests::native_parallel::native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies
+────────────
+     Summary [  43.999s] 2 tests run: 2 passed, 4779 skipped

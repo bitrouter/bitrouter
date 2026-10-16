@@ -1,0 +1,152 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning
+warning: `bitrouter` (test "daemon") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 1m 35s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 93717113-d005-4376-be54-030ea503fb66 with nextest profile: default
+    Starting 16 tests across 41 binaries (2995 tests skipped)
+        FAIL [   0.111s] ( 1/16) bitrouter goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1816 filtered out; finished in 0.10s
+
+  stderr ───
+
+    thread 'goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn' (524312) panicked at /Users/kelsen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/mock_server/builder.rs:107:46:
+    Failed to bind an OS port for a mock server.: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.111s] ( 2/16) bitrouter goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1816 filtered out; finished in 0.10s
+
+  stderr ───
+
+    thread 'goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output' (524315) panicked at /Users/kelsen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/mock_server/builder.rs:107:46:
+    Failed to bind an OS port for a mock server.: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.112s] ( 3/16) bitrouter goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1816 filtered out; finished in 0.09s
+
+  stderr ───
+
+    thread 'goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent' (524326) panicked at /Users/kelsen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/mock_server/builder.rs:107:46:
+    Failed to bind an OS port for a mock server.: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.116s] ( 4/16) bitrouter goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1816 filtered out; finished in 0.10s
+
+  stderr ───
+
+    thread 'goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect' (524323) panicked at /Users/kelsen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/mock_server/builder.rs:107:46:
+    Failed to bind an OS port for a mock server.: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.117s] ( 5/16) bitrouter goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1816 filtered out; finished in 0.10s
+
+  stderr ───
+
+    thread 'goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery' (524319) panicked at /Users/kelsen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/mock_server/builder.rs:107:46:
+    Failed to bind an OS port for a mock server.: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.117s] ( 6/16) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1816 filtered out; finished in 0.10s
+
+  stderr ───
+
+    thread 'goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness' (524318) panicked at /Users/kelsen/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/mock_server/builder.rs:107:46:
+    Failed to bind an OS port for a mock server.: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.135s] ( 7/16) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_reuses_its_key_and_rejects_conflicting_input
+        PASS [   0.248s] ( 8/16) bitrouter-orchestrator service::tests::worker::decisions::revoked_native_decision_waits_for_usage_settlement_before_finishing
+        PASS [   0.349s] ( 9/16) bitrouter-orchestrator service::tests::worker::failed_host_outcome_ack_retains_provider_evidence_without_running_its_tools
+        PASS [   0.500s] (10/16) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_bounds_time_and_honors_revocation_and_input_limits
+        PASS [   0.413s] (11/16) bitrouter-orchestrator service::tests::worker::revoked_worker_source_cannot_ask_for_or_launch_configured_verification
+        PASS [   0.508s] (12/16) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention
+        PASS [   0.678s] (13/16) bitrouter-orchestrator service::tests::worker::native_workers_share_one_budget_and_ordinary_rpcs_cannot_bypass_it
+        PASS [   1.018s] (14/16) bitrouter-orchestrator service::tests::worker::decisions::native_decisions_use_shared_admission_and_require_host_outcome_ack
+        PASS [   1.479s] (15/16) bitrouter-orchestrator service::tests::worker::waiting::native_worker_waits_for_known_capacity_and_replays_only_original_admission
+        PASS [   2.720s] (16/16) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_refuses_withdrawn_sources_deadlines_and_unknown_workspace_owners
+────────────
+     Summary [   2.856s] 16 tests run: 10 passed, 6 failed, 2995 skipped
+        FAIL [   0.111s] ( 1/16) bitrouter goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+        FAIL [   0.111s] ( 2/16) bitrouter goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output
+        FAIL [   0.112s] ( 3/16) bitrouter goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent
+        FAIL [   0.116s] ( 4/16) bitrouter goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect
+        FAIL [   0.117s] ( 5/16) bitrouter goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery
+        FAIL [   0.117s] ( 6/16) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+error: test run failed

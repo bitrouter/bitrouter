@@ -1,0 +1,6 @@
+{
+  "phase": "source packaging before jobs",
+  "error": "tar: no files or directories specified",
+  "jobsStarted": 0,
+  "scope": "Old verification runner assumed a dirty checkout. Clean committed source is intact; no registry validation is claimed by this attempt."
+}

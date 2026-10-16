@@ -1,0 +1,94 @@
+{
+  "source": "acp-continuation-green2-source.json",
+  "scope": "Controlled real SQLite pre-prompt image after actual source process/owner shutdown and Rust peer private nonce restore. Five cases: same session, live owner, missing private data, unsupported load, paused source. No submitted prompt replay or arbitrary crash takeover claim.",
+  "startedAt": "2026-10-16T18:35:41.803Z",
+  "runs": [
+    {
+      "name": "same-session",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session)",
+        "--success-output",
+        "final"
+      ],
+      "log": "acp-continuation-green2-same-session.log",
+      "startedAt": "2026-10-16T18:35:41.803Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:39:51.451Z",
+      "summaries": [
+        "     Summary [   4.413s] 1 test run: 1 passed, 1837 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "acp-guards",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(service::tests::worker::acp::)"
+      ],
+      "log": "acp-continuation-green2-acp-guards.log",
+      "startedAt": "2026-10-16T18:39:51.457Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:40:19.879Z",
+      "summaries": [
+        "     Summary [   0.087s] 3 tests run: 3 passed, 289 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "acp-continuation-green2-clippy.log",
+      "startedAt": "2026-10-16T18:40:19.879Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:41:16.688Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "acp-continuation-green2-fmt.log",
+      "startedAt": "2026-10-16T18:41:16.688Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:41:37.431Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T18:41:37.553Z",
+  "changed": [],
+  "passed": true
+}

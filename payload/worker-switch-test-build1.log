@@ -1,0 +1,74 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+error[E0615]: attempted to take value of method `max_duration` on type `thread::executor::Config`
+   --> crates/bitrouter-orchestrator/src/service/tests/generation/waiting.rs:101:16
+    |
+101 |         config.max_duration = duration;
+    |                ^^^^^^^^^^^^ method, not a field
+    |
+    = help: methods are immutable and cannot be assigned to
+
+error[E0308]: mismatched types
+   --> crates/bitrouter-orchestrator/src/service/tests/generation/waiting.rs:108:21
+    |
+108 |                     config,
+    |                     ^^^^^^ expected `AgentConfig`, found `Config`
+
+error[E0609]: no field `response` on type `state::PendingInput`
+   --> crates/bitrouter-orchestrator/src/service/tests/support.rs:369:33
+    |
+369 |                 let _ = pending.response.send(false);
+    |                                 ^^^^^^^^ unknown field
+
+error[E0308]: mismatched types
+   --> crates/bitrouter-orchestrator/src/service/recovery/tests.rs:30:30
+    |
+ 30 |             config: Box::new(AgentConfig::fixed("model", None).read_only()),
+    |                     -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Config`, found `AgentConfig`
+    |                     |
+    |                     arguments to this function are incorrect
+    |
+note: associated function defined here
+   --> /Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:284:12
+    |
+284 |     pub fn new(x: T) -> Self {
+    |            ^^^
+help: try wrapping the expression in `thread::executor::Config::Native`
+    |
+ 30 |             config: Box::new(thread::executor::Config::Native(AgentConfig::fixed("model", None).read_only())),
+    |                              +++++++++++++++++++++++++++++++++                                             +
+
+error[E0308]: mismatched types
+   --> crates/bitrouter-orchestrator/src/service/recovery/tests.rs:79:26
+    |
+ 79 |         config: Box::new(AgentConfig::fixed("model", None).read_only()),
+    |                 -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Config`, found `AgentConfig`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+note: associated function defined here
+   --> /Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/boxed.rs:284:12
+    |
+284 |     pub fn new(x: T) -> Self {
+    |            ^^^
+help: try wrapping the expression in `thread::executor::Config::Native`
+    |
+ 79 |         config: Box::new(thread::executor::Config::Native(AgentConfig::fixed("model", None).read_only())),
+    |                          +++++++++++++++++++++++++++++++++                                             +
+
+error[E0308]: mismatched types
+   --> crates/bitrouter-orchestrator/src/service/tests/generation.rs:366:25
+    |
+366 |                 config: view.config,
+    |                         ^^^^^^^^^^^ expected `AgentConfig`, found `Config`
+
+error[E0609]: no field `instructions` on type `thread::executor::Config`
+  --> crates/bitrouter-orchestrator/src/service/tests/instructions.rs:56:32
+   |
+56 |         assert_eq!(view.config.instructions, base);
+   |                                ^^^^^^^^^^^^ unknown field
+
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+Some errors have detailed explanations: E0308, E0609, E0615.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `bitrouter-orchestrator` (lib test) due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...

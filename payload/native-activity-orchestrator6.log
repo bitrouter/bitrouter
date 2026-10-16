@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized] target(s) in 0.12s
+────────────
+ Nextest run ID dc6fc1ae-28ea-4178-8000-1d352b36d884 with nextest profile: default
+    Starting 11 tests across 1 binary (278 tests skipped)
+        PASS [   0.505s] ( 1/11) bitrouter-orchestrator agent::tests::native_reasoning_requires_host_authority_for_model_followup
+        PASS [   0.516s] ( 2/11) bitrouter-orchestrator agent::tests::native::native_spend_limit_stops_new_model_work_without_losing_settlement
+        PASS [   0.631s] ( 3/11) bitrouter-orchestrator agent::tests::native::native_output_budget_follows_the_effort_eligible_route
+        PASS [   0.944s] ( 4/11) bitrouter-orchestrator agent::tests::native::native_cumulative_tool_limit_rejects_later_effects
+        PASS [   0.985s] ( 5/11) bitrouter-orchestrator agent::tests::native::native_legacy_capacity_upgrades_between_runs_and_replays
+        PASS [   1.097s] ( 6/11) bitrouter-orchestrator agent::tests::native::native_agent_executes_context_decision_through_core_and_thread_commit_channel
+        PASS [   1.124s] ( 7/11) bitrouter-orchestrator agent::tests::native::native_subscription_reservation_survives_configuration_restore
+        PASS [   1.447s] ( 8/11) bitrouter-orchestrator agent::tests::native::native_core_tool_effect_still_requires_native_approval
+        PASS [   2.984s] ( 9/11) bitrouter-orchestrator agent::tests::native::oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_task_scope
+        PASS [  31.966s] (10/11) bitrouter-orchestrator agent::tests::native::native_checkpoint_capacity_failure_reports_the_resource_cause
+        PASS [  59.216s] (11/11) bitrouter-orchestrator agent::tests::native::native_long_tool_loop_completes_beyond_old_checkpoint_capacity
+────────────
+     Summary [  91.183s] 11 tests run: 11 passed, 278 skipped

@@ -1,0 +1,33 @@
+{
+  "source": "native-cold-green3-source.json",
+  "scope": "Corrected direct-API workspace registration, retained provider accounting and four controlled native SQLite checkpoint cases",
+  "startedAt": "2026-10-16T14:40:49.023Z",
+  "runs": [
+    {
+      "name": "boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint)"
+      ],
+      "log": "native-cold-green3-boundary.log",
+      "startedAt": "2026-10-16T14:40:49.023Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:41:48.244Z",
+      "summaries": [
+        "     Summary [   4.117s] 1 test run: 0 passed, 1 failed, 1830 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T14:41:48.469Z",
+  "changed": [],
+  "passed": false
+}

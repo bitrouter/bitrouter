@@ -1,0 +1,9 @@
+{
+  "binary": "target/debug/deps/bitrouter-5fb43c3212e75b30",
+  "sha256": "4dce22c1143c9595ead4e0fef86fa599d63663ef5efba4077e691833cd99f619",
+  "code": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_ms": 2553,
+  "listed_lines": 1816
+}

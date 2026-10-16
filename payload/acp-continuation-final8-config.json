@@ -1,0 +1,55 @@
+{
+  "id": "acp-continuation-final8",
+  "scope": "Final required workspace checks after global native-fixture resource reservation and a stricter pending-read uncertainty assertion. Production code unchanged from final4; no timeout/product bound is increased. Unknown effects never manufacture stopped-owner proof. final7 was explicitly interrupted after two failures, with one SIGINT case and three unrun cases retained.",
+  "jobs": [
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

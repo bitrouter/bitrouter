@@ -1,0 +1,24 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "daemon") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 58.39s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 7bfef940-313d-4729-879f-61b0bb96ae0c with nextest profile: default
+    Starting 4 tests across 38 binaries (2399 tests skipped)
+        PASS [   4.792s] (1/4) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        PASS [  14.687s] (2/4) bitrouter goal_runtime::tests::workflow_recovery::known_review_failure_repairs_without_restarting_independent_work
+        PASS [  16.161s] (3/4) bitrouter goal_runtime::tests::workflow_recovery::known_check_failure_repairs_with_actual_evidence_and_same_requirements
+        PASS [  21.363s] (4/4) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+────────────
+     Summary [  21.376s] 4 tests run: 4 passed, 2399 skipped

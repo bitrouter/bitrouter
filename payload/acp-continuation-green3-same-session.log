@@ -1,0 +1,32 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 19s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID e3bcfa18-6c38-4701-bae9-3d520206a5f2 with nextest profile: default
+    Starting 1 test across 1 binary (1837 tests skipped)
+        PASS [   1.764s] (1/1) bitrouter goal_runtime::tests::threads::acp_recovery::acp_pre_prompt_recovery_loads_only_the_original_stopped_session
+────────────
+     Summary [   1.780s] 1 test run: 1 passed, 1837 skipped
+        PASS [   1.764s] (1/1) bitrouter goal_runtime::tests::threads::acp_recovery::acp_pre_prompt_recovery_loads_only_the_original_stopped_session
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::threads::acp_recovery::acp_pre_prompt_recovery_loads_only_the_original_stopped_session ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1837 filtered out; finished in 1.75s
+
+  stderr ───
+    ACP continuation fixture same-session: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpD3sN1I
+    ACP_CONTINUATION_PROOF {"scenario":"same-session","thread_id":"a5e69332-2a02-4963-833e-eb151d2bbac5","turn_id":"3700204e-212a-4e05-be2e-e02dd418a234","session_id":"goal-fixture-4404","restored_from":"ab4bc531-e015-4e79-a643-cc93eb6eec34","new_run_id":"6742a3ed-c6e0-4293-91f2-9631c260386e","session_new":1,"session_load":1,"prompt":1,"turn_completed":true,"process_stop_confirmed":true,"checked_file":"LEFT\n","scope":"Controlled SQLite pre-prompt snapshot, actual source join, Rust peer persisted private nonce; no vendor/provider qualification"}
+    ACP continuation fixture live-owner: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpbZsPOg
+    ACP continuation fixture missing-private: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpXO5nqf
+    ACP continuation fixture unsupported-load: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpAM3dno
+    ACP continuation fixture paused-source: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpwzRTYt
+

@@ -1,0 +1,13 @@
+{
+  "createdAt": "2026-10-16T20:35:36.083Z",
+  "repository": "https://github.com/bitrouter/bitrouter",
+  "pr": 981,
+  "featureSource": "6a72cfb1da0e2d4641a96097e09a507d7d032189",
+  "finalLocalRun": "acp-continuation-final15",
+  "retentionBranch": "codex/pr981-refactor-evidence-20261016",
+  "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46",
+  "payloadFiles": 3966,
+  "payloadBytes": 76719035,
+  "restoredFilesVerified": 3966,
+  "scope": "Original source archive bytes and modes verified after independent extraction. Directories are tarred to preserve hidden files and Git workspace pointers without Git submodule interpretation. All per-run bindings, failures and live-gate limits remain applicable."
+}

@@ -1,0 +1,33 @@
+{
+  "source": "native-history-green2-source.json",
+  "scope": "Same native historical boundary with retained production-reader diagnostic output. First failure and 472-file SQLite/artifact image preserved independently; cause not established yet.",
+  "startedAt": "2026-10-16T17:29:00.114Z",
+  "runs": [
+    {
+      "name": "archive-boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ],
+      "log": "native-history-green2-archive-boundary.log",
+      "startedAt": "2026-10-16T17:29:00.114Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:30:23.094Z",
+      "summaries": [
+        "     Summary [  17.730s] 1 test run: 0 passed, 1 failed, 1835 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:30:23.300Z",
+  "changed": [],
+  "passed": false
+}

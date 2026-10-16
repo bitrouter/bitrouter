@@ -1,0 +1,36 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 53.02s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 6954fd65-c89c-473a-896b-a933c04de8a6 with nextest profile: default
+    Starting 5 tests across 7 binaries (3629 tests skipped)
+        PASS [   0.116s] (1/5) bitrouter goal_runtime::tests::threads::interrupted_owner_link_reconciles_the_original_thread_after_database_reopen
+        PASS [   0.392s] (2/5) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+        PASS [   0.445s] (3/5) bitrouter goal_runtime::tests::start_recovery::initialize_failure_retains_actual_phase_and_reaped_process_receipt
+        PASS [   0.447s] (4/5) bitrouter goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume
+        FAIL [   0.468s] (5/5) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1816 filtered out; finished in 0.45s
+
+  stderr ───
+    Error: operation identity already belongs to different input
+
+────────────
+     Summary [   0.485s] 5 tests run: 4 passed, 1 failed, 3629 skipped
+        FAIL [   0.468s] (5/5) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+error: test run failed

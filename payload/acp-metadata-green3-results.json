@@ -1,0 +1,94 @@
+{
+  "source": "acp-metadata-green3-source.json",
+  "scope": "Same production source as green2; add an ACP-specific live-owner negative case. It must neither accept a Turn nor retire the original active owner. Repeated real SQLite shutdown/reopen first-session proof and strict workspace checks; no private-session restore claim.",
+  "startedAt": "2026-10-16T18:11:07.082Z",
+  "runs": [
+    {
+      "name": "live-owner",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(unopened_acp_metadata_cannot_retire_a_live_execution_owner)"
+      ],
+      "log": "acp-metadata-green3-live-owner.log",
+      "startedAt": "2026-10-16T18:11:07.082Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:11:50.013Z",
+      "summaries": [
+        "     Summary [   0.045s] 1 test run: 1 passed, 290 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "metadata-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "3",
+        "-E",
+        "test(unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown)"
+      ],
+      "log": "acp-metadata-green3-metadata-stress.log",
+      "startedAt": "2026-10-16T18:11:50.014Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:11:55.789Z",
+      "summaries": [
+        "     Summary [   4.871s] 3/3 stress run iterations: 3 passed"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "acp-metadata-green3-clippy.log",
+      "startedAt": "2026-10-16T18:11:55.790Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:12:10.213Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "acp-metadata-green3-fmt.log",
+      "startedAt": "2026-10-16T18:12:10.213Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:12:30.479Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T18:12:30.587Z",
+  "changed": [],
+  "passed": true
+}

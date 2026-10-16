@@ -1,0 +1,15 @@
+{
+  "capturedAt": "2026-10-16T11:51:04.255Z",
+  "base": "5057f3b364298e09cdf2e573823c717113ae2eff",
+  "method": "Parent Git archive plus original saved source1 patch; all original manifest file hashes verified",
+  "checkedFiles": 1298,
+  "changedFiles": [
+    "apps/bitrouter/src/goal_runtime/tests/native.rs"
+  ],
+  "archive": "native-activity-red1-reconstructed-files.tar.gz",
+  "sha256": "d18367832da45aa84cf653d40e19420fa131f16f96866704c6e068f514761309",
+  "extracted": "/tmp/bro-native-red1-reconstruct-kEF0kf/check",
+  "passed": true,
+  "originalGzipContainerOverwritten": true,
+  "scope": "Exact source-file bytes reconstructed; original gzip container and transient runtime state are not recovered."
+}

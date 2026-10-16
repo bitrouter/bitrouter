@@ -1,0 +1,71 @@
+{
+  "source": "fixture-retention-green2-source.json",
+  "scope": "Normal source after exact restoration of the intentional panic assertion; preserve failed filesystem including panic, capture runtime facts only on returned errors, clean successful fixtures normally",
+  "startedAt": "2026-10-16T12:05:19.103Z",
+  "runs": [
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "fixture-retention-green2-clippy.log",
+      "startedAt": "2026-10-16T12:05:19.103Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:05:53.974Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "fixture-retention-green2-fmt.log",
+      "startedAt": "2026-10-16T12:05:53.974Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:06:13.935Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ],
+      "log": "fixture-retention-green2-goal-runtime.log",
+      "startedAt": "2026-10-16T12:06:13.936Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:07:55.403Z",
+      "summaries": [
+        "     Summary [  46.496s] 77 tests run: 77 passed, 1749 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T12:07:55.598Z",
+  "changed": [],
+  "passed": true
+}

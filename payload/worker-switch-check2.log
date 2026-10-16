@@ -1,0 +1,25 @@
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error: future cannot be sent between threads safely
+  --> crates/bitrouter-orchestrator/src/service/runner.rs:58:9
+   |
+58 | /         Box::pin(async move {
+59 | |             let _worker = worker;
+60 | |             match driver {
+61 | |                 Driver::Acp(job) => {
+...  |
+81 | |         })
+   | |__________^ future created by async block is not `Send`
+   |
+   = help: within `impl futures::Future<Output = std::result::Result<(), service::ServiceError>>`, the trait `std::marker::Send` is not implemented for `std::sync::MutexGuard<'_, state::State>`
+note: future is not `Send` as this value is used across an await
+  --> crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs:88:16
+   |
+78 |             let mut state = self.lock_state();
+   |                 --------- has type `std::sync::MutexGuard<'_, state::State>` which is not `Send`
+...
+88 |             }).await?;
+   |                ^^^^^ await occurs here, with `mut state` maybe used later
+   = note: required for the cast from `Pin<Box<{async block@crates/bitrouter-orchestrator/src/service/runner.rs:58:18: 58:28}>>` to `Pin<Box<dyn futures::Future<Output = ()> + std::marker::Send>>`
+
+error: could not compile `bitrouter-orchestrator` (lib) due to 1 previous error

@@ -1,0 +1,6 @@
+import fs from 'node:fs';import {execFileSync} from 'node:child_process';
+const patterns=[/sk-or-v1-[a-f0-9]{40,}/gi,/sk-ant-api\d+-[A-Za-z0-9_-]{30,}/g,/\bgh[pousr]_[A-Za-z0-9_]{25,}/g,/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g];
+const base='fe9df6f8157945d3559789926326a7effb468db1';const head=execFileSync('git',['rev-parse','HEAD']).toString().trim();
+const objects=execFileSync('git',['rev-list','--objects',`${base}..${head}`]).toString().trim().split('\n').filter(Boolean).map(l=>l.split(' ')[0]);let checked=0;const hits=[];
+for(const oid of objects){const type=execFileSync('git',['cat-file','-t',oid]).toString().trim();if(!['blob','commit'].includes(type))continue;const s=execFileSync('git',['cat-file',type,oid],{maxBuffer:64*1024*1024}).toString('latin1');checked++;let count=0;for(const p of patterns){p.lastIndex=0;count += [...s.matchAll(p)].length;}if(count)hits.push({oid,type,matches:count});}
+const result={createdAt:new Date().toISOString(),base,head,scope:'Decompressed blobs and commit messages introduced by the final recoverable bundle range; token values are never emitted.',checked,hits};console.log(JSON.stringify(result,null,2));if(hits.length)process.exitCode=1;

@@ -1,0 +1,33 @@
+{
+  "source": "acp-metadata-red1-source.json",
+  "scope": "Real SQLite and Cargo Rust peer regression: original managed ACP Thread metadata survived a confirmed clean owner shutdown, but no Turn/session ever existed. It should keep the original Thread/action for first admission, not claim private session restoration. No forced crash retirement or model/provider proof.",
+  "startedAt": "2026-10-16T17:55:46.031Z",
+  "runs": [
+    {
+      "name": "unopened-metadata",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown)"
+      ],
+      "log": "acp-metadata-red1-unopened-metadata.log",
+      "startedAt": "2026-10-16T17:55:46.031Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:56:53.710Z",
+      "summaries": [
+        "     Summary [   0.487s] 1 test run: 0 passed, 1 failed, 1836 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:56:53.937Z",
+  "changed": [],
+  "passed": false
+}

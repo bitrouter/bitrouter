@@ -1,0 +1,101 @@
+{
+  "source": "native-activity-source4.json",
+  "startedAt": "2026-10-16T11:38:58.959Z",
+  "scope": "Actual native content receipt, monotonic overlap, isolated conflicting writes, checked join and immutable outcome replay; other refactor gates remain open",
+  "runs": [
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "native-activity-clippy4.log",
+      "startedAt": "2026-10-16T11:38:58.959Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:39:46.883Z"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "native-activity-fmt4.log",
+      "startedAt": "2026-10-16T11:39:46.884Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:40:06.897Z"
+    },
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime) | test(agent::tests_native) | test(service::tests::worker)"
+      ],
+      "log": "native-activity-runtime4.log",
+      "startedAt": "2026-10-16T11:40:06.897Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:40:54.672Z"
+    },
+    {
+      "id": "stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(native_branches_overlap) | test(received_content_survives)"
+      ],
+      "log": "native-activity-unknown-stress4.log",
+      "startedAt": "2026-10-16T11:40:54.672Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:42:54.973Z"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "native-activity-doctests4.log",
+      "startedAt": "2026-10-16T11:42:54.973Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:43:52.087Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T11:43:52.190Z",
+  "changed": [],
+  "passed": true
+}

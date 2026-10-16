@@ -1,0 +1,30 @@
+{
+  "source": "acp-continuation-final8-source.json",
+  "scope": "Final required workspace checks after global native-fixture resource reservation and a stricter pending-read uncertainty assertion. Production code unchanged from final4; no timeout/product bound is increased. Unknown effects never manufacture stopped-owner proof. final7 was explicitly interrupted after two failures, with one SIGINT case and three unrun cases retained.",
+  "startedAt": "2026-10-16T19:23:57.626Z",
+  "runs": [
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "acp-continuation-final8-workspace.log",
+      "startedAt": "2026-10-16T19:23:57.626Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:40:12.620Z",
+      "summaries": [
+        "     Summary [ 644.799s] 4756/4757 tests run: 4752 passed (6 slow), 4 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T19:40:12.867Z",
+  "changed": [],
+  "passed": false
+}

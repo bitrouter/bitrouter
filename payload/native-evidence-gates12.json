@@ -1,0 +1,105 @@
+{
+  "source": "native-evidence-source12.json",
+  "startedAt": "2026-10-16T11:23:39.780Z",
+  "scope": "S4 bounded native SDK/material projection; full refactor and native activity gates remain open",
+  "runs": [
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "native-evidence-clippy12.log",
+      "startedAt": "2026-10-16T11:23:39.780Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:24:17.397Z"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "native-evidence-fmt12.log",
+      "startedAt": "2026-10-16T11:24:17.398Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:24:37.423Z"
+    },
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ],
+      "log": "native-evidence-goal-runtime12.log",
+      "startedAt": "2026-10-16T11:24:37.423Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:26:18.880Z"
+    },
+    {
+      "id": "stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(active_input_adds_machine_checks) | test(requested_new_worker_cannot_bypass)"
+      ],
+      "log": "native-evidence-unknown-stress12.log",
+      "startedAt": "2026-10-16T11:26:18.880Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:27:12.034Z"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "native-evidence-doctests12.log",
+      "startedAt": "2026-10-16T11:27:12.034Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:27:58.553Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T11:27:58.684Z",
+  "changed": [],
+  "passed": true,
+  "nextestSummary": "     Summary [  45.989s] 74 tests run: 74 passed (1 leaky), 1749 skipped",
+  "nextestLeakLines": [
+    "        LEAK [   0.346s] (30/74) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work"
+  ]
+}

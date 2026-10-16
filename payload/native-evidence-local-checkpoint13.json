@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-10-16T11:42:33.215Z",
+  "commit": "5057f3b364298e09cdf2e573823c717113ae2eff",
+  "bundle": "native-evidence-local-checkpoint13.bundle",
+  "bytes": 272058,
+  "sha256": "9cd4d3b26010863baac56be804a956fe1ede1ae6e35e67d1a3376224c39aff2d",
+  "bundleVerified": true,
+  "verification": "The bundle contains this ref:\n5057f3b364298e09cdf2e573823c717113ae2eff HEAD\nThe bundle requires this ref:\nfe9df6f8157945d3559789926326a7effb468db1 \nThe bundle uses this hash algorithm: sha1\n",
+  "source": "native-evidence-source12.json",
+  "applicability": "native-evidence-source13-applicability.json",
+  "archiveManifest": "native-evidence-manifest13.json",
+  "publication": "local only; original PR head remains fe9; not a full-refactor completion or hosted-CI claim"
+}

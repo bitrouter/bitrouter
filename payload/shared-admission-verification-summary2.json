@@ -1,0 +1,29 @@
+{
+  "capturedAt": "2026-10-16T07:44:06.519Z",
+  "source": "shared-admission-source2.json",
+  "passed": true,
+  "open": [
+    "S3 managed ACP driver and shared authority",
+    "S4-S6 acceptance",
+    "Token-quote waiting and persistent UI waiting phase",
+    "Earlier intermittent PTY and route-startup causes"
+  ],
+  "sha256": {
+    "shared-admission-source1.json": "db944ebaea5e09b6f11880e993dfc67c374bfde99f1d674dc3626b0b76933a25",
+    "shared-admission-gates1.json": "6ef31f1255c61ddb8bcee32f74b2517c2af587256aafa7bfff9cef82ff59ec87",
+    "shared-admission-full1.log": "96624d7cfe2c66d7b3f1eb7d8122d7f03f875c9db7f844384ffc162240713027",
+    "shared-admission-stack-overflow-fixtures1/MANIFEST.json": "99d0557ca0649dbc0977c900b730c889bc5a9175068c995227e5ee8e90ee4751",
+    "shared-admission-source2.json": "db7fbf7a51b9b3f5e47ab1489a75c78cdcf18e996be0fffe35e72672f2816c9a",
+    "shared-admission-gates2.json": "2c6e36ba24003a4b3e780834fe757869fea5a46141facfe20f7ec82d2ce2bb41",
+    "shared-admission-source-audit2.json": "f07ad4ace79cdfd89d25b41c58e3a3f36361bfdaee107e626d812291effa85c8",
+    "shared-admission-full2.log": "33a3281af8d24a9eca44524aea605c515d319dd457d49b00c50dd3ed2b2a2baa",
+    "shared-admission-clippy2.log": "2f182c079bdc60af9e569ce4468264b8386e4ed39ff0daed2fa723ee5d58cefd",
+    "shared-admission-fmt2.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "shared-admission-doctests2.log": "ba9ae4446489a65bc7bb18890752b472ff6ef51d1bf756e7f536da70585b10c9",
+    "shared-admission-focused1.log": "b25e27916b5c63c963f8e421fef16694d7a2d80c38abc8fb19ad508414a77776",
+    "shared-admission-focused2.log": "866d70174296b8cc38dab78d5bb510eda24b8581ab735650c7a6b7b28710d9d8",
+    "shared-admission-focused3.log": "c64ce2e0d9f30566ab490e17ae74e80c1e9934c8465d493e3492addbdde83fe5",
+    "shared-admission-focused4.log": "08c7b8b8a71824d05916a8fa1221866226439e798ed86c85b9e6cf5498896059",
+    "shared-admission-focused5.log": "f51cb311ffbb2879177ca471b311b59a3a39ead7caff98ab4b32878facc3e4f1"
+  }
+}

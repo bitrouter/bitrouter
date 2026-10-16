@@ -1,0 +1,85 @@
+{
+  "source": "acp-continuation-isolation5-source.json",
+  "scope": "Same production/test source as final4. Isolate the two native workflow cases at one outer test process, retaining all original 45s deadlines and in-workflow branch concurrency. Three repetitions diagnose full-suite resource contention; not a substitute for complete regression.",
+  "startedAt": "2026-10-16T19:07:01.289Z",
+  "runs": [
+    {
+      "name": "native-pair-1",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "1"
+      ],
+      "log": "acp-continuation-isolation5-native-pair-1.log",
+      "startedAt": "2026-10-16T19:07:01.289Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:09:15.385Z",
+      "summaries": [
+        "     Summary [  41.256s] 2 tests run: 2 passed, 1836 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "native-pair-2",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "1"
+      ],
+      "log": "acp-continuation-isolation5-native-pair-2.log",
+      "startedAt": "2026-10-16T19:09:15.386Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:09:58.403Z",
+      "summaries": [
+        "     Summary [  42.156s] 2 tests run: 2 passed, 1836 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "native-pair-3",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "1"
+      ],
+      "log": "acp-continuation-isolation5-native-pair-3.log",
+      "startedAt": "2026-10-16T19:09:58.404Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:10:39.535Z",
+      "summaries": [
+        "     Summary [  40.644s] 2 tests run: 2 passed, 1836 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T19:10:39.735Z",
+  "changed": [],
+  "passed": true
+}

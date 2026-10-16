@@ -1,0 +1,34 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 05s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID c125bb44-2510-4617-a83b-3482ea9b95db with nextest profile: default
+    Starting 1 test across 1 binary (1830 tests skipped)
+        FAIL [   0.105s] (1/1) bitrouter goal_runtime::model_control::tests::worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope
+  stdout ───
+
+    running 1 test
+    test goal_runtime::model_control::tests::worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::model_control::tests::worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1830 filtered out; finished in 0.09s
+
+  stderr ───
+    Error: worker refused transient quote contention instead of waiting
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.121s] 1 test run: 0 passed, 1 failed, 1830 skipped
+        FAIL [   0.105s] (1/1) bitrouter goal_runtime::model_control::tests::worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope
+error: test run failed

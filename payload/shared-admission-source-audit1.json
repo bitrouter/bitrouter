@@ -1,0 +1,9 @@
+{
+  "source": "shared-admission-source1.json",
+  "capturedAt": "2026-10-16T07:23:45.590Z",
+  "checkedFiles": 1287,
+  "changed": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md"
+  ],
+  "executableOrBuildSourceChanged": false
+}

@@ -1,0 +1,20 @@
+{
+  "id": "dispatch-rejection-completion-red8b",
+  "scope": "Locate the no-admission completion regression at the current-handoff source gate; domain receipts only",
+  "jobs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goals",
+        "-E",
+        "test(no_admission_history_allows_verified_replacement_sources)"
+      ]
+    }
+  ]
+}

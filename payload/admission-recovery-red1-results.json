@@ -1,0 +1,33 @@
+{
+  "source": "admission-recovery-red1-source.json",
+  "scope": "Regression for a saved current ACP dispatch before any common Thread admission; expected failure before routing fix, not full recovery acceptance",
+  "startedAt": "2026-10-16T11:54:06.124Z",
+  "runs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(saved_acp_intent_without_any_thread)"
+      ],
+      "log": "admission-recovery-red1-regression.log",
+      "startedAt": "2026-10-16T11:54:06.124Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:55:02.627Z",
+      "summaries": [
+        "     Summary [   0.298s] 1 test run: 0 passed, 1 failed, 1825 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T11:55:02.845Z",
+  "changed": [],
+  "passed": false
+}

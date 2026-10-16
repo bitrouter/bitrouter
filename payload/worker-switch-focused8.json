@@ -1,0 +1,25 @@
+{
+  "source": "worker-switch-source8.json",
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "--all-features",
+    "--lib",
+    "--test",
+    "goals",
+    "--no-fail-fast",
+    "-E",
+    "test(worker_change_versions_work)"
+  ],
+  "startedAt": "2026-10-16T10:12:07.121Z",
+  "log": "worker-switch-focused8.log",
+  "priorRun": "Worker replacement, immutable requested worker provenance, Goal protocol6 and application marker31; partial S3 implementation.",
+  "code": 0,
+  "signal": null,
+  "finishedAt": "2026-10-16T10:12:09.933Z",
+  "changed": [],
+  "summary": "     Summary [   0.060s] 1 test run: 1 passed, 1914 skipped",
+  "passed": true
+}

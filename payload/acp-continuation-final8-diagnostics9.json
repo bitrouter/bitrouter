@@ -1,0 +1,32 @@
+{
+  "createdAt": "2026-10-16T19:44:44.160Z",
+  "scope": "Failed/interrupted run final8 is retained, not reported as complete. Production source is unchanged from final4. Native Goal pair passed with global scheduling; the new negative test composed large unboxed readers and aborted its test process with stack overflow. Test-only future boxing fixes composition instead of increasing stack limits. Complete native resource and terminal scenarios get the same global reservation, retaining original timing and business assertions.",
+  "originalFailures": [
+    {
+      "test": "native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading",
+      "outcome": "SIGABRT stack overflow",
+      "retainedFilesystem": "acp-continuation-final8-stack-fixture.tar.gz",
+      "verifiedFiles": 7
+    },
+    {
+      "test": "sqlite_reopen_retains_resource_inventory_and_known_result_without_connections",
+      "outcome": "Elapsed original 10s wait",
+      "retainedFilesystem": null,
+      "limitation": "Original test dropped its temporary directory; no recovered image is claimed. Failure retention added for subsequent runs."
+    },
+    {
+      "test": "active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution",
+      "outcome": "Goal wait did not reach expected state",
+      "retainedFilesystem": null,
+      "limitation": "Original test dropped its temporary directory; no recovered image is claimed. Failure retention added for subsequent runs."
+    }
+  ],
+  "interruption": {
+    "signal": "SIGINT",
+    "runningCase": "maximum_tree_byte_failure_survives_terminal_ack_loss_before_persistence",
+    "unrunCases": 1,
+    "summary": "4756/4757 run; 4752 passed, 3 original failures and 1 interrupted; 24 skipped; no reported LEAK/source drift"
+  },
+  "focusedCorrection": "acp-continuation-fix9",
+  "timeoutsAndProductBoundsUnchanged": true
+}

@@ -1,0 +1,25 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.36s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 55745fc5-e750-43e4-9b89-f680b9e548a4 with nextest profile: default
+    Starting 1 test across 1 binary (1836 tests skipped)
+────────────
+ Stress test iteration 1/3 (00:00:00 elapsed so far, 3 iterations remaining)
+        PASS [   0.816s] [1/3] (1/1) bitrouter goal_runtime::tests::threads::acp_recovery::unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown
+ Stress test [   0.822s] iteration 1/3: 1 test run: 1 passed, 1836 skipped
+────────────
+ Stress test iteration 2/3 (00:00:00 elapsed so far, 2 iterations remaining)
+        PASS [   0.479s] [2/3] (1/1) bitrouter goal_runtime::tests::threads::acp_recovery::unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown
+ Stress test [   0.487s] iteration 2/3: 1 test run: 1 passed, 1836 skipped
+────────────
+ Stress test iteration 3/3 (00:00:01 elapsed so far, 1 iteration remaining)
+        PASS [   3.552s] [3/3] (1/1) bitrouter goal_runtime::tests::threads::acp_recovery::unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown
+ Stress test [   3.562s] iteration 3/3: 1 test run: 1 passed, 1836 skipped
+────────────
+     Summary [   4.871s] 3/3 stress run iterations: 3 passed

@@ -1,0 +1,23 @@
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index 4af15ab7..ccbe3182 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -12,6 +12,8 @@ use bitrouter_orchestrator::thread::{
+ };
+ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+ 
++#[path = "acp_recovery.rs"]
++mod acp_recovery;
+ #[path = "native_recovery.rs"]
+ mod native_recovery;
+ 
+diff --git a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+index 5d3f5e85..476f1f29 100644
+--- a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
++++ b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+@@ -203,4 +203,4 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
+ | S5 | native/ACP 依赖与验收接入共同执行；完成剩余恢复场景和实际 harness 资格核对 |
+ | S6 | 审计替代路径的消费者，只删除已被替代的逻辑；完成全量回归、证据发布和 PR 更新 |
+ 
+-最终交付还需：合入已获取的 main 更新；逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。
++main 的目录更新已在本地合入；registry validate/build/check 通过，产物没有漂移。最终交付还需：逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。

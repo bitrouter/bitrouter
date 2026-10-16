@@ -1,0 +1,17 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 21.01s
+────────────
+ Nextest run ID c20e292b-b084-4c04-9263-16173effe53b with nextest profile: default
+    Starting 10 tests across 3 binaries (618 tests skipped)
+        PASS [   0.144s] ( 1/10) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_reuses_its_key_and_rejects_conflicting_input
+        PASS [   0.319s] ( 2/10) bitrouter-orchestrator service::tests::worker::decisions::revoked_native_decision_waits_for_usage_settlement_before_finishing
+        PASS [   0.393s] ( 3/10) bitrouter-orchestrator service::tests::worker::failed_host_outcome_ack_retains_provider_evidence_without_running_its_tools
+        PASS [   0.481s] ( 4/10) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_bounds_time_and_honors_revocation_and_input_limits
+        PASS [   0.484s] ( 5/10) bitrouter-orchestrator service::tests::worker::revoked_worker_source_cannot_ask_for_or_launch_configured_verification
+        PASS [   0.517s] ( 6/10) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention
+        PASS [   0.655s] ( 7/10) bitrouter-orchestrator service::tests::worker::native_workers_share_one_budget_and_ordinary_rpcs_cannot_bypass_it
+        PASS [   1.010s] ( 8/10) bitrouter-orchestrator service::tests::worker::decisions::native_decisions_use_shared_admission_and_require_host_outcome_ack
+        PASS [   1.457s] ( 9/10) bitrouter-orchestrator service::tests::worker::waiting::native_worker_waits_for_known_capacity_and_replays_only_original_admission
+        PASS [   2.725s] (10/10) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_refuses_withdrawn_sources_deadlines_and_unknown_workspace_owners
+────────────
+     Summary [   2.730s] 10 tests run: 10 passed, 618 skipped

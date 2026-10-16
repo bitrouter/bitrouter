@@ -1,0 +1,56 @@
+{
+  "head": "aa6f87a61818aac47990afed5bf5e2b1c515dc4d",
+  "extracts": [
+    {
+      "id": "native-history-green1",
+      "extracted": "/tmp/native-history-green1-source-GpK2x8",
+      "files": 2,
+      "tarSha256": "05769779771c6a34160ff483874b650f2ed4f09fb452467dcc334473b515b395",
+      "passed": false,
+      "leaks": []
+    },
+    {
+      "id": "native-history-green2",
+      "extracted": "/tmp/native-history-green2-source-GD3kMG",
+      "files": 2,
+      "tarSha256": "0f0119e12cbc8d1aa3ba4849f37d19fe816ca29afc0e5e726937f092a449020d",
+      "passed": false,
+      "leaks": []
+    },
+    {
+      "id": "native-history-green3",
+      "extracted": "/tmp/native-history-green3-source-nSEkVg",
+      "files": 3,
+      "tarSha256": "52e0763080eeaf4c0d31fb04403b104b638da04884b7f1c3eab3985ac57b5fe3",
+      "passed": true,
+      "leaks": []
+    },
+    {
+      "id": "native-history-follow4",
+      "extracted": "/tmp/native-history-follow4-source-j9FoWV",
+      "files": 3,
+      "tarSha256": "496383962ca5e6a622c65cb8a428d3f9e04d2053edfc7de2fea3a840eaaadd39",
+      "passed": true,
+      "leaks": []
+    }
+  ],
+  "sameTestSource": true,
+  "postTestDelta": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/DEVELOPMENT.md"
+  ],
+  "priorLedger": {
+    "file": "native-history-prior-ledger5.md",
+    "sha256": "ae9db9c233905bac64375ef811265664869c4de89d96cd22c7e956c190bccb5a",
+    "lines": 1339
+  },
+  "finalExtracted": "/tmp/native-history-final5-QiiCUN",
+  "finalFiles": {
+    "apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs": "1d8f6ce8221675f0fad0d6ae26e4b7d9a8742b54b1be1f99605667165f3017e9",
+    "apps/bitrouter/src/goal_runtime/tests/fixture.rs": "3266b1a2b2a27656b4bb018d4a8cc95765ed6e7e6af37f09edfec4543e074512",
+    "apps/bitrouter/src/goal_runtime/tests/native.rs": "8dba242fc47ae628e4c09ca48291a33468411c99508d3fcf3e9a543ce3611e41",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "0ccca294df785b161c197b60c35c0c13d13650d950c52e60ca8e7c0382a9b410",
+    "docs/DEVELOPMENT.md": "aca802d4b2486739d90754de240d53463537bc35348e62ac3f23318f57b3194c"
+  },
+  "finalTarSha256": "53819431a1417dd46b1368e5618121e85019651965536dabcd3df0bbf66a910f"
+}

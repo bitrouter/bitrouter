@@ -1,0 +1,237 @@
+{
+  "createdAt": "2026-10-16T15:10:43.824Z",
+  "files": {
+    "NATIVE_COLD_RECOVERY_INDEX.md": {
+      "bytes": 2489,
+      "sha256": "6ebc2d90b90b9fd00d5c46ff112332c0c251a4376a4f03f95d51ea6d17251959"
+    },
+    "native-cold-applicability6.json": {
+      "bytes": 3363,
+      "sha256": "90b91f585dde607eca38e05aa38bcadc8a32055219ba4d6d11cbad3da3c6828e"
+    },
+    "native-cold-final6-files.tar.gz": {
+      "bytes": 147537,
+      "sha256": "50a6ab914c55c16ddb24b01352ce68b0da90ac156ff77fa2b2444a1e713cc2c3"
+    },
+    "native-cold-final6.patch": {
+      "bytes": 29826,
+      "sha256": "3e07ffdaf6ab4ab81418ade6a5849dc9c9f5220c53ec5c8f13b149d76eb4c490"
+    },
+    "native-cold-follow5-audit.json": {
+      "bytes": 91,
+      "sha256": "589049215921cae5b4f464e9e89fbebd4930dba5229c44d70bd85186cba5e446"
+    },
+    "native-cold-follow5-config.json": {
+      "bytes": 811,
+      "sha256": "68e679366427018210bc51425cdbcf042fe051bbe1e7dd425b30636c8bd78299"
+    },
+    "native-cold-follow5-files.tar.gz": {
+      "bytes": 39254,
+      "sha256": "7d1fe2bcb6c01e526d4c41c2d02feab7a239b997735ed5caf5a920707b5990d4"
+    },
+    "native-cold-follow5-matrix-stress.log": {
+      "bytes": 2679,
+      "sha256": "0ad60c0e1f9996f8bf4fbad3912b727a76e7204f5b5d3684165e9d0023cd2fd3"
+    },
+    "native-cold-follow5-native-recovery-generation.log": {
+      "bytes": 7130,
+      "sha256": "970f53b6903e7445017446e99c2f312ca535ce1e882bf4a8979296f3f072f366"
+    },
+    "native-cold-follow5-results.json": {
+      "bytes": 1640,
+      "sha256": "950ca748d959cc27917f6310ac220593371f011a04d9a015f470dd4f26419421"
+    },
+    "native-cold-follow5-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-cold-follow5-source.json": {
+      "bytes": 160278,
+      "sha256": "176ecf07158cd52c7ada493bd5e834590d928724b603847426478ca8877aec3d"
+    },
+    "native-cold-follow5-source.patch": {
+      "bytes": 9045,
+      "sha256": "227254fd7930b946670d0c68f60d0bccff3b750ab62565719d642b4fc2408bef"
+    },
+    "native-cold-green2-audit.json": {
+      "bytes": 90,
+      "sha256": "a23de5fea427c3989f00cae4b1f5a8187906d0fab617f1f1667c862f569a8190"
+    },
+    "native-cold-green2-boundary.log": {
+      "bytes": 2466,
+      "sha256": "2baf98b76e12a36c2ddb2b85325ea13b726344cc43c564ed12a5ffe00f2a9699"
+    },
+    "native-cold-green2-config.json": {
+      "bytes": 1285,
+      "sha256": "277c3f3d4b18fce02c2cee2b7077852646d582e1a9a652610cc224d9c86a6c8c"
+    },
+    "native-cold-green2-files.tar.gz": {
+      "bytes": 38675,
+      "sha256": "2d3d46355b9381ac2037c39a9515d311a6fac3a88ac07b5b433c51fba38eb1e3"
+    },
+    "native-cold-green2-fixture-audit.json": {
+      "bytes": 5583,
+      "sha256": "6b8fd12f7b09a0ae596d32217ef2a8bf6259374f439d407eb68082a7454348dd"
+    },
+    "native-cold-green2-fixture-runner.mjs": {
+      "bytes": 1815,
+      "sha256": "f3ea7043e41508016a909651c0e047e17d7f16865e9999704046ddcf2262e366"
+    },
+    "native-cold-green2-fixture.tar.gz": {
+      "bytes": 435104,
+      "sha256": "356b27f9ca2984c84e9c3d4afe6064eaeb9cbe678ff2c0050bc56f29fa945cfb"
+    },
+    "native-cold-green2-results.json": {
+      "bytes": 1005,
+      "sha256": "e86b1dd06959f839e583775bc2fe83407a4899ffcd68f94f7e766c57f5fe8a58"
+    },
+    "native-cold-green2-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-cold-green2-source.json": {
+      "bytes": 160278,
+      "sha256": "2e030f8a848c08ab9f9652712fba94b87bdafdbb934ced2f37715c54ac1ee161"
+    },
+    "native-cold-green2-source.patch": {
+      "bytes": 9045,
+      "sha256": "227254fd7930b946670d0c68f60d0bccff3b750ab62565719d642b4fc2408bef"
+    },
+    "native-cold-green3-audit.json": {
+      "bytes": 90,
+      "sha256": "d74021834505b1454e43b96fbbd21b74fd188d551594fad04ecd6017baed96b5"
+    },
+    "native-cold-green3-boundary.log": {
+      "bytes": 2677,
+      "sha256": "eabf981f207bc27d4c0086429c9b37c226ed47fd922de7a2af1a9b3295fe5590"
+    },
+    "native-cold-green3-config.json": {
+      "bytes": 1211,
+      "sha256": "a95b14fdb7a2ecfe59878eb57a819679ab4698cf20405772c6d87bdb890da3a0"
+    },
+    "native-cold-green3-files.tar.gz": {
+      "bytes": 38799,
+      "sha256": "03b74d34fecc155a37eb774c2b42a04aeb4e7cb199fb8542adfd70c373ad6600"
+    },
+    "native-cold-green3-fixture-audit.json": {
+      "bytes": 5583,
+      "sha256": "356d28dd0bfd6762f7efe07fb768c2f3875e74d0652e079a3a5b7d5a3c0c9f6c"
+    },
+    "native-cold-green3-fixture-runner.mjs": {
+      "bytes": 1815,
+      "sha256": "f3ea7043e41508016a909651c0e047e17d7f16865e9999704046ddcf2262e366"
+    },
+    "native-cold-green3-fixture.tar.gz": {
+      "bytes": 406923,
+      "sha256": "cb3d66d38d6b29758394d73e5d1d9a4ec5a7bedcc0a30e3e7b735045c0b1df2f"
+    },
+    "native-cold-green3-results.json": {
+      "bytes": 931,
+      "sha256": "4d99b35615893c5f97934e126ad6bd2ebc88736a0b5392f1d2d65771327cbb1b"
+    },
+    "native-cold-green3-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-cold-green3-source.json": {
+      "bytes": 160278,
+      "sha256": "d5c9936e21457d1c96b64cd33017b001d6f46a7ac516ba4f97b909a24297cd94"
+    },
+    "native-cold-green3-source.patch": {
+      "bytes": 9045,
+      "sha256": "227254fd7930b946670d0c68f60d0bccff3b750ab62565719d642b4fc2408bef"
+    },
+    "native-cold-green4-audit.json": {
+      "bytes": 90,
+      "sha256": "93d683382e01cca74cebae2ffb6b38167e217109ebf76accfaec271866df4d02"
+    },
+    "native-cold-green4-boundary.log": {
+      "bytes": 1143,
+      "sha256": "ec5bf19efe74945a8d3767a5e6fa3977c950ad351143b8bd37adf76bcc7b709f"
+    },
+    "native-cold-green4-clippy.log": {
+      "bytes": 548,
+      "sha256": "c765d0f3414503e93edf3c1f54ad66ed51944236c99a95b3eb85615b4301cddb"
+    },
+    "native-cold-green4-config.json": {
+      "bytes": 1269,
+      "sha256": "78d7fb5b76d0446842c7f288d6494f2e454879fce2c68bbdd8bb47901b74400d"
+    },
+    "native-cold-green4-files.tar.gz": {
+      "bytes": 39254,
+      "sha256": "4f1d3a56d41fce82ea4c1fe53faa7e136543ad7c568ed365e41293366a792a55"
+    },
+    "native-cold-green4-fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "native-cold-green4-goal-runtime.log": {
+      "bytes": 13078,
+      "sha256": "a97c1072911cf53b8e59bbe78b717672977432565304d6f70f79c2afbd295062"
+    },
+    "native-cold-green4-results.json": {
+      "bytes": 2895,
+      "sha256": "475e47d424dbce619552353da86a68a2382ffc5bccdc94f9994e1e9e36fa23ca"
+    },
+    "native-cold-green4-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-cold-green4-shared-worker.log": {
+      "bytes": 2057,
+      "sha256": "b43e908d46a075dedaa8093d87da4ed813ecda8113e91f90becba4daa561d174"
+    },
+    "native-cold-green4-source.json": {
+      "bytes": 160278,
+      "sha256": "9380124b3b7bf6c2f3e1c5255d511db32886c31b195056b1755a26035c81a87e"
+    },
+    "native-cold-green4-source.patch": {
+      "bytes": 9045,
+      "sha256": "227254fd7930b946670d0c68f60d0bccff3b750ab62565719d642b4fc2408bef"
+    },
+    "native-cold-index6-runner.mjs": {
+      "bytes": 6718,
+      "sha256": "486990d7a609158ef6bd1d974dc2df4ed1c105a1ea14dec57a9cec9fdc0da76d"
+    },
+    "native-cold-red1-audit.json": {
+      "bytes": 88,
+      "sha256": "ab46ab6a1ab414e7980b5cf99494f67d3a945aa2316ce1fba28c5881ac05b5c9"
+    },
+    "native-cold-red1-config.json": {
+      "bytes": 501,
+      "sha256": "d6cb3003e38ca0ab20f26522c2dbe3fe120b791de967ce69bf18650c70625cba"
+    },
+    "native-cold-red1-files.tar.gz": {
+      "bytes": 14103,
+      "sha256": "6336faf932c66458e3c3606bb0fad04b402e4586dc0fdab6794a2ebd3737c4b5"
+    },
+    "native-cold-red1-fixture-audit.json": {
+      "bytes": 5637,
+      "sha256": "651c631a1f7300f6187861ffb1caf2b1e320070976b91991c4cc6c0f7ada5ec4"
+    },
+    "native-cold-red1-fixture.tar.gz": {
+      "bytes": 403238,
+      "sha256": "cadcb5911aaf868e94cb9102aafe4649407bea7ffc42fce30ff6259940bf3786"
+    },
+    "native-cold-red1-regression.log": {
+      "bytes": 2319,
+      "sha256": "fa9ee9f8a599e0af959ecd1449ab73d4696da2a2fc9b14f071571087196f82db"
+    },
+    "native-cold-red1-results.json": {
+      "bytes": 979,
+      "sha256": "ef05ea8500007264aa36d2413022ff6926004fdd207015edd3d531a44abd2bb7"
+    },
+    "native-cold-red1-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-cold-red1-source.json": {
+      "bytes": 160278,
+      "sha256": "08f5bd866738fbd7779e39b7441476095cc81cb27759e997927d4aaeb7747c42"
+    },
+    "native-cold-red1-source.patch": {
+      "bytes": 618,
+      "sha256": "a1945b73ca33e92acc5d47a0fbe212599548fe31fe6b53b68672e9db33feab4a"
+    }
+  }
+}

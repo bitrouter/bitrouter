@@ -1,0 +1,99 @@
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index 2a2d66be..7649c222 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -418,6 +418,94 @@ async fn pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configurat
+     Ok(())
+ }
+ 
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent() -> Result<()>
++{
++    for harness in [None, Some("goal-peer")] {
++        let home = tempfile::tempdir()?;
++        let extra = mcp_worker_configuration(home.path()).await?;
++        let (coordinator, db) =
++            coordinator_with_config(home.path(), "sqlite::memory:", &extra).await?;
++        let result: Result<()> = async {
++            let selection = Selection {
++                mcp_servers: vec!["selected".into()],
++                ..Default::default()
++            };
++            let id = prepared_worker_attempt(&coordinator, home.path(), harness, selection).await?;
++            change_selected_mcp(&coordinator).await?;
++            let before = read(&coordinator, &id).await?;
++            let task = &before.workflow.tasks[0];
++            let original = task.executions[0].clone();
++            // The first launcher records this uncertainty after an error. A
++            // saved dispatch intent alone cannot tell whether it was accepted.
++            coordinator
++                .change(
++                    &before,
++                    Change::ObserveExecution {
++                        execution_id: original.id.clone(),
++                        observation: Observation::Unknown {
++                            run_id: None,
++                            reason: "Selected resources rejected before Turn admission".into(),
++                        },
++                    },
++                )
++                .await?;
++            let pending = read(&coordinator, &id).await?;
++            coordinator
++                .drive_task(&pending, &pending.workflow.tasks[0])
++                .await?;
++            let reconciled = read(&coordinator, &id).await?;
++            let task = &reconciled.workflow.tasks[0];
++            assert_eq!(
++                task.execution_admission(
++                    reconciled.requirements_revision,
++                    reconciled.control_source_revision
++                ),
++                ExecutionAdmission::Ready,
++                "an original action with no accepted Turn remains permanently blocked"
++            );
++            assert!(
++                task.executions[0].dispatch_requested,
++                "the saved dispatch intent must remain in history"
++            );
++            assert_eq!(task.executions[0].resources, original.resources);
++            assert!(task.executions[0].thread.is_none());
++            assert!(!original.workspace.join("mcp.pid").exists());
++            assert!(
++                tokio::fs::read_dir(home.path().join("captures"))
++                    .await?
++                    .next_entry()
++                    .await?
++                    .is_none()
++            );
++            coordinator
++                .change(
++                    &reconciled,
++                    Change::RequestExecution {
++                        task_id: task.spec.id.clone(),
++                        execution_id: "prepared-again".into(),
++                        workspace: coordinator.workspaces.join(&id).join("prepared-again"),
++                    },
++                )
++                .await?;
++            let next = read(&coordinator, &id).await?;
++            assert_eq!(next.workflow.tasks[0].executions.len(), 2);
++            assert_eq!(next.workflow.tasks[0].executions[0], task.executions[0]);
++            assert_eq!(
++                next.workflow.owner_thread_id,
++                reconciled.workflow.owner_thread_id
++            );
++            Ok(())
++        }
++        .await;
++        coordinator.threads.shutdown().await;
++        coordinator.supervisor.shutdown().await;
++        db.close().await?;
++        result?;
++    }
++    Ok(())
++}
++
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+ async fn accepted_native_and_acp_receipts_keep_original_resources_after_mcp_config_change()
+ -> Result<()> {

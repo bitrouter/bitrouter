@@ -1,0 +1,25 @@
+{
+  "source": "native-evidence-source1.json",
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "--all-features",
+    "--lib",
+    "--test",
+    "goals",
+    "--no-fail-fast",
+    "-E",
+    "test(native_goal_uses_real_thread_turn)"
+  ],
+  "startedAt": "2026-10-16T10:36:40.921Z",
+  "log": "native-evidence-red1.log",
+  "priorRun": "Worker replacement, immutable requested worker provenance, Goal protocol6 and application marker31; partial S3 implementation.",
+  "code": 100,
+  "signal": null,
+  "finishedAt": "2026-10-16T10:38:19.268Z",
+  "changed": [],
+  "summary": "     Summary [  45.143s] 1 test run: 0 passed, 1 failed, 1914 skipped",
+  "passed": false
+}

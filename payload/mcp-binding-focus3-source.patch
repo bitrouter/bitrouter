@@ -1,0 +1,322 @@
+diff --git a/apps/bitrouter/src/goal_runtime/acp.rs b/apps/bitrouter/src/goal_runtime/acp.rs
+index 78ebe1d5..7105d391 100644
+--- a/apps/bitrouter/src/goal_runtime/acp.rs
++++ b/apps/bitrouter/src/goal_runtime/acp.rs
+@@ -292,6 +292,7 @@ impl Coordinator {
+         {
+             Some(thread) => thread,
+             None => {
++                super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
+                 self.threads
+                     .create_goal_acp_thread(
+                         &ThreadTarget {
+@@ -330,6 +331,10 @@ impl Coordinator {
+         {
+             Some(turn) => turn,
+             None => {
++                // Thread metadata can outlive a missing Turn admission. Check
++                // the exact descriptors again before constructing its driver;
++                // an existing Turn receipt remains readable after config edits.
++                super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
+                 let driver = Arc::new(Adapter {
+                     supervisor: self.supervisor.clone(),
+                     threads: self.threads.clone(),
+diff --git a/apps/bitrouter/src/goal_runtime/native.rs b/apps/bitrouter/src/goal_runtime/native.rs
+index 4cfa4221..c72a547b 100644
+--- a/apps/bitrouter/src/goal_runtime/native.rs
++++ b/apps/bitrouter/src/goal_runtime/native.rs
+@@ -81,6 +81,10 @@ impl Coordinator {
+             Some(thread) => thread,
+             None => {
+                 let config = self.routing.snapshot_config();
++                super::resources::verify_mcp_configuration(
++                    execution,
++                    &super::resources::servers(&config, &task.spec.resources)?,
++                )?;
+                 let model = task
+                     .spec
+                     .resources
+diff --git a/apps/bitrouter/src/goal_runtime/resources.rs b/apps/bitrouter/src/goal_runtime/resources.rs
+index 7ea1d41e..c14dafce 100644
+--- a/apps/bitrouter/src/goal_runtime/resources.rs
++++ b/apps/bitrouter/src/goal_runtime/resources.rs
+@@ -153,6 +153,21 @@ pub(super) fn digest(bytes: &[u8]) -> String {
+     hex::encode(Sha256::digest(bytes))
+ }
+ 
++pub(super) fn verify_mcp_configuration(
++    execution: &Execution,
++    descriptors: &[acp::McpServer],
++) -> Result<()> {
++    let prepared = execution
++        .resources
++        .as_ref()
++        .context("saved worker resources are missing")?;
++    ensure!(
++        digest(&serde_json::to_vec(descriptors)?) == prepared.mcp_configuration_sha256,
++        "selected MCP configuration changed since saved input; new worker admission is blocked"
++    );
++    Ok(())
++}
++
+ impl Coordinator {
+     pub(super) async fn prepare_resources(
+         &self,
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index 5150e812..26c57b85 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -4,6 +4,7 @@
+ 
+ use super::*;
+ use bitrouter_orchestrator::agent::AgentConfig;
++use bitrouter_orchestrator::goal::resources::Selection;
+ use bitrouter_orchestrator::service::ThreadService;
+ use bitrouter_orchestrator::store::ExecutionStore;
+ use bitrouter_orchestrator::thread::{
+@@ -84,13 +85,14 @@ async fn read(coordinator: &Coordinator, id: &str) -> Result<GoalSnapshot> {
+ }
+ 
+ async fn prepared_native_attempt(original: &Coordinator, home: &Path) -> Result<String> {
+-    prepared_worker_attempt(original, home, None).await
++    prepared_worker_attempt(original, home, None, Selection::default()).await
+ }
+ 
+ async fn prepared_worker_attempt(
+     original: &Coordinator,
+     home: &Path,
+     harness: Option<&str>,
++    selection: Selection,
+ ) -> Result<String> {
+     use bitrouter_orchestrator::goal::completion::{Condition, Specification};
+     use bitrouter_orchestrator::goal::resources::Prepared;
+@@ -128,6 +130,10 @@ async fn prepared_worker_attempt(
+         },
+     )
+     .await?;
++    let descriptors =
++        super::super::resources::servers(&original.routing.snapshot_config(), &selection)?;
++    let mcp_configuration_sha256 =
++        super::super::resources::digest(&serde_json::to_vec(&descriptors)?);
+     for change in [
+         Change::RequestPlan {
+             attempt_id: "plan".into(),
+@@ -142,7 +148,7 @@ async fn prepared_worker_attempt(
+                     harness: harness.map(str::to_owned),
+                     dependencies: vec![],
+                     checks: vec![],
+-                    resources: Default::default(),
++                    resources: selection.clone(),
+                 }],
+                 completion: Specification {
+                     conditions: vec![Condition {
+@@ -168,11 +174,11 @@ async fn prepared_worker_attempt(
+             execution_id: "original-work".into(),
+             resources: Prepared {
+                 worker_handoff: None,
+-                selection: Default::default(),
++                selection,
+                 prompt,
+                 materials: vec![],
+                 checked_dependencies: None,
+-                mcp_configuration_sha256: "a".repeat(64),
++                mcp_configuration_sha256,
+             },
+         },
+         Change::RequestDispatch {
+@@ -199,7 +205,13 @@ async fn saved_acp_intent_without_any_thread_admission_uses_its_original_action(
+     );
+     let (coordinator, db) = coordinator_with_config(home.path(), "sqlite::memory:", &extra).await?;
+     let result = async {
+-        let id = prepared_worker_attempt(&coordinator, home.path(), Some("goal-peer")).await?;
++        let id = prepared_worker_attempt(
++            &coordinator,
++            home.path(),
++            Some("goal-peer"),
++            Selection::default(),
++        )
++        .await?;
+         let before = read(&coordinator, &id).await?;
+         let task = &before.workflow.tasks[0];
+         let original = &task.executions[0];
+@@ -312,6 +324,180 @@ async fn saved_acp_intent_without_any_thread_admission_uses_its_original_action(
+     result
+ }
+ 
++async fn mcp_worker_configuration(home: &Path) -> Result<String> {
++    for name in ["controls", "captures"] {
++        tokio::fs::create_dir_all(home.join(name)).await?;
++    }
++    let mcp = fixture_binary::build("harness_mcp_fixture").map_err(anyhow::Error::msg)?;
++    Ok(format!(
++        "mcp_servers:\n  selected:\n    name: selected\n    transport:\n      type: stdio\n      command: {}\n      env: {{FIXTURE_SELECTED_VERSION: old}}\nagents:\n  goal-peer:\n    name: goal-peer\n    transport:\n      type: stdio\n      command: {}\n      env:\n        BRO_GOAL_FIXTURE_CONTROL: {}\n        BRO_GOAL_FIXTURE_CAPTURE: {}\n",
++        serde_json::to_string(&mcp)?,
++        serde_json::to_string(&peer_executable()?)?,
++        serde_json::to_string(&home.join("controls"))?,
++        serde_json::to_string(&home.join("captures"))?
++    ))
++}
++
++async fn change_selected_mcp(coordinator: &Coordinator) -> Result<()> {
++    let mut config = coordinator.routing.snapshot_config();
++    let server = config
++        .mcp_servers
++        .get_mut("selected")
++        .context("selected configuration missing")?;
++    let bitrouter_sdk::mcp::transport::McpTransport::Stdio { env, .. } = &mut server.transport
++    else {
++        anyhow::bail!("fixture transport changed")
++    };
++    env.insert("FIXTURE_SELECTED_VERSION".into(), "new".into());
++    coordinator.routing.replace_prepared_config(config).await?;
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration() -> Result<()>
++{
++    for harness in [None, Some("goal-peer")] {
++        let home = tempfile::tempdir()?;
++        let extra = mcp_worker_configuration(home.path()).await?;
++        let (coordinator, db) =
++            coordinator_with_config(home.path(), "sqlite::memory:", &extra).await?;
++        let result: Result<()> = async {
++            let selection = Selection { mcp_servers:vec!["selected".into()], ..Default::default() };
++            let id = prepared_worker_attempt(&coordinator, home.path(), harness, selection).await?;
++            let goal = read(&coordinator, &id).await?;
++            let task = &goal.workflow.tasks[0];
++            let execution = &task.executions[0];
++            let prepared = execution.resources.as_ref().context("saved resources missing")?;
++            let original = prepared.clone();
++            let source = super::super::native::source(&goal, task, execution)?;
++            change_selected_mcp(&coordinator).await?;
++            let descriptors = super::super::resources::servers(&coordinator.routing.snapshot_config(), &prepared.selection)?;
++            assert_ne!(super::super::resources::digest(&serde_json::to_vec(&descriptors)?), prepared.mcp_configuration_sha256);
++            let prompt = String::from_utf8(crate::goal_artifacts::read(&crate::goal_artifacts::root(&coordinator.workspaces, &id), &prepared.prompt).await?)?;
++            let launched = match harness {
++                Some(harness) => Box::pin(coordinator.launch_acp(&goal, task, &execution.id, prompt, harness, descriptors)).await,
++                None => Box::pin(coordinator.launch_native(&goal, task, &execution.id, prompt)).await,
++            };
++            anyhow::ensure!(launched.as_ref().err().is_some_and(|error| error.to_string().contains("selected MCP configuration changed")),
++                "changed frozen MCP configuration was not fenced before {harness:?} admission: {launched:?}");
++            assert!(coordinator.threads.find_thread_admission(&coordinator.threads.capabilities().server_instance_id,
++                &CallerContext::local(), &bitrouter_orchestrator::service::worker::thread_key(&source)?).await?.is_none());
++            assert!(!execution.workspace.join("mcp.pid").exists());
++            assert!(tokio::fs::read_dir(home.path().join("captures")).await?.next_entry().await?.is_none());
++            let retained = read(&coordinator, &id).await?;
++            assert_eq!(retained.workflow.tasks[0].executions[0].resources.as_ref(), Some(&original));
++            Ok(())
++        }.await;
++        coordinator.threads.shutdown().await;
++        coordinator.supervisor.shutdown().await;
++        db.close().await?;
++        result?;
++    }
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn accepted_native_and_acp_receipts_keep_original_resources_after_mcp_config_change()
++-> Result<()> {
++    for harness in [None, Some("goal-peer")] {
++        let home = tempfile::tempdir()?;
++        let extra = mcp_worker_configuration(home.path()).await?;
++        let (coordinator, db) =
++            coordinator_with_config(home.path(), "sqlite::memory:", &extra).await?;
++        let result: Result<()> = async {
++            let selection = Selection {
++                mcp_servers: vec!["selected".into()],
++                ..Default::default()
++            };
++            let id = prepared_worker_attempt(&coordinator, home.path(), harness, selection).await?;
++            let before = read(&coordinator, &id).await?;
++            let original_resources = before.workflow.tasks[0].executions[0]
++                .resources
++                .clone()
++                .context("prepared resources missing")?;
++            let prompt = String::from_utf8(
++                crate::goal_artifacts::read(
++                    &crate::goal_artifacts::root(&coordinator.workspaces, &id),
++                    &original_resources.prompt,
++                )
++                .await?,
++            )?;
++            let descriptors = super::super::resources::servers(
++                &coordinator.routing.snapshot_config(),
++                &original_resources.selection,
++            )?;
++            let task = &before.workflow.tasks[0];
++            match harness {
++                Some(harness) => {
++                    Box::pin(coordinator.launch_acp(
++                        &before,
++                        task,
++                        "original-work",
++                        prompt.clone(),
++                        harness,
++                        descriptors,
++                    ))
++                    .await?
++                }
++                None => {
++                    Box::pin(coordinator.launch_native(
++                        &before,
++                        task,
++                        "original-work",
++                        prompt.clone(),
++                    ))
++                    .await?
++                }
++            }
++            let accepted = read(&coordinator, &id).await?;
++            let binding = accepted.workflow.tasks[0].executions[0]
++                .thread
++                .clone()
++                .context("original binding missing")?;
++            change_selected_mcp(&coordinator).await?;
++            let descriptors = super::super::resources::servers(
++                &coordinator.routing.snapshot_config(),
++                &original_resources.selection,
++            )?;
++            assert_ne!(
++                super::super::resources::digest(&serde_json::to_vec(&descriptors)?),
++                original_resources.mcp_configuration_sha256
++            );
++            let task = &accepted.workflow.tasks[0];
++            match harness {
++                Some(harness) => {
++                    Box::pin(coordinator.launch_acp(
++                        &accepted,
++                        task,
++                        "original-work",
++                        prompt,
++                        harness,
++                        descriptors,
++                    ))
++                    .await?
++                }
++                None => {
++                    Box::pin(coordinator.launch_native(&accepted, task, "original-work", prompt))
++                        .await?
++                }
++            }
++            let replayed = read(&coordinator, &id).await?;
++            assert_eq!(replayed.workflow.tasks[0].executions.len(), 1);
++            let retained = &replayed.workflow.tasks[0].executions[0];
++            assert_eq!(retained.thread.as_ref(), Some(&binding));
++            assert_eq!(retained.resources.as_ref(), Some(&original_resources));
++            assert!(!replayed.workflow.completion.completed_for(1));
++            Ok(())
++        }
++        .await;
++        coordinator.threads.shutdown().await;
++        coordinator.supervisor.shutdown().await;
++        db.close().await?;
++        result?;
++    }
++    Ok(())
++}
++
+ #[tokio::test]
+ async fn native_late_stop_evidence_uses_the_original_turn_even_after_resume() -> Result<()> {
+     for (unknown_observation, resumed, failed_commit) in [

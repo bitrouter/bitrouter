@@ -1,0 +1,92 @@
+{
+  "source": "native-history-green3-source.json",
+  "scope": "Native historical projection retains exact archive identities and SDK reports within the existing 48 KiB bound by explicitly omitting selected native public display details before the old fail-closed fallback. Actual native execution, SQLite archive receipt, corruption refusal and read-side no-execution checks. Native timing completeness stays false; ACP timing events are untouched.",
+  "startedAt": "2026-10-16T17:33:05.630Z",
+  "runs": [
+    {
+      "name": "archive-boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ],
+      "log": "native-history-green3-archive-boundary.log",
+      "startedAt": "2026-10-16T17:33:05.630Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:34:27.383Z",
+      "summaries": [
+        "     Summary [  17.241s] 1 test run: 1 passed, 1835 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "evidence",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::runtime_evidence::) | test(goal_runtime::native_evidence::) | test(goal_code::evidence::) | test(goal_archive::)"
+      ],
+      "log": "native-history-green3-evidence.log",
+      "startedAt": "2026-10-16T17:34:27.384Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:34:28.312Z",
+      "summaries": [
+        "     Summary [   0.072s] 6 tests run: 6 passed, 1830 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "native-history-green3-clippy.log",
+      "startedAt": "2026-10-16T17:34:28.312Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:35:11.409Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "native-history-green3-fmt.log",
+      "startedAt": "2026-10-16T17:35:11.409Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:35:31.966Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:35:32.073Z",
+  "changed": [],
+  "passed": true
+}

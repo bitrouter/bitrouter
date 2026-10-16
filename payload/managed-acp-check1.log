@@ -1,0 +1,32 @@
+    Checking rustls v0.23.41
+    Checking tokio-rustls v0.26.4
+    Checking rustls-platform-verifier v0.7.0
+    Checking sqlx-core v0.8.6
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.13.4
+    Checking bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+    Checking rmcp v3.3.0
+    Checking opentelemetry-http v0.32.0
+    Checking axoasset v2.0.1
+    Checking opentelemetry-otlp v0.32.0
+    Checking axoupdater v0.10.0
+    Checking sqlx-postgres v0.8.6
+    Checking sqlx-sqlite v0.8.6
+    Checking sqlx-mysql v0.8.6
+    Checking sqlx v0.8.6
+    Checking sea-query-binder v0.7.0
+    Checking sea-orm v1.1.20
+    Checking sea-schema v0.16.2
+    Checking bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Checking sea-orm-migration v1.1.20
+    Checking bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Checking bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error[E0308]: mismatched types
+   --> apps/bitrouter/src/goal_runtime/threads.rs:129:41
+    |
+129 | ...                   config: owner_view.config,
+    |                               ^^^^^^^^^^^^^^^^^ expected `AgentConfig`, found `Config`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `bitrouter` (lib) due to 1 previous error

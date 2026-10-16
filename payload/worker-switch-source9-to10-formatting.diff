@@ -1,0 +1,13 @@
+--- /tmp/bro-worker-switch-source9-extract-fvi137/apps/bitrouter/tests/goals/input.rs	2026-10-16 06:12:05
++++ /Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter/tests/goals/input.rs	2026-10-16 06:13:31
+@@ -67,7 +67,9 @@
+     .context("save replacement request")?;
+     let saved = snapshot(&goals, &id).await?;
+     let left = &saved.workflow.tasks[0];
+-    let control_source = saved.control_source_revision.max(left.control_source_revision);
++    let control_source = saved
++        .control_source_revision
++        .max(left.control_source_revision);
+     assert!(left.spec.harness.is_none());
+     assert_eq!(left.executions[0], old);
+     assert_eq!(left.execution_harness(&old), Some("configured-acp"));

@@ -1,0 +1,66 @@
+{
+  "source": "main-catalog-sync2-source.json",
+  "scope": "Local merge of main 54c822a3 into feature checkpoint 3c0310d5. Only five registry/catalog files changed, 81 insertions; no Rust code or test change. Validate/build/check registry as required. This is not a final runtime/full-workspace or hosted-CI pass.",
+  "startedAt": "2026-10-16T17:46:48.273Z",
+  "runs": [
+    {
+      "name": "registry-validate",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "registry",
+        "validate"
+      ],
+      "log": "main-catalog-sync2-registry-validate.log",
+      "startedAt": "2026-10-16T17:46:48.273Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:47:04.393Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "registry-build",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "registry",
+        "build"
+      ],
+      "log": "main-catalog-sync2-registry-build.log",
+      "startedAt": "2026-10-16T17:47:04.394Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:47:05.328Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "dist-check",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ],
+      "log": "main-catalog-sync2-dist-check.log",
+      "startedAt": "2026-10-16T17:47:05.328Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:47:06.095Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:47:06.276Z",
+  "changed": [],
+  "passed": true
+}

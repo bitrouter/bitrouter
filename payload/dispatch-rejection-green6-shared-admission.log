@@ -1,0 +1,12 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 28.04s
+────────────
+ Nextest run ID b9a7499d-3823-4305-8b2c-7b17c1e449b2 with nextest profile: default
+    Starting 5 tests across 3 binaries (627 tests skipped)
+        PASS [   0.028s] (1/5) bitrouter-orchestrator service::tests::worker::waiting::revoked_worker_waiting_on_admission_lock_cannot_accept_a_turn
+        PASS [   0.101s] (2/5) bitrouter-orchestrator service::tests::worker::acp::acp_last_dispatch_check_rejects_changed_owner_source_and_workspace_grant
+        PASS [   0.420s] (3/5) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention
+        PASS [   1.373s] (4/5) bitrouter-orchestrator service::tests::worker::waiting::native_worker_waits_for_known_capacity_and_replays_only_original_admission
+        PASS [   2.627s] (5/5) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_refuses_withdrawn_sources_deadlines_and_unknown_workspace_owners
+────────────
+     Summary [   2.631s] 5 tests run: 5 passed, 627 skipped

@@ -1,0 +1,34 @@
+{
+  "id": "native-history-follow4",
+  "scope": "Byte-identical follow-up to green3: all Goal runtime regressions and three actual native archive-reader matrices, including the unchanged 48 KiB bound and no read-side work. Final whole-refactor, ACP/session, live, main integration and full workspace gates remain open.",
+  "jobs": [
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::)"
+      ]
+    },
+    {
+      "name": "archive-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "3",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ]
+    }
+  ]
+}

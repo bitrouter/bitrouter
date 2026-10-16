@@ -1,0 +1,64 @@
+{
+  "id": "native-cold-green2",
+  "scope": "Native Goal continuation on controlled SQLite checkpoint images, original-key body refusal, source/effect/pause boundaries, actual SDK/read replay counters; not abrupt-crash or external ACP recovery",
+  "jobs": [
+    {
+      "name": "boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::)"
+      ]
+    },
+    {
+      "name": "shared-worker",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::worker)"
+      ]
+    }
+  ]
+}

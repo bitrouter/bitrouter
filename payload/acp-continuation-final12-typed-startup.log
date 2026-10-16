@@ -1,0 +1,40 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 15s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 309150c1-6d63-4719-a375-01ab652fe766 with nextest profile: default
+    Starting 2 tests across 7 binaries (3664 tests skipped)
+        PASS [   0.515s] (1/2) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        FAIL [   0.255s] (2/2) bitrouter goal_runtime::resources::tests::unsupported_mcp_transports_are_rejected_before_session_open_and_reaped
+  stdout ───
+
+    running 1 test
+    test goal_runtime::resources::tests::unsupported_mcp_transports_are_rejected_before_session_open_and_reaped ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::resources::tests::unsupported_mcp_transports_are_rejected_before_session_open_and_reaped
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1837 filtered out; finished in 0.24s
+
+  stderr ───
+    Failure-retention resource startup fixture: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpM51uAa
+
+    thread 'goal_runtime::resources::tests::unsupported_mcp_transports_are_rejected_before_session_open_and_reaped' (2859491) panicked at apps/bitrouter/src/goal_runtime/resources/tests.rs:317:9:
+    assertion `left == right` failed: startup phase receipt differs from the captured protocol requests
+      left: false
+     right: true
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.788s] 2 tests run: 1 passed, 1 failed, 3664 skipped
+        FAIL [   0.255s] (2/2) bitrouter goal_runtime::resources::tests::unsupported_mcp_transports_are_rejected_before_session_open_and_reaped
+error: test run failed

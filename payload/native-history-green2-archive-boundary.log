@@ -1,0 +1,35 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 02s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 5eb2e5b4-b004-435a-bb7e-ef776d5ea720 with nextest profile: default
+    Starting 1 test across 1 binary (1835 tests skipped)
+        FAIL [  17.721s] (1/1) bitrouter goal_runtime::tests::native::superseded_native_execution_keeps_receipt_verified_history_without_replay
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::superseded_native_execution_keeps_receipt_verified_history_without_replay ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::superseded_native_execution_keeps_receipt_verified_history_without_replay
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1835 filtered out; finished in 17.70s
+
+  stderr ───
+    Failure-retention Goal fixture: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp0Nes2V
+    Retained failed Goal fixture: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp0Nes2V
+    Error: original native history missing: {"historical_only":true,"current_artifact_authority":false,"goal_id":"e29d0402-dc2d-4f41-9a5d-0a758f9bb2e2","task_id":"inspect","entries":[],"omitted_executions":1,"scope":"Bounded earlier execution activity from live records or an exact committed archive receipt. Complete ordered activity boundaries may support a historical workflow condition such as parallel work. These observations do not verify the current delivery, satisfy current task checks, approve a handoff, grant permissions or authorize replay. Omitted, changed or incomplete observations remain unknown.","status":"unavailable: history projection exceeded 48 KiB"}
+
+  Cancelling due to test failure: 
+────────────
+     Summary [  17.730s] 1 test run: 0 passed, 1 failed, 1835 skipped
+        FAIL [  17.721s] (1/1) bitrouter goal_runtime::tests::native::superseded_native_execution_keeps_receipt_verified_history_without_replay
+error: test run failed

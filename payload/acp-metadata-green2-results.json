@@ -1,0 +1,92 @@
+{
+  "source": "acp-metadata-green2-source.json",
+  "scope": "Never-started ACP metadata uses existing shared idle checkpoint recovery only when the journal accepted no Turn; original source/config is validated first, stopped owner/workspace/live control fences remain. Real SQLite and actual first Rust-peer session; no private ACP session restore or full-refactor claim.",
+  "startedAt": "2026-10-16T18:01:16.193Z",
+  "runs": [
+    {
+      "name": "unopened-metadata",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown)"
+      ],
+      "log": "acp-metadata-green2-unopened-metadata.log",
+      "startedAt": "2026-10-16T18:01:16.193Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:02:42.862Z",
+      "summaries": [
+        "     Summary [   3.655s] 1 test run: 1 passed, 1836 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "shared-worker-recovery",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(service::tests::worker::) | test(service::tests::recovery::)"
+      ],
+      "log": "acp-metadata-green2-shared-worker-recovery.log",
+      "startedAt": "2026-10-16T18:02:42.864Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:04:47.019Z",
+      "summaries": [
+        "     Summary [  89.496s] 32 tests run: 32 passed (1 slow), 258 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "acp-metadata-green2-clippy.log",
+      "startedAt": "2026-10-16T18:04:47.019Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:05:56.456Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "acp-metadata-green2-fmt.log",
+      "startedAt": "2026-10-16T18:05:56.456Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:06:17.036Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T18:06:17.145Z",
+  "changed": [],
+  "passed": true
+}

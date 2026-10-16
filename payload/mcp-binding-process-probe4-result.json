@@ -1,0 +1,25 @@
+{
+  "code": 0,
+  "signal": null,
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "--all-features",
+    "--lib",
+    "--no-fail-fast",
+    "--stress-count",
+    "5",
+    "-E",
+    "test(native_late_stop_evidence) | test(pending_native_and_acp_dispatch_refuses_changed_selected_mcp) | test(accepted_native_and_acp_receipts_keep_original_resources)"
+  ],
+  "changed": [],
+  "leaks": [],
+  "summaries": [
+    "     Summary [   2.592s] 5/5 stress run iterations: 5 passed"
+  ],
+  "processesSeen": 49,
+  "stillObserved": [],
+  "scope": "Read-only process ancestry sampling for this owned nextest tree only. Instrumented diagnostic, normal product/test limits and leak timeout unchanged. No signals sent, no unrelated process arguments retained. Passing repeats alone do not explain an earlier leak."
+}

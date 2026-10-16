@@ -1,0 +1,130 @@
+{
+  "source": "dispatch-rejection-green6-source.json",
+  "scope": "Original-key no-admission reconciliation with serialized source revocation; local fixtures and full workspace qualification",
+  "startedAt": "2026-10-16T13:28:35.508Z",
+  "runs": [
+    {
+      "name": "shared-admission",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::worker::waiting) | test(service::tests::worker::acp)"
+      ],
+      "log": "dispatch-rejection-green6-shared-admission.log",
+      "startedAt": "2026-10-16T13:28:35.508Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:29:09.053Z",
+      "summaries": [
+        "     Summary [   2.631s] 5 tests run: 5 passed, 627 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "goal-interruptions",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "-E",
+        "test(goal_runtime::tests::threads) | test(goal_runtime::tests::start_recovery) | test(legacy_startup_rejects_managed_goal_format)"
+      ],
+      "log": "dispatch-rejection-green6-goal-interruptions.log",
+      "startedAt": "2026-10-16T13:29:09.053Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:31:28.407Z",
+      "summaries": [
+        "     Summary [   3.791s] 11 tests run: 11 passed (1 leaky), 2387 skipped"
+      ],
+      "leaks": [
+        "        LEAK [   0.588s] ( 4/11) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "dispatch-rejection-green6-clippy.log",
+      "startedAt": "2026-10-16T13:31:28.409Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:32:16.911Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "dispatch-rejection-green6-fmt.log",
+      "startedAt": "2026-10-16T13:32:16.911Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:32:36.955Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--all-features"
+      ],
+      "log": "dispatch-rejection-green6-workspace.log",
+      "startedAt": "2026-10-16T13:32:36.955Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:44:43.485Z",
+      "summaries": [
+        "     Summary [ 575.567s] 4744 tests run: 4744 passed (8 slow), 24 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "dispatch-rejection-green6-rustdoc.log",
+      "startedAt": "2026-10-16T13:44:43.490Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T13:44:45.011Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T13:44:45.205Z",
+  "changed": [],
+  "passed": true
+}

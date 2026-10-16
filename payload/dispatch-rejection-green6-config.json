@@ -1,0 +1,68 @@
+{
+  "id": "dispatch-rejection-green6",
+  "scope": "Original-key no-admission reconciliation with serialized source revocation; local fixtures and full workspace qualification",
+  "jobs": [
+    {
+      "name": "shared-admission",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::worker::waiting) | test(service::tests::worker::acp)"
+      ]
+    },
+    {
+      "name": "goal-interruptions",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "-E",
+        "test(goal_runtime::tests::threads) | test(goal_runtime::tests::start_recovery) | test(legacy_startup_rejects_managed_goal_format)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--all-features"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

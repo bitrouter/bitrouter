@@ -1,0 +1,25 @@
+{
+  "code": 0,
+  "signal": null,
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "--all-features",
+    "--lib",
+    "--no-fail-fast",
+    "--stress-count",
+    "20",
+    "-E",
+    "test(native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen)"
+  ],
+  "changed": [],
+  "leaks": [],
+  "summaries": [
+    "     Summary [   6.370s] 20/20 stress run iterations: 20 passed"
+  ],
+  "processesSeen": 23,
+  "stillObserved": [],
+  "scope": "Read-only sampling of this owned Cargo/nextest tree only; no signals, no source or product/test limit changes. Instrumentation is diagnostic and can miss brief children. A passing repetition does not explain the earlier leak."
+}

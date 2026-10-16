@@ -1,0 +1,130 @@
+{
+  "base": "65e4150d6533ea42762331b991a04b0eafbd6a95",
+  "files": [
+    {
+      "file": "ADMISSION_RECOVERY_INDEX.md",
+      "bytes": 1159,
+      "sha256": "d706b7584dfb2c607e029ac1050e0877eb0bf2eee7d975e39f284ca1230f1592"
+    },
+    {
+      "file": "admission-recovery-applicability3.json",
+      "bytes": 160498,
+      "sha256": "6aef251f149e83d796686dd86bf4d9f594b4e7d29acbc9dcaf65c13076bba60c"
+    },
+    {
+      "file": "admission-recovery-final3-files.tar.gz",
+      "bytes": 57281,
+      "sha256": "d32edcf2031d81c6784c2290791ff103db8a13f4f77a618cc7fdd2c41bd30d05"
+    },
+    {
+      "file": "admission-recovery-final3.patch",
+      "bytes": 16468,
+      "sha256": "b5515c1398384ec930cf8d7d760685155755268273588a0c9ed00420fd685895"
+    },
+    {
+      "file": "admission-recovery-focus2-audit.json",
+      "bytes": 97,
+      "sha256": "6b3e7544331a28bbee73e72dbd2b309a65999720cfb015be2868a31a89ea280a"
+    },
+    {
+      "file": "admission-recovery-focus2-clippy.log",
+      "bytes": 418,
+      "sha256": "51d630ec7f96012c69c2b100c95b6bbee71314a300ab8ed939a73e532e79f827"
+    },
+    {
+      "file": "admission-recovery-focus2-config.json",
+      "bytes": 1427,
+      "sha256": "fd0cd6b6904e001f294324d7d95018f98fb0a129a84d9f9c379901dd9a2331dd"
+    },
+    {
+      "file": "admission-recovery-focus2-files.tar.gz",
+      "bytes": 31487,
+      "sha256": "4d294f05d131127edaeb583d9065ffbd35c1f2ffa9edd7763c0eff30391b1a4b"
+    },
+    {
+      "file": "admission-recovery-focus2-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "admission-recovery-focus2-goal-runtime.log",
+      "bytes": 12311,
+      "sha256": "54394f35053af72876a9d7da9af8d8168e17714f4291fd9c0d418e4fa9eb9154"
+    },
+    {
+      "file": "admission-recovery-focus2-interruptions.log",
+      "bytes": 1844,
+      "sha256": "81f65a66b9cef0860748c262f3752998380d3f9dbaab21ecd7698fece0957a33"
+    },
+    {
+      "file": "admission-recovery-focus2-results.json",
+      "bytes": 3086,
+      "sha256": "5d48bb671c32c51bd97ce90a3a4bcdcf251e7d8ebf592fb4097a24739fdd7fc7"
+    },
+    {
+      "file": "admission-recovery-focus2-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "admission-recovery-focus2-source.json",
+      "bytes": 159997,
+      "sha256": "bbdda5ea9867b4c9a5c177a4b1b707da024b3f5bc9030d8c387d54aa1c165eaf"
+    },
+    {
+      "file": "admission-recovery-focus2-source.patch",
+      "bytes": 11877,
+      "sha256": "ceee1b9e333a1b0b8650cd795da919b95f7f1a261443080d72843e8770f4661c"
+    },
+    {
+      "file": "admission-recovery-focus2-stress.log",
+      "bytes": 3300,
+      "sha256": "d72e3e632f541e9bb224ad73b89db358b6180ad38220254308fd645a44f2b77a"
+    },
+    {
+      "file": "admission-recovery-index-runner3.mjs",
+      "bytes": 4058,
+      "sha256": "3e7af1b269b7f534cc748117242a6ab35b39cb6b923efd818017f29aa5cab3ce"
+    },
+    {
+      "file": "admission-recovery-red1-audit.json",
+      "bytes": 95,
+      "sha256": "46812c35fe4008d7dfe17d0204b7de99a1881d76a50b7672c5c4dd479e6c8f3b"
+    },
+    {
+      "file": "admission-recovery-red1-config.json",
+      "bytes": 457,
+      "sha256": "be0f9b9c9c836827dfc65fd6882d45b62aae3e2ecb12945ff30dba943d59a0da"
+    },
+    {
+      "file": "admission-recovery-red1-files.tar.gz",
+      "bytes": 7007,
+      "sha256": "0af8e874b78fc30e2e9348065f249290e436fcdfbd50ac0cf8cec619bf010430"
+    },
+    {
+      "file": "admission-recovery-red1-regression.log",
+      "bytes": 1820,
+      "sha256": "8e8e1a5fec2659bffadf9f5ed22b858c6a70c23a0573c3e3b29da24d40336773"
+    },
+    {
+      "file": "admission-recovery-red1-results.json",
+      "bytes": 942,
+      "sha256": "f948793b62f47d0c8cde1f4c74d3ade9b19f823814f7ddb3d55f67e317f4e689"
+    },
+    {
+      "file": "admission-recovery-red1-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "admission-recovery-red1-source.json",
+      "bytes": 159997,
+      "sha256": "3bf5b917e52c3e9340ed00bb987f284c3a5901087232641fa21fa37bdd36acae"
+    },
+    {
+      "file": "admission-recovery-red1-source.patch",
+      "bytes": 8818,
+      "sha256": "15043dd5bad14f637013bf3cd6908e45211b3fef2db48f1cc227a7a4fe17487d"
+    }
+  ]
+}

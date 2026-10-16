@@ -1,0 +1,74 @@
+{
+  "source": "late-stop-source6.json",
+  "startedAt": "2026-10-16T06:46:54.264Z",
+  "purpose": "Full regression with retained editor fixtures and exact startup errors, not a claim that intermittent failures are fixed",
+  "runs": [
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "late-stop-full3.log",
+      "startedAt": "2026-10-16T06:46:54.265Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T06:56:17.483Z"
+    },
+    {
+      "id": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "late-stop-clippy4.log",
+      "startedAt": "2026-10-16T06:56:17.484Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T06:56:55.679Z"
+    },
+    {
+      "id": "format",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "late-stop-fmt5.log",
+      "startedAt": "2026-10-16T06:56:55.679Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T06:57:15.895Z"
+    },
+    {
+      "id": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc",
+        "--jobs=2"
+      ],
+      "log": "late-stop-doctests3.log",
+      "startedAt": "2026-10-16T06:57:15.895Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T06:57:23.001Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T06:57:23.001Z",
+  "passed": true
+}

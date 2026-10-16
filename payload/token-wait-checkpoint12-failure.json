@@ -1,0 +1,6 @@
+{
+  "action": "git bundle create with raw SHA positive revision",
+  "exitCode": 128,
+  "error": "Refusing to create empty bundle",
+  "scope": "Packaging command failed because no named positive ref was exported. No source or Git history was modified, and no bundle is claimed."
+}

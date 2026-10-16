@@ -1,0 +1,55 @@
+{
+  "id": "mcp-binding-focus3",
+  "scope": "Frozen selected MCP descriptors before native/ACP admission; original accepted receipt lookup remains valid after later config changes; partial S4 resource binding proof",
+  "jobs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime::tests::threads) | test(goal_runtime::tests::start_recovery)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ]
+    }
+  ]
+}

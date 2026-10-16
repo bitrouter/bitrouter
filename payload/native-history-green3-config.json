@@ -1,0 +1,52 @@
+{
+  "id": "native-history-green3",
+  "scope": "Native historical projection retains exact archive identities and SDK reports within the existing 48 KiB bound by explicitly omitting selected native public display details before the old fail-closed fallback. Actual native execution, SQLite archive receipt, corruption refusal and read-side no-execution checks. Native timing completeness stays false; ACP timing events are untouched.",
+  "jobs": [
+    {
+      "name": "archive-boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ]
+    },
+    {
+      "name": "evidence",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::runtime_evidence::) | test(goal_runtime::native_evidence::) | test(goal_code::evidence::) | test(goal_archive::)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    }
+  ]
+}

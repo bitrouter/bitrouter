@@ -1,0 +1,85 @@
+{
+  "id": "dispatch-rejection-final11",
+  "scope": "Final batch source: all Goal domain/runtime tests after saved-input fault closure, shared admission and compatibility boundaries, strict workspace checks and doctests; source6 remains the earlier full nextest baseline",
+  "jobs": [
+    {
+      "name": "goal-domain",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goals"
+      ]
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::)"
+      ]
+    },
+    {
+      "name": "shared-admission",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::worker::waiting) | test(service::tests::worker::acp)"
+      ]
+    },
+    {
+      "name": "compatibility",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(legacy_startup_rejects_managed_goal_format)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

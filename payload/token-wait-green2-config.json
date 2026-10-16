@@ -1,0 +1,51 @@
+{
+  "id": "token-wait-green2",
+  "scope": "Native worker quote contention, unknown-cost holds, SDK admission cancellation with zero executor polls, and writer compatibility; focused first integration run",
+  "jobs": [
+    {
+      "name": "budget",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ]
+    },
+    {
+      "name": "sdk-admission",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-sdk",
+        "--all-features",
+        "-E",
+        "test(app_preserves_budget_quotes_for_plan_and_attempt_admission) | test(cancelled_or_refused_attempt_admission_reports_no_dispatch_without_polling_executor)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "source": "native-cold-green2-source.json",
+  "scope": "Native Goal continuation on controlled SQLite checkpoint images, original-key body refusal, source/effect/pause boundaries, actual SDK/read replay counters; not abrupt-crash or external ACP recovery",
+  "startedAt": "2026-10-16T14:33:26.752Z",
+  "runs": [
+    {
+      "name": "boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint)"
+      ],
+      "log": "native-cold-green2-boundary.log",
+      "startedAt": "2026-10-16T14:33:26.752Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:34:35.167Z",
+      "summaries": [
+        "     Summary [   0.787s] 1 test run: 0 passed, 1 failed, 1830 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T14:34:35.392Z",
+  "changed": [],
+  "passed": false
+}

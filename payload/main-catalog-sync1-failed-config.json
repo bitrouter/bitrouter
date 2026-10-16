@@ -1,0 +1,38 @@
+{
+  "id": "main-catalog-sync1",
+  "scope": "Local merge of main 54c822a3 into feature checkpoint 3c0310d5. Only five registry/catalog files changed, 81 insertions; no Rust code or test change. Validate/build/check registry as required. This is not a final runtime/full-workspace or hosted-CI pass.",
+  "jobs": [
+    {
+      "name": "registry-validate",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "registry",
+        "validate"
+      ]
+    },
+    {
+      "name": "registry-build",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "registry",
+        "build"
+      ]
+    },
+    {
+      "name": "dist-check",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

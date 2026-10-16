@@ -1,0 +1,95 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 47.59s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 6599c8b2-1f60-46eb-a9c4-227a2e23dcda with nextest profile: default
+    Starting 1 test across 1 binary (37 tests skipped)
+────────────
+ Stress test iteration 1/20 (00:00:00 elapsed so far, 20 iterations remaining)
+        PASS [   0.719s] [ 1/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.725s] iteration 1/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 2/20 (00:00:00 elapsed so far, 19 iterations remaining)
+        PASS [   0.301s] [ 2/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.301s] iteration 2/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 3/20 (00:00:01 elapsed so far, 18 iterations remaining)
+        PASS [   0.275s] [ 3/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.276s] iteration 3/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 4/20 (00:00:01 elapsed so far, 17 iterations remaining)
+        PASS [   0.271s] [ 4/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.272s] iteration 4/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 5/20 (00:00:01 elapsed so far, 16 iterations remaining)
+        PASS [   0.277s] [ 5/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.277s] iteration 5/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 6/20 (00:00:01 elapsed so far, 15 iterations remaining)
+        PASS [   0.286s] [ 6/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.286s] iteration 6/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 7/20 (00:00:02 elapsed so far, 14 iterations remaining)
+        PASS [   0.289s] [ 7/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.290s] iteration 7/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 8/20 (00:00:02 elapsed so far, 13 iterations remaining)
+        PASS [   0.291s] [ 8/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.291s] iteration 8/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 9/20 (00:00:02 elapsed so far, 12 iterations remaining)
+        PASS [   0.404s] [ 9/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.405s] iteration 9/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 10/20 (00:00:03 elapsed so far, 11 iterations remaining)
+        PASS [   0.301s] [10/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.302s] iteration 10/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 11/20 (00:00:03 elapsed so far, 10 iterations remaining)
+        PASS [   0.287s] [11/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.288s] iteration 11/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 12/20 (00:00:03 elapsed so far, 9 iterations remaining)
+        PASS [   0.282s] [12/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.283s] iteration 12/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 13/20 (00:00:03 elapsed so far, 8 iterations remaining)
+        PASS [   0.290s] [13/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.290s] iteration 13/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 14/20 (00:00:04 elapsed so far, 7 iterations remaining)
+        PASS [   0.400s] [14/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.400s] iteration 14/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 15/20 (00:00:04 elapsed so far, 6 iterations remaining)
+        PASS [   0.331s] [15/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.331s] iteration 15/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 16/20 (00:00:05 elapsed so far, 5 iterations remaining)
+        PASS [   0.299s] [16/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.299s] iteration 16/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 17/20 (00:00:05 elapsed so far, 4 iterations remaining)
+        PASS [   0.276s] [17/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.277s] iteration 17/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 18/20 (00:00:05 elapsed so far, 3 iterations remaining)
+        PASS [   0.293s] [18/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.293s] iteration 18/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 19/20 (00:00:05 elapsed so far, 2 iterations remaining)
+        PASS [   0.369s] [19/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.369s] iteration 19/20: 1 test run: 1 passed, 37 skipped
+────────────
+ Stress test iteration 20/20 (00:00:06 elapsed so far, 1 iteration remaining)
+        PASS [   0.293s] [20/20] (1/1) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+ Stress test [   0.294s] iteration 20/20: 1 test run: 1 passed, 37 skipped
+────────────
+     Summary [   6.548s] 20/20 stress run iterations: 20 passed

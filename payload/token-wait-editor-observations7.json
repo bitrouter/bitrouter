@@ -1,0 +1,47 @@
+{
+  "fixtureAudit": "token-wait-final7-editor-fixture-audit.json",
+  "tool": "/usr/bin/sqlite3",
+  "args": [
+    "-json",
+    "file:/tmp/token-wait-final7-editor-fixture-audit-3ZXdOR/bitrouter.db?immutable=1",
+    "select revision, json_extract(cast(payload as text),'$.accepted_at_ms'), json_extract(cast(payload as text),'$.kind') from bro_goal_operations where goal_id='dbafcedf-6c70-4329-8902-b4927a334acb' order by revision"
+  ],
+  "rows": [
+    {
+      "revision": 1,
+      "json_extract(cast(payload as text),'$.accepted_at_ms')": 1792169880120,
+      "json_extract(cast(payload as text),'$.kind')": "{\"kind\":\"created\"}"
+    },
+    {
+      "revision": 2,
+      "json_extract(cast(payload as text),'$.accepted_at_ms')": 1792169880217,
+      "json_extract(cast(payload as text),'$.kind')": "{\"kind\":\"workflow\",\"change\":{\"change\":\"claim_coordinator\",\"id\":\"b41c1c3a-2acd-4471-8656-2e445d3d6378\",\"expires_at_ms\":1792169910217}}"
+    },
+    {
+      "revision": 3,
+      "json_extract(cast(payload as text),'$.accepted_at_ms')": 1792169880217,
+      "json_extract(cast(payload as text),'$.kind')": "{\"kind\":\"workflow\",\"change\":{\"change\":\"claim_coordinator\",\"id\":\"b41c1c3a-2acd-4471-8656-2e445d3d6378\",\"expires_at_ms\":1792169910217}}"
+    },
+    {
+      "revision": 4,
+      "json_extract(cast(payload as text),'$.accepted_at_ms')": 1792169880230,
+      "json_extract(cast(payload as text),'$.kind')": "{\"kind\":\"workflow\",\"change\":{\"change\":\"budget\",\"event\":{\"event\":\"observe_elapsed\"}}}"
+    },
+    {
+      "revision": 5,
+      "json_extract(cast(payload as text),'$.accepted_at_ms')": 1792169880218,
+      "json_extract(cast(payload as text),'$.kind')": "{\"kind\":\"workflow\",\"change\":{\"change\":\"claim_coordinator\",\"id\":\"b41c1c3a-2acd-4471-8656-2e445d3d6378\",\"expires_at_ms\":1792169910218}}"
+    },
+    {
+      "revision": 6,
+      "json_extract(cast(payload as text),'$.accepted_at_ms')": 1792169885716,
+      "json_extract(cast(payload as text),'$.kind')": "{\"kind\":\"workflow\",\"change\":{\"change\":\"budget\",\"event\":{\"event\":\"observe_elapsed\"}}}"
+    },
+    {
+      "revision": 7,
+      "json_extract(cast(payload as text),'$.accepted_at_ms')": 1792169890716,
+      "json_extract(cast(payload as text),'$.kind')": "{\"kind\":\"workflow\",\"change\":{\"change\":\"budget\",\"event\":{\"event\":\"observe_elapsed\"}}}"
+    }
+  ],
+  "scope": "Read-only extracted database evidence: repeated elapsed-budget observations after a recorded halt. It does not retain the rejected request body or prove which concurrent update produced that request conflict."
+}

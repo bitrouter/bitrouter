@@ -1,0 +1,304 @@
+diff --git a/apps/bitrouter/src/goal_runtime/model_control.rs b/apps/bitrouter/src/goal_runtime/model_control.rs
+index beb49cf6..79432f89 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control.rs
+@@ -11,6 +11,8 @@ use bitrouter_sdk::language_model::native_preparation::{
+ use bitrouter_sdk::language_model::native_work::{NativeProviderWork, NativeProviderWorkReport};
+ use std::sync::atomic::{AtomicBool, Ordering};
+ 
++pub(super) mod activity;
++
+ pub(super) struct ModelControl {
+     goals: Arc<GoalService>,
+     goal: GoalSnapshot,
+@@ -22,6 +24,7 @@ pub(super) struct ModelControl {
+     failed_ack: AtomicBool,
+     failure: tokio::sync::Mutex<Option<String>>,
+     plans: tokio::sync::Mutex<BTreeMap<String, NativePlan>>,
++    activity: tokio::sync::Mutex<BTreeMap<String, activity::StreamActivity>>,
+ }
+ 
+ impl ModelControl {
+@@ -67,6 +70,7 @@ impl ModelControl {
+             failed_ack: AtomicBool::new(false),
+             failure: tokio::sync::Mutex::new(None),
+             plans: tokio::sync::Mutex::new(BTreeMap::new()),
++            activity: tokio::sync::Mutex::new(BTreeMap::new()),
+         }
+     }
+ 
+@@ -461,6 +465,10 @@ impl bitrouter_orchestrator::control::WorkControl for ModelControl {
+ 
+ #[async_trait::async_trait]
+ impl NativeExecutionControl for ModelControl {
++    async fn on_stream_part(&self, request_id: &str, part: &bitrouter_ai::types::StreamPart) {
++        self.record_content(request_id, part).await;
++    }
++
+     async fn before_typed_decision(
+         &self,
+         attempt_id: &str,
+@@ -702,6 +710,15 @@ impl NativeExecutionControl for ModelControl {
+         }
+     }
+     async fn after_attempt(&self, report: NativeAttemptReport) {
++        match self.replay_attempt(&report).await {
++            Ok(true) => return,
++            Ok(false) => {}
++            Err(_) => {
++                self.fail_ack("original provider attempt outcome could not be confirmed")
++                    .await;
++                return;
++            }
++        }
+         let estimate = report.token_cost.estimated_micro_usd();
+         let work_id = key_id(&format!(
+             "{}/attempt/{}",
+@@ -755,11 +772,19 @@ impl NativeExecutionControl for ModelControl {
+                 }),
+             _ => false,
+         };
+-        let Ok(value) = serde_json::to_value(&report) else {
++        let Ok(mut value) = serde_json::to_value(&report) else {
+             self.fail_ack("provider attempt outcome could not be serialized")
+                 .await;
+             return;
+         };
++        if let Some(activity) = self.activity.lock().await.remove(&report.request_id) {
++            let Ok(observed) = serde_json::to_value(activity) else {
++                self.fail_ack("provider stream observations could not be serialized")
++                    .await;
++                return;
++            };
++            value["bro_stream_activity"] = observed;
++        }
+         if self
+             .observe_with_reservation(
+                 &format!("{}/attempt/{}", report.request_id, report.attempt_index),
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/tests.rs b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+index 1bea5a2a..9f8e82ce 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+@@ -534,6 +534,7 @@ async fn control(root: &Path) -> Result<(Arc<ModelControl>, Arc<FaultStore>, Arc
+         failed_ack: AtomicBool::new(false),
+         failure: tokio::sync::Mutex::new(None),
+         plans: tokio::sync::Mutex::new(BTreeMap::new()),
++        activity: tokio::sync::Mutex::new(BTreeMap::new()),
+     });
+     Ok((control, store, goals))
+ }
+@@ -850,6 +851,130 @@ async fn lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work(
+     Ok(())
+ }
+ 
++#[tokio::test]
++async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -> Result<()> {
++    use bitrouter_ai::types::{ApiProtocol, StreamPart};
++    use bitrouter_sdk::language_model::native::NativeRoute;
++    let root = tempfile::tempdir()?;
++    let (control, store, goals) = control(root.path()).await?;
++    let report = NativeAttemptReport {
++        request_id: "streamed-request".into(),
++        attempt_index: 0,
++        route: NativeRoute {
++            provider: "fixture".into(),
++            model: "test-model".into(),
++            protocol: ApiProtocol::ChatCompletions,
++            constraints: Default::default(),
++            output_token_limit_supported: None,
++            input_count: None,
++            protocol_validation: Default::default(),
++            continuation: Default::default(),
++        },
++        actual_provider: None,
++        actual_model: None,
++        result: None,
++        output_rejection: None,
++        report_rejection: None,
++        error: Some("interrupted after partial content".into()),
++        elapsed_ms: 1,
++        token_cost: Default::default(),
++        cache: Default::default(),
++        private_context: Default::default(),
++        continuation: Default::default(),
++    };
++    let key = "streamed-request/attempt/0";
++    control.begin(WorkKind::ProviderAttempt, key, Some(&report.request_id),
++        serde_json::json!({"request_id":report.request_id,"attempt_index":0,"route":report.route})).await?;
++    // Empty markers are not activity. Partial tool arguments count as received
++    // content but never become a permission or completed tool-effect claim.
++    control
++        .on_stream_part(
++            &report.request_id,
++            &StreamPart::TextStart { id: "empty".into() },
++        )
++        .await;
++    control
++        .on_stream_part(
++            &report.request_id,
++            &StreamPart::TextDelta {
++                text: "received".into(),
++            },
++        )
++        .await;
++    control
++        .on_stream_part(
++            &report.request_id,
++            &StreamPart::ToolCallDelta {
++                id: "partial".into(),
++                name: Some("write".into()),
++                arguments: "{".into(),
++                provider_metadata: Default::default(),
++            },
++        )
++        .await;
++    store.inject(Fault::LostAcknowledgement, 1)?;
++    control.after_attempt(report.clone()).await;
++    assert!(control.acknowledged());
++    assert!(control.activity.lock().await.is_empty());
++    let observed = snapshot(&goals, &control.goal.id).await?;
++    assert_eq!(observed.accounting.provider_attempts, 1);
++    assert!(observed.accounting.in_flight.is_empty());
++    let GoalReply::Accepted { operation } = goals
++        .execute(
++            "local",
++            GoalCommand::Operation {
++                operation_id: format!("{}-outcome", key_id(key)),
++            },
++            now()?,
++        )
++        .await?
++    else {
++        anyhow::bail!("outcome missing")
++    };
++    let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind else {
++        anyhow::bail!("outcome operation differs")
++    };
++    let Change::Accounting {
++        event: Event::Observe {
++            report: reference, ..
++        },
++    } = *change
++    else {
++        anyhow::bail!("outcome event differs")
++    };
++    let original = crate::goal_artifacts::read(&control.root, &reference).await?;
++    let value: serde_json::Value = serde_json::from_slice(&original)?;
++    assert_eq!(value["bro_stream_activity"]["content_parts"], 2);
++    assert!(value["actual_provider"].is_null());
++    assert!(value["result"].is_null());
++    goals
++        .execute(
++            "local",
++            GoalCommand::Control {
++                operation_id: "pause-before-outcome-replay".into(),
++                goal_id: control.goal.id.clone(),
++                expected_revision: observed.revision,
++                intent: RunIntent::Pause,
++            },
++            now()?,
++        )
++        .await?;
++    let paused = snapshot(&goals, &control.goal.id).await?;
++    control.after_attempt(report.clone()).await;
++    assert!(control.acknowledged());
++    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
++    assert_eq!(
++        crate::goal_artifacts::read(&control.root, &reference).await?,
++        original
++    );
++    let mut changed = report;
++    changed.error = Some("different outcome cannot reuse the original key".into());
++    control.after_attempt(changed).await;
++    assert!(!control.acknowledged());
++    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
++    Ok(())
++}
++
+ #[tokio::test]
+ async fn persistent_accounting_failure_retains_its_cause_and_fences_new_work() -> Result<()> {
+     let root = tempfile::tempdir()?;
+diff --git a/apps/bitrouter/src/goal_runtime/native_evidence.rs b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+index af1e0750..4865ceba 100644
+--- a/apps/bitrouter/src/goal_runtime/native_evidence.rs
++++ b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+@@ -416,8 +416,20 @@ async fn observe(
+                     serde_json::json!({"status":"pending","actual_provider":null,"actual_model":null}),
+                 );
+             };
+-            let report: NativeAttemptReport =
+-                serde_json::from_slice(&read(root, reference).await?)?;
++            let value: serde_json::Value = serde_json::from_slice(&read(root, reference).await?)?;
++            let activity = value
++                .get("bro_stream_activity")
++                .map(|value| {
++                    serde_json::from_value::<super::model_control::activity::StreamActivity>(
++                        value.clone(),
++                    )
++                })
++                .transpose()?;
++            anyhow::ensure!(
++                activity.as_ref().is_none_or(|activity| activity.valid()),
++                "native stream observation clock or format is unavailable"
++            );
++            let report: NativeAttemptReport = serde_json::from_value(value)?;
+             let intent: serde_json::Value =
+                 serde_json::from_slice(&read(root, &work.intent).await?)?;
+             anyhow::ensure!(
+@@ -433,7 +445,9 @@ async fn observe(
+                 "actual_provider":report.actual_provider,"actual_model":report.actual_model,
+                 "usage":report.result.as_ref().and_then(|result| result.usage.as_ref()),
+                 "output_recorded":report.result.is_some(),"output_rejected":report.output_rejection.is_some(),
+-                "report_rejected":report.report_rejection.is_some(),"error_reported":report.error.is_some(),"elapsed_ms":report.elapsed_ms}),
++                "report_rejected":report.report_rejection.is_some(),"error_reported":report.error.is_some(),"elapsed_ms":report.elapsed_ms,
++                "stream_activity":activity,
++                "activity_scope":"Local receipt of content fragments only; not admission, full execution lifetime, physical provider timing, tool execution or settlement"}),
+             )
+         }
+         _ => Ok(
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native.rs b/apps/bitrouter/src/goal_runtime/tests/native.rs
+index 15dc9339..99d58cb7 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native.rs
+@@ -214,6 +214,8 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+         let evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await?;
+         let entries = evidence["entries"].as_array().context("native model entries missing")?;
+         assert!(!entries.is_empty());
++        assert!(entries.iter().any(|entry| entry["observation"]["stream_activity"]["content_parts"].as_u64().is_some_and(|count| count > 0)),
++            "native completion lacks actual received content evidence");
+         let serialized_source = serde_json::to_value(&source)?;
+         assert!(entries.iter().all(|entry| entry["source"] == serialized_source));
+         assert!(entries.iter().any(|entry| entry["kind"] == "preparation"
+@@ -241,7 +243,7 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+         assert!(rejected["observation"]["actual_provider"].is_null());
+         assert_eq!(fixture.backend.received_requests().await.context("request capture unavailable")?.len(), requests.len());
+         // Prove the opt-in failure snapshot mechanism can retain both stores
+-        // from this real in-memory Goal/Thread run and reopen them read-only.
++        // from this real file-backed Goal/Thread run and reopen them read-only.
+         let copy = fixture.controls.join("native-evidence-copy.sqlite");
+         fixture::copy_database(&fixture.db, &copy).await?;
+         let copied_db = crate::db::connect(&format!("sqlite://{}?mode=ro", copy.display())).await?;
+diff --git a/crates/bitrouter-orchestrator/src/agent/native/port.rs b/crates/bitrouter-orchestrator/src/agent/native/port.rs
+index 6dd598ee..bea18b06 100644
+--- a/crates/bitrouter-orchestrator/src/agent/native/port.rs
++++ b/crates/bitrouter-orchestrator/src/agent/native/port.rs
+@@ -124,7 +124,18 @@ impl HarnessPort for Port {
+         true
+     }
+ 
+-    async fn model_stream_part(&self, agent_id: &str, step_id: &str, _: &str, part: &StreamPart) {
++    async fn model_stream_part(
++        &self,
++        agent_id: &str,
++        step_id: &str,
++        request_id: &str,
++        part: &StreamPart,
++    ) {
++        if let Some(control) = &self.work_control {
++            // Observe received content before lossy display delivery. These
++            // callbacks never authorize a tool or replace a settled outcome.
++            control.on_stream_part(request_id, part).await;
++        }
+         if self.root_agent.get().is_none_or(|root| root != agent_id) {
+             return;
+         }

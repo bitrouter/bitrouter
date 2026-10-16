@@ -1,0 +1,117 @@
+{
+  "source": "acp-continuation-green3-source.json",
+  "scope": "Controlled real SQLite pre-prompt image after actual source process/owner shutdown and Rust peer private nonce restore. Five cases: same session, live owner, missing private data, unsupported load, paused source. No submitted prompt replay or arbitrary crash takeover claim.",
+  "startedAt": "2026-10-16T18:45:52.034Z",
+  "runs": [
+    {
+      "name": "same-session",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session)",
+        "--success-output",
+        "final"
+      ],
+      "log": "acp-continuation-green3-same-session.log",
+      "startedAt": "2026-10-16T18:45:52.034Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:47:16.327Z",
+      "summaries": [
+        "     Summary [   1.780s] 1 test run: 1 passed, 1837 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "acp-guards",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(service::tests::worker::acp::) | test(lost_restore_start_ack)"
+      ],
+      "log": "acp-continuation-green3-acp-guards.log",
+      "startedAt": "2026-10-16T18:47:16.327Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:47:43.402Z",
+      "summaries": [
+        "     Summary [   0.080s] 4 tests run: 4 passed, 289 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "stopped-history",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(stopped_history_is_hash_bound)"
+      ],
+      "log": "acp-continuation-green3-stopped-history.log",
+      "startedAt": "2026-10-16T18:47:43.402Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:47:44.114Z",
+      "summaries": [
+        "     Summary [   0.027s] 1 test run: 1 passed, 1837 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "acp-continuation-green3-clippy.log",
+      "startedAt": "2026-10-16T18:47:44.114Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:48:45.520Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "acp-continuation-green3-fmt.log",
+      "startedAt": "2026-10-16T18:48:45.521Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:49:06.854Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T18:49:06.972Z",
+  "changed": [],
+  "passed": true
+}

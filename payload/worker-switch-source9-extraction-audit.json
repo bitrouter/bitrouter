@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-10-16T10:20:56.830Z",
+  "source": "worker-switch-source9.json",
+  "parent": "9d0460696b39b12b8585334b401224fbafde6494",
+  "archive": "worker-switch-source9-files.tar.gz",
+  "archiveSha256": "b441a71bb684f3952df00aca8977e5e71f677fc95b4e50baa22e76760377657e",
+  "verifiedRegularFiles": 41,
+  "extraction": "/tmp/bro-worker-switch-source9-extract-fvi137",
+  "passed": true
+}

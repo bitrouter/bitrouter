@@ -1,0 +1,58 @@
+{
+  "id": "token-wait-final6",
+  "scope": "Final source for native reservation waiting: release/pause/SDK-future-abort matrix with a lost wait ACK, frozen quotes and replay, unknown-cost holds, source-scoped UI, protocol-pure fixture diagnostics and full local checks. Prior final3/final4 failures and the unexplained PTY closure remain in the independent archive; passing repeats do not establish its cause. Overall refactor/live/CI gates remain open.",
+  "jobs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope) | test(frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_once) | test(quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion) | test(undispatched_admission_and_resource_wait_never_claim_a_serving_model) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

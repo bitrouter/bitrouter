@@ -1,0 +1,12 @@
+{
+  "capturedAt": "2026-10-16T11:16:16.867Z",
+  "archive": "native-evidence-failure-fixture9.tar.gz",
+  "sha256": "d9615c3609f7ac4894deab69634b564bc0af7b89b4cacbe6657bba7dbf40a67f",
+  "bytes": 96852,
+  "verifiedFiles": 251,
+  "omitted": 0,
+  "passed": true,
+  "extracted": "/tmp/bro-native-failure9-audit-XeTSNy",
+  "originalUnchanged": true,
+  "scope": "Surviving filesystem fixture only. Goal/execution in-memory DB, separate supervisor memory store and process state were not captured and cannot be recovered from this archive."
+}

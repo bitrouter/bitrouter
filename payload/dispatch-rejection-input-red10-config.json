@@ -1,0 +1,19 @@
+{
+  "id": "dispatch-rejection-input-red10",
+  "scope": "Expected regression: an original saved-input integrity refusal must revoke and reconcile before a new attempt; do not execute corrupted input",
+  "jobs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(refused_dispatch_without_a_turn)"
+      ]
+    }
+  ]
+}

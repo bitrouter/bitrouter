@@ -1,0 +1,46 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (test "extension_host") generated 1 warning
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "daemon") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 1m 15s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID e51d754a-70ed-492b-a4f0-87973f8613b9 with nextest profile: default
+    Starting 26 tests across 41 binaries (2988 tests skipped)
+        PASS [   4.868s] ( 1/26) bitrouter goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent
+        PASS [  10.210s] ( 2/26) bitrouter goal_runtime::tests::managed_acp::generic_supervisor_control_cannot_take_over_a_managed_turn
+        PASS [  10.223s] ( 3/26) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+        PASS [   5.426s] ( 4/26) bitrouter goal_runtime::tests::workflow_permissions::confirmed_stop_keeps_original_permission_history_after_cold_reopen
+        PASS [  10.490s] ( 5/26) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+        PASS [  10.497s] ( 6/26) bitrouter goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output
+        PASS [   0.232s] ( 7/26) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_reuses_its_key_and_rejects_conflicting_input
+        PASS [  10.855s] ( 8/26) bitrouter goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery
+        PASS [   0.544s] ( 9/26) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_bounds_time_and_honors_revocation_and_input_limits
+        PASS [   0.188s] (10/26) bitrouter-orchestrator service::tests::worker::decisions::revoked_native_decision_waits_for_usage_settlement_before_finishing
+        PASS [   0.294s] (11/26) bitrouter-orchestrator service::tests::worker::failed_host_outcome_ack_retains_provider_evidence_without_running_its_tools
+        PASS [  11.589s] (12/26) bitrouter goal_runtime::tests::goal_model_route_is_confirmed_before_prompt_and_persisted_through_delivery
+        PASS [   0.576s] (13/26) bitrouter-orchestrator service::tests::worker::native_workers_share_one_budget_and_ordinary_rpcs_cannot_bypass_it
+        PASS [  11.635s] (14/26) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [   0.382s] (15/26) bitrouter-orchestrator service::tests::worker::revoked_worker_source_cannot_ask_for_or_launch_configured_verification
+        PASS [   0.015s] (16/26) bitrouter-orchestrator thread::executor::tests::acp_header_contains_no_native_model_or_context_configuration
+        PASS [   0.015s] (17/26) bitrouter-orchestrator thread::executor::tests::native_headers_keep_their_existing_json_and_reject_ambiguous_executors
+        PASS [   1.031s] (18/26) bitrouter-orchestrator service::tests::worker::decisions::native_decisions_use_shared_admission_and_require_host_outcome_ack
+        PASS [   0.394s] (19/26) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention
+        PASS [  12.321s] (20/26) bitrouter goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect
+        PASS [   1.434s] (21/26) bitrouter-orchestrator service::tests::worker::waiting::native_worker_waits_for_known_capacity_and_replays_only_original_admission
+        PASS [   3.397s] (22/26) bitrouter goal_runtime::tests::workflow_permissions::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        PASS [   2.713s] (23/26) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_refuses_withdrawn_sources_deadlines_and_unknown_workspace_owners
+        PASS [   5.782s] (24/26) bitrouter goal_runtime::tests::workflow_permissions::teardown_denial_has_controller_origin_and_does_not_become_user_consent
+        PASS [  18.015s] (25/26) bitrouter goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+        PASS [   8.936s] (26/26) bitrouter goal_runtime::tests::workflow_permissions::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery
+────────────
+     Summary [  19.177s] 26 tests run: 26 passed, 2988 skipped

@@ -1,0 +1,33 @@
+{
+  "source": "acp-metadata-follow4-source.json",
+  "scope": "Byte-identical source to green3. App Goal Thread/admission/recovery regressions after adding never-started ACP metadata recovery. This preserves the accepted/private-session block and existing native checkpoint/source fences; no full-refactor or live-provider claim.",
+  "startedAt": "2026-10-16T18:14:10.278Z",
+  "runs": [
+    {
+      "name": "goal-thread-boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::threads::)"
+      ],
+      "log": "acp-metadata-follow4-goal-thread-boundaries.log",
+      "startedAt": "2026-10-16T18:14:10.278Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:14:16.164Z",
+      "summaries": [
+        "     Summary [   5.301s] 11 tests run: 11 passed, 1826 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T18:14:16.228Z",
+  "changed": [],
+  "passed": true
+}

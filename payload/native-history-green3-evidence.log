@@ -1,0 +1,19 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.33s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 7f40e17c-9f38-44f5-b610-f4fa4e7a85df with nextest profile: default
+    Starting 6 tests across 1 binary (1830 tests skipped)
+        PASS [   0.016s] (1/6) bitrouter goal_runtime::runtime_evidence::tests::missing_omitted_unordered_or_bounded_history_is_never_complete_timing_proof
+        PASS [   0.016s] (2/6) bitrouter goal_runtime::runtime_evidence::tests::actual_worker_updates_are_private_and_coalesced_only_within_their_turn
+        PASS [   0.016s] (3/6) bitrouter goal_archive::tests::historical_content_needs_the_exact_goal_task_and_archive_receipt
+        PASS [   0.016s] (4/6) bitrouter goal_runtime::runtime_evidence::tests::runtime_metadata_binds_identity_and_never_copies_private_content
+        PASS [   0.038s] (5/6) bitrouter goal_runtime::native_evidence::tests::undispatched_admission_and_resource_wait_never_claim_a_serving_model
+        PASS [   0.066s] (6/6) bitrouter goal_code::evidence::tests::archive_inspector_reads_committed_chain_and_rejects_uncommitted_or_foreign_material
+────────────
+     Summary [   0.072s] 6 tests run: 6 passed, 1830 skipped

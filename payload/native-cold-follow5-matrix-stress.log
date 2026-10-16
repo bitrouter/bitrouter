@@ -1,0 +1,33 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.26s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 56bd1b95-29da-460c-8e62-17f5f50f27f5 with nextest profile: default
+    Starting 1 test across 1 binary (1830 tests skipped)
+────────────
+ Stress test iteration 1/5 (00:00:00 elapsed so far, 5 iterations remaining)
+        PASS [   4.771s] [1/5] (1/1) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+ Stress test [   4.776s] iteration 1/5: 1 test run: 1 passed, 1830 skipped
+────────────
+ Stress test iteration 2/5 (00:00:04 elapsed so far, 4 iterations remaining)
+        PASS [   4.768s] [2/5] (1/1) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+ Stress test [   4.774s] iteration 2/5: 1 test run: 1 passed, 1830 skipped
+────────────
+ Stress test iteration 3/5 (00:00:09 elapsed so far, 3 iterations remaining)
+        PASS [   4.738s] [3/5] (1/1) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+ Stress test [   4.743s] iteration 3/5: 1 test run: 1 passed, 1830 skipped
+────────────
+ Stress test iteration 4/5 (00:00:14 elapsed so far, 2 iterations remaining)
+        PASS [   4.754s] [4/5] (1/1) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+ Stress test [   4.760s] iteration 4/5: 1 test run: 1 passed, 1830 skipped
+────────────
+ Stress test iteration 5/5 (00:00:19 elapsed so far, 1 iteration remaining)
+        PASS [   4.730s] [5/5] (1/1) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+ Stress test [   4.735s] iteration 5/5: 1 test run: 1 passed, 1830 skipped
+────────────
+     Summary [  23.788s] 5/5 stress run iterations: 5 passed

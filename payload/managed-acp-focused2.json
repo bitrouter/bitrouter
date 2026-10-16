@@ -1,0 +1,24 @@
+{
+  "source": "managed-acp-source2.json",
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "-p",
+    "bitrouter-orchestrator",
+    "--all-features",
+    "--no-fail-fast",
+    "-E",
+    "test(daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery) | test(generic_supervisor_control_cannot_take_over) | test(goal_model_route_is_confirmed_before_prompt) | test(goal_selected_resources_are_persisted) | test(goal_runtime::tests::native) | test(thread::executor::tests) | test(goal_runtime::tests::workflow_permissions) | test(service::tests::worker) | test(service::tests::generation::waiting)"
+  ],
+  "startedAt": "2026-10-16T08:49:15.568Z",
+  "log": "managed-acp-focused2.log",
+  "priorRun": "focused1 source changed while compiling; not source-qualified",
+  "code": 0,
+  "signal": null,
+  "finishedAt": "2026-10-16T08:51:37.274Z",
+  "changed": [],
+  "summary": "     Summary [  19.177s] 26 tests run: 26 passed, 2988 skipped",
+  "passed": true
+}

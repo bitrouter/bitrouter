@@ -1,0 +1,23 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (test "daemon") generated 1 warning
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 0.41s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID e99aa428-f343-4e3e-a997-d3f8aa9d47f5 with nextest profile: default
+    Starting 4 tests across 71 binaries (4777 tests skipped)
+        PASS [   0.679s] (1/4) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration
+        PASS [   0.408s] (2/4) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+        PASS [  10.762s] (3/4) bitrouter goal_runtime::tests::workflow_edits::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [   2.688s] (4/4) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+────────────
+     Summary [  14.561s] 4 tests run: 4 passed, 4777 skipped

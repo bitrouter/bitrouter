@@ -1,0 +1,310 @@
+diff --git a/apps/bitrouter/src/goal_runtime.rs b/apps/bitrouter/src/goal_runtime.rs
+index 4c7f59b1..c5712c33 100644
+--- a/apps/bitrouter/src/goal_runtime.rs
++++ b/apps/bitrouter/src/goal_runtime.rs
+@@ -36,6 +36,7 @@ mod dependencies;
+ mod input_scope;
+ mod model_control;
+ mod native;
++mod native_evidence;
+ mod permissions;
+ mod recovery;
+ mod repair;
+diff --git a/apps/bitrouter/src/goal_runtime/native.rs b/apps/bitrouter/src/goal_runtime/native.rs
+index 7a31b4c4..4cfa4221 100644
+--- a/apps/bitrouter/src/goal_runtime/native.rs
++++ b/apps/bitrouter/src/goal_runtime/native.rs
+@@ -48,56 +48,6 @@ impl Coordinator {
+         Ok(self.threads.register_local_workspace(&workspace)?)
+     }
+ 
+-    pub(super) async fn native_execution_evidence(
+-        &self,
+-        goal: &GoalSnapshot,
+-        task: &Task,
+-        execution: &Execution,
+-    ) -> Result<serde_json::Value> {
+-        anyhow::ensure!(
+-            goal.workflow
+-                .tasks
+-                .iter()
+-                .any(|known| known.spec == task.spec && known.executions.contains(execution)),
+-            "native execution is outside this Goal cutoff"
+-        );
+-        self.native_workspace(goal, execution)?;
+-        let binding = execution
+-            .thread
+-            .as_ref()
+-            .context("native execution has no accepted Thread/Turn link")?;
+-        let target = ThreadTarget {
+-            thread_id: binding.thread_id.clone(),
+-            server_instance_id: self.threads.capabilities().server_instance_id,
+-        };
+-        let caller = CallerContext::local();
+-        let view = self
+-            .threads
+-            .read_stored_thread_view(&target, &caller)
+-            .await?;
+-        anyhow::ensure!(
+-            view.thread.goal_work.as_ref() == Some(&source(goal, task, execution)?)
+-                && view.thread.workspace.canonicalize()? == execution.workspace.canonicalize()?,
+-            "native execution source or workspace does not match"
+-        );
+-        let turn = self
+-            .threads
+-            .read_stored_turn(&target, &caller, &binding.turn_id)
+-            .await?;
+-        Ok(
+-            serde_json::json!({"status":"observed", "executor":"built_in", "goal_id":goal.id,
+-            "task_id":task.spec.id, "execution_id":execution.id, "thread_id":binding.thread_id, "turn_id":binding.turn_id,
+-            "execution_requirements_revision":execution.requirements_revision,"execution_task_revision":execution.task_revision,
+-            "current_task_version":execution.task_revision == task.requirements_revision,
+-            "turn_status":turn.status,"unknown_effect":turn.unknown_effect,"verification":turn.verification,
+-            "requested_model_route":execution.resources.as_ref().and_then(|resources| resources.selection.model_route.as_ref()),
+-            "recorded_model_selector":turn.model,"actual_provider_model":"unreported by this snapshot projection",
+-            "snapshot_seq":view.thread.cursor,"history_complete":false,"timeline_complete":false,
+-            "admission_is_execution_evidence":false,
+-            "scope":"Committed native Thread/Turn projection only. This does not include a complete activity timeline, prove parallel overlap, verify artifacts or authorize replay. Model selector and configured resources do not prove actual provider or tool/skill use."}),
+-        )
+-    }
+-
+     pub(super) async fn launch_native(
+         &self,
+         goal: &GoalSnapshot,
+diff --git a/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs b/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs
+index c5153fdf..f9484198 100644
+--- a/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs
++++ b/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs
+@@ -74,6 +74,14 @@ async fn archive(
+     let record =
+         crate::goal_archive::decode(&goal.id, &task.spec.id, reference, &bytes, &operation)?;
+     let execution = &record.execution;
++    if task.execution_harness(execution).is_none() {
++        let mut value = coordinator
++            .native_execution_evidence_bound(goal, task, execution)
++            .await?;
++        value["committed_archive"] = serde_json::to_value(reference)?;
++        value["archive_operation_id"] = operation.id.into();
++        return Ok(value);
++    }
+     let snapshot = coordinator.acp_run_snapshot(goal, task, execution).await?;
+     let SessionResponse::Events { replay } = coordinator
+         .supervisor
+diff --git a/apps/bitrouter/src/goal_runtime/tests/fixture.rs b/apps/bitrouter/src/goal_runtime/tests/fixture.rs
+index 35d7a49f..567d7399 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/fixture.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/fixture.rs
+@@ -20,6 +20,7 @@ pub(super) struct Fixture {
+     pub source: crate::paths::ConfigSource,
+     pub routing: Arc<ConfigRoutingTable>,
+     pub threads: bitrouter_orchestrator::service::ThreadService,
++    pub goals: Arc<GoalService>,
+     runtime: GoalRuntime,
+     ipc: JoinHandle<Result<()>>,
+ }
+@@ -115,6 +116,19 @@ impl Setup {
+         );
+     }
+ 
++    pub fn native_fallback(&mut self) {
++        self.config_text = self.config_text.replacen(
++            "\nmodels:\n",
++            &format!("\n  fixture-backup:\n    api_base: {}/v2\n    api_key: backup-fixture-key\n    api_protocol: [{{'*': chat_completions}}]\n    models: [{{id: test-model}}]\nmodels:\n", self.backend.uri()),
++            1,
++        );
++        self.config_text = self.config_text.replacen(
++            "endpoints: [{provider: fixture, service_id: test-model}]",
++            "endpoints: [{provider: fixture, service_id: test-model}, {provider: fixture-backup, service_id: test-model}]",
++            1,
++        );
++    }
++
+     pub fn worker_alias(&mut self, id: &str) -> Result<()> {
+         let config = bitrouter_sdk::config::parse_with(&self.config_text, |_| None)?;
+         let mut agent = config
+@@ -227,7 +241,7 @@ impl Setup {
+             LocalControlOptions {
+                 administration: None,
+                 threads: None,
+-                goals: Some(goals),
++                goals: Some(goals.clone()),
+                 gate,
+                 cli_owned: false,
+             },
+@@ -239,6 +253,7 @@ impl Setup {
+             source,
+             routing,
+             threads,
++            goals,
+             runtime,
+             ipc,
+         })
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native.rs b/apps/bitrouter/src/goal_runtime/tests/native.rs
+index bee3e03a..f4afd5a5 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native.rs
+@@ -123,6 +123,24 @@ fn model(request: &Request) -> ResponseTemplate {
+     } else if state.get("actual_workspace").is_some() {
+         json!({"ready":true,"reason":"Fixture semantic judgment; machine checks are independently required", "missing_checks":[]})
+     } else if state.get("integrated_material").is_some() {
++        let runtime = &state["task_evidence"][0]["runtime_observations"];
++        let provider_observed =
++            runtime["model_work"]["entries"]
++                .as_array()
++                .is_some_and(|entries| {
++                    entries.iter().any(|entry| {
++                        entry["kind"] == "provider_attempt"
++                            && (entry["observation"]["actual_provider"] == "fixture"
++                                || entry["observation"]["actual_provider"] == "fixture-backup")
++                            && entry["observation"]["actual_model"] == "test-model"
++                    })
++                });
++        if runtime["executor"] != "built_in" || !provider_observed {
++            return ResponseTemplate::new(422).set_body_json(json!({
++                "status":runtime["status"],"reason":runtime["reason"],
++                "model_work":runtime["model_work"]
++            }));
++        }
+         json!({"conditions":[{"id":condition,"status":"met","reason":"Actual read and content-check evidence",
+             "evidence":["integrated_material",format!("check:{final_check}")]}],"unmet_original_requirements":[],
+             "constraints_preserved":true,"human_acceptance_required":false,"summary":"Verified seed inspection fixture"})
+@@ -187,6 +205,36 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+                     message["role"] == "tool" && message["content"].as_str().is_some_and(|text| text.contains("original input"))))
+             })
+         }));
++        let source = super::super::native::source(&goal, task, execution)?;
++        let evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await?;
++        let entries = evidence["entries"].as_array().context("native model entries missing")?;
++        assert!(!entries.is_empty());
++        let serialized_source = serde_json::to_value(&source)?;
++        assert!(entries.iter().all(|entry| entry["source"] == serialized_source));
++        assert!(entries.iter().any(|entry| entry["kind"] == "preparation"
++            && entry["observation"]["requested_selector"] == "goal-model"
++            && entry["observation"]["prepared_prompt_bytes"].as_u64().is_some_and(|bytes| bytes > 0)
++            && entry["observation"]["prepared_prompt_sha256"].as_str().is_some_and(|hash| hash.len() == 64)
++            && entry["observation"]["actual_model"].is_null()));
++        let mut foreign = source.clone();
++        foreign.execution_id = "unrelated-attempt".into();
++        let foreign_evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &foreign).await?;
++        assert_eq!(foreign_evidence["entries"], json!([]));
++        // An artifact whose immutable identity no longer matches cannot supply
++        // an actual serving identity. Restore it after checking this refusal.
++        let observed = entries.iter().find(|entry| entry["kind"] == "provider_attempt").context("native provider outcome missing")?;
++        let reference: ArtifactRef = serde_json::from_value(observed["report"].clone())?;
++        let original = crate::goal_artifacts::read(&fixture.root(&id), &reference).await?;
++        let changed = original.iter().enumerate().map(|(index, byte)| if index == 0 { *byte ^ 1 } else { *byte }).collect::<Vec<_>>();
++        tokio::fs::write(&reference.path, &changed).await?;
++        let refused = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await;
++        tokio::fs::write(&reference.path, original).await?;
++        let refused = refused?;
++        let rejected = refused["entries"].as_array().context("refusal entries missing")?.iter()
++            .find(|entry| entry["work_id"] == observed["work_id"]).context("original outcome was discarded")?;
++        assert_eq!(rejected["observation"]["status"], "unavailable");
++        assert!(rejected["observation"]["actual_provider"].is_null());
++        assert_eq!(fixture.backend.received_requests().await.context("request capture unavailable")?.len(), requests.len());
+         assert!(!fixture.controls.join("started-inspect").exists());
+         Ok(())
+     }.await;
+@@ -232,6 +280,67 @@ async fn native_fixture() -> Result<fixture::Fixture> {
+     setup.start().await
+ }
+ 
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn native_fallback_evidence_retains_failed_candidate_and_actual_serving_identity()
++-> Result<()> {
++    let mut setup = Setup::new_without_external_harnesses().await?;
++    setup.native_fallback();
++    Mock::given(method("POST"))
++        .and(path("/v1/chat/completions"))
++        .respond_with(|request: &Request| {
++            if serde_json::from_slice::<Value>(&request.body)
++                .ok()
++                .is_some_and(|body| {
++                    body["tools"]
++                        .as_array()
++                        .is_some_and(|tools| !tools.is_empty())
++                })
++            {
++                ResponseTemplate::new(503).set_body_json(
++                    json!({"error":{"message":"controlled primary candidate failure"}}),
++                )
++            } else {
++                model(request)
++            }
++        })
++        .with_priority(1)
++        .mount(&setup.backend)
++        .await;
++    Mock::given(method("POST"))
++        .and(path("/v2/chat/completions"))
++        .respond_with(model)
++        .mount(&setup.backend)
++        .await;
++    let fixture = setup.start().await?;
++    let result = async {
++        let id = fixture.create_with("Read seed.txt with the built-in executor, preserve its contents and deliver a verified report. Use the configured fallback when the primary candidate is unavailable.").await?;
++        let goal = wait_for(&fixture.socket, &id, |goal| goal.workflow.completion.completed_for(1)).await?;
++        let task = &goal.workflow.tasks[0];
++        let execution = task.executions.last().context("fallback execution missing")?;
++        assert_eq!(task.executions.len(), 1);
++        let source = super::super::native::source(&goal, task, execution)?;
++        let evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await?;
++        let entries = evidence["entries"].as_array().context("fallback evidence missing")?;
++        let failed = entries.iter().find(|entry| entry["kind"] == "provider_attempt"
++            && entry["observation"]["candidate_provider"] == "fixture"
++            && entry["observation"]["error_reported"] == true).context("failed candidate was omitted")?;
++        assert!(failed["observation"]["actual_provider"].is_null());
++        assert!(failed["observation"]["actual_model"].is_null());
++        assert!(failed["observation"]["usage"].is_null());
++        let served = entries.iter().find(|entry| entry["kind"] == "provider_attempt"
++            && entry["request_id"] == failed["request_id"]
++            && entry["observation"]["actual_provider"] == "fixture-backup").context("actual fallback outcome missing")?;
++        assert_eq!(served["observation"]["actual_model"], "test-model");
++        assert_eq!(served["observation"]["output_recorded"], true);
++        assert_ne!(served["observation"]["attempt_index"], failed["observation"]["attempt_index"]);
++        let requests = fixture.backend.received_requests().await.context("fallback requests missing")?;
++        assert!(requests.iter().any(|request| request.url.path() == "/v2/chat/completions"));
++        assert_eq!(tokio::fs::read_to_string(fixture.workspace.join("seed.txt")).await?, "original input\n");
++        Ok(())
++    }.await;
++    fixture.finish(result).await
++}
++
+ #[tokio::test]
+ async fn native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery()
+ -> Result<()> {
+diff --git a/apps/bitrouter/src/goal_runtime/tests/workflow_edits.rs b/apps/bitrouter/src/goal_runtime/tests/workflow_edits.rs
+index 1f6b9c89..1fb5fd25 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/workflow_edits.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/workflow_edits.rs
+@@ -41,17 +41,24 @@ async fn requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a
+         let id = fixture.create().await?;
+         fixture.running(&id).await?;
+         let paused = paused_after_workers(&fixture,&id).await?;
+-        let old = task(&paused,"left")?.executions[0].clone();
++        let paused_left = task(&paused,"left")?;
++        let old = paused_left.executions.last().context("actual paused worker missing")?.clone();
++        assert!(old.thread.is_some(), "paused worker has no accepted Thread/Turn: {old:?}");
++        let old_attempts = paused_left.executions.len() + usize::try_from(paused_left.archived_executions)?;
+         let edited = edit_left(&fixture,&id,"FIXTURE_NEW_LEFT_RULE: WORKER_SWITCH_ACP_FIXTURE: select the replacement worker for left and retain the current pause.").await?;
+         assert_eq!(edited.run_intent,RunIntent::Pause);
+         assert_eq!(task(&edited,"left")?.spec.harness.as_deref(),Some("replacement-peer"));
+         control(&fixture.socket,&id,"resume-worker-request",RunIntent::Run).await?;
+-        let blocked = wait_for(&fixture.socket,&id,|goal| task(goal,"left").is_ok_and(|task| task.executions[0].reconciliation.as_ref().is_some_and(|state| matches!(state, bitrouter_orchestrator::goal::workflow::LocalReconciliation::Blocked { .. })))).await?;
++        let blocked = wait_for(&fixture.socket,&id,|goal| task(goal,"left").is_ok_and(|task| task.executions.last().is_some_and(|execution| execution.reconciliation.as_ref().is_some_and(|state| matches!(state, bitrouter_orchestrator::goal::workflow::LocalReconciliation::Blocked { .. }))))).await?;
+         let left = task(&blocked,"left")?;
+-        assert_eq!(left.executions.len(),1);
+-        assert_eq!(left.executions[0].id,old.id);
+-        assert_eq!(left.executions[0].thread,old.thread);
+-        assert_eq!(left.execution_harness(&left.executions[0]),Some("goal-peer"));
++        // Earlier known failures may already have retired into immutable
++        // history. Neither retirement nor a changed selection permits a new
++        // attempt while the actual paused worker still has unknown effects.
++        assert_eq!(left.executions.len() + usize::try_from(left.archived_executions)?, old_attempts);
++        let current = left.executions.last().context("blocked original worker missing")?;
++        assert_eq!(current.id,old.id,"original worker changed: before={old:?}; after={left:?}");
++        assert_eq!(current.thread,old.thread);
++        assert_eq!(left.execution_harness(current),Some("goal-peer"));
+         assert!(!blocked.workflow.completion.completed_for(2));
+         assert!(!fixture.controls.join("started-join").exists());
+         Ok(())

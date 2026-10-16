@@ -1,0 +1,245 @@
+{
+  "base": "a3fa36829ee3dd9b85665a15e44ced3905859db0",
+  "files": [
+    {
+      "file": "MCP_BINDING_INDEX.md",
+      "bytes": 1635,
+      "sha256": "76aabb526ba72a1fd1e1df5c1d376d461610d857a9552a06538ae6304fd50684"
+    },
+    {
+      "file": "mcp-binding-applicability6.json",
+      "bytes": 160841,
+      "sha256": "1c036ac782c4637ca64d41ed501765539b825b8e08a1bab5045bb6e18b568ba6"
+    },
+    {
+      "file": "mcp-binding-final6-files.tar.gz",
+      "bytes": 66194,
+      "sha256": "22acd8011a1cf3a6eb2c73f0566b3778e37253c2537c31d88e88208d16281cc7"
+    },
+    {
+      "file": "mcp-binding-final6.patch",
+      "bytes": 20500,
+      "sha256": "4223c5cfea1c621214fdc5dd7cb66d04e3a84aee98996f4adc3f72145875da5d"
+    },
+    {
+      "file": "mcp-binding-focus2-audit.json",
+      "bytes": 90,
+      "sha256": "145514d816eac937d7218976f32a0e840389923eeb2c9b91d246d6b3c1938210"
+    },
+    {
+      "file": "mcp-binding-focus2-boundaries.log",
+      "bytes": 19776,
+      "sha256": "0443546fd03947436db0ae072231dacc141a4a1f3c34f03bc22e56679788290e"
+    },
+    {
+      "file": "mcp-binding-focus2-config.json",
+      "bytes": 1109,
+      "sha256": "a2fd091bf18d7c02f0faa37b373ce66344c0eed9aaa0b69b5c682f67cb44b76f"
+    },
+    {
+      "file": "mcp-binding-focus2-files.tar.gz",
+      "bytes": 18165,
+      "sha256": "1488b0c5e2a695ee6419c258983bf927a313d4c047512e089b2c109c2a51d50f"
+    },
+    {
+      "file": "mcp-binding-focus2-results.json",
+      "bytes": 932,
+      "sha256": "64c2fcd5e50cde88057e61ab66083550f16eb461ba141e9992b6379351dedf7c"
+    },
+    {
+      "file": "mcp-binding-focus2-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "mcp-binding-focus2-source.json",
+      "bytes": 159997,
+      "sha256": "a98b3a10556f2a11a5a13c8e88cf68fcb6b5f49307ec26efc3db2e71582e8c79"
+    },
+    {
+      "file": "mcp-binding-focus2-source.patch",
+      "bytes": 14659,
+      "sha256": "a70d467768660a46010b559e17b9e9a17b2270707a28bdb89f7f16781b02ebc0"
+    },
+    {
+      "file": "mcp-binding-focus3-audit.json",
+      "bytes": 90,
+      "sha256": "c5839593a156f21d174d68662ea5e89418dedf50cd2ae16503966b72a30e81f4"
+    },
+    {
+      "file": "mcp-binding-focus3-boundaries.log",
+      "bytes": 2152,
+      "sha256": "ce39ea97d233577fdf1f04b2e55d77a766248aec0ca3a4a6ef09c5cf67f1c85a"
+    },
+    {
+      "file": "mcp-binding-focus3-clippy.log",
+      "bytes": 418,
+      "sha256": "abcb685d096a145558a51934340d11db566880bfe9f4dbf731c3702d5970f48a"
+    },
+    {
+      "file": "mcp-binding-focus3-config.json",
+      "bytes": 1109,
+      "sha256": "29f42ed45c87f53d293907202fbdc9a6be39190fbead7937eb04048b22504f7c"
+    },
+    {
+      "file": "mcp-binding-focus3-files.tar.gz",
+      "bytes": 18182,
+      "sha256": "e991eb979930e5988c11b70d0170ce065f4cbec3d5b295bee9f9ff1298f6a36b"
+    },
+    {
+      "file": "mcp-binding-focus3-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "mcp-binding-focus3-goal-runtime.log",
+      "bytes": 12613,
+      "sha256": "04567625c79c9728a8c562f9f685e3115d715aa64a0e594a740039eea94ae782"
+    },
+    {
+      "file": "mcp-binding-focus3-results.json",
+      "bytes": 2569,
+      "sha256": "201c703feb7de7b6837c7db55ab6eadac8585e70c9ceffebfd1c49a62f58918a"
+    },
+    {
+      "file": "mcp-binding-focus3-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "mcp-binding-focus3-source.json",
+      "bytes": 159997,
+      "sha256": "1c6fa7f683dedad4278c65495193ca36ea903b6d01ab9687bf2099a4b1f3e370"
+    },
+    {
+      "file": "mcp-binding-focus3-source.patch",
+      "bytes": 14683,
+      "sha256": "0ab21efe952246f7ba92591e828fbbdd64013b6f1d60e0a75411bf7b15701ebd"
+    },
+    {
+      "file": "mcp-binding-index-runner6.mjs",
+      "bytes": 4489,
+      "sha256": "1c7a3a40fedf6997a18cc3cb0e69973d450a3b8bb5819086b28fda24cd7eb247"
+    },
+    {
+      "file": "mcp-binding-metadata5-audit.json",
+      "bytes": 93,
+      "sha256": "fd873b5ce8fc26ba94718b21bd08870fd1470023765aac4f0abd8fab81d2e37c"
+    },
+    {
+      "file": "mcp-binding-metadata5-boundaries.log",
+      "bytes": 2142,
+      "sha256": "3e187eaf518e979740c4f5bbacaf46352ca1444883aebe9d462d56f8ef82b9d6"
+    },
+    {
+      "file": "mcp-binding-metadata5-clippy.log",
+      "bytes": 418,
+      "sha256": "64174d1855d90284c07aef5749401844d646018892f5afc24f9ec57678774d1b"
+    },
+    {
+      "file": "mcp-binding-metadata5-config.json",
+      "bytes": 1113,
+      "sha256": "466f3aeb159080520d377032c33a063292504b1164c5a394280aeb8218274773"
+    },
+    {
+      "file": "mcp-binding-metadata5-files.tar.gz",
+      "bytes": 18542,
+      "sha256": "85136872e601e6fb1d4e3f1ca1de873918b85abc715aff51ce9eb5694c42e710"
+    },
+    {
+      "file": "mcp-binding-metadata5-fmt.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "mcp-binding-metadata5-goal-runtime.log",
+      "bytes": 12613,
+      "sha256": "43c4765fa15154916760a52e7d7887b147028deeee4193ea1e67b13afb7cd655"
+    },
+    {
+      "file": "mcp-binding-metadata5-results.json",
+      "bytes": 2420,
+      "sha256": "95363e6604e0357904a778f88a58ca245fd354151750e8e76f4da878a2bafe9a"
+    },
+    {
+      "file": "mcp-binding-metadata5-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "mcp-binding-metadata5-source.json",
+      "bytes": 159997,
+      "sha256": "ede9e8b8ae80caa9ea247e87717fd656cc2e79f895d31a87ec7e8219496c3a03"
+    },
+    {
+      "file": "mcp-binding-metadata5-source.patch",
+      "bytes": 16155,
+      "sha256": "2744c9eb2d2d242febdbe0c2b455971c45c6eb554296203870a7cfa38bf07e61"
+    },
+    {
+      "file": "mcp-binding-process-probe4-nextest.log",
+      "bytes": 4095,
+      "sha256": "2ae9c635ef83f0106e62ed333b8ef3d4c106f2dff9548eda67874ded85092d5f"
+    },
+    {
+      "file": "mcp-binding-process-probe4-processes.jsonl",
+      "bytes": 43056,
+      "sha256": "8bbfcb2cd8e2f4eef927566510bfc6940a2857fca2ec37e7e83c3fcf767f9cf1"
+    },
+    {
+      "file": "mcp-binding-process-probe4-result.json",
+      "bytes": 817,
+      "sha256": "7f92d8f67f0a029f7fa4d60aac88b652fdea5785af4ea2a8870b392d757f445d"
+    },
+    {
+      "file": "mcp-binding-process-probe4-runner.mjs",
+      "bytes": 3948,
+      "sha256": "4db288c1dfa177287751688028dddfa90db7dc5a71a507b64083f68819c894f9"
+    },
+    {
+      "file": "mcp-binding-process-probe4-source.json",
+      "bytes": 159953,
+      "sha256": "3bade226832f28224a2868cb5866be59b591e7deeb4e5e43fa1666ef7062d618"
+    },
+    {
+      "file": "mcp-binding-red1-audit.json",
+      "bytes": 88,
+      "sha256": "06969b9ebabfd868041d40bf1ceb19e762b84c25c04a9b26b944bae72fcfcfcc"
+    },
+    {
+      "file": "mcp-binding-red1-config.json",
+      "bytes": 478,
+      "sha256": "154d24513d9662ebde64d53461206f9391944d0f230c9baad005543113f0ead2"
+    },
+    {
+      "file": "mcp-binding-red1-files.tar.gz",
+      "bytes": 7898,
+      "sha256": "70a66c1d75502fe3a760404255182a185385392a4fb713bcbea6ae85ee967337"
+    },
+    {
+      "file": "mcp-binding-red1-regression.log",
+      "bytes": 1860,
+      "sha256": "4ab4e62a5b4c631ba4d5abfd5852270c675257619c9e8c837b91443169e10ee3"
+    },
+    {
+      "file": "mcp-binding-red1-results.json",
+      "bytes": 956,
+      "sha256": "ae9f3accd3860c4c74fc81805767904fe945ef895960985b613ee710b2c38e73"
+    },
+    {
+      "file": "mcp-binding-red1-runner.mjs",
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    {
+      "file": "mcp-binding-red1-source.json",
+      "bytes": 159997,
+      "sha256": "54219102c90407d9797a282879910216342ae2eaf475928397c8243d18e6480a"
+    },
+    {
+      "file": "mcp-binding-red1-source.patch",
+      "bytes": 7772,
+      "sha256": "a29afd71facecd314b02411a65718f742a13c8c94693b484511ca72fa79b1327"
+    }
+  ]
+}

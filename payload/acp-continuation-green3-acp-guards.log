@@ -1,0 +1,11 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 25.27s
+────────────
+ Nextest run ID 700915ee-5d00-49a1-85a3-b98a1d828f83 with nextest profile: default
+    Starting 4 tests across 1 binary (289 tests skipped)
+        PASS [   0.018s] (1/4) bitrouter-orchestrator service::recovery::acp::tests::lost_restore_start_ack_never_reuses_the_previous_session_as_a_checkpoint
+        PASS [   0.069s] (2/4) bitrouter-orchestrator service::tests::worker::acp::submitted_acp_prompt_is_not_recovered_as_unopened_metadata
+        PASS [   0.073s] (3/4) bitrouter-orchestrator service::tests::worker::acp::unopened_acp_metadata_cannot_retire_a_live_execution_owner
+        PASS [   0.077s] (4/4) bitrouter-orchestrator service::tests::worker::acp::acp_last_dispatch_check_rejects_changed_owner_source_and_workspace_grant
+────────────
+     Summary [   0.080s] 4 tests run: 4 passed, 289 skipped

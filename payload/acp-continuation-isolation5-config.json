@@ -1,0 +1,51 @@
+{
+  "id": "acp-continuation-isolation5",
+  "scope": "Same production/test source as final4. Isolate the two native workflow cases at one outer test process, retaining all original 45s deadlines and in-workflow branch concurrency. Three repetitions diagnose full-suite resource contention; not a substitute for complete regression.",
+  "jobs": [
+    {
+      "name": "native-pair-1",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "1"
+      ]
+    },
+    {
+      "name": "native-pair-2",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "1"
+      ]
+    },
+    {
+      "name": "native-pair-3",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "1"
+      ]
+    }
+  ]
+}

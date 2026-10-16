@@ -1,0 +1,121 @@
+{
+  "capturedAt": "2026-10-16T07:48:37.303Z",
+  "localCheckpoint": "d2c5ad519c438d655b3ac43786c8e4a832d4f9b8",
+  "published": false,
+  "scope": "Append-only local evidence; existing historical index and manifests unchanged. Nested raw fixture trees are packaged separately for eventual independent publication.",
+  "openRouterCredentialPatternMatches": 0,
+  "files": {
+    "SHARED_ADMISSION_INDEX.md": {
+      "bytes": 2706,
+      "sha256": "5831d3d277b821f1d31d82d17008375ca0b69af9d24a2c3945ddf2b5feb8360e"
+    },
+    "shared-admission-clippy1.log": {
+      "bytes": 548,
+      "sha256": "3f8601569a509b899f9cdfd2d73caa96356285e0ec6617246b8dbb2e0f2f021d"
+    },
+    "shared-admission-clippy2.log": {
+      "bytes": 548,
+      "sha256": "2f182c079bdc60af9e569ce4468264b8386e4ed39ff0daed2fa723ee5d58cefd"
+    },
+    "shared-admission-doctests1.log": {
+      "bytes": 2054,
+      "sha256": "832b4adc687db6fdba9bdd7a0b886e1e65890b759f1a2d3cdcb52375c8cf231b"
+    },
+    "shared-admission-doctests2.log": {
+      "bytes": 2054,
+      "sha256": "ba9ae4446489a65bc7bb18890752b472ff6ef51d1bf756e7f536da70585b10c9"
+    },
+    "shared-admission-fmt1.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "shared-admission-fmt2.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "shared-admission-focused1.log": {
+      "bytes": 2488,
+      "sha256": "b25e27916b5c63c963f8e421fef16694d7a2d80c38abc8fb19ad508414a77776"
+    },
+    "shared-admission-focused2.log": {
+      "bytes": 1890,
+      "sha256": "866d70174296b8cc38dab78d5bb510eda24b8581ab735650c7a6b7b28710d9d8"
+    },
+    "shared-admission-focused3.log": {
+      "bytes": 2080,
+      "sha256": "c64ce2e0d9f30566ab490e17ae74e80c1e9934c8465d493e3492addbdde83fe5"
+    },
+    "shared-admission-focused4.log": {
+      "bytes": 10487,
+      "sha256": "08c7b8b8a71824d05916a8fa1221866226439e798ed86c85b9e6cf5498896059"
+    },
+    "shared-admission-focused5.log": {
+      "bytes": 4108,
+      "sha256": "f51cb311ffbb2879177ca471b311b59a3a39ead7caff98ab4b32878facc3e4f1"
+    },
+    "shared-admission-full1.log": {
+      "bytes": 616504,
+      "sha256": "96624d7cfe2c66d7b3f1eb7d8122d7f03f875c9db7f844384ffc162240713027"
+    },
+    "shared-admission-full2.log": {
+      "bytes": 614997,
+      "sha256": "33a3281af8d24a9eca44524aea605c515d319dd457d49b00c50dd3ed2b2a2baa"
+    },
+    "shared-admission-gates1.json": {
+      "bytes": 1738,
+      "sha256": "6ef31f1255c61ddb8bcee32f74b2517c2af587256aafa7bfff9cef82ff59ec87"
+    },
+    "shared-admission-gates2.json": {
+      "bytes": 1870,
+      "sha256": "2c6e36ba24003a4b3e780834fe757869fea5a46141facfe20f7ec82d2ce2bb41"
+    },
+    "shared-admission-local-checkpoint.json": {
+      "bytes": 1504,
+      "sha256": "a7e0e731c361b0745a665682d6d18ad1642e2676d328daab7a046ed56d6661e0"
+    },
+    "shared-admission-runner1.mjs": {
+      "bytes": 4259,
+      "sha256": "c601687457fcedcf5f7357dd1c4eafd375508ed27e7cdb7dc7cb420cc52d443d"
+    },
+    "shared-admission-runner2.mjs": {
+      "bytes": 4668,
+      "sha256": "f1a7cd950989fecd5f9486266f75e20a0c52cb95c4faede8ce71c85042b57907"
+    },
+    "shared-admission-source-audit1.json": {
+      "bytes": 234,
+      "sha256": "5d9c1a764f3e854491fd0c363ec482b585ec05f8a3efd46fd4ea676c5e8e642b"
+    },
+    "shared-admission-source-audit2.json": {
+      "bytes": 238,
+      "sha256": "f07ad4ace79cdfd89d25b41c58e3a3f36361bfdaee107e626d812291effa85c8"
+    },
+    "shared-admission-source-lineage.json": {
+      "bytes": 709,
+      "sha256": "73bf799aa794956b7cdc098ee1a8a0dba11efe8a7e93426bf073f76cee6ac3ab"
+    },
+    "shared-admission-source1.json": {
+      "bytes": 158292,
+      "sha256": "db944ebaea5e09b6f11880e993dfc67c374bfde99f1d674dc3626b0b76933a25"
+    },
+    "shared-admission-source2.json": {
+      "bytes": 158292,
+      "sha256": "db7fbf7a51b9b3f5e47ab1489a75c78cdcf18e996be0fffe35e72672f2816c9a"
+    },
+    "shared-admission-stack-overflow-fixtures1.tar.gz": {
+      "bytes": 236410,
+      "sha256": "737a4731615686266b8dd886e94662e571de6685d479a7c905e4f8a295353ac9"
+    },
+    "shared-admission-unboxed-source1.rs": {
+      "bytes": 7720,
+      "sha256": "a477dfab7a4b0dd99b413616a8f0ddc7d1806e04a68910e523007ab3137c0fb8"
+    },
+    "shared-admission-verification-summary.json": {
+      "bytes": 1383,
+      "sha256": "7b265294b1e7e2d9f7a20242e0f6154755731abf1534bf278054ade159db3db1"
+    },
+    "shared-admission-verification-summary2.json": {
+      "bytes": 2034,
+      "sha256": "3d1e8a9abb4098f7169e82908751d451bdd8f0bcc47281da1e3048ee67a96e11"
+    }
+  }
+}

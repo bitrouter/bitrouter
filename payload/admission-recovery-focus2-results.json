@@ -1,0 +1,121 @@
+{
+  "source": "admission-recovery-focus2-source.json",
+  "scope": "Current ACP saved-intent recovery with original legacy supervisor priority; partial A16, not same-session/active recovery closure",
+  "startedAt": "2026-10-16T11:57:01.028Z",
+  "runs": [
+    {
+      "name": "interruptions",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime::tests::threads) | test(goal_runtime::tests::start_recovery)"
+      ],
+      "log": "admission-recovery-focus2-interruptions.log",
+      "startedAt": "2026-10-16T11:57:01.028Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:58:00.353Z",
+      "summaries": [
+        "     Summary [   3.839s] 6 tests run: 6 passed, 1820 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "admission-recovery-focus2-clippy.log",
+      "startedAt": "2026-10-16T11:58:00.354Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:58:39.186Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "admission-recovery-focus2-fmt.log",
+      "startedAt": "2026-10-16T11:58:39.186Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:58:59.222Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ],
+      "log": "admission-recovery-focus2-goal-runtime.log",
+      "startedAt": "2026-10-16T11:58:59.222Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:59:47.521Z",
+      "summaries": [
+        "     Summary [  47.390s] 77 tests run: 77 passed, 1749 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(saved_acp_intent_without_any_thread) | test(paused_goal_recovers_original_start)"
+      ],
+      "log": "admission-recovery-focus2-stress.log",
+      "startedAt": "2026-10-16T11:59:47.521Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:00:04.863Z",
+      "summaries": [
+        "     Summary [  16.887s] 5/5 stress run iterations: 5 passed"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T12:00:04.986Z",
+  "changed": [],
+  "passed": true
+}

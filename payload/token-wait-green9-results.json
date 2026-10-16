@@ -1,0 +1,102 @@
+{
+  "source": "token-wait-green9-source.json",
+  "scope": "Native quote waits plus deterministic removal of redundant elapsed-halt writes. Real SQLite clock/resume regression, all Goal runtime and SDK component regressions, PTY editor stress and strict workspace checks. Final7 full workspace has one preserved CAS/editor failure; no all-refactor or current-source full-workspace pass is claimed by this checkpoint.",
+  "startedAt": "2026-10-16T17:10:13.093Z",
+  "runs": [
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::) | test(quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ],
+      "log": "token-wait-green9-goal-runtime.log",
+      "startedAt": "2026-10-16T17:10:13.093Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:11:59.081Z",
+      "summaries": [
+        "     Summary [  49.288s] 87 tests run: 87 passed, 1748 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "sdk",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-sdk",
+        "--all-features",
+        "--lib"
+      ],
+      "log": "token-wait-green9-sdk.log",
+      "startedAt": "2026-10-16T17:11:59.081Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:12:00.826Z",
+      "summaries": [
+        "     Summary [   1.051s] 735 tests run: 735 passed, 2 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "goal-tui",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty"
+      ],
+      "log": "token-wait-green9-goal-tui.log",
+      "startedAt": "2026-10-16T17:12:00.827Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:13:07.850Z",
+      "summaries": [
+        "     Summary [  25.306s] 4 tests run: 4 passed, 0 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "editor-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty",
+        "--stress-count",
+        "10",
+        "-E",
+        "test(goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal)"
+      ],
+      "log": "token-wait-green9-editor-stress.log",
+      "startedAt": "2026-10-16T17:13:07.850Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:13:32.227Z",
+      "summaries": [
+        "     Summary [  23.837s] 1/10 stress run iterations: 0 passed, 1 failed"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:13:32.432Z",
+  "changed": [],
+  "passed": false
+}

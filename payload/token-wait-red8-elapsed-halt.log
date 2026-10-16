@@ -1,0 +1,35 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 55.03s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 061a5f0a-eea0-4fbe-b69c-80945aedae9a with nextest profile: default
+    Starting 1 test across 1 binary (1834 tests skipped)
+        FAIL [   0.068s] (1/1) bitrouter goal_runtime::tests::threads::exhausted_elapsed_budget_stays_quiet_and_raised_limit_retains_actual_age
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::threads::exhausted_elapsed_budget_stays_quiet_and_raised_limit_retains_actual_age ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::threads::exhausted_elapsed_budget_stays_quiet_and_raised_limit_retains_actual_age
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1834 filtered out; finished in 0.05s
+
+  stderr ───
+    Failure-retention elapsed-budget fixture: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp5VyAYQ
+    Retained elapsed-budget fixture: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmp5VyAYQ
+    Error: a known elapsed halt wrote another observation: 3 -> 4
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.079s] 1 test run: 0 passed, 1 failed, 1834 skipped
+        FAIL [   0.068s] (1/1) bitrouter goal_runtime::tests::threads::exhausted_elapsed_budget_stays_quiet_and_raised_limit_retains_actual_age
+error: test run failed

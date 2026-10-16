@@ -1,0 +1,24 @@
+{
+  "head": "ebbbc000a500486889be80dfc87bf180cc0d7a69",
+  "dirtyFiles": [
+    "crates/bitrouter-orchestrator/src/service/recovery/acp.rs",
+    ".config/nextest.toml",
+    "apps/bitrouter/src/goal_runtime/acp.rs",
+    "apps/bitrouter/src/goal_runtime/native.rs",
+    "apps/bitrouter/src/goal_runtime/resources/tests.rs",
+    "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs",
+    "apps/bitrouter/src/goal_runtime/tests/native_recovery.rs",
+    "apps/bitrouter/src/supervisor.rs",
+    "apps/bitrouter/tests/goal_tui_pty.rs",
+    "apps/bitrouter/tests/native_harness_resources.rs",
+    "crates/bitrouter-orchestrator/src/service/recovery.rs",
+    "crates/bitrouter-orchestrator/src/service/recovery/tests.rs",
+    "crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs",
+    "crates/bitrouter-orchestrator/src/service/waiting.rs",
+    "crates/bitrouter-orchestrator/src/service/worker/acp.rs",
+    "crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs",
+    "crates/bitrouter-orchestrator/src/thread.rs",
+    "helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs"
+  ],
+  "scope": "Dirty files supplement the exact committed HEAD."
+}

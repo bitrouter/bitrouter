@@ -1,0 +1,37 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 53.65s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 802eca9f-3550-4c09-8ff9-22b67269b0dd with nextest profile: default
+    Starting 1 test across 1 binary (1825 tests skipped)
+        FAIL [   8.282s] (1/1) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1825 filtered out; finished in 8.27s
+
+  stderr ───
+    Failure-retention Goal fixture: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpKUBRf8
+
+    thread 'goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness' (1355515) panicked at apps/bitrouter/src/goal_runtime/tests/native.rs:217:9:
+    Intentional fixture-retention panic probe after actual native Goal completion
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   8.298s] 1 test run: 0 passed, 1 failed, 1825 skipped
+        FAIL [   8.282s] (1/1) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+error: test run failed

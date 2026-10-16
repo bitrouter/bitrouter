@@ -1,0 +1,5 @@
+{
+  "file": "apps/bitrouter/src/goal_runtime/tests/native.rs",
+  "sha256": "01534670431acc634442302d091604a4203b64eec0fae521a43e0e1b37c0e7ba",
+  "purpose": "Temporary impossible assertion to validate panic filesystem retention; restore exact original before green validation"
+}

@@ -1,0 +1,34 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 56.04s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID d6616dba-1c49-499b-8537-d85425e41522 with nextest profile: default
+    Starting 19 tests across 2 binaries (1897 tests skipped)
+        PASS [   0.175s] ( 1/19) bitrouter goal_runtime::tests::threads::interrupted_owner_link_reconciles_the_original_thread_after_database_reopen
+        PASS [   0.527s] ( 2/19) bitrouter goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume
+        PASS [   0.640s] ( 3/19) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+        PASS [   4.718s] ( 4/19) bitrouter goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent
+        PASS [  10.777s] ( 5/19) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+        PASS [  11.062s] ( 6/19) bitrouter goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output
+        PASS [  11.439s] ( 7/19) bitrouter goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery
+        PASS [  12.308s] ( 8/19) bitrouter goal_runtime::tests::native::native_fallback_evidence_retains_failed_candidate_and_actual_serving_identity
+        PASS [  12.619s] ( 9/19) bitrouter goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect
+        PASS [  12.988s] (10/19) bitrouter goal_runtime::tests::workflow_edits::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [  12.762s] (11/19) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        PASS [  14.393s] (12/19) bitrouter goal_runtime::tests::workflow_edits::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        PASS [   4.223s] (13/19) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+        PASS [   2.730s] (14/19) bitrouter goal_runtime::tests::workflow_edits::unconfigured_worker_request_is_retained_as_clarification_without_replacement
+        PASS [   3.519s] (15/19) bitrouter goal_runtime::tests::workflow_edits::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [  12.363s] (16/19) bitrouter goal_runtime::tests::workflow_edits::independent_review_recovers_from_goal_revision_without_worker_replay
+        PASS [  18.558s] (17/19) bitrouter goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+        PASS [  11.824s] (18/19) bitrouter goal_runtime::tests::workflow_edits::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [  28.940s] (19/19) bitrouter goal_runtime::tests::workflow_edits::requested_worker_replacement_keeps_old_session_source_and_independent_work
+────────────
+     Summary [  40.393s] 19 tests run: 19 passed, 1897 skipped

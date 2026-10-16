@@ -1,0 +1,24 @@
+{
+  "capturedAt": "2026-10-16T09:04:33.960Z",
+  "archive": "managed-acp-stack-overflow-fixtures3.tar.gz",
+  "verifiedFiles": 2103,
+  "diagnosticSource": "source3 plus the archived frame-size probe; source4 adds only boxed startup and receipt-query boundaries",
+  "before": {
+    "dispatch": 32880,
+    "goalTask": 38384,
+    "goalWorker": 40720
+  },
+  "after": {
+    "dispatch": 8912,
+    "goalTask": 16888,
+    "goalWorker": 18304
+  },
+  "debugger": "stalled with its test suspended before output; all three verified diagnostic processes terminated; no usable backtrace",
+  "sha256": {
+    "managed-acp-check5.log": "abde8a595a6ccd3be1888cdf633fd9539a49e303d5ae68f0ed5e75911c75eafd",
+    "managed-acp-frame-sizes3.log": "45407e1354360f047c533320d28bd68fe35031a062a194af05ca7398ac14942b",
+    "managed-acp-frame-sizes4.log": "1afca71619daf9699cc13a12447a5511a43da6334a9ab39f694247619e18eca1",
+    "managed-acp-debugger3.log": "467879def1044cbc89d997d8dc98bed1ae3e2bbe85021dfbf01b467aaaa592d8",
+    "managed-acp-frame-probe.rs": "c851cfc86304500e53b40c2f6c3d200922175695555e4e365c86e0d377189bf2"
+  }
+}

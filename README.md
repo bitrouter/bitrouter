@@ -1,0 +1,11 @@
+# PR #981 BRO refactor evidence
+
+Feature checkpoint: 6a72cfb1da0e2d4641a96097e09a507d7d032189. Final local verification: acp-continuation-final15. This separate branch preserves original failures, superseded runs, retained fixtures, source bindings, exact configurations, runners and recoverable Git bundles. Actual vendor harness/provider requalification remains unpassed.
+
+Start with [the final index](payload/ACP_CONTINUATION_INDEX.md) and other *_INDEX.md files. Feature documentation pins this archive commit separately; production inputs match the final run's source hashes.
+
+Verify all published files with `shasum -a 256 -c SHA256SUMS`. PAYLOAD.json records every original file's bytes, SHA-256 and mode. Ordinary root files are in payload/. The five original directories are complete tar files in packed-directories/ so nested hidden Git pointers remain inert bytes rather than submodule entries. Copy payload/ contents into an empty directory, then extract each packed-directories/*.tar.gz there to reconstruct the original archive. The independently restored 1:1 file/mode/hash check passed before publication.
+
+Dirty source tars require their recorded HEAD. Git bundles require their recorded public base; in a clone containing that base, use `git bundle verify payload/<bundle>` before fetching. SQLite/filesystem copies are controlled evidence, not process images or proof of forced crash takeover. Vendor/private context/provider/cost qualification is explicitly separate.
+
+Earlier pre-refactor evidence remains pinned at 382c2b58c5c25b02805175a33d60707dc4227b46.

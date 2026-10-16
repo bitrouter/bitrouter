@@ -1,0 +1,8 @@
+{
+  "capturedAt": "2026-10-16T10:26:41.539Z",
+  "source": "worker-switch-source9.json",
+  "checkedFiles": 1297,
+  "changed": [
+    "apps/bitrouter/tests/goals/input.rs"
+  ]
+}

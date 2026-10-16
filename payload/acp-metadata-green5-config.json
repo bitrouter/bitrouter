@@ -1,0 +1,39 @@
+{
+  "id": "acp-metadata-green5",
+  "scope": "Production is unchanged from green2/green3. Factor shared ACP metadata test setup and add a synthetic selected-session/lost-prompt journal guard: a submitted prompt remains private/unconfirmed and cannot take the unopened metadata path. Original receipt remains readable, no replay. Real ACP process qualification remains in the separate SQLite peer case.",
+  "jobs": [
+    {
+      "name": "acp-guards",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(service::tests::worker::acp::)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    }
+  ]
+}

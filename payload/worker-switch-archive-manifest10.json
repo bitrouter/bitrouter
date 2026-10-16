@@ -1,0 +1,431 @@
+{
+  "capturedAt": "2026-10-16T10:32:03.406Z",
+  "head": "867642d95bc5a74e8b777bce2d3bb3f79f11a8a5",
+  "artifacts": [
+    {
+      "file": "WORKER_SWITCH_INDEX.md",
+      "bytes": 4545,
+      "sha256": "c082d29c6f84ea19f7500c6384689389077257a6230825c1a0235f19d3939607"
+    },
+    {
+      "file": "worker-switch-check1.log",
+      "bytes": 1582,
+      "sha256": "0c2c425e721dfb9dd3c3e819365cb9905ee76aef3e9f7916ae0ed537790b79a9"
+    },
+    {
+      "file": "worker-switch-check2.log",
+      "bytes": 1487,
+      "sha256": "db95af22c1a7c644beb0817577b37567c7fcd15fc6e440c9a56074667ef528c6"
+    },
+    {
+      "file": "worker-switch-check3.log",
+      "bytes": 548,
+      "sha256": "c98e47b3de3a89c67d174a162942e4957ed1f82c51a0f96f1552a11b6876bff3"
+    },
+    {
+      "file": "worker-switch-check4.log",
+      "bytes": 548,
+      "sha256": "c98e47b3de3a89c67d174a162942e4957ed1f82c51a0f96f1552a11b6876bff3"
+    },
+    {
+      "file": "worker-switch-clippy9.log",
+      "bytes": 681,
+      "sha256": "1afd6a75b9f1a5cfa283aa2aae7c3bdc81466090a9490e0ae288662da8c711e9"
+    },
+    {
+      "file": "worker-switch-doctests9.log",
+      "bytes": 2054,
+      "sha256": "005761b705ba62db1b8ea38895cab581658c8325ffaa2250f23a0f2981761011"
+    },
+    {
+      "file": "worker-switch-fmt9.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "worker-switch-focused1.json",
+      "bytes": 739,
+      "sha256": "07f1a22885c37b75c8593be1641cd76f6061fc21f4b371992a4bafa61b5acc1d"
+    },
+    {
+      "file": "worker-switch-focused1.log",
+      "bytes": 2380,
+      "sha256": "0161c341b1ad46a11fe70d5280afe6def44bcb016a626d8f8ddc45695a7e5cd9"
+    },
+    {
+      "file": "worker-switch-focused10.json",
+      "bytes": 800,
+      "sha256": "30f0b74dd4e6e5cd3c7ea01121bb4105e8f25bfc8fa439a6909deba7daf7b9bc"
+    },
+    {
+      "file": "worker-switch-focused10.log",
+      "bytes": 16564,
+      "sha256": "dbc03aa9390b35d670fce3c303c2dbcc6fe1b58486695be9316f04846b062862"
+    },
+    {
+      "file": "worker-switch-focused2.json",
+      "bytes": 739,
+      "sha256": "fa5953949da86f146d8ad62d8ec36abe5d7fd770a8e82baec65a3471fbb55916"
+    },
+    {
+      "file": "worker-switch-focused2.log",
+      "bytes": 1688,
+      "sha256": "e49ade0e805e1803fe293ad077e10c2ac1e98dab153664fe76bb68c8e74d5f3a"
+    },
+    {
+      "file": "worker-switch-focused3.json",
+      "bytes": 811,
+      "sha256": "9fa7ed4c159b2b9e078c7a0a69d5f20f5e94e8919b46ecf9eff835f2aaf5194e"
+    },
+    {
+      "file": "worker-switch-focused3.log",
+      "bytes": 18785,
+      "sha256": "2e4f14c0096e504fc6baf6d69182cf0529888b9a5da22318caf3434138b01ee3"
+    },
+    {
+      "file": "worker-switch-focused4.json",
+      "bytes": 811,
+      "sha256": "21120d67eca60d3dc0ef605d63b954066193cc7e0907235fe177a1dda0ec4442"
+    },
+    {
+      "file": "worker-switch-focused4.log",
+      "bytes": 17328,
+      "sha256": "c74ae64ddcd122f3bf0b806332da31e77128fa85c0ffcb6d7670e2d5da4bf680"
+    },
+    {
+      "file": "worker-switch-focused5.json",
+      "bytes": 811,
+      "sha256": "f105711ee2adbb393a2f9429998e8c2b61ec0301432480dc83f82e0a3d9ea700"
+    },
+    {
+      "file": "worker-switch-focused5.log",
+      "bytes": 17197,
+      "sha256": "1c406143ed2a71de8e12d3c6cc50399ed052b16da9af24a3eb1cc580ebe3b766"
+    },
+    {
+      "file": "worker-switch-focused6.json",
+      "bytes": 674,
+      "sha256": "7b6c251321d6570d47c15729b0b2c0cb198dadc30a4a93fca6b49f48c2528cba"
+    },
+    {
+      "file": "worker-switch-focused6.log",
+      "bytes": 1870,
+      "sha256": "1cc8c2897be99e83ecc13184a017d907daf82f3c1d5c2f01017c02df48bf2d77"
+    },
+    {
+      "file": "worker-switch-focused7.json",
+      "bytes": 674,
+      "sha256": "5915cfb05dcf4125c04a0d6cc61a69c287754d1dcc1c8c4e87cd93981dc784f3"
+    },
+    {
+      "file": "worker-switch-focused7.log",
+      "bytes": 1866,
+      "sha256": "5c8ad222e84568f12cc273e789a4ee91172ee38627d01371fd31f166d8151e83"
+    },
+    {
+      "file": "worker-switch-focused8.json",
+      "bytes": 661,
+      "sha256": "95c4fcdc124e62f517888b58714fc1f0d5c818151cd6b733a6201cceb3e184dc"
+    },
+    {
+      "file": "worker-switch-focused8.log",
+      "bytes": 1182,
+      "sha256": "2edaa17e6546e7666afdcd47a707947d40b5ac7d0275a81b5ea338eee259a189"
+    },
+    {
+      "file": "worker-switch-full9.log",
+      "bytes": 616114,
+      "sha256": "4dda84f800f757253fb1ecc1ec73457a5a1612da801abd1335474e6b8f334af0"
+    },
+    {
+      "file": "worker-switch-gates9.json",
+      "bytes": 1927,
+      "sha256": "55f4386210a6e6536845a72599a5cc6129b74a187c145ac012b0ac76c5281ba2"
+    },
+    {
+      "file": "worker-switch-initial-check1.log",
+      "bytes": 548,
+      "sha256": "d7260a7c388e50e8c3ee164184e2b032e45e22063ec7f2492c355b9e35ad89e2"
+    },
+    {
+      "file": "worker-switch-local-checkpoint10.json",
+      "bytes": 696,
+      "sha256": "bc7bb1f10f36b8c0c6e6afa469a9c7c509f57db8c3a3b785f857c2ad472f4009"
+    },
+    {
+      "file": "worker-switch-local-checkpoints10.bundle",
+      "bytes": 259672,
+      "sha256": "cf9ab7c03d880686c24a76b8d84cb28099c9302c265b8119c00ba5dd98ad9262"
+    },
+    {
+      "file": "worker-switch-post-gates-implementation.md",
+      "bytes": 61991,
+      "sha256": "ecb4ae20241c5fe1f8b2463e5274ae8f57e9e6bc54edc424b839e1d267903aa4"
+    },
+    {
+      "file": "worker-switch-pr981-before-publication.json",
+      "bytes": 465,
+      "sha256": "f117b6a53364c5e722e40f7d70b9f02cff678c3584c162b89d7b6a53d33f50cc"
+    },
+    {
+      "file": "worker-switch-precommit10.json",
+      "bytes": 160027,
+      "sha256": "2e972e0d77fa459b27b9c9fc76c0d2298f129060a4bafee40c8e7e322e6d8f3f"
+    },
+    {
+      "file": "worker-switch-runner9.mjs",
+      "bytes": 3982,
+      "sha256": "38517ca6954c220850a833eeab1f0daafa32385e8e256a1a54ce205ff8584ddf"
+    },
+    {
+      "file": "worker-switch-source-audit9.json",
+      "bytes": 175,
+      "sha256": "e5b90a396c3b3a64e4bfcee7922c47915b4b8ca37a0f170d37b21e1eb129809a"
+    },
+    {
+      "file": "worker-switch-source1-files.tar.gz",
+      "bytes": 133368,
+      "sha256": "3c29ae9927b39318ab269cf5b7a3e33b9b551f1b5fd35183f9e6eb66196aa7bb"
+    },
+    {
+      "file": "worker-switch-source1.json",
+      "bytes": 159481,
+      "sha256": "306e1f4455bbf0137c067f4abd3feb9ae499673910909fb8a50152ed8198da49"
+    },
+    {
+      "file": "worker-switch-source1.patch",
+      "bytes": 72109,
+      "sha256": "02813eeffd03796d50bee19b1a2060a797dd80a6fb64c58c23988eba93ebc724"
+    },
+    {
+      "file": "worker-switch-source10-extraction-audit.json",
+      "bytes": 399,
+      "sha256": "9e287b16e9e8399ac4674ff00c7375e394908ef7883eb28336b6c0d51fd5cc92"
+    },
+    {
+      "file": "worker-switch-source10-files.tar.gz",
+      "bytes": 288572,
+      "sha256": "7328aceded1fe0ed9244fb02a1c1af05545c75a739a600420e1d7766744e63ef"
+    },
+    {
+      "file": "worker-switch-source10.json",
+      "bytes": 159606,
+      "sha256": "882f4ce3c38725aa7d969c3af3246645c557d7db4b697ab9b70b32b897d41a4d"
+    },
+    {
+      "file": "worker-switch-source10.patch",
+      "bytes": 121537,
+      "sha256": "7a27d0edc4fe966d118851a716cc993ef7d12583283506bd8f3df29dcf3f88b0"
+    },
+    {
+      "file": "worker-switch-source2-files.tar.gz",
+      "bytes": 133975,
+      "sha256": "2aaad8c4f72455f463c88af8ecc2fd67f396e74c3abb7cea0daf8cfa6e35ab49"
+    },
+    {
+      "file": "worker-switch-source2.json",
+      "bytes": 159481,
+      "sha256": "fe7d6e55219cfc44c4b6482152e5d94e8e3070188da192a0f3e275c0e20d0e20"
+    },
+    {
+      "file": "worker-switch-source2.patch",
+      "bytes": 76031,
+      "sha256": "df78f3fb6a549925228ed82748862e02a5193dd5c3a3d84cdaaedffcebeb71d7"
+    },
+    {
+      "file": "worker-switch-source3-files.tar.gz",
+      "bytes": 243762,
+      "sha256": "e17a55504103e43d2bed7ff12970fee796f5d9f1c3000bcb54dc592f39d8a01a"
+    },
+    {
+      "file": "worker-switch-source3.json",
+      "bytes": 159481,
+      "sha256": "9074027a8c25f4678ef630ac2feb8c7cf91457c2212358e3029c2b7289b47efb"
+    },
+    {
+      "file": "worker-switch-source3.patch",
+      "bytes": 93162,
+      "sha256": "acdce07a31728467a40752915858db633c008ccc94bbe4dce223e320b1852042"
+    },
+    {
+      "file": "worker-switch-source4-files.tar.gz",
+      "bytes": 262354,
+      "sha256": "5a0fff2eb56db3e1d6497a6dc5c786a85bb9594ff29ec33540f493b7f8fffa20"
+    },
+    {
+      "file": "worker-switch-source4.json",
+      "bytes": 159606,
+      "sha256": "95fb25f6deece620a5b71eeb98cfa5500ca3e06092721d914f5d22f5eb754242"
+    },
+    {
+      "file": "worker-switch-source4.patch",
+      "bytes": 106025,
+      "sha256": "e1936e3d2358587267ebdf59b2f3a6b87ce324e6d17691e830569fa2c93c529c"
+    },
+    {
+      "file": "worker-switch-source5-files.tar.gz",
+      "bytes": 262839,
+      "sha256": "b709b68a3bff3e0681913c06b4d400c8d781daf8f4b380571189adb8a32181d7"
+    },
+    {
+      "file": "worker-switch-source5.json",
+      "bytes": 159606,
+      "sha256": "fef23e0e5f2a5825914993d9ed203766c87f668801316daa1c9e949abcb21505"
+    },
+    {
+      "file": "worker-switch-source5.patch",
+      "bytes": 108767,
+      "sha256": "3bc9a66c1f18aae0a32fe8ba33d5f0ba1b600f718cbde7be0aa202cf46367aa6"
+    },
+    {
+      "file": "worker-switch-source6-files.tar.gz",
+      "bytes": 262977,
+      "sha256": "2b20490d86a4f6402b7042b127b4d6a8b799b0bd97d5cd615c5eca4998ee52af"
+    },
+    {
+      "file": "worker-switch-source6.json",
+      "bytes": 159606,
+      "sha256": "5ffbca4cc75091b56f2922513785cc603c42c3f35de3f33336a554165555f7ea"
+    },
+    {
+      "file": "worker-switch-source6.patch",
+      "bytes": 109270,
+      "sha256": "30cf667f63828aa03682b79d8a59f46a7d9e6f66cfe12c9e42ee7be300e69b79"
+    },
+    {
+      "file": "worker-switch-source7-files.tar.gz",
+      "bytes": 263008,
+      "sha256": "c5928201b319c3f78dc82640a4d6b2fafd919dd2c7eddbe11f68d448d7429ce2"
+    },
+    {
+      "file": "worker-switch-source7.json",
+      "bytes": 159606,
+      "sha256": "211c9d63f7d3f34467a596c4417f83fc4fc8e238fc13069d039e7c46a8b108b8"
+    },
+    {
+      "file": "worker-switch-source7.patch",
+      "bytes": 109455,
+      "sha256": "c2ecabec7e63a668076d9988aace977f00532065448aaf2eb401d68ee54c8deb"
+    },
+    {
+      "file": "worker-switch-source8-files.tar.gz",
+      "bytes": 263043,
+      "sha256": "a1014e92b13503599a31bb0f8e1df443c2357e0262c1cba4ace59c872ff9f1ef"
+    },
+    {
+      "file": "worker-switch-source8.json",
+      "bytes": 159606,
+      "sha256": "8d22157e347c9f49cd4a427046336c68dd93af362f1968bbd1fff5a4e01e425b"
+    },
+    {
+      "file": "worker-switch-source8.patch",
+      "bytes": 109788,
+      "sha256": "55aa90eb130a2c4a281d8158b2115323e8988725ce5a646ff3561b6be2d3a70d"
+    },
+    {
+      "file": "worker-switch-source9-applicability10.json",
+      "bytes": 876,
+      "sha256": "77aca59c79bb4eed9abdfa5b5482e2f9ef261ea9fbc71d668520cd145a6f37c3"
+    },
+    {
+      "file": "worker-switch-source9-extraction-audit.json",
+      "bytes": 396,
+      "sha256": "09d3526d3a46f611a72f40ba0b390e5c930679d3a8261bf293e887cf955d540e"
+    },
+    {
+      "file": "worker-switch-source9-files.tar.gz",
+      "bytes": 288571,
+      "sha256": "b441a71bb684f3952df00aca8977e5e71f677fc95b4e50baa22e76760377657e"
+    },
+    {
+      "file": "worker-switch-source9-to10-formatting.diff",
+      "bytes": 721,
+      "sha256": "38cdd37e2541986a0c6a614e4ab50df3ec2072449c5a9bd239afb91229c9ef5a"
+    },
+    {
+      "file": "worker-switch-source9.json",
+      "bytes": 159606,
+      "sha256": "263917a923eb34657071cc901077534b9c1fe02973dc3ac222991bd2b31e8092"
+    },
+    {
+      "file": "worker-switch-source9.patch",
+      "bytes": 121517,
+      "sha256": "4e84c6407e483b4f38997880883ae567646c3ff3fcf3a664ce2f42e74c604654"
+    },
+    {
+      "file": "worker-switch-switch-runner1.mjs",
+      "bytes": 3292,
+      "sha256": "846283dc340cd5f47ca040654ea50454f2250d8d13ec98025908925a36e72f66"
+    },
+    {
+      "file": "worker-switch-switch-runner10.mjs",
+      "bytes": 3071,
+      "sha256": "05c9719a4bc01732718de220522e1aeeff5a81fff9983cf952a133e6368b7712"
+    },
+    {
+      "file": "worker-switch-switch-runner2.mjs",
+      "bytes": 3063,
+      "sha256": "f851a8fa03370d0eac84ec65e76165b39f3857d2bffe3d42148b844b5aa2fecf"
+    },
+    {
+      "file": "worker-switch-switch-runner3.mjs",
+      "bytes": 3063,
+      "sha256": "cf1a2e4c9168c1f6ec0048b90d640654d86b481407788acc191dfd6e7fc2e4d3"
+    },
+    {
+      "file": "worker-switch-switch-runner4.mjs",
+      "bytes": 3063,
+      "sha256": "05f315f3bffb54f1b3d21da1c3957bf3f6ab29f753b5c032a3f3361ed9d732f7"
+    },
+    {
+      "file": "worker-switch-switch-runner5.mjs",
+      "bytes": 3063,
+      "sha256": "33a58ec0a70487fb9250ac9b021e4c74388100f20db274d695c16a0b8d2e7330"
+    },
+    {
+      "file": "worker-switch-switch-runner6.mjs",
+      "bytes": 2931,
+      "sha256": "96da1274bae41e42792b6dfea58221d43f85e023f383c88dc8216b2ab4708155"
+    },
+    {
+      "file": "worker-switch-switch-runner7.mjs",
+      "bytes": 2931,
+      "sha256": "01c5e78b5c0f734f500303d815bae39f25559f94ed8073a26f68a3894e1a3d58"
+    },
+    {
+      "file": "worker-switch-switch-runner8.mjs",
+      "bytes": 2931,
+      "sha256": "147a834d7c2d8b23efd5bc1af5a8d410c47b49834df7cc985b2004927325135a"
+    },
+    {
+      "file": "worker-switch-test-build1.log",
+      "bytes": 3743,
+      "sha256": "58128d8d9c2a73552b17d7eff7d76f663e35b7e26f112fd64ab829fb9f4dabd5"
+    },
+    {
+      "file": "worker-switch-test-build2.log",
+      "bytes": 5088,
+      "sha256": "fadab6fcaf7d336d3f4f84b5770ffaa01c739ad5dc27ebae00aeb49e35e9aa24"
+    },
+    {
+      "file": "worker-switch-tool-bro-worker-switch-archive-index.mjs",
+      "bytes": 5154,
+      "sha256": "bb691792facb30313177c27b334134b85e8434484f6c97a56461226cf7cb35bd"
+    },
+    {
+      "file": "worker-switch-tool-bro-worker-switch-extract-audit10.mjs",
+      "bytes": 1542,
+      "sha256": "6104303e83dababb7ad6d4c1fe88f7438434522b6ab8594379fef0c8ae1d4db8"
+    },
+    {
+      "file": "worker-switch-tool-bro-worker-switch-extract-audit9.mjs",
+      "bytes": 1536,
+      "sha256": "2ee958100f3ed8167161b5e328f87b1b14e573dbfce6357ef23b4e6bee40eb21"
+    },
+    {
+      "file": "worker-switch-trial-index.json",
+      "bytes": 9907,
+      "sha256": "53af7b58b2b6d37489e5829cbf0c4a7cea2c77a56f9f9e6a923386679d904636"
+    }
+  ]
+}

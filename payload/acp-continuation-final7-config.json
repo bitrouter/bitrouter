@@ -1,0 +1,55 @@
+{
+  "id": "acp-continuation-final7",
+  "scope": "Complete final workspace regression after scheduling native Goal checkpoint-heavy fixtures in the existing pressure group. Since final4, only .config/nextest.toml changes; runtime, Rust test bodies, product limits and 45s fixture waits are unchanged. Same-source exact-workspace isolation6 passed both prior timeouts; internal workflow parallelism remains asserted.",
+  "jobs": [
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

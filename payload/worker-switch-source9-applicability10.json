@@ -1,0 +1,17 @@
+{
+  "capturedAt": "2026-10-16T10:28:39.558Z",
+  "before": "worker-switch-source9.json",
+  "after": "worker-switch-source10.json",
+  "changed": [
+    "apps/bitrouter/tests/goals/input.rs"
+  ],
+  "classification": "One line wrap/indentation in a Rust test expression; exact byte replacement verified. No tokens, strings, values, assertions or executable source changed.",
+  "allFourCommandsPassed": true,
+  "originalGateAggregatePassed": false,
+  "reason": "The earlier cargo fmt finished while the source9 snapshot was being captured. Preserve its failed zero-drift audit.",
+  "freshFocusedRun": "worker-switch-focused10.json",
+  "currentParent": "9d0460696b39b12b8585334b401224fbafde6494",
+  "beforeHash": "877716985040b1b52a23c950f8308aa9427106b1711b6678e7145db25e96048e",
+  "afterHash": "870c42a7688ee0ec2513e8d2185b839c2fc2647a8489991aa168774ef28f5fa6",
+  "passed": true
+}

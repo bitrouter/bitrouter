@@ -1,0 +1,5 @@
+(lldb) target create "target/debug/deps/bitrouter-7305cf7ec23b6db5"
+Current executable set to '/Users/kelsen/.codex/worktrees/d91b/bitrouter/target/debug/deps/bitrouter-7305cf7ec23b6db5' (arm64).
+(lldb) settings set -- target.run-args  "--exact" "goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume" "--nocapture"
+(lldb) settings set target.disable-aslr false
+(lldb) run

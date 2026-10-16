@@ -1,0 +1,26 @@
+{
+  "createdAt": "2026-10-16T17:51:51.704Z",
+  "head": "35a08b319a8240e7816c2d0e78069eef537dcaca",
+  "parents": [
+    "3c0310d5a156b11a29c4ea9ee4b9ffe3dcc8dc13",
+    "54c822a34d4dbfd75d484ca35e108b497048efef"
+  ],
+  "changed": [
+    "apps/bitrouter/registry-dist/models.json",
+    "apps/bitrouter/registry-dist/providers.json",
+    "dist/registry/models.json",
+    "dist/registry/providers.json",
+    "registry/providers/ambient.yaml"
+  ],
+  "bundle": "refactor-local-checkpoint-35a08b31.bundle",
+  "bundleSha256": "0f40c716699daaf12a15ff2cee10817f1b62eff82531858497dd7fc878227b32",
+  "source": "main-catalog-sync2-source.json",
+  "sourceSha256": "74141d084c4337b0fc904ee487899e78f92c53e318b14ac72f382be9c4e920e9",
+  "verifiedSourceFiles": 1304,
+  "passedJobs": [
+    "registry-validate",
+    "registry-build",
+    "dist-check"
+  ],
+  "scope": "Catalog-only main integration. Clean committed source, empty dirty-file tar, verified Git bundle requiring the public PR base. No current full-runtime/full-workspace or hosted CI pass is claimed. Source-packaging attempt sync1 failed before running any jobs and remains retained."
+}

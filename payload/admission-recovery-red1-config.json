@@ -1,0 +1,19 @@
+{
+  "id": "admission-recovery-red1",
+  "scope": "Regression for a saved current ACP dispatch before any common Thread admission; expected failure before routing fix, not full recovery acceptance",
+  "jobs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(saved_acp_intent_without_any_thread)"
+      ]
+    }
+  ]
+}

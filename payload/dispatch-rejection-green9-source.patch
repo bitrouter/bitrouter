@@ -1,0 +1,980 @@
+diff --git a/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs b/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
+index 7510ac09..039d2fec 100644
+--- a/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
++++ b/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
+@@ -59,6 +59,19 @@ mod tests {
+         }
+     }
+ 
++    struct BeforeAdmissionVerdictMigrator;
++    #[async_trait::async_trait]
++    impl MigratorTrait for BeforeAdmissionVerdictMigrator {
++        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
++            Migrator::migrations()
++                .into_iter()
++                .take_while(|migration| {
++                    migration.name() != "m20240101_000032_bro_admission_verdict"
++                })
++                .collect()
++        }
++    }
++
+     #[tokio::test]
+     async fn legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals()
+     -> anyhow::Result<()> {
+@@ -114,6 +127,18 @@ mod tests {
+                 .is_err()
+         );
+         drop(goals);
++        assert!(
++            BeforeAdmissionVerdictMigrator::up(&db, None)
++                .await
++                .err()
++                .is_some_and(|error| error.to_string().contains("000032_bro_admission_verdict"))
++        );
++        assert!(
++            crate::db::migration::m20240101_000032_bro_admission_verdict::Migration
++                .down(&SchemaManager::new(&db))
++                .await
++                .is_err()
++        );
+         drop(store);
+         db.close().await?;
+         let reopened = crate::db::connect(&url).await?;
+diff --git a/apps/bitrouter/src/db/migration/mod.rs b/apps/bitrouter/src/db/migration/mod.rs
+index 64ad6116..186cecdb 100644
+--- a/apps/bitrouter/src/db/migration/mod.rs
++++ b/apps/bitrouter/src/db/migration/mod.rs
+@@ -42,6 +42,7 @@ mod m20240101_000028_create_bro_goals;
+ mod m20240101_000029_index_acp_resource_head;
+ mod m20240101_000030_bro_goal_execution_format;
+ mod m20240101_000031_bro_worker_source_format;
++mod m20240101_000032_bro_admission_verdict;
+ 
+ use sea_orm_migration::{MigrationTrait, MigratorTrait};
+ 
+@@ -83,6 +84,7 @@ impl MigratorTrait for Migrator {
+             Box::new(m20240101_000029_index_acp_resource_head::Migration),
+             Box::new(m20240101_000030_bro_goal_execution_format::Migration),
+             Box::new(m20240101_000031_bro_worker_source_format::Migration),
++            Box::new(m20240101_000032_bro_admission_verdict::Migration),
+         ]
+     }
+ }
+diff --git a/apps/bitrouter/src/goal_code/projection.rs b/apps/bitrouter/src/goal_code/projection.rs
+index f43d7cf2..947d8df5 100644
+--- a/apps/bitrouter/src/goal_code/projection.rs
++++ b/apps/bitrouter/src/goal_code/projection.rs
+@@ -142,7 +142,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+             ));
+             detail.push(format!("Workspace: {}", attempt.workspace.display()));
+             detail.push(format!(
+-                "Dispatch admitted: {} · stop fact: {:?}",
++                "Dispatch intent saved: {} · stop fact: {:?}",
+                 attempt.dispatch_requested, attempt.stop
+             ));
+             if matches!(attempt.stop, Some(StopState::Unknown { .. })) {
+@@ -281,6 +281,10 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+                     detail.push(reason.clone());
+                     "failed / incomplete"
+                 }
++                Observation::NotAdmitted { reason } => {
++                    detail.push(reason.clone());
++                    "Turn not admitted / preparation may retry"
++                }
+             }
+         } else {
+             "waiting dependencies / not dispatched"
+diff --git a/apps/bitrouter/src/goal_runtime.rs b/apps/bitrouter/src/goal_runtime.rs
+index 2b54c686..03d58e04 100644
+--- a/apps/bitrouter/src/goal_runtime.rs
++++ b/apps/bitrouter/src/goal_runtime.rs
+@@ -324,6 +324,7 @@ impl Coordinator {
+                 goal.workflow.planning_requirements_revision
+             }
+             Change::ObserveExecution { execution_id, .. }
++            | Change::RejectWorkerDispatch { execution_id, .. }
+             | Change::BindWorkerTurn { execution_id, .. }
+             | Change::ConfirmModelRoute { execution_id, .. } => goal
+                 .workflow
+@@ -1511,12 +1512,14 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
+         };
+         // An original supervisor start remains authoritative even without a
+         // Goal link. New attempts record their worker before any Thread exists.
+-        // Keep their original action on the common path even in that gap.
++        // Keep their original action on the common path even in that gap. A
++        // saved managed dispatch retains this provenance after a task edit.
+         // Legacy selections frozen by a worker edit belong to an older task
+         // version and must retain their original supervisor reconciliation.
+-        let current_worker_request = execution.worker.is_some()
+-            && execution.task_revision == task.requirements_revision
+-            && legacy_start.is_none();
++        let current_worker_request = legacy_start.is_none()
++            && (execution.managed_dispatch
++                || execution.worker.is_some()
++                    && execution.task_revision == task.requirements_revision);
+         let admitted_worker = if execution.thread.is_none()
+             && execution.dispatch_requested
+             && goal.workflow.owner_thread_id.is_some()
+@@ -1534,7 +1537,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
+             false
+         };
+         anyhow::ensure!(
+-            !(legacy_start.is_some() && admitted_worker),
++            !(legacy_start.is_some() && (admitted_worker || execution.managed_dispatch)),
+             "original ACP supervisor and common Thread admissions conflict"
+         );
+         if current_worker_request
+@@ -1587,7 +1590,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
+             Observation::Unknown { run_id, .. } | Observation::Failed { run_id, .. } => {
+                 run_id.as_deref()
+             }
+-            Observation::Requested => None,
++            Observation::Requested | Observation::NotAdmitted { .. } => None,
+         };
+         if let Some(run_id) = run_id
+             && execution.confirmed_model_route.is_none()
+@@ -1937,7 +1940,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
+             );
+             self.change(
+                 goal,
+-                Change::RequestDispatch {
++                Change::RequestWorkerDispatch {
+                     execution_id: id.clone(),
+                 },
+             )
+diff --git a/apps/bitrouter/src/goal_runtime/native.rs b/apps/bitrouter/src/goal_runtime/native.rs
+index c72a547b..a6ce19f5 100644
+--- a/apps/bitrouter/src/goal_runtime/native.rs
++++ b/apps/bitrouter/src/goal_runtime/native.rs
+@@ -179,6 +179,9 @@ impl Coordinator {
+         task: &Task,
+         execution: &Execution,
+     ) -> Result<()> {
++        if matches!(execution.observation, Observation::NotAdmitted { .. }) {
++            return Ok(());
++        }
+         let caller = CallerContext::local();
+         let epoch = self.threads.capabilities().server_instance_id;
+         if execution.dispatch_requested {
+@@ -216,7 +219,7 @@ impl Coordinator {
+                 );
+                 let target = ThreadTarget {
+                     thread_id: thread.thread_id,
+-                    server_instance_id: epoch,
++                    server_instance_id: epoch.clone(),
+                 };
+                 if let Some(turn) = self
+                     .threads
+@@ -237,6 +240,40 @@ impl Coordinator {
+                     return Ok(());
+                 }
+             }
++            if execution.managed_dispatch
++                && let Observation::Unknown {
++                    run_id: None,
++                    reason,
++                } = &execution.observation
++            {
++                // Unknown has already revoked this exact source. The shared
++                // admission lock orders this lookup after any earlier accept
++                // and before every future authorization check. An existing
++                // Turn must be linked, even when its outcome is unresolved.
++                if let Some(turn) = self
++                    .threads
++                    .find_goal_worker_admission(&epoch, &caller, &source, &turn_key(&execution.id))
++                    .await?
++                {
++                    self.change(
++                        goal,
++                        Change::BindWorkerTurn {
++                            execution_id: execution.id.clone(),
++                            thread: ThreadExecution {
++                                thread_id: turn.thread_id,
++                                turn_id: turn.turn_id,
++                            },
++                        },
++                    )
++                    .await?;
++                } else {
++                    self.change(goal, Change::RejectWorkerDispatch {
++                        execution_id:execution.id.clone(),
++                        reason: format!("Original managed Turn was not admitted after source revocation; previous dispatch error: {reason}"),
++                    }).await?;
++                }
++                return Ok(());
++            }
+             if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
+                 // The original durable admission key is absent. Re-submit that
+                 // same action with its saved input; admission serializes a
+@@ -252,22 +289,43 @@ impl Coordinator {
+                     )
+                     .await?,
+                 )?;
+-                return match task.execution_harness(execution) {
+-                    Some(harness) => {
+-                        Box::pin(self.launch_acp(
++                let result = async {
++                    match task.execution_harness(execution) {
++                        Some(harness) => {
++                            Box::pin(self.launch_acp(
++                                goal,
++                                task,
++                                &execution.id,
++                                prompt,
++                                harness,
++                                super::resources::servers(
++                                    &self.routing.snapshot_config(),
++                                    &prepared.selection,
++                                )?,
++                            ))
++                            .await
++                        }
++                        None => {
++                            Box::pin(self.launch_native(goal, task, &execution.id, prompt)).await
++                        }
++                    }
++                }
++                .await;
++                return match result {
++                    Ok(()) => Ok(()),
++                    Err(error) => {
++                        self.change(
+                             goal,
+-                            task,
+-                            &execution.id,
+-                            prompt,
+-                            harness,
+-                            super::resources::servers(
+-                                &self.routing.snapshot_config(),
+-                                &prepared.selection,
+-                            )?,
+-                        ))
++                            Change::ObserveExecution {
++                                execution_id: execution.id.clone(),
++                                observation: Observation::Unknown {
++                                    run_id: None,
++                                    reason: bounded_error(&error),
++                                },
++                            },
++                        )
+                         .await
+                     }
+-                    None => Box::pin(self.launch_native(goal, task, &execution.id, prompt)).await,
+                 };
+             }
+             if matches!(execution.observation, Observation::Requested) {
+diff --git a/apps/bitrouter/src/goal_runtime/runtime_evidence.rs b/apps/bitrouter/src/goal_runtime/runtime_evidence.rs
+index 23b5d8e6..28e2d869 100644
+--- a/apps/bitrouter/src/goal_runtime/runtime_evidence.rs
++++ b/apps/bitrouter/src/goal_runtime/runtime_evidence.rs
+@@ -87,7 +87,7 @@ fn project_bound(
+             run_id.as_ref()
+         }
+         Observation::Failed { run_id, .. } | Observation::Unknown { run_id, .. } => run_id.as_ref(),
+-        Observation::Requested => None,
++        Observation::Requested | Observation::NotAdmitted { .. } => None,
+     };
+     anyhow::ensure!(
+         run_id == Some(&snapshot.run_id)
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index 2a2d66be..5d856cc9 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -181,7 +181,7 @@ async fn prepared_worker_attempt(
+                 mcp_configuration_sha256,
+             },
+         },
+-        Change::RequestDispatch {
++        Change::RequestWorkerDispatch {
+             execution_id: "original-work".into(),
+         },
+     ] {
+@@ -418,6 +418,197 @@ async fn pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configurat
+     Ok(())
+ }
+ 
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent() -> Result<()>
++{
++    for (harness, preaccepted_metadata) in [
++        (None, false),
++        (Some("goal-peer"), false),
++        (Some("goal-peer"), true),
++    ] {
++        let home = tempfile::tempdir()?;
++        let extra = mcp_worker_configuration(home.path()).await?;
++        let (coordinator, db) =
++            coordinator_with_config(home.path(), "sqlite::memory:", &extra).await?;
++        let result: Result<()> = async {
++            let selection = Selection {
++                mcp_servers: vec!["selected".into()],
++                ..Default::default()
++            };
++            let id = prepared_worker_attempt(&coordinator, home.path(), harness, selection).await?;
++            let before = read(&coordinator, &id).await?;
++            let task = &before.workflow.tasks[0];
++            let original = task.executions[0].clone();
++            if preaccepted_metadata {
++                let source = super::super::native::source(&before, task, &original)?;
++                coordinator
++                    .threads
++                    .create_goal_acp_thread(
++                        &ThreadTarget {
++                            thread_id: source.owner_thread_id.clone(),
++                            server_instance_id: coordinator
++                                .threads
++                                .capabilities()
++                                .server_instance_id,
++                        },
++                        &source,
++                        bitrouter_orchestrator::thread::executor::AcpThreadRequest {
++                            caller: CallerContext::local(),
++                            workspace: coordinator.native_workspace(&before, &original)?,
++                            config: bitrouter_orchestrator::thread::executor::AcpConfig {
++                                agent_id: "goal-peer".into(),
++                                requested_model_route: None,
++                                max_duration: Duration::from_secs(600),
++                            },
++                            permission_profile: PermissionProfile::Ask,
++                            idempotency_key: bitrouter_orchestrator::service::worker::thread_key(
++                                &source,
++                            )?,
++                        },
++                    )
++                    .await?;
++            }
++            change_selected_mcp(&coordinator).await?;
++            // The real launcher saves uncertainty first. Only a separate
++            // original-action reconciliation may classify it as not admitted.
++            coordinator.drive_task(&before, task).await?;
++            let pending = read(&coordinator, &id).await?;
++            assert!(matches!(
++                pending.workflow.tasks[0].executions[0].observation,
++                Observation::Unknown { run_id: None, .. }
++            ));
++            coordinator
++                .drive_task(&pending, &pending.workflow.tasks[0])
++                .await?;
++            let reconciled = read(&coordinator, &id).await?;
++            let task = &reconciled.workflow.tasks[0];
++            assert_eq!(
++                task.execution_admission(
++                    reconciled.requirements_revision,
++                    reconciled.control_source_revision
++                ),
++                ExecutionAdmission::Ready,
++                "an original action with no accepted Turn remains permanently blocked"
++            );
++            assert!(
++                task.executions[0].dispatch_requested,
++                "the saved dispatch intent must remain in history"
++            );
++            assert_eq!(task.executions[0].resources, original.resources);
++            assert!(task.executions[0].thread.is_none());
++            assert!(matches!(
++                task.executions[0].observation,
++                Observation::NotAdmitted { .. }
++            ));
++            // This verdict is terminal for the attempt, including late links.
++            assert!(
++                coordinator
++                    .change(
++                        &reconciled,
++                        Change::BindWorkerTurn {
++                            execution_id: original.id.clone(),
++                            thread: bitrouter_orchestrator::goal::workflow::ThreadExecution {
++                                thread_id: "late-thread".into(),
++                                turn_id: "late-turn".into(),
++                            },
++                        }
++                    )
++                    .await
++                    .is_err()
++            );
++            assert!(!original.workspace.join("mcp.pid").exists());
++            assert!(
++                tokio::fs::read_dir(home.path().join("captures"))
++                    .await?
++                    .next_entry()
++                    .await?
++                    .is_none()
++            );
++            coordinator
++                .change(
++                    &reconciled,
++                    Change::RequestExecution {
++                        task_id: task.spec.id.clone(),
++                        execution_id: "prepared-again".into(),
++                        workspace: coordinator.workspaces.join(&id).join("prepared-again"),
++                    },
++                )
++                .await?;
++            let next = read(&coordinator, &id).await?;
++            assert_eq!(next.workflow.tasks[0].executions.len(), 2);
++            assert_eq!(next.workflow.tasks[0].executions[0], task.executions[0]);
++            assert_eq!(
++                next.workflow.owner_thread_id,
++                reconciled.workflow.owner_thread_id
++            );
++            Ok(())
++        }
++        .await;
++        coordinator.threads.shutdown().await;
++        coordinator.supervisor.shutdown().await;
++        db.close().await?;
++        result?;
++    }
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn unknown_dispatch_with_a_lost_goal_link_retains_the_original_accepted_turn() -> Result<()> {
++    for harness in [None, Some("goal-peer")] {
++        let home = tempfile::tempdir()?;
++        let extra = mcp_worker_configuration(home.path()).await?;
++        let (coordinator, db) =
++            coordinator_with_config(home.path(), "sqlite::memory:", &extra).await?;
++        let result: Result<()> = async {
++            let id = prepared_worker_attempt(&coordinator, home.path(), harness, Selection::default()).await?;
++            let before = read(&coordinator, &id).await?;
++            let task = &before.workflow.tasks[0];
++            let execution = &task.executions[0];
++            let source = super::super::native::source(&before, task, execution)?;
++            let epoch = coordinator.threads.capabilities().server_instance_id;
++            let prompt = String::from_utf8(crate::goal_artifacts::read(
++                &crate::goal_artifacts::root(&coordinator.workspaces, &id),
++                &execution.resources.as_ref().context("prepared input missing")?.prompt,
++            ).await?)?;
++            db.execute(Statement::from_string(DatabaseBackend::Sqlite,
++                "CREATE TRIGGER reject_work_link BEFORE UPDATE ON bro_goals WHEN json_extract(CAST(NEW.payload AS TEXT), '$.workflow.tasks[0].executions[0].thread') IS NOT NULL BEGIN SELECT RAISE(ABORT, 'worker link interrupted'); END;"
++            )).await?;
++            let result = match harness {
++                Some(harness) => Box::pin(coordinator.launch_acp(&before, task, &execution.id, prompt, harness, vec![])).await,
++                None => Box::pin(coordinator.launch_native(&before, task, &execution.id, prompt)).await,
++            };
++            assert!(result.is_err());
++            db.execute(Statement::from_string(DatabaseBackend::Sqlite, "DROP TRIGGER reject_work_link")).await?;
++            let receipt = coordinator.threads.find_goal_worker_admission(&epoch, &CallerContext::local(), &source,
++                &super::super::native::turn_key(&execution.id)).await?.context("the original Turn was not accepted")?;
++            let current = read(&coordinator, &id).await?;
++            assert!(current.workflow.tasks[0].executions[0].thread.is_none());
++            coordinator.change(&current, Change::ObserveExecution {
++                execution_id:execution.id.clone(), observation:Observation::Unknown {run_id:None, reason:"Acceptance succeeded but the Goal link was interrupted".into()},
++            }).await?;
++            let uncertain = read(&coordinator, &id).await?;
++            coordinator.drive_task(&uncertain, &uncertain.workflow.tasks[0]).await?;
++            let linked = read(&coordinator, &id).await?;
++            let retained = &linked.workflow.tasks[0].executions[0];
++            assert_eq!(retained.thread, Some(bitrouter_orchestrator::goal::workflow::ThreadExecution {
++                thread_id:receipt.thread_id.clone(), turn_id:receipt.turn_id.clone(),
++            }));
++            assert!(matches!(retained.observation, Observation::Unknown { .. }));
++            assert_eq!(linked.workflow.tasks[0].executions.len(), 1);
++            assert_eq!(linked.workflow.tasks[0].execution_admission(linked.requirements_revision, linked.control_source_revision), ExecutionAdmission::Blocked);
++            assert!(coordinator.change(&linked, Change::RejectWorkerDispatch { execution_id:execution.id.clone(), reason:"A missing binding is not no-admission evidence".into() }).await.is_err());
++            assert_eq!(coordinator.threads.find_goal_worker_admission(&epoch, &CallerContext::local(), &source,
++                &super::super::native::turn_key(&execution.id)).await?.map(|receipt|receipt.turn_id), Some(receipt.turn_id));
++            Ok(())
++        }.await;
++        coordinator.threads.shutdown().await;
++        coordinator.supervisor.shutdown().await;
++        db.close().await?;
++        result?;
++    }
++    Ok(())
++}
++
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+ async fn accepted_native_and_acp_receipts_keep_original_resources_after_mcp_config_change()
+ -> Result<()> {
+diff --git a/apps/bitrouter/tests/goals/completion.rs b/apps/bitrouter/tests/goals/completion.rs
+index bf39688b..aab84781 100644
+--- a/apps/bitrouter/tests/goals/completion.rs
++++ b/apps/bitrouter/tests/goals/completion.rs
+@@ -89,6 +89,103 @@ async fn delivery(
+     Ok((id, artifact))
+ }
+ 
++#[tokio::test]
++async fn no_admission_history_allows_verified_replacement_sources_but_unknown_history_does_not()
++-> Result<()> {
++    let db = database().await?;
++    let goals = service(db.clone());
++    let workspace = tempfile::tempdir()?;
++    let id = planned(&goals, workspace.path()).await?;
++    // Domain receipts only: the host's real no-admission/fencing proof is
++    // covered by goal_runtime::tests::threads and the shared admission tests.
++    for (index, mutation) in [
++        Change::RequestExecution {
++            task_id: "left".into(),
++            execution_id: "refused-left".into(),
++            workspace: workspace.path().join("refused-left"),
++        },
++        Change::RegisterWorkspace {
++            execution_id: "refused-left".into(),
++            base_commit: "a".repeat(40),
++        },
++        Change::RequestWorkerDispatch {
++            execution_id: "refused-left".into(),
++        },
++        Change::ObserveExecution {
++            execution_id: "refused-left".into(),
++            observation: Observation::Unknown {
++                run_id: None,
++                reason: "Domain fixture: dispatch result not yet reconciled".into(),
++            },
++        },
++        Change::RejectWorkerDispatch {
++            execution_id: "refused-left".into(),
++            reason: "Domain fixture: original Turn not admitted after source revocation".into(),
++        },
++    ]
++    .into_iter()
++    .enumerate()
++    {
++        goals
++            .workflow_change(actor(), &id, &format!("refusal-{index}"), 1, mutation, 100)
++            .await?;
++    }
++    for task in ["left", "right", "integrate"] {
++        let handoff = request_handoff(&goals, &id, workspace.path(), task).await?;
++        goals
++            .workflow_change(
++                actor(),
++                &id,
++                &format!("{task}-handoff"),
++                1,
++                Change::ApproveHandoff {
++                    execution_id: format!("{task}-execution"),
++                    handoff,
++                },
++                110,
++            )
++            .await?;
++    }
++    let ready = snapshot(&goals, &id).await?;
++    let refused = &ready.workflow.tasks[0].executions[0];
++    assert!(refused.dispatch_requested);
++    assert!(refused.thread.is_none());
++    assert!(refused.stop.is_none());
++    let sources = completion::sources(&ready)
++        .context("a settled no-admission history blocked the current verified handoffs")?;
++    assert_eq!(sources.len(), 3);
++    assert!(
++        sources
++            .iter()
++            .all(|source| source.execution_id != "refused-left")
++    );
++    let mut uncertain = ready.clone();
++    uncertain.workflow.tasks[0].executions[0].observation = Observation::Unknown {
++        run_id: None,
++        reason: "Missing association is not a no-admission verdict".into(),
++    };
++    assert!(completion::sources(&uncertain).is_err());
++    change(
++        &goals,
++        &id,
++        "replacement-integration",
++        1,
++        Event::Begin {
++            attempt_id: "verified-replacement".into(),
++            sources,
++            workspace: workspace.path().join("delivery"),
++        },
++    )
++    .await?;
++    assert_eq!(
++        snapshot(&goals, &id).await?.workflow.tasks[0].executions[0],
++        *refused
++    );
++    drop(goals);
++    db.close().await?;
++    Ok(())
++}
++
+ fn verdict() -> Verdict {
+     Verdict {
+         conditions: vec![ConditionResult {
+diff --git a/crates/bitrouter-orchestrator/src/goal.rs b/crates/bitrouter-orchestrator/src/goal.rs
+index ea71de8f..97677b5d 100644
+--- a/crates/bitrouter-orchestrator/src/goal.rs
++++ b/crates/bitrouter-orchestrator/src/goal.rs
+@@ -22,7 +22,7 @@ pub const MAX_PAGE_ITEMS: usize = 16;
+ /// Bound on a serialized snapshot, operation or query page.
+ pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
+ /// Goal requests are a separate local protocol from native Thread operations.
+-pub const PROTOCOL_VERSION: u32 = 6;
++pub const PROTOCOL_VERSION: u32 = 7;
+ 
+ #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "snake_case")]
+diff --git a/crates/bitrouter-orchestrator/src/goal/completion.rs b/crates/bitrouter-orchestrator/src/goal/completion.rs
+index e9a3546f..f34de079 100644
+--- a/crates/bitrouter-orchestrator/src/goal/completion.rs
++++ b/crates/bitrouter-orchestrator/src/goal/completion.rs
+@@ -219,11 +219,16 @@ pub fn sources(goal: &GoalSnapshot) -> Result<Vec<Source>, GoalError> {
+     let mut result = Vec::new();
+     for task in &goal.workflow.tasks {
+         for execution in &task.executions {
+-            let known_no_dispatch = !execution.dispatch_requested
+-                && matches!(
+-                    execution.observation,
+-                    Observation::Failed { run_id: None, .. }
+-                );
++            // Retain the saved intent without treating a fenced no-admission
++            // verdict as an unresolved running attempt. Unknown remains a
++            // blocker even if a later candidate has current handoff evidence.
++            let known_no_dispatch =
++                matches!(execution.observation, Observation::NotAdmitted { .. })
++                    || !execution.dispatch_requested
++                        && matches!(
++                            execution.observation,
++                            Observation::Failed { run_id: None, .. }
++                        );
+             let settled = execution.dispatch_requested
+                 && matches!(execution.stop, Some(StopState::Confirmed { .. }))
+                 && (execution.effects_reconciled()
+diff --git a/crates/bitrouter-orchestrator/src/goal/workflow.rs b/crates/bitrouter-orchestrator/src/goal/workflow.rs
+index 48e3f35b..07d4eb10 100644
+--- a/crates/bitrouter-orchestrator/src/goal/workflow.rs
++++ b/crates/bitrouter-orchestrator/src/goal/workflow.rs
+@@ -302,13 +302,17 @@ impl Task {
+                     {
+                         return Ok(Some(handoff.clone()));
+                     }
+-                    if !execution.dispatch_requested {
++                    if !execution.dispatch_requested
++                        || matches!(execution.observation, Observation::NotAdmitted { .. })
++                    {
+                         continue;
+                     }
+                 }
+                 return Ok(None);
+             }
+-            if !execution.dispatch_requested {
++            if !execution.dispatch_requested
++                || matches!(execution.observation, Observation::NotAdmitted { .. })
++            {
+                 continue;
+             }
+             if let Some(LocalReconciliation::Verified {
+@@ -348,11 +352,12 @@ impl Task {
+         goal_control_source: u64,
+     ) -> ExecutionAdmission {
+         let previous_ready = self.executions.last().is_none_or(|execution| {
+-            (!execution.dispatch_requested
+-                && matches!(
+-                    execution.observation,
+-                    Observation::Failed { run_id: None, .. }
+-                ))
++            matches!(execution.observation, Observation::NotAdmitted { .. })
++                || (!execution.dispatch_requested
++                    && matches!(
++                        execution.observation,
++                        Observation::Failed { run_id: None, .. }
++                    ))
+                 || execution.replacement_ready(
+                     self.requirements_revision,
+                     goal_control_source.max(self.control_source_revision),
+@@ -400,6 +405,10 @@ pub struct Execution {
+     pub control_source_revision: u64,
+     #[serde(default)]
+     pub dispatch_requested: bool,
++    /// This attempt uses the common ThreadService admission path. Legacy
++    /// supervisor requests, including choices frozen by later edits, omit it.
++    #[serde(default, skip_serializing_if = "is_false")]
++    pub managed_dispatch: bool,
+     #[serde(default)]
+     pub checks: Vec<CheckRun>,
+     #[serde(default)]
+@@ -462,6 +471,10 @@ fn zero_revision(revision: &u64) -> bool {
+     *revision == 0
+ }
+ 
++fn is_false(value: &bool) -> bool {
++    !value
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(tag = "state", rename_all = "snake_case")]
+ pub enum LocalReconciliation {
+@@ -636,6 +649,11 @@ pub enum StopState {
+ #[serde(tag = "state", rename_all = "snake_case")]
+ pub enum Observation {
+     Requested,
++    /// The source was revoked and original-action reconciliation found no
++    /// accepted Turn. The earlier dispatch intent remains in history.
++    NotAdmitted {
++        reason: String,
++    },
+     Running {
+         run_id: Option<String>,
+         native_session_id: Option<String>,
+@@ -713,6 +731,13 @@ pub enum Change {
+     RequestDispatch {
+         execution_id: String,
+     },
++    RequestWorkerDispatch {
++        execution_id: String,
++    },
++    RejectWorkerDispatch {
++        execution_id: String,
++        reason: String,
++    },
+     Input {
+         event: super::input::Event,
+     },
+@@ -1101,6 +1126,7 @@ impl GoalService {
+                             | super::completion::Event::Block { .. }
+                     } | Change::ObserveCheck { .. }
+                         | Change::BindWorkerTurn { .. }
++                        | Change::RejectWorkerDispatch { .. }
+                         | Change::BlockPlan { .. }
+                         | Change::ObserveExecution { .. }
+                         | Change::ConfirmModelRoute { .. }
+@@ -1273,6 +1299,7 @@ fn apply(
+         Change::RequestPlan { .. }
+             | Change::RequestExecution { .. }
+             | Change::RequestDispatch { .. }
++            | Change::RequestWorkerDispatch { .. }
+             | Change::PrepareResources { .. }
+             | Change::RequestCheck { .. }
+             | Change::RequestReview { .. }
+@@ -1307,6 +1334,7 @@ fn apply(
+                 .find(|execution| &execution.id == execution_id)
+                 .ok_or(GoalError::NotFound)?;
+             if !execution.dispatch_requested
++                || matches!(execution.observation, Observation::NotAdmitted { .. })
+                 || execution.requirements_revision != revision
+                 || execution
+                     .thread
+@@ -1498,6 +1526,7 @@ fn apply(
+                 task_revision: task.requirements_revision,
+                 control_source_revision: goal_control_source.max(task.control_source_revision),
+                 dispatch_requested: false,
++                managed_dispatch: false,
+                 resources: None,
+                 confirmed_model_route: None,
+                 checks: Vec::new(),
+@@ -1717,7 +1746,8 @@ fn apply(
+                 passed: output.supports(&check.spec) && *workspace_after == check.workspace,
+             };
+         }
+-        Change::RequestDispatch { execution_id } => {
++        Change::RequestDispatch { execution_id }
++        | Change::RequestWorkerDispatch { execution_id } => {
+             let task = workflow
+                 .tasks
+                 .iter_mut()
+@@ -1746,6 +1776,36 @@ fn apply(
+                 return Err(GoalError::Conflict);
+             }
+             execution.dispatch_requested = true;
++            execution.managed_dispatch = matches!(change, Change::RequestWorkerDispatch { .. });
++        }
++        Change::RejectWorkerDispatch {
++            execution_id,
++            reason,
++        } => {
++            super::message(reason)?;
++            let execution = workflow
++                .tasks
++                .iter_mut()
++                .flat_map(|task| &mut task.executions)
++                .find(|execution| &execution.id == execution_id)
++                .ok_or(GoalError::NotFound)?;
++            // Unknown revokes worker_requested before the host queries the
++            // original keys under ThreadService's admission lock. A missing
++            // Goal binding alone is never this evidence.
++            if !execution.managed_dispatch
++                || !execution.dispatch_requested
++                || execution.thread.is_some()
++                || execution.stop.is_some()
++                || !matches!(
++                    execution.observation,
++                    Observation::Unknown { run_id: None, .. }
++                )
++            {
++                return Err(GoalError::Conflict);
++            }
++            execution.observation = Observation::NotAdmitted {
++                reason: reason.clone(),
++            };
+         }
+         Change::ApproveHandoff {
+             execution_id,
+@@ -2089,7 +2149,11 @@ fn apply(
+                 _ => return Err(GoalError::Conflict),
+             }
+             match observation {
+-                Observation::Requested => return Err(invalid("cannot replay requested execution")),
++                Observation::Requested | Observation::NotAdmitted { .. } => {
++                    return Err(invalid(
++                        "execution observation cannot set an admission verdict",
++                    ));
++                }
+                 Observation::Candidate { report, .. } => report.validate()?,
+                 Observation::Failed { reason, .. } | Observation::Unknown { reason, .. } => {
+                     super::message(reason)?
+@@ -2151,6 +2215,6 @@ fn observation_run(observation: &Observation) -> Option<&str> {
+         Observation::Failed { run_id, .. } | Observation::Unknown { run_id, .. } => {
+             run_id.as_deref()
+         }
+-        Observation::Requested => None,
++        Observation::Requested | Observation::NotAdmitted { .. } => None,
+     }
+ }
+diff --git a/crates/bitrouter-orchestrator/src/service/admission.rs b/crates/bitrouter-orchestrator/src/service/admission.rs
+index 3d2852dc..f430f26d 100644
+--- a/crates/bitrouter-orchestrator/src/service/admission.rs
++++ b/crates/bitrouter-orchestrator/src/service/admission.rs
+@@ -317,6 +317,17 @@ impl ThreadService {
+             drop(admission);
+             return self.existing_turn_receipt(&entry).await;
+         }
++        // A caller may have passed its source check before waiting for this
++        // lock. Recheck under the same lock used by original-action recovery:
++        // once a Goal revokes an attempt, a later absent-receipt read can fence
++        // all new acceptances. Existing receipts remain readable above.
++        if let Some(managed) = &managed {
++            managed
++                .control()
++                .authorize()
++                .await
++                .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
++        }
+         if request.prompt.trim().is_empty()
+             || request.prompt.len() > self.inner.limits.request_bytes
+         {
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/worker/waiting.rs b/crates/bitrouter-orchestrator/src/service/tests/worker/waiting.rs
+index 4a730243..64690ef9 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/worker/waiting.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/worker/waiting.rs
+@@ -48,9 +48,9 @@ fn gate() -> (Arc<Gate>, tokio::sync::mpsc::UnboundedReceiver<()>) {
+ async fn refusal(
+     visits: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
+ ) -> Result<(), Box<dyn std::error::Error>> {
+-    // The outer live check and the underlying admission check happen on the
+-    // first pass. A third visit proves a second pass after an actual refusal.
+-    for _ in 0..3 {
++    // Outer, entrypoint and serialized acceptance checks happen on the first
++    // pass. A fourth visit proves another pass after an actual refusal.
++    for _ in 0..4 {
+         tokio::time::timeout(Duration::from_secs(3), visits.recv())
+             .await?
+             .ok_or("waiting source check channel closed")?;
+@@ -58,6 +58,58 @@ async fn refusal(
+     Ok(())
+ }
+ 
++#[tokio::test]
++async fn revoked_worker_waiting_on_admission_lock_cannot_accept_a_turn()
++-> Result<(), Box<dyn std::error::Error>> {
++    let directory = tempfile::tempdir()?;
++    let service = ThreadService::new(app(vec![final_turn()])?, &[directory.path().into()])?;
++    let root = root(&service, &directory).await?;
++    let (worker, source) = worker(&service, &root, &directory, "revoked").await?;
++    let (control, mut visits) = gate();
++    let admission = service.inner.admission.lock().await;
++    let waiting = {
++        let service = service.clone();
++        let target = target(&worker);
++        let source = source.clone();
++        let control = control.clone();
++        tokio::spawn(async move {
++            service
++                .start_goal_worker_turn(
++                    &target,
++                    &CallerContext::local(),
++                    source,
++                    input("must not run after revocation", "revoked-work"),
++                    control,
++                )
++                .await
++        })
++    };
++    tokio::time::timeout(Duration::from_secs(3), visits.recv())
++        .await?
++        .ok_or("the entrypoint source check was not reached")?;
++    control.budget.revoked.store(true, Ordering::SeqCst);
++    drop(admission);
++    let result = tokio::time::timeout(Duration::from_secs(3), waiting).await??;
++    let error = result
++        .err()
++        .ok_or("revoked work was admitted after waiting for the lock")?;
++    assert_eq!(error.code, ErrorCode::Unauthorized);
++    assert!(
++        service
++            .find_goal_worker_admission(
++                &service.inner.instance_id,
++                &CallerContext::local(),
++                &source,
++                "revoked-work"
++            )
++            .await?
++            .is_none()
++    );
++    assert_eq!(control.budget.admitted.load(Ordering::SeqCst), 0);
++    service.shutdown().await;
++    Ok(())
++}
++
+ struct Capacity {
+     service: ThreadService,
+     worker: ThreadSnapshot,
+diff --git a/crates/bitrouter-orchestrator/src/service/worker.rs b/crates/bitrouter-orchestrator/src/service/worker.rs
+index 089ef5bf..d7f99f01 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker.rs
+@@ -52,6 +52,50 @@ impl Managed {
+ }
+ 
+ impl ThreadService {
++    /// Read the original Thread and Turn keys under the admission lock. The
++    /// host must revoke this attempt's source before treating absence as a
++    /// settled refusal. This never authorizes work or proves ambient effects
++    /// outside the managed Turn absent.
++    pub async fn find_goal_worker_admission(
++        &self,
++        server_instance_id: &str,
++        caller: &CallerContext,
++        source: &GoalWork,
++        turn_key: &str,
++    ) -> Result<Option<TurnReceipt>, ServiceError> {
++        source.validate()?;
++        self.ensure_instance(Some(server_instance_id))?;
++        let _admission = self.inner.admission.lock().await;
++        let key = thread_key(source)?;
++        let scope = super::admission::key_scope(caller, None, "create_thread", &key)?;
++        let Some(entry) = self
++            .inner
++            .store
++            .find_key(&scope, &key)
++            .await
++            .map_err(ServiceError::storage)?
++        else {
++            return Ok(None);
++        };
++        let thread = self.existing_thread_receipt(&entry).await?;
++        self.check_snapshot_grant(&thread)?;
++        if thread.goal_work.as_ref() != Some(source) {
++            return Err("original worker Thread belongs to another source".into());
++        }
++        let scope =
++            super::admission::key_scope(caller, Some(&thread.thread_id), "goal_work", turn_key)?;
++        let Some(entry) = self
++            .inner
++            .store
++            .find_key(&scope, turn_key)
++            .await
++            .map_err(ServiceError::storage)?
++        else {
++            return Ok(None);
++        };
++        self.existing_turn_receipt(&entry).await.map(Some)
++    }
++
+     /// Reconcile a saved Goal action without authorizing or starting work.
+     pub async fn find_goal_worker_turn(
+         &self,

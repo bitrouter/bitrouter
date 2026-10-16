@@ -1,0 +1,12 @@
+{
+  "head": "97b02928b9d31b0db9a8470f37be2e02eda45f2a",
+  "branch": "codex/bro-goal-workflow-mvp",
+  "worktreeClean": true,
+  "goal": "active",
+  "pushed": false,
+  "pr": 981,
+  "bundle": "refactor-local-checkpoint-97b02928.bundle",
+  "bundleSha256": "60db9759f429e70e552b41b841bd0c8159c16554e49c17e0e5c8a83e435040ec",
+  "manifestSha256": "596b6a4cb9ee821aacd48413456428da14642547f03ceffaadc3943d0f19e23c",
+  "scope": "Controlled native checkpoint continuation; final full refactor gates remain open."
+}

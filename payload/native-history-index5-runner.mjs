@@ -1,0 +1,35 @@
+import {readFileSync,writeFileSync,readdirSync,existsSync,mkdtempSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import path from 'node:path';
+const cwd='/Users/kelsen/.codex/worktrees/d91b/bitrouter',root='/Users/kelsen/.codex/archives/bro-refactor/2026-10-16';
+const sha=b=>createHash('sha256').update(b).digest('hex');
+const read=n=>JSON.parse(readFileSync(path.join(root,n),'utf8'));
+const write=(n,o)=>writeFileSync(path.join(root,n),typeof o==='string'?o:JSON.stringify(o,null,2)+'\n',{flag:'wx'});
+const ids=['green1','green2','green3','follow4'].map(s=>'native-history-'+s),extracts=[];
+for(const id of ids){
+  const source=read(id+'-source.json'),result=read(id+'-results.json');
+  if(!result.finishedAt||result.runs.some(r=>r.status==='running'))throw Error('run not terminal '+id);
+  const tar=path.join(root,id+'-files.tar.gz'),names=execFileSync('tar',['-tzf',tar]).toString().trim().split('\n');
+  for(const n of names)if(n.startsWith('/')||n.split('/').includes('..'))throw Error('unsafe tar path');
+  const dest=mkdtempSync('/tmp/'+id+'-source-');execFileSync('tar',['-xzf',tar,'-C',dest]);
+  for(const n of names)if(sha(readFileSync(path.join(dest,n)))!==source.files[n])throw Error('source mismatch '+id+' '+n);
+  extracts.push({id,extracted:dest,files:names.length,tarSha256:sha(readFileSync(tar)),passed:result.passed,leaks:result.runs.flatMap(r=>r.leaks||[])});
+}
+const tested=read('native-history-green3-source.json'),follow=read('native-history-follow4-source.json');
+if(JSON.stringify(tested.files)!==JSON.stringify(follow.files))throw Error('green3/follow4 sources differ');
+const names=[...new Set(execFileSync('git',['ls-files','-c','-o','--exclude-standard','-z'],{cwd}).toString().split('\0').filter(Boolean))];
+const delta=[...new Set([...names,...Object.keys(tested.files)])].filter(n=>!existsSync(path.join(cwd,n))||sha(readFileSync(path.join(cwd,n)))!==tested.files[n]);
+if(delta.some(n=>!['docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md','docs/DEVELOPMENT.md'].includes(n)))throw Error('unexpected post-test delta '+delta);
+const ledger=readFileSync(path.join(root,'native-history-prior-ledger5.md'));
+if(sha(ledger)!==tested.files['docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md'])throw Error('prior ledger is not exact tested source');
+const dirty=execFileSync('git',['ls-files','-m','-o','--exclude-standard','-z'],{cwd}).toString().split('\0').filter(Boolean);
+write('native-history-final5.patch',execFileSync('git',['diff','--binary'],{cwd}).toString());
+const tar=path.join(root,'native-history-final5-files.tar.gz');if(existsSync(tar))throw Error('final tar exists');
+execFileSync('tar',['-czf',tar,'--',...dirty],{cwd});const restored=mkdtempSync('/tmp/native-history-final5-');execFileSync('tar',['-xzf',tar,'-C',restored]);
+for(const n of dirty)if(sha(readFileSync(path.join(cwd,n)))!==sha(readFileSync(path.join(restored,n))))throw Error('final tar mismatch '+n);
+write('native-history-applicability5.json',{head:execFileSync('git',['rev-parse','HEAD'],{cwd}).toString().trim(),extracts,sameTestSource:true,postTestDelta:delta,priorLedger:{file:'native-history-prior-ledger5.md',sha256:sha(ledger),lines:ledger.toString().split('\n').length-1},finalExtracted:restored,finalFiles:Object.fromEntries(dirty.map(n=>[n,sha(readFileSync(path.join(cwd,n)))])),finalTarSha256:sha(readFileSync(tar))});
+write('native-history-index5-runner.mjs',readFileSync('/tmp/bro-native-history-index5.mjs','utf8'));
+const files=readdirSync(root).filter(n=>n.startsWith('native-history-')&&n!=='native-history-manifest5.json'||n==='NATIVE_HISTORY_INDEX.md').sort();
+write('native-history-manifest5.json',{createdAt:new Date().toISOString(),files:Object.fromEntries(files.map(n=>{const b=readFileSync(path.join(root,n));return[n,{bytes:b.length,sha256:sha(b)}];}))});
+process.stdout.write(JSON.stringify({sourceTars:extracts.length,postTestDelta:delta,finalSourceFiles:dirty.length,priorLedgerLines:ledger.toString().split('\n').length-1,manifestFiles:files.length})+'\n');

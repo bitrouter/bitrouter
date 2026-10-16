@@ -1,0 +1,41 @@
+{
+  "id": "fixture-retention-green2",
+  "scope": "Normal source after exact restoration of the intentional panic assertion; preserve failed filesystem including panic, capture runtime facts only on returned errors, clean successful fixtures normally",
+  "jobs": [
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ]
+    }
+  ]
+}

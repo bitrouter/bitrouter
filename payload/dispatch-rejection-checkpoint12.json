@@ -1,0 +1,44 @@
+{
+  "capturedAt": "2026-10-16T14:09:48.077Z",
+  "head": "9c5a0ea135c1cd3730143723e8e9bd58c8f5b58d",
+  "branch": "codex/bro-goal-workflow-mvp",
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "eafa838383dcdfa3bd79a74a5be3d3c87c056d72",
+    "headRefName": "codex/bro-goal-workflow-mvp",
+    "headRefOid": "fe9df6f8157945d3559789926326a7effb468db1",
+    "mergeStateStatus": "CLEAN",
+    "state": "OPEN",
+    "url": "https://github.com/bitrouter/bitrouter/pull/981"
+  },
+  "goalStatus": "active",
+  "pushed": false,
+  "localCommitsSinceRemote": 9,
+  "bundle": {
+    "file": "refactor-local-checkpoint-9c5a0ea1.bundle",
+    "sha256": "c0a34eced8dba461cf32ae3d5056daf22997590e082f0a981ce33eb2336113d4",
+    "prerequisite": "fe9df6f8157945d3559789926326a7effb468db1",
+    "verified": true
+  },
+  "evidence": {
+    "index": "DISPATCH_REJECTION_INDEX.md",
+    "manifest": "dispatch-rejection-manifest12.json",
+    "manifestSha256": "df01f274231c68b44bd0d039067b78ae9195f4540d42711982a077943b85b91a",
+    "applicability": "dispatch-rejection-applicability12.json",
+    "finalSource": "dispatch-rejection-final11-source.json",
+    "finalResults": "dispatch-rejection-final11-results.json",
+    "fullyCleanRuntimeQualification": false,
+    "observedLeaks": [
+      {
+        "run": "goal-runtime",
+        "line": "        LEAK [   0.316s] (23/81) bitrouter goal_runtime::model_control::tests::model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability"
+      },
+      {
+        "run": "shared-admission",
+        "line": "        LEAK [   0.604s] (3/5) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention"
+      }
+    ],
+    "sourceMatchesCommittedFiles": true
+  },
+  "scope": "Local recovery checkpoint only. Existing PR has not been pushed or commented on. Full S0-S6/A01-A22 remains active; final exact-source, live, archive publication and hosted-CI gates remain."
+}

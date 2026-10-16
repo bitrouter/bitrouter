@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-10-16T09:01:19.151Z",
+  "source": "managed-acp-source3.json",
+  "tar": "managed-acp-stack-overflow-fixtures3.tar.gz",
+  "bytes": 970091,
+  "sha256": "3f871e4e1c62376abcbe8e52f470b5dbb762a408906b60e67837c9653d2cb91c",
+  "directories": 17,
+  "files": 2103,
+  "omitted": 15
+}

@@ -1,0 +1,10 @@
+{
+  "source": "shared-admission-source2.json",
+  "capturedAt": "2026-10-16T07:44:06.511Z",
+  "checkedFiles": 1287,
+  "changed": [
+    "docs/BRO_RUST_DESIGN_REVIEW.md",
+    "docs/README.md"
+  ],
+  "executableOrBuildSourceChanged": false
+}

@@ -1,0 +1,230 @@
+{
+  "source": "acp-continuation-startup11-source.json",
+  "scope": "Investigate an intermittent original ACP initialize closure without accepting a different rejection cause. Both actual Rust subprocess capability probes reserve global slots and retain failure files. All startup/cause/cleanup/no-prompt assertions remain unchanged; production code unchanged after final4.",
+  "startedAt": "2026-10-16T19:51:12.639Z",
+  "runs": [
+    {
+      "name": "startup-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-1.log",
+      "startedAt": "2026-10-16T19:51:12.639Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:22.031Z",
+      "summaries": [
+        "     Summary [   0.667s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-2.log",
+      "startedAt": "2026-10-16T19:52:22.031Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:23.374Z",
+      "summaries": [
+        "     Summary [   0.497s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-3.log",
+      "startedAt": "2026-10-16T19:52:23.374Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:24.394Z",
+      "summaries": [
+        "     Summary [   0.520s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-4",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-4.log",
+      "startedAt": "2026-10-16T19:52:24.394Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:25.470Z",
+      "summaries": [
+        "     Summary [   0.579s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-5",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-5.log",
+      "startedAt": "2026-10-16T19:52:25.470Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:26.490Z",
+      "summaries": [
+        "     Summary [   0.500s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-6",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-6.log",
+      "startedAt": "2026-10-16T19:52:26.490Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:27.544Z",
+      "summaries": [
+        "     Summary [   0.541s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-7",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-7.log",
+      "startedAt": "2026-10-16T19:52:27.545Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:28.601Z",
+      "summaries": [
+        "     Summary [   0.531s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-8",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-8.log",
+      "startedAt": "2026-10-16T19:52:28.601Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:29.640Z",
+      "summaries": [
+        "     Summary [   0.507s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-9",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-9.log",
+      "startedAt": "2026-10-16T19:52:29.640Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:30.695Z",
+      "summaries": [
+        "     Summary [   0.549s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "startup-10",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-startup11-startup-10.log",
+      "startedAt": "2026-10-16T19:52:30.695Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:52:31.750Z",
+      "summaries": [
+        "     Summary [   0.496s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T19:52:31.990Z",
+  "changed": [],
+  "passed": true
+}

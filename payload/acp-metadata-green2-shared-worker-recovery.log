@@ -1,0 +1,41 @@
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 32.85s
+────────────
+ Nextest run ID 1da8e515-3b54-41a7-8bb1-dfcec690fc79 with nextest profile: default
+    Starting 32 tests across 1 binary (258 tests skipped)
+        PASS [   0.030s] ( 1/32) bitrouter-orchestrator service::tests::recovery::cold_load_rechecks_owner_grants_epoch_and_record_capacity_without_partial_hot_install
+        PASS [   0.103s] ( 2/32) bitrouter-orchestrator service::tests::recovery::later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_epochs
+        PASS [   0.750s] ( 3/32) bitrouter-orchestrator service::tests::recovery::empty_thread_inspection_releases_a_valid_marker_after_confirmed_recovery
+        PASS [   0.823s] ( 4/32) bitrouter-orchestrator service::tests::recovery::missing_stable_identity_is_reported_as_invalid_and_never_regenerated
+        PASS [   0.068s] ( 5/32) bitrouter-orchestrator service::tests::recovery::recovery_commit_failure_stays_blocked_and_lost_ack_adopts_only_the_exact_committed_batch
+        PASS [   0.047s] ( 6/32) bitrouter-orchestrator service::tests::recovery::recovery_operation_survives_caller_disconnect_and_serializes_duplicate_acceptance
+        PASS [   0.036s] ( 7/32) bitrouter-orchestrator service::tests::recovery::recovery_reader_limit_does_not_hold_admission_and_releases_after_loading
+        PASS [   1.121s] ( 8/32) bitrouter-orchestrator service::tests::recovery::interrupted_stream_recovery_keeps_display_evidence_out_of_context_and_usage_unknown
+        PASS [   1.349s] ( 9/32) bitrouter-orchestrator service::tests::recovery::load_restores_fifo_pause_cancel_and_pending_approval_but_old_reply_cannot_authorize
+        PASS [   0.769s] (10/32) bitrouter-orchestrator service::tests::recovery::recovered_verification_result_must_match_the_exact_committed_invocation
+        PASS [   2.382s] (11/32) bitrouter-orchestrator service::tests::recovery::native_checkpoint_spans_small_pages_and_incomplete_prefix_cannot_recover
+        PASS [   3.580s] (12/32) bitrouter-orchestrator service::tests::recovery::committed_windows_rebuild_calls_context_and_budgets_without_replaying_completed_write
+        PASS [   3.668s] (13/32) bitrouter-orchestrator service::tests::recovery::pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_after_recovery
+        PASS [   2.427s] (14/32) bitrouter-orchestrator service::tests::recovery::steering_retries_use_bounded_receipt_pages
+        PASS [   0.045s] (15/32) bitrouter-orchestrator service::tests::worker::acp::acp_last_dispatch_check_rejects_changed_owner_source_and_workspace_grant
+        PASS [   2.875s] (16/32) bitrouter-orchestrator service::tests::recovery::steering_application_rebuild_uses_committed_prompt_once_and_preserves_terminal_receipts
+        PASS [   0.344s] (17/32) bitrouter-orchestrator service::tests::worker::decisions::revoked_native_decision_waits_for_usage_settlement_before_finishing
+        PASS [   0.737s] (18/32) bitrouter-orchestrator service::tests::recovery::uncached_acceptance_retry_pages_share_reader_limits_without_holding_admission
+        PASS [   1.989s] (19/32) bitrouter-orchestrator service::tests::recovery::terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_foreign_caller
+        PASS [   0.479s] (20/32) bitrouter-orchestrator service::tests::worker::failed_host_outcome_ack_retains_provider_evidence_without_running_its_tools
+        PASS [   0.616s] (21/32) bitrouter-orchestrator service::tests::worker::revoked_worker_source_cannot_ask_for_or_launch_configured_verification
+        PASS [   4.957s] (22/32) bitrouter-orchestrator service::tests::recovery::native_cold_recovery_reuses_core_evidence_and_views
+        PASS [   0.033s] (23/32) bitrouter-orchestrator service::tests::worker::waiting::revoked_worker_waiting_on_admission_lock_cannot_accept_a_turn
+        PASS [   0.729s] (24/32) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention
+        PASS [   0.961s] (25/32) bitrouter-orchestrator service::tests::worker::native_workers_share_one_budget_and_ordinary_rpcs_cannot_bypass_it
+        PASS [   5.339s] (26/32) bitrouter-orchestrator service::tests::recovery::continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_without_reexecution
+        PASS [   1.668s] (27/32) bitrouter-orchestrator service::tests::worker::decisions::native_decisions_use_shared_admission_and_require_host_outcome_ack
+        PASS [   5.035s] (28/32) bitrouter-orchestrator service::tests::recovery::settled_turn_recovery_finishes_original_outcome_without_model_or_verification_replay
+        PASS [   5.060s] (29/32) bitrouter-orchestrator service::tests::recovery::stopped_terminal_thread_reopens_with_original_context_and_idempotent_recovery
+        PASS [   1.933s] (30/32) bitrouter-orchestrator service::tests::worker::waiting::native_worker_waits_for_known_capacity_and_replays_only_original_admission
+        PASS [   3.485s] (31/32) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_refuses_withdrawn_sources_deadlines_and_unknown_workspace_owners
+        SLOW [> 60.000s] (─────) bitrouter-orchestrator service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery
+        PASS [  89.436s] (32/32) bitrouter-orchestrator service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery
+────────────
+     Summary [  89.496s] 32 tests run: 32 passed (1 slow), 258 skipped

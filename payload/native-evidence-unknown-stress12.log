@@ -1,0 +1,38 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.31s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 828b41a1-ffe9-4b71-890b-699fd7a5e573 with nextest profile: default
+    Starting 2 tests across 1 binary (1821 tests skipped)
+────────────
+ Stress test iteration 1/5 (00:00:00 elapsed so far, 5 iterations remaining)
+        PASS [   3.243s] [1/5] (1/2) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+        PASS [  10.765s] [1/5] (2/2) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+ Stress test [  10.770s] iteration 1/5: 2 tests run: 2 passed, 1821 skipped
+────────────
+ Stress test iteration 2/5 (00:00:10 elapsed so far, 4 iterations remaining)
+        PASS [   3.239s] [2/5] (1/2) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+        PASS [  10.282s] [2/5] (2/2) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+ Stress test [  10.288s] iteration 2/5: 2 tests run: 2 passed, 1821 skipped
+────────────
+ Stress test iteration 3/5 (00:00:21 elapsed so far, 3 iterations remaining)
+        PASS [   3.234s] [3/5] (1/2) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+        PASS [  10.786s] [3/5] (2/2) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+ Stress test [  10.791s] iteration 3/5: 2 tests run: 2 passed, 1821 skipped
+────────────
+ Stress test iteration 4/5 (00:00:31 elapsed so far, 2 iterations remaining)
+        PASS [   2.726s] [4/5] (1/2) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+        PASS [  10.291s] [4/5] (2/2) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+ Stress test [  10.296s] iteration 4/5: 2 tests run: 2 passed, 1821 skipped
+────────────
+ Stress test iteration 5/5 (00:00:42 elapsed so far, 1 iteration remaining)
+        PASS [   3.222s] [5/5] (1/2) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+        PASS [  10.281s] [5/5] (2/2) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+ Stress test [  10.286s] iteration 5/5: 2 tests run: 2 passed, 1821 skipped
+────────────
+     Summary [  52.431s] 5/5 stress run iterations: 5 passed

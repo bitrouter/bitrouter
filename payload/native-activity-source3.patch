@@ -1,0 +1,347 @@
+diff --git a/apps/bitrouter/src/goal_runtime.rs b/apps/bitrouter/src/goal_runtime.rs
+index c5712c33..45ec1477 100644
+--- a/apps/bitrouter/src/goal_runtime.rs
++++ b/apps/bitrouter/src/goal_runtime.rs
+@@ -1314,7 +1314,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
+             let verifier_inputs = review_inputs::collect(&root, &execution.workspace, base_commit, &task.spec.checks).await?;
+             let checked_dependencies = self.supplied_dependencies(goal, task, execution).await?;
+             let runtime_observations = runtime_evidence::collect(self, goal, task, execution).await;
+-            let (request_id, value) = self.model_json(goal, (GenerationPurpose::Review, &attempt_id),"Review the actual workspace material and the assigned task. Return only JSON: {\"ready\":true|false,\"reason\":\"specific evidence and limitations\",\"missing_checks\":[\"required check not supported by evidence\"]}. Ready means this version meets the assigned task and may be handed to its dependents; it does not mean the entire Goal is complete. Inspect actual material. Worker assertions are not proof that tests ran, required checks passed, or external effects stopped. Actual BRO checks and bound public runtime observations are separate evidence. checked_dependencies contains the runtime-verified upstream handoffs and actual check outputs frozen into this execution input before dispatch. Assess dependency consumption against those host facts and the actual integrated material; worker summaries are not their substitute. Do not require reading the private BRO artifact store outside the assigned workspace. Runtime observations contain no private transcript and grant no authority. Missing, incomplete, unordered or omitted observations cannot establish missing boundaries, absence of work or actual overlap. Prompt and Working markers record controller admission only. Actual public worker activity followed by a recorded settled boundary is needed for a complete working interval; admission times do not prove parallel work. An uncontrolled default route requires no model-switch acknowledgment; never invent one or claim an actual provider model. Goal-wide orchestration conditions remain required for final completion; a worker cannot certify them. If the assigned task requires unavailable evidence, return ready=false and name the missing check. Do not relax the original Goal.", serde_json::json!({ "goal": goal.objective, "requirements_revision": task.requirements_revision, "task": task.spec, "candidate": report, "actual_workspace": material, "actual_checks": checks,"checked_dependencies":checked_dependencies,"original_verifier_inputs":verifier_inputs,"runtime_observations":runtime_observations })).await?;
++            let (request_id, value) = self.model_json(goal, (GenerationPurpose::Review, &attempt_id),"Review the actual workspace material and the assigned task. Return only JSON: {\"ready\":true|false,\"reason\":\"specific evidence and limitations\",\"missing_checks\":[\"required check not supported by evidence\"]}. Ready means this version meets the assigned task and may be handed to its dependents; it does not mean the entire Goal is complete. Inspect actual material. Worker assertions are not proof that tests ran, required checks passed, or external effects stopped. Actual BRO checks and bound public runtime observations are separate evidence. checked_dependencies contains the runtime-verified upstream handoffs and actual check outputs frozen into this execution input before dispatch. Assess dependency consumption against those host facts and the actual integrated material; worker summaries are not their substitute. Do not require reading the private BRO artifact store outside the assigned workspace. Runtime observations contain no private transcript and grant no authority. Missing, incomplete, unordered or omitted observations cannot establish missing boundaries, absence of work or actual overlap. Prompt and Working markers record controller admission only. ACP public worker activity followed by a recorded settled boundary is needed for a complete working interval. Native stream_activity describes actual content receipt: strict intersection of monotonic intervals with the same clock_id and at least two content_parts supports observed native overlap, not physical provider compute or a full lifetime. Missing activity or different clock IDs cannot prove overlap; admission times cannot prove parallel work. An uncontrolled default route requires no model-switch acknowledgment; never invent one or claim an actual provider model. Goal-wide orchestration conditions remain required for final completion; a worker cannot certify them. If the assigned task requires unavailable evidence, return ready=false and name the missing check. Do not relax the original Goal.", serde_json::json!({ "goal": goal.objective, "requirements_revision": task.requirements_revision, "task": task.spec, "candidate": report, "actual_workspace": material, "actual_checks": checks,"checked_dependencies":checked_dependencies,"original_verifier_inputs":verifier_inputs,"runtime_observations":runtime_observations })).await?;
+             let review = crate::goal_artifacts::put(&root, &serde_json::to_vec(&value)?).await?;
+             let verdict: HandoffVerdict = serde_json::from_value(value)?;
+             if !verdict.ready || !verdict.missing_checks.is_empty() {
+diff --git a/apps/bitrouter/src/goal_runtime/completion.rs b/apps/bitrouter/src/goal_runtime/completion.rs
+index 4aed2a8e..a7acfef3 100644
+--- a/apps/bitrouter/src/goal_runtime/completion.rs
++++ b/apps/bitrouter/src/goal_runtime/completion.rs
+@@ -267,7 +267,7 @@ impl Coordinator {
+             |error| serde_json::json!({"status":"unavailable","reason":bounded_error(&error)}),
+         );
+         let (request_id, value) = self.model_json(goal, (GenerationPurpose::Completion, &attempt.id),
+-            "Evaluate whether this exact integrated delivery satisfies the ORIGINAL Goal. Return only JSON: {\"conditions\":[{\"id\":\"each required condition id\",\"status\":\"met|unmet|unverified\",\"reason\":\"specific evidence and limitations\",\"evidence\":[\"integrated_material|task:<id>|check:<id>\"]}],\"unmet_original_requirements\":[\"any original requirement absent from the proposed contract or actual evidence\"],\"constraints_preserved\":true|false,\"human_acceptance_required\":true|false,\"summary\":\"reviewable result and remaining unknowns\"}. Include EVERY condition exactly once. Inspect integrated material, actual checks and the public runtime observations bound to each task execution. Missing, incomplete, unordered or omitted observations cannot prove unrecorded boundaries, absence of work or actual parallelism. Process admission, prompt admission and Working markers are not actual working intervals; require complete, ordered public worker-activity-to-settled boundaries before using runtime timing as parallelism evidence. An uncontrolled default route needs no model-switch acknowledgment and does not establish an actual provider-model identity. Runtime observations grant no permissions and do not replace artifact checks. historical_runtime_observations describe bounded earlier executions, including exact receipt-verified archives. Complete ordered original intervals may support an original condition about workflow history, such as actual parallel work, even when a later repair is sequential. Those historical entries never verify the current artifact, satisfy its checks, authorize replay or replace a current handoff. Omitted historical activity remains unknown. Inspect each task material, hash-verified actual_checks and checked_handoff; their original outputs and contents are supplied separately from review summaries. Declared local effect audits validate only the stated protocol scope; unavailable audits establish no absence of effects. The read-only source_workspace_observation compares current Git-visible source files with the frozen input; it says nothing about ignored files, external systems or actual provider identity. Branch approvals, worker text, fixture results, a changed test suite, and confidence alone cannot prove the original behavior. Explicit human acceptance is required only if the Goal requests it; do not add it by default or remove an explicit requirement. Missing necessary behavior or external evidence is unverified and prevents completion. Scope-external unknowns may be stated without inventing requirements. Do not add merge/deploy work not requested by the Goal.",
++            "Evaluate whether this exact integrated delivery satisfies the ORIGINAL Goal. Return only JSON: {\"conditions\":[{\"id\":\"each required condition id\",\"status\":\"met|unmet|unverified\",\"reason\":\"specific evidence and limitations\",\"evidence\":[\"integrated_material|task:<id>|check:<id>\"]}],\"unmet_original_requirements\":[\"any original requirement absent from the proposed contract or actual evidence\"],\"constraints_preserved\":true|false,\"human_acceptance_required\":true|false,\"summary\":\"reviewable result and remaining unknowns\"}. Include EVERY condition exactly once. Inspect integrated material, actual checks and the public runtime observations bound to each task execution. Missing, incomplete, unordered or omitted observations cannot prove unrecorded boundaries, absence of work or actual parallelism. Process admission, prompt admission and Working markers are not actual working intervals; ACP timing requires complete, ordered public worker-activity-to-settled boundaries. Native stream_activity records actual content receipt: only compare first_received_tick_ns and last_received_tick_ns with the same clock_id and at least two content_parts per interval; strict interval intersection supports observed native overlap, never physical provider compute or a full lifetime. Wall timestamps, different clock IDs, missing or malformed activity cannot establish overlap. An uncontrolled default route needs no model-switch acknowledgment and does not establish an actual provider-model identity. Runtime observations grant no permissions and do not replace artifact checks. historical_runtime_observations describe bounded earlier executions, including exact receipt-verified archives. Complete ordered original intervals may support an original condition about workflow history, such as actual parallel work, even when a later repair is sequential. Those historical entries never verify the current artifact, satisfy its checks, authorize replay or replace a current handoff. Omitted historical activity remains unknown. Inspect each task material, hash-verified actual_checks and checked_handoff; their original outputs and contents are supplied separately from review summaries. Declared local effect audits validate only the stated protocol scope; unavailable audits establish no absence of effects. The read-only source_workspace_observation compares current Git-visible source files with the frozen input; it says nothing about ignored files, external systems or actual provider identity. Branch approvals, worker text, fixture results, a changed test suite, and confidence alone cannot prove the original behavior. Explicit human acceptance is required only if the Goal requests it; do not add it by default or remove an explicit requirement. Missing necessary behavior or external evidence is unverified and prevents completion. Scope-external unknowns may be stated without inventing requirements. Do not add merge/deploy work not requested by the Goal.",
+             serde_json::json!({"original_goal":goal.objective,"requirements_revision":goal.requirements_revision,"specification":specification,"integrated_material":material,"actual_checks":checks,"task_evidence":tasks,"source_workspace_observation":source_workspace_observation,"budget":goal.budget,"accounting":goal.accounting,"cost_scope":"Configured managed model-token estimates only; harness/tool/hooks/auth/counters/request-bill amounts may be unknown. This is not evidence of a total external-dollar cap."})).await?;
+         let verdict: Verdict = serde_json::from_value(value.clone())?;
+         let report = crate::goal_artifacts::put(&root, &serde_json::to_vec(&value)?).await?;
+diff --git a/apps/bitrouter/src/goal_runtime/model_control.rs b/apps/bitrouter/src/goal_runtime/model_control.rs
+index beb49cf6..79432f89 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control.rs
+@@ -11,6 +11,8 @@ use bitrouter_sdk::language_model::native_preparation::{
+ use bitrouter_sdk::language_model::native_work::{NativeProviderWork, NativeProviderWorkReport};
+ use std::sync::atomic::{AtomicBool, Ordering};
+ 
++pub(super) mod activity;
++
+ pub(super) struct ModelControl {
+     goals: Arc<GoalService>,
+     goal: GoalSnapshot,
+@@ -22,6 +24,7 @@ pub(super) struct ModelControl {
+     failed_ack: AtomicBool,
+     failure: tokio::sync::Mutex<Option<String>>,
+     plans: tokio::sync::Mutex<BTreeMap<String, NativePlan>>,
++    activity: tokio::sync::Mutex<BTreeMap<String, activity::StreamActivity>>,
+ }
+ 
+ impl ModelControl {
+@@ -67,6 +70,7 @@ impl ModelControl {
+             failed_ack: AtomicBool::new(false),
+             failure: tokio::sync::Mutex::new(None),
+             plans: tokio::sync::Mutex::new(BTreeMap::new()),
++            activity: tokio::sync::Mutex::new(BTreeMap::new()),
+         }
+     }
+ 
+@@ -461,6 +465,10 @@ impl bitrouter_orchestrator::control::WorkControl for ModelControl {
+ 
+ #[async_trait::async_trait]
+ impl NativeExecutionControl for ModelControl {
++    async fn on_stream_part(&self, request_id: &str, part: &bitrouter_ai::types::StreamPart) {
++        self.record_content(request_id, part).await;
++    }
++
+     async fn before_typed_decision(
+         &self,
+         attempt_id: &str,
+@@ -702,6 +710,15 @@ impl NativeExecutionControl for ModelControl {
+         }
+     }
+     async fn after_attempt(&self, report: NativeAttemptReport) {
++        match self.replay_attempt(&report).await {
++            Ok(true) => return,
++            Ok(false) => {}
++            Err(_) => {
++                self.fail_ack("original provider attempt outcome could not be confirmed")
++                    .await;
++                return;
++            }
++        }
+         let estimate = report.token_cost.estimated_micro_usd();
+         let work_id = key_id(&format!(
+             "{}/attempt/{}",
+@@ -755,11 +772,19 @@ impl NativeExecutionControl for ModelControl {
+                 }),
+             _ => false,
+         };
+-        let Ok(value) = serde_json::to_value(&report) else {
++        let Ok(mut value) = serde_json::to_value(&report) else {
+             self.fail_ack("provider attempt outcome could not be serialized")
+                 .await;
+             return;
+         };
++        if let Some(activity) = self.activity.lock().await.remove(&report.request_id) {
++            let Ok(observed) = serde_json::to_value(activity) else {
++                self.fail_ack("provider stream observations could not be serialized")
++                    .await;
++                return;
++            };
++            value["bro_stream_activity"] = observed;
++        }
+         if self
+             .observe_with_reservation(
+                 &format!("{}/attempt/{}", report.request_id, report.attempt_index),
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/tests.rs b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+index 1bea5a2a..9f8e82ce 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+@@ -534,6 +534,7 @@ async fn control(root: &Path) -> Result<(Arc<ModelControl>, Arc<FaultStore>, Arc
+         failed_ack: AtomicBool::new(false),
+         failure: tokio::sync::Mutex::new(None),
+         plans: tokio::sync::Mutex::new(BTreeMap::new()),
++        activity: tokio::sync::Mutex::new(BTreeMap::new()),
+     });
+     Ok((control, store, goals))
+ }
+@@ -850,6 +851,130 @@ async fn lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work(
+     Ok(())
+ }
+ 
++#[tokio::test]
++async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -> Result<()> {
++    use bitrouter_ai::types::{ApiProtocol, StreamPart};
++    use bitrouter_sdk::language_model::native::NativeRoute;
++    let root = tempfile::tempdir()?;
++    let (control, store, goals) = control(root.path()).await?;
++    let report = NativeAttemptReport {
++        request_id: "streamed-request".into(),
++        attempt_index: 0,
++        route: NativeRoute {
++            provider: "fixture".into(),
++            model: "test-model".into(),
++            protocol: ApiProtocol::ChatCompletions,
++            constraints: Default::default(),
++            output_token_limit_supported: None,
++            input_count: None,
++            protocol_validation: Default::default(),
++            continuation: Default::default(),
++        },
++        actual_provider: None,
++        actual_model: None,
++        result: None,
++        output_rejection: None,
++        report_rejection: None,
++        error: Some("interrupted after partial content".into()),
++        elapsed_ms: 1,
++        token_cost: Default::default(),
++        cache: Default::default(),
++        private_context: Default::default(),
++        continuation: Default::default(),
++    };
++    let key = "streamed-request/attempt/0";
++    control.begin(WorkKind::ProviderAttempt, key, Some(&report.request_id),
++        serde_json::json!({"request_id":report.request_id,"attempt_index":0,"route":report.route})).await?;
++    // Empty markers are not activity. Partial tool arguments count as received
++    // content but never become a permission or completed tool-effect claim.
++    control
++        .on_stream_part(
++            &report.request_id,
++            &StreamPart::TextStart { id: "empty".into() },
++        )
++        .await;
++    control
++        .on_stream_part(
++            &report.request_id,
++            &StreamPart::TextDelta {
++                text: "received".into(),
++            },
++        )
++        .await;
++    control
++        .on_stream_part(
++            &report.request_id,
++            &StreamPart::ToolCallDelta {
++                id: "partial".into(),
++                name: Some("write".into()),
++                arguments: "{".into(),
++                provider_metadata: Default::default(),
++            },
++        )
++        .await;
++    store.inject(Fault::LostAcknowledgement, 1)?;
++    control.after_attempt(report.clone()).await;
++    assert!(control.acknowledged());
++    assert!(control.activity.lock().await.is_empty());
++    let observed = snapshot(&goals, &control.goal.id).await?;
++    assert_eq!(observed.accounting.provider_attempts, 1);
++    assert!(observed.accounting.in_flight.is_empty());
++    let GoalReply::Accepted { operation } = goals
++        .execute(
++            "local",
++            GoalCommand::Operation {
++                operation_id: format!("{}-outcome", key_id(key)),
++            },
++            now()?,
++        )
++        .await?
++    else {
++        anyhow::bail!("outcome missing")
++    };
++    let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind else {
++        anyhow::bail!("outcome operation differs")
++    };
++    let Change::Accounting {
++        event: Event::Observe {
++            report: reference, ..
++        },
++    } = *change
++    else {
++        anyhow::bail!("outcome event differs")
++    };
++    let original = crate::goal_artifacts::read(&control.root, &reference).await?;
++    let value: serde_json::Value = serde_json::from_slice(&original)?;
++    assert_eq!(value["bro_stream_activity"]["content_parts"], 2);
++    assert!(value["actual_provider"].is_null());
++    assert!(value["result"].is_null());
++    goals
++        .execute(
++            "local",
++            GoalCommand::Control {
++                operation_id: "pause-before-outcome-replay".into(),
++                goal_id: control.goal.id.clone(),
++                expected_revision: observed.revision,
++                intent: RunIntent::Pause,
++            },
++            now()?,
++        )
++        .await?;
++    let paused = snapshot(&goals, &control.goal.id).await?;
++    control.after_attempt(report.clone()).await;
++    assert!(control.acknowledged());
++    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
++    assert_eq!(
++        crate::goal_artifacts::read(&control.root, &reference).await?,
++        original
++    );
++    let mut changed = report;
++    changed.error = Some("different outcome cannot reuse the original key".into());
++    control.after_attempt(changed).await;
++    assert!(!control.acknowledged());
++    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
++    Ok(())
++}
++
+ #[tokio::test]
+ async fn persistent_accounting_failure_retains_its_cause_and_fences_new_work() -> Result<()> {
+     let root = tempfile::tempdir()?;
+diff --git a/apps/bitrouter/src/goal_runtime/native_evidence.rs b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+index af1e0750..9c379378 100644
+--- a/apps/bitrouter/src/goal_runtime/native_evidence.rs
++++ b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+@@ -416,8 +416,24 @@ async fn observe(
+                     serde_json::json!({"status":"pending","actual_provider":null,"actual_model":null}),
+                 );
+             };
+-            let report: NativeAttemptReport =
+-                serde_json::from_slice(&read(root, reference).await?)?;
++            let value: serde_json::Value = serde_json::from_slice(&read(root, reference).await?)?;
++            let activity = value
++                .get("bro_stream_activity")
++                .and_then(|value| {
++                    serde_json::from_value::<super::model_control::activity::StreamActivity>(
++                        value.clone(),
++                    )
++                    .ok()
++                })
++                .filter(|activity| activity.valid());
++            let activity_status = if activity.is_some() {
++                "observed"
++            } else if value.get("bro_stream_activity").is_some() {
++                "unavailable"
++            } else {
++                "not_recorded"
++            };
++            let report: NativeAttemptReport = serde_json::from_value(value)?;
+             let intent: serde_json::Value =
+                 serde_json::from_slice(&read(root, &work.intent).await?)?;
+             anyhow::ensure!(
+@@ -433,7 +449,10 @@ async fn observe(
+                 "actual_provider":report.actual_provider,"actual_model":report.actual_model,
+                 "usage":report.result.as_ref().and_then(|result| result.usage.as_ref()),
+                 "output_recorded":report.result.is_some(),"output_rejected":report.output_rejection.is_some(),
+-                "report_rejected":report.report_rejection.is_some(),"error_reported":report.error.is_some(),"elapsed_ms":report.elapsed_ms}),
++                "report_rejected":report.report_rejection.is_some(),"error_reported":report.error.is_some(),"elapsed_ms":report.elapsed_ms,
++                "stream_activity":activity,
++                "activity_status":activity_status,
++                "activity_scope":"Local receipt of content fragments only. Compare monotonic ticks only within the same clock_id; wall timestamps may regress. Not admission, full execution lifetime, physical provider timing, tool execution or settlement"}),
+             )
+         }
+         _ => Ok(
+diff --git a/apps/bitrouter/src/goal_runtime/tests.rs b/apps/bitrouter/src/goal_runtime/tests.rs
+index ed811ad0..7496e279 100644
+--- a/apps/bitrouter/src/goal_runtime/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/tests.rs
+@@ -29,6 +29,7 @@ mod fixture;
+ mod live_input;
+ mod managed_acp;
+ mod native;
++mod native_parallel;
+ mod review_barrier;
+ mod start_recovery;
+ mod threads;
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native.rs b/apps/bitrouter/src/goal_runtime/tests/native.rs
+index 15dc9339..99d58cb7 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native.rs
+@@ -214,6 +214,8 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+         let evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await?;
+         let entries = evidence["entries"].as_array().context("native model entries missing")?;
+         assert!(!entries.is_empty());
++        assert!(entries.iter().any(|entry| entry["observation"]["stream_activity"]["content_parts"].as_u64().is_some_and(|count| count > 0)),
++            "native completion lacks actual received content evidence");
+         let serialized_source = serde_json::to_value(&source)?;
+         assert!(entries.iter().all(|entry| entry["source"] == serialized_source));
+         assert!(entries.iter().any(|entry| entry["kind"] == "preparation"
+@@ -241,7 +243,7 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+         assert!(rejected["observation"]["actual_provider"].is_null());
+         assert_eq!(fixture.backend.received_requests().await.context("request capture unavailable")?.len(), requests.len());
+         // Prove the opt-in failure snapshot mechanism can retain both stores
+-        // from this real in-memory Goal/Thread run and reopen them read-only.
++        // from this real file-backed Goal/Thread run and reopen them read-only.
+         let copy = fixture.controls.join("native-evidence-copy.sqlite");
+         fixture::copy_database(&fixture.db, &copy).await?;
+         let copied_db = crate::db::connect(&format!("sqlite://{}?mode=ro", copy.display())).await?;
+diff --git a/crates/bitrouter-orchestrator/src/agent/native/port.rs b/crates/bitrouter-orchestrator/src/agent/native/port.rs
+index 6dd598ee..bea18b06 100644
+--- a/crates/bitrouter-orchestrator/src/agent/native/port.rs
++++ b/crates/bitrouter-orchestrator/src/agent/native/port.rs
+@@ -124,7 +124,18 @@ impl HarnessPort for Port {
+         true
+     }
+ 
+-    async fn model_stream_part(&self, agent_id: &str, step_id: &str, _: &str, part: &StreamPart) {
++    async fn model_stream_part(
++        &self,
++        agent_id: &str,
++        step_id: &str,
++        request_id: &str,
++        part: &StreamPart,
++    ) {
++        if let Some(control) = &self.work_control {
++            // Observe received content before lossy display delivery. These
++            // callbacks never authorize a tool or replace a settled outcome.
++            control.on_stream_part(request_id, part).await;
++        }
+         if self.root_agent.get().is_none_or(|root| root != agent_id) {
+             return;
+         }

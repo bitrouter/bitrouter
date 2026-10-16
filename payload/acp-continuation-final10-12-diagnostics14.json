@@ -1,0 +1,19 @@
+{
+  "createdAt": "2026-10-16T20:14:59.207Z",
+  "final10": {
+    "scope": "Interrupted complete-workspace attempt after one unrelated initialize closure in the capability-negative test. The expected resource-rejection cause was not accepted. Old fixture directory was not retained; no recovered filesystem image claimed.",
+    "originalFailure": "unsupported_mcp_transports_are_rejected_before_session_open_and_reaped",
+    "errorPhase": "incoming_transport_closed during initialize; teardown unconfirmed",
+    "interruption": "3101/4757 run; 3090 pass, one original failure and ten SIGINT cases; 1656 unrun, 24 skips; no source drift/LEAK reported"
+  },
+  "startup11": {
+    "scope": "Global real-process capability-probe isolation plus opt-in failure retention; 10 pairs / 20 tests passed; this does not explain or certify the prior OS/transport closure cause."
+  },
+  "final12": {
+    "scope": "New typed teardown check passed, but a newly introduced bidirectional phase assertion was over-strong. Positive LifecycleBeforeSession evidence is not an exhaustive classification; absence stays unknown. Actual capability rejection and no-session wire count were correct.",
+    "retainedFixture": "acp-continuation-final12-phase-assert-fixture.tar.gz",
+    "verifiedFiles": 1,
+    "workspaceJobsRan": false
+  },
+  "final13Correction": "Keep typed teardown strict and check the phase marker as an implication; exact captured session/new and prompt counts remain required. Runtime implementation unchanged."
+}

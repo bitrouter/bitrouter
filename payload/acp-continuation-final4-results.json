@@ -1,0 +1,30 @@
+{
+  "source": "acp-continuation-final4-source.json",
+  "scope": "Whole workspace verification after controlled ACP original-session recovery, unknown-start guard and ownership-bound stopped history. Local fixture evidence; actual vendor/provider gate remains unpassed.",
+  "startedAt": "2026-10-16T18:49:33.325Z",
+  "runs": [
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "acp-continuation-final4-workspace.log",
+      "startedAt": "2026-10-16T18:49:33.325Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:06:25.466Z",
+      "summaries": [
+        "     Summary [ 766.864s] 4757 tests run: 4755 passed (11 slow), 2 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T19:06:25.721Z",
+  "changed": [],
+  "passed": false
+}

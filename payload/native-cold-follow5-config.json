@@ -1,0 +1,33 @@
+{
+  "id": "native-cold-follow5",
+  "scope": "Same frozen source as green4: shared native recovery/generation regressions and five repeated controlled Goal checkpoint matrices",
+  "jobs": [
+    {
+      "name": "native-recovery-generation",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "-E",
+        "test(service::tests::recovery) | test(service::tests::generation) | test(agent::tests::native)"
+      ]
+    },
+    {
+      "name": "matrix-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint)"
+      ]
+    }
+  ]
+}

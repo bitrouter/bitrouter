@@ -1,0 +1,131 @@
+{
+  "source": "acp-continuation-final15-source.json",
+  "scope": "Complete final required regression under v3 strict output-leak qualification. Same Rust source as final13; only .config/nextest.toml now reserves full coordinator transport fixtures globally. Three leak14 repetitions (12 tests) passed with no LEAK and unchanged detector. All internal workflow concurrency, stack/fixture/product limits, protocol phase/counts, owner/effect and business assertions remain. Actual vendor/provider live requalification remains unpassed.",
+  "startedAt": "2026-10-16T20:17:04.728Z",
+  "runs": [
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-final15-typed-startup.log",
+      "startedAt": "2026-10-16T20:17:04.728Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:17:06.209Z",
+      "summaries": [
+        "     Summary [   0.640s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "acp-continuation-final15-workspace.log",
+      "startedAt": "2026-10-16T20:17:06.209Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:32:23.383Z",
+      "summaries": [
+        "     Summary [ 916.362s] 4757 tests run: 4757 passed (7 slow), 24 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "acp-continuation-final15-clippy.log",
+      "startedAt": "2026-10-16T20:32:23.385Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:32:24.216Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "acp-continuation-final15-fmt.log",
+      "startedAt": "2026-10-16T20:32:24.216Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:32:44.241Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "acp-continuation-final15-doctest.log",
+      "startedAt": "2026-10-16T20:32:44.241Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:32:51.378Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ],
+      "log": "acp-continuation-final15-registry.log",
+      "startedAt": "2026-10-16T20:32:51.378Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:32:52.168Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T20:32:52.284Z",
+  "changed": [],
+  "passed": true
+}

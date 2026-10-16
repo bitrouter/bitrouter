@@ -1,0 +1,95 @@
+{
+  "source": "mcp-binding-metadata5-source.json",
+  "scope": "Frozen selected MCP configuration at missing Thread and at existing ACP metadata without a Turn; immutable accepted native/ACP receipts remain readable after config edits",
+  "startedAt": "2026-10-16T12:40:32.682Z",
+  "runs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime::tests::threads) | test(goal_runtime::tests::start_recovery)"
+      ],
+      "log": "mcp-binding-metadata5-boundaries.log",
+      "startedAt": "2026-10-16T12:40:32.682Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:41:32.214Z",
+      "summaries": [
+        "     Summary [   3.695s] 8 tests run: 8 passed, 1820 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "mcp-binding-metadata5-clippy.log",
+      "startedAt": "2026-10-16T12:41:32.215Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:42:07.106Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "log": "mcp-binding-metadata5-fmt.log",
+      "startedAt": "2026-10-16T12:42:07.106Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:42:27.077Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(goal_runtime)"
+      ],
+      "log": "mcp-binding-metadata5-goal-runtime.log",
+      "startedAt": "2026-10-16T12:42:27.078Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T12:43:13.804Z",
+      "summaries": [
+        "     Summary [  46.178s] 79 tests run: 79 passed, 1749 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T12:43:13.915Z",
+  "changed": [],
+  "passed": true
+}

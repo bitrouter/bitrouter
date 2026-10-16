@@ -1,0 +1,39 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpSq53Hi",
+  "restored": "/tmp/acp-metadata-red1-fixture-audit-GDSvjQ",
+  "files": {
+    "metadata.sqlite": {
+      "sha256": "a8711fef888a40c0141a45f265f4a5cb3d6b20db0b571e4458da45d18c2650b6",
+      "bytes": 479232,
+      "mode": 420
+    },
+    "owner.yaml": {
+      "sha256": "3456fbd7dd0d81f72aa935222fa4da68b21f5c17f4821242bc3dd36a1af32331",
+      "bytes": 806,
+      "mode": 420
+    },
+    "supervisor-runs-v1-3d4fdb26d6dbbb223ec00b7945fc1ad962b4e6f694d35bd39e8f34c6d84c6d4e.json": {
+      "sha256": "54da247d61faf1235db34e198ff222c46525a1174a98f465c30163c203116cdb",
+      "bytes": 32,
+      "mode": 420
+    },
+    "workspaces/cd694ad1-9739-4892-933e-e766f56c8e01/.bro-workspace-d2bc5bb8c4d64988492540e3fa7b824cbbaa26857c2319d224238ad88cc2fdb4.json": {
+      "sha256": "a760a9041cd7a1b6b4f6013e750ebb45fbe03fa94df779b65f6ccaf540e1facb",
+      "bytes": 419,
+      "mode": 384
+    },
+    "workspaces/cd694ad1-9739-4892-933e-e766f56c8e01/.bro-workspace-d2bc5bb8c4d64988492540e3fa7b824cbbaa26857c2319d224238ad88cc2fdb4.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "workspaces/cd694ad1-9739-4892-933e-e766f56c8e01/artifacts/564451d39304db08a8e3e06d48b6201404cedd3cfa8408911d29d70b6b80f3ea.blob": {
+      "sha256": "564451d39304db08a8e3e06d48b6201404cedd3cfa8408911d29d70b6b80f3ea",
+      "bytes": 50,
+      "mode": 384
+    }
+  },
+  "verifiedFiles": 6,
+  "tarSha256": "91e57ecd90fc644a0b03c07f788d40198ff7fc4c4df4aac85f0c32b8f9d9f189",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}

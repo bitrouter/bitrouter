@@ -1,0 +1,23 @@
+{
+  "capturedAt": "2026-10-16T17:02:54.838Z",
+  "source": "token-wait-final7-source.json",
+  "files": [
+    {
+      "name": "goal_acp_fixture",
+      "bytes": 1824720,
+      "sha256": "65165ffc38bcf1424d79ef36caacb6e124f0408f5c69a203f2d0e8bf02aedd19",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "pty_acp_fixture",
+      "bytes": 1367072,
+      "sha256": "2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "scope": "Read-only signature checks. AMFI warnings also occurred during passing startups; these checks do not establish or fix the earlier initialization closures."
+}

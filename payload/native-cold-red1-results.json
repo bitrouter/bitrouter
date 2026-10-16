@@ -1,0 +1,33 @@
+{
+  "source": "native-cold-red1-source.json",
+  "scope": "Controlled SQLite checkpoint image with actual source shutdown and SDK requests; expected missing Goal cold-continuation bridge. Not abrupt-process or external ACP recovery",
+  "startedAt": "2026-10-16T14:26:53.183Z",
+  "runs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint)"
+      ],
+      "log": "native-cold-red1-regression.log",
+      "startedAt": "2026-10-16T14:26:53.183Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T14:27:50.180Z",
+      "summaries": [
+        "     Summary [   0.801s] 1 test run: 0 passed, 1 failed, 1830 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T14:27:50.391Z",
+  "changed": [],
+  "passed": false
+}

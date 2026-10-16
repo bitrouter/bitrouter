@@ -1,0 +1,36 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+    Finished `test` profile [unoptimized] target(s) in 2.09s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 0a03cf49-a01b-46b4-b0a1-7b9914bcd1b9 with nextest profile: default
+    Starting 1 test across 1 binary (93 tests skipped)
+        FAIL [   0.061s] (1/1) bitrouter::goals completion_tests::no_admission_history_allows_verified_replacement_sources_but_unknown_history_does_not
+  stdout ───
+
+    running 1 test
+    test completion_tests::no_admission_history_allows_verified_replacement_sources_but_unknown_history_does_not ... FAILED
+
+    failures:
+
+    failures:
+        completion_tests::no_admission_history_allows_verified_replacement_sources_but_unknown_history_does_not
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.05s
+
+  stderr ───
+    Error: a settled no-admission history blocked the current verified handoffs
+
+    Caused by:
+        Goal revision changed; refresh before submitting
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.062s] 1 test run: 0 passed, 1 failed, 93 skipped
+        FAIL [   0.061s] (1/1) bitrouter::goals completion_tests::no_admission_history_allows_verified_replacement_sources_but_unknown_history_does_not
+error: test run failed

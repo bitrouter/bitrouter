@@ -1,0 +1,30 @@
+{
+  "source": "acp-continuation-final10-source.json",
+  "scope": "Complete required final validation after focused fix9 passed all six cold-recovery/PTY/SQLite-resource cases plus strict Clippy/fmt. Production code unchanged since final4. Test changes: no fabricated stopped proof, boxed composed reader futures, global resource reservation for complete native/PTY/resource fixtures and opt-in failure retention. No increased stack/timeout/product limits, automatic retries or weakened overlap/business assertions. Prior complete failures and interrupted runs remain archived honestly.",
+  "startedAt": "2026-10-16T19:45:59.702Z",
+  "runs": [
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "acp-continuation-final10-workspace.log",
+      "startedAt": "2026-10-16T19:45:59.702Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:50:38.739Z",
+      "summaries": [
+        "     Summary [ 277.821s] 3101/4757 tests run: 3090 passed, 11 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T19:50:39.111Z",
+  "changed": [],
+  "passed": false
+}

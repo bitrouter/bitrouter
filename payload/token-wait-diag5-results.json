@@ -1,0 +1,97 @@
+{
+  "source": "token-wait-diag5-source.json",
+  "scope": "Same production reservation-wait behavior plus exact admitted-counter label, unchanged negative worker-switch assertions, and failure-retention/PID startup diagnostics for the unexplained PTY initialize closure. Repeated passing startup does not establish its original cause.",
+  "startedAt": "2026-10-16T16:03:33.503Z",
+  "runs": [
+    {
+      "name": "pty-startup-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "code_tui_pty",
+        "--stress-count",
+        "20",
+        "-E",
+        "test(evolution_api_restore_reviews_current_identity_and_retains_publication)"
+      ],
+      "log": "token-wait-diag5-pty-startup-stress.log",
+      "startedAt": "2026-10-16T16:03:33.503Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T16:04:30.209Z",
+      "summaries": [
+        "     Summary [   6.548s] 20/20 stress run iterations: 20 passed"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "token-wait-diag5-clippy.log",
+      "startedAt": "2026-10-16T16:04:30.209Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T16:05:28.922Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "token-wait-diag5-fmt.log",
+      "startedAt": "2026-10-16T16:05:28.923Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T16:05:49.950Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "token-wait-diag5-rustdoc.log",
+      "startedAt": "2026-10-16T16:05:49.950Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T16:06:41.837Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T16:06:41.984Z",
+  "changed": [],
+  "passed": true
+}

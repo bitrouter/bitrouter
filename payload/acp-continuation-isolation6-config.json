@@ -1,0 +1,19 @@
+{
+  "id": "acp-continuation-isolation6",
+  "scope": "Exact source and complete workspace/all-feature target selection from final4, changing only outer test concurrency to one. Original 45s waits and actual internal branch overlap remain. One exact-feature counterfactual; isolation5 separately records three app-only feature-graph repetitions.",
+  "jobs": [
+    {
+      "name": "native-pair-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "test(native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "1"
+      ]
+    }
+  ]
+}

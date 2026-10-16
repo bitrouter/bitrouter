@@ -1,0 +1,67 @@
+{
+  "id": "acp-continuation-final13",
+  "scope": "Final complete validation after all focused fixes. Two real ACP capability probes additionally retain failures, reserve global slots and assert typed teardown/phase receipts instead of brittle presentation text. Startup11 passed 10 repetitions before this stricter assertion. Runtime production is unchanged from final4; no timeouts, stack limits, product bounds or actual overlap/business assertions are relaxed. All original failed/interrupted runs remain separate. Phase-marker correction: positive LifecycleBeforeSession implies no session request; its absence is unknown, not evidence that session/new occurred. Existing wire-count and typed teardown assertions remain strict. final12 stopped at that over-strong assertion and never ran the workspace jobs.",
+  "jobs": [
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

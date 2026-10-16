@@ -1,0 +1,20 @@
+{
+  "id": "dispatch-rejection-completion-red8",
+  "scope": "Expected domain regression: a settled no-admission history must not block current verified handoffs; no provider or harness qualification",
+  "jobs": [
+    {
+      "name": "regression",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goals",
+        "-E",
+        "test(no_admission_history_allows_verified_replacement_sources)"
+      ]
+    }
+  ]
+}

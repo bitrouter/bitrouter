@@ -1,0 +1,30 @@
+{
+  "source": "native-activity-source6.json",
+  "startedAt": "2026-10-16T11:45:13.769Z",
+  "scope": "Actual native content receipt, monotonic overlap, isolated conflicting writes, checked join and immutable outcome replay; other refactor gates remain open",
+  "runs": [
+    {
+      "id": "orchestrator",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "--no-fail-fast",
+        "-E",
+        "test(agent::tests::native)"
+      ],
+      "log": "native-activity-orchestrator6.log",
+      "startedAt": "2026-10-16T11:45:13.769Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:46:45.329Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T11:46:45.390Z",
+  "changed": [],
+  "passed": true
+}

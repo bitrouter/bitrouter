@@ -1,0 +1,53 @@
+{
+  "source": "token-wait-final3-source.json",
+  "scope": "Frozen native reservation-wait source: current-worker settlement/pause/lost ACK, unknown-cost holds, immutable route/quote replay, SDK no-dispatch cancellation, read-only projection, writer fencing and full workspace regressions. This is a local gate for this batch, not completion of S0-S6/live/CI gates.",
+  "startedAt": "2026-10-16T15:32:25.230Z",
+  "runs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope) | test(frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_once) | test(quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion) | test(undispatched_admission_and_resource_wait_never_claim_a_serving_model) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ],
+      "log": "token-wait-final3-boundaries.log",
+      "startedAt": "2026-10-16T15:32:25.230Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:33:35.084Z",
+      "summaries": [
+        "     Summary [   0.437s] 5 tests run: 5 passed, 1829 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "token-wait-final3-workspace.log",
+      "startedAt": "2026-10-16T15:33:35.085Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:46:03.353Z",
+      "summaries": [
+        "     Summary [ 580.038s] 4750 tests run: 4749 passed (8 slow), 1 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T15:46:03.554Z",
+  "changed": [],
+  "passed": false
+}

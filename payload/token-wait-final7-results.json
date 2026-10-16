@@ -1,0 +1,75 @@
+{
+  "source": "token-wait-final7-source.json",
+  "scope": "Native worker quote wait source after exact running-attempt recovery assertions, deterministic first-initialize failure and synchronized PTY admission label. Preserve previous failures. Full refactor and live gates remain open.",
+  "startedAt": "2026-10-16T16:53:03.530Z",
+  "runs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope) | test(frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_once) | test(quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion) | test(undispatched_admission_and_resource_wait_never_claim_a_serving_model) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ],
+      "log": "token-wait-final7-boundaries.log",
+      "startedAt": "2026-10-16T16:53:03.530Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T16:54:04.901Z",
+      "summaries": [
+        "     Summary [   0.495s] 5 tests run: 5 passed, 1829 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "repair-boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "-E",
+        "test(known_check_failure_repairs_with_actual_evidence_and_same_requirements) | test(known_review_failure) | test(active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution) | test(evolution_api_restore_reviews_current_identity_and_retains_publication)"
+      ],
+      "log": "token-wait-final7-repair-boundaries.log",
+      "startedAt": "2026-10-16T16:54:04.902Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T16:56:01.468Z",
+      "summaries": [
+        "     Summary [  21.376s] 4 tests run: 4 passed, 2399 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "token-wait-final7-workspace.log",
+      "startedAt": "2026-10-16T16:56:01.470Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:06:47.471Z",
+      "summaries": [
+        "     Summary [ 586.848s] 4750 tests run: 4749 passed (7 slow), 1 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:06:47.660Z",
+  "changed": [],
+  "passed": false
+}

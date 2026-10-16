@@ -1,0 +1,34 @@
+{
+  "createdAt": "2026-10-16T19:24:42.390Z",
+  "sourceDbSha256": "1071b758e0b42ab881db15f86aaebf1a6d4e2c270a3a288ab900358aeef08029",
+  "sourceFixture": "acp-continuation-final7-pending-read-fixture.tar.gz",
+  "facts": [
+    {
+      "execution_id": "b79672e7-af8d-4380-a1e6-ffe89c28adda",
+      "sequence": 73,
+      "fact": {
+        "record": "turn_lifecycle",
+        "turn_id": "23dc9f22-acc9-49f3-8a20-1ff492936087",
+        "lifecycle": {
+          "kind": "finished",
+          "status": "recovery_required",
+          "detail": "tool dispatch is blocked by durable state",
+          "final_answer": null,
+          "verification": "unavailable",
+          "verification_evidence": null,
+          "unknown_effect": true
+        }
+      }
+    }
+  ],
+  "scope": "Read-only original failed SQLite evidence. Shared runtime persisted RecoveryRequired/unknown_effect and did not mint stopped-owner proof. The negative test must preserve this uncertainty; no owner is forcibly retired. final7 also had a native parallel 45s wait failure. SIGINT of the identified nextest run after these failures caused one interrupted case and three unrun cases; not a complete suite result.",
+  "schedulingEvidence": {
+    "full4": "4755 passed, 2 native workflow timeouts; complete run",
+    "isolation5": "three app-only feature-graph pairs passed; not identical full-workspace binary graph",
+    "isolation6": "same complete workspace/all-feature graph, only one outer process: both passed at 16.216s/27.770s",
+    "final7": "group-only exclusion was insufficient against unrelated global workloads",
+    "final8": "num-test-threads reserves global slots for each multithreaded native Goal fixture; product limits, 45s waits and actual internal overlap assertions unchanged"
+  },
+  "configurationReference": "https://nexte.st/docs/configuration/threads-required/",
+  "configurationVersion": "cargo-nextest 0.9.137, installed parser/list command accepted num-test-threads"
+}

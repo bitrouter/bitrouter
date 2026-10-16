@@ -1,0 +1,65 @@
+{
+  "head": "35a08b319a8240e7816c2d0e78069eef537dcaca",
+  "extracts": [
+    {
+      "id": "acp-metadata-red1",
+      "files": 3,
+      "passed": false,
+      "leaks": [],
+      "tarSha256": "1e8e14b9d523e2711680451d03c226f2cf772466056cfc59cf683a571ebdc40c"
+    },
+    {
+      "id": "acp-metadata-green2",
+      "files": 5,
+      "passed": true,
+      "leaks": [],
+      "tarSha256": "d26fbb97bddbb2e2eea4487a0da803bd88c2b3e54a13c1ccc625c6a06f884a5f"
+    },
+    {
+      "id": "acp-metadata-green3",
+      "files": 6,
+      "passed": true,
+      "leaks": [],
+      "tarSha256": "5e9cb1e352451ee81dc80dc548a783cbacd5668e642fff7f9370e70f2267e7a0"
+    },
+    {
+      "id": "acp-metadata-follow4",
+      "files": 6,
+      "passed": true,
+      "leaks": [],
+      "tarSha256": "312bfeef5946fcbc14d893ae34d587f0f96f7ac95d0821d0695f43d2ebc30e8f"
+    },
+    {
+      "id": "acp-metadata-green5",
+      "files": 6,
+      "passed": true,
+      "leaks": [],
+      "tarSha256": "9e696d6ac1f7fb749be59d470f4bc831a704bf11720bcf1795d0db6fdf27ba65"
+    }
+  ],
+  "productionUnchangedAfterGreen2": true,
+  "postTestDelta": [
+    ".agents/plugins/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/DEVELOPMENT.md",
+    "skills/bitrouter/SKILL.md",
+    "skills/bitrouter/references/cli.md"
+  ],
+  "finalFiles": {
+    "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs": "f007bca11a5740485bbd9d2e67c8ffdd9bf180fcfc24beb330bcad23b57afb89",
+    ".agents/plugins/marketplace.json": "19f21d0209db281c87394bc4cbb2a55e80456dbd10926514c72f3b714b818638",
+    ".claude-plugin/plugin.json": "d6fa88aa25f9724be47b6cbac543c67ce1d975f2ff5c62a307eb895ae50050cc",
+    ".codex-plugin/plugin.json": "4a0814fabbfa3a16ad8b9da2f30ddba0563be5409a46e18bbe587a005fe692b3",
+    "apps/bitrouter/src/goal_runtime/tests/threads.rs": "fbf7c4aac4d4de79a594e41b9c2b715e1bc6ec7f9b6868f4ff3bb1cd7391adc1",
+    "crates/bitrouter-orchestrator/src/service/recovery.rs": "f8bf0b65b938ec3b47e68d9ee06125e39089aa234f50e4d25d572248cae82898",
+    "crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs": "5b28c3e851a5260c6e003515a9130f693ca10840005a9a47a68eb1c0071d74ce",
+    "crates/bitrouter-orchestrator/src/service/worker/acp.rs": "2b68d82707b3699768d636f2213634ff31cee81c410662e3c020f4fde64ad5a7",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "19a7a98f28d2dd67d8499452e54cea1d56334476d36e74aa141eeb8ae781c4d0",
+    "docs/DEVELOPMENT.md": "a14261c1a1b05b357e00f055cc91757e8b68105a68cf2dcab024da2421d5a3ad",
+    "skills/bitrouter/SKILL.md": "73642bef5531eacd32384b918d7ca0ef92122116fc9af940c15200332e517d27",
+    "skills/bitrouter/references/cli.md": "8ab46c6d31bd966d29d0ef472211209e0fc98c0e2ab5b3a2bc5219b4464101bc"
+  },
+  "finalTarSha256": "483eef213e9f4000adddc294bac8bf320450e7c41caadae125408de97499b3d5"
+}

@@ -1,0 +1,24 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 41700fc6-4ad7-431c-aa59-ad4ac7ec580a with nextest profile: default
+    Starting 11 tests across 1 binary (1826 tests skipped)
+        PASS [   0.108s] ( 1/11) bitrouter goal_runtime::tests::threads::exhausted_elapsed_budget_stays_quiet_and_raised_limit_retains_actual_age
+        PASS [   0.125s] ( 2/11) bitrouter goal_runtime::tests::threads::interrupted_owner_link_reconciles_the_original_thread_after_database_reopen
+        PASS [   0.540s] ( 3/11) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+        PASS [   0.582s] ( 4/11) bitrouter goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume
+        PASS [   1.235s] ( 5/11) bitrouter goal_runtime::tests::threads::accepted_native_and_acp_receipts_keep_original_resources_after_mcp_config_change
+        PASS [   1.127s] ( 6/11) bitrouter goal_runtime::tests::threads::unknown_dispatch_with_a_lost_goal_link_retains_the_original_accepted_turn
+        PASS [   1.355s] ( 7/11) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration
+        PASS [   1.468s] ( 8/11) bitrouter goal_runtime::tests::threads::refused_dispatch_without_a_turn_can_prepare_again_without_erasing_its_intent
+        PASS [   3.808s] ( 9/11) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+        PASS [   4.107s] (10/11) bitrouter goal_runtime::tests::threads::acp_recovery::unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown
+        PASS [   5.295s] (11/11) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+────────────
+     Summary [   5.301s] 11 tests run: 11 passed, 1826 skipped

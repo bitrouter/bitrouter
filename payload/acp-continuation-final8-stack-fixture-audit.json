@@ -1,0 +1,44 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpVeg38l",
+  "restored": "/tmp/acp-continuation-final8-stack-fixture-audit-2e9k54",
+  "files": {
+    "owner.yaml": {
+      "sha256": "1e8ff534dc2ca0cd9d626e491fad435280c6cd8c70a667e2b65eb2b761db25e0",
+      "bytes": 479,
+      "mode": 420
+    },
+    "source.db": {
+      "sha256": "1fe8f6113488865c546d2faa55b21482662ce4be19d4f505eeefa09bc3131489",
+      "bytes": 4096,
+      "mode": 420
+    },
+    "source.db-shm": {
+      "sha256": "e03e9dd13c34748424a5f29ee33f1b206905753250834ea057e34369d452f57a",
+      "bytes": 32768,
+      "mode": 420
+    },
+    "source.db-wal": {
+      "sha256": "6017b15d920fda2ab410baa0bc31fe67157f86ea6e9501b0a1764ffb43e49f53",
+      "bytes": 1808712,
+      "mode": 420
+    },
+    "supervisor-runs-v1-61c770e48935a24c553ca089e9a8598affd4527156d5590dd0255578776795f3.json": {
+      "sha256": "54da247d61faf1235db34e198ff222c46525a1174a98f465c30163c203116cdb",
+      "bytes": 32,
+      "mode": 420
+    },
+    "workspaces/8bb65127-3035-4d48-a19e-ba9f1eb71d90/artifacts/5649b2eabc957b1be5d579b92b2be6c4de534647c3346f2aa16d185285bb6ea0.blob": {
+      "sha256": "5649b2eabc957b1be5d579b92b2be6c4de534647c3346f2aa16d185285bb6ea0",
+      "bytes": 27,
+      "mode": 384
+    },
+    "workspaces/8bb65127-3035-4d48-a19e-ba9f1eb71d90/original-work/seed.txt": {
+      "sha256": "5b3ee3788ed0768e490c179574864bf57f659ae15deacdc63446b433a6b7f4ec",
+      "bytes": 23,
+      "mode": 420
+    }
+  },
+  "verifiedFiles": 7,
+  "tarSha256": "be4127aaa5c980002b12a6b7ceba9e2bbc81ad326f3bff4ef163e96d21f6ea53",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}

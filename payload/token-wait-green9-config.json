@@ -1,0 +1,87 @@
+{
+  "id": "token-wait-green9",
+  "scope": "Native quote waits plus deterministic removal of redundant elapsed-halt writes. Real SQLite clock/resume regression, all Goal runtime and SDK component regressions, PTY editor stress and strict workspace checks. Final7 full workspace has one preserved CAS/editor failure; no all-refactor or current-source full-workspace pass is claimed by this checkpoint.",
+  "jobs": [
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::) | test(quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion) | test(legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals)"
+      ]
+    },
+    {
+      "name": "sdk",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-sdk",
+        "--all-features",
+        "--lib"
+      ]
+    },
+    {
+      "name": "goal-tui",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty"
+      ]
+    },
+    {
+      "name": "editor-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty",
+        "--stress-count",
+        "10",
+        "-E",
+        "test(goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    }
+  ]
+}

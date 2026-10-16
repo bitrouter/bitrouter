@@ -1,0 +1,33 @@
+{
+  "source": "native-history-green1-source.json",
+  "scope": "Positive native historical/archive closure: actual built-in Goal execution and a user instruction revision, real SQLite archive receipts, production historical/UI readers, original Thread/Turn and actual SDK identity reports, corruption refusal and no read-side execution. Model judgments remain fixtures. No private ACP/cold restore or full refactor claim.",
+  "startedAt": "2026-10-16T17:24:18.894Z",
+  "runs": [
+    {
+      "name": "archive-boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ],
+      "log": "native-history-green1-archive-boundary.log",
+      "startedAt": "2026-10-16T17:24:18.894Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:25:50.271Z",
+      "summaries": [
+        "     Summary [  17.256s] 1 test run: 0 passed, 1 failed, 1835 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:25:50.502Z",
+  "changed": [],
+  "passed": false
+}

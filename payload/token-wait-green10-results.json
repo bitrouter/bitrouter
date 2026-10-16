@@ -1,0 +1,119 @@
+{
+  "source": "token-wait-green10-source.json",
+  "scope": "Native worker quote waits, quiet exhausted elapsed cap, and exact editor bytes across a single explicit user resubmission after a definite CAS rejection and refreshed matching Goal. All prior failures retained; no automatic mutation retry or relaxed deadline. Focused/component and strict workspace checks only; full final refactor remains open.",
+  "startedAt": "2026-10-16T17:16:09.969Z",
+  "runs": [
+    {
+      "name": "goal-tui",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty"
+      ],
+      "log": "token-wait-green10-goal-tui.log",
+      "startedAt": "2026-10-16T17:16:09.969Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:16:37.172Z",
+      "summaries": [
+        "     Summary [  24.804s] 4 tests run: 4 passed, 0 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "editor-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "goal_tui_pty",
+        "--stress-count",
+        "10",
+        "-E",
+        "test(goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal)"
+      ],
+      "log": "token-wait-green10-editor-stress.log",
+      "startedAt": "2026-10-16T17:16:37.172Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:17:49.840Z",
+      "summaries": [
+        "     Summary [  72.227s] 10/10 stress run iterations: 10 passed"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "token-wait-green10-clippy.log",
+      "startedAt": "2026-10-16T17:17:49.841Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:18:28.691Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "token-wait-green10-fmt.log",
+      "startedAt": "2026-10-16T17:18:28.692Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:18:48.991Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "rustdoc",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "token-wait-green10-rustdoc.log",
+      "startedAt": "2026-10-16T17:18:48.992Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:19:31.272Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:19:31.375Z",
+  "changed": [],
+  "passed": true
+}

@@ -1,0 +1,16 @@
+{
+  "commit": "a3fa36829ee3dd9b85665a15e44ced3905859db0",
+  "bundle": "refactor-local-checkpoint-a3fa3682.bundle",
+  "sha256": "0bca2a61d489f136c094e0a3c352ff98c1291c4ef16c1b5a793ef19af32dd30a",
+  "verified": true,
+  "verification": "The bundle contains this ref:\na3fa36829ee3dd9b85665a15e44ced3905859db0 HEAD\nThe bundle requires this ref:\nfe9df6f8157945d3559789926326a7effb468db1 \nThe bundle uses this hash algorithm: sha1\n",
+  "scope": "All seven local refactor commits after fe9. Unfinished MCP binding changes are not included. Full goal incomplete; no refactor push or hosted-CI claim.",
+  "indexes": [
+    "MANAGED_ACP_INDEX.md",
+    "WORKER_SWITCH_INDEX.md",
+    "NATIVE_EVIDENCE_INDEX.md",
+    "NATIVE_ACTIVITY_INDEX.md",
+    "ADMISSION_RECOVERY_INDEX.md",
+    "FIXTURE_RETENTION_INDEX.md"
+  ]
+}

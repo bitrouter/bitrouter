@@ -1,0 +1,44 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (example "native_regex_checker") generated 1 warning
+warning: `bitrouter` (test "daemon") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "configuration_state") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "extension_host") generated 1 warning (1 duplicate)
+warning: `bitrouter` (bin "bro") generated 1 warning (1 duplicate)
+warning: `bitrouter` (test "code_tui_pty") generated 1 warning (1 duplicate)
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized] target(s) in 1m 18s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID bb0da8f0-4a86-44a2-82e6-09f010dbf510 with nextest profile: default
+    Starting 24 tests across 71 binaries (4722 tests skipped)
+        PASS [   0.025s] ( 1/24) bitrouter goal_code::tests::old_receipt_with_identical_text_cannot_clear_a_different_pending_draft
+        PASS [   0.039s] ( 2/24) bitrouter goal_code::tests::permission_preview_separates_earlier_declarations_from_original_rpc
+        PASS [   0.050s] ( 3/24) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.051s] ( 4/24) bitrouter goal_code::tests::outbox_retains_exact_identity_scope_and_text_without_replaying
+        PASS [   0.052s] ( 5/24) bitrouter goal_code::tests::changed_protocol_outbox_is_preserved_without_reinterpreting_or_replaying
+        PASS [   0.010s] ( 6/24) bitrouter goal_code::tests::receipt_recovery_rotates_lanes_without_replaying_or_replacing_identity
+        PASS [   0.013s] ( 7/24) bitrouter goal_code::tests::unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop
+        PASS [   0.011s] ( 8/24) bitrouter goal_runtime::resources::tests::context_capture_is_bounded_and_rejects_escape_and_non_files
+        PASS [   0.015s] ( 9/24) bitrouter goal_runtime::resources::tests::advertised_skills_have_stable_distinct_ids_and_validation_rejects_invention
+        PASS [   0.010s] (10/24) bitrouter goal_runtime::resources::tests::selected_descriptors_preserve_config_without_exposing_the_other_servers
+        PASS [   0.077s] (11/24) bitrouter goal_code::tests::actual_database_receipt_must_match_the_original_client_payload
+        PASS [   0.015s] (12/24) bitrouter goal_runtime::resources::tests::context_capture_refuses_symlink_components_and_special_files
+        PASS [   0.079s] (13/24) bitrouter goal_code::tests::projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer
+        PASS [   0.081s] (14/24) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        PASS [   0.079s] (15/24) bitrouter goal_code::tests::real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates
+        PASS [   0.114s] (16/24) bitrouter goal_code::tests::exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt
+        PASS [   0.121s] (17/24) bitrouter goal_code::evidence::tests::archive_inspector_reads_committed_chain_and_rejects_uncommitted_or_foreign_material
+        PASS [   0.195s] (18/24) bitrouter goal_code::tests::retry_admission_matches_durable_commit_and_projection_at_recovery_boundaries
+        PASS [   4.760s] (19/24) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        PASS [   4.754s] (20/24) bitrouter goal_runtime::resources::tests::unsupported_mcp_transports_are_rejected_before_session_open_and_reaped
+        PASS [   9.966s] (21/24) bitrouter::goal_tui_pty goal_directory_resize_defers_backlog_and_isolates_native_inspection
+        PASS [  11.437s] (22/24) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+        PASS [  21.336s] (23/24) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        PASS [  25.482s] (24/24) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+────────────
+     Summary [  25.584s] 24 tests run: 24 passed, 4722 skipped

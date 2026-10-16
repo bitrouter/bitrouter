@@ -1,0 +1,14 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpM51uAa",
+  "restored": "/tmp/acp-continuation-final12-phase-assert-fixture-audit-4EgarM",
+  "files": {
+    "captures/28027.ndjson": {
+      "sha256": "aff289a9fbe0419152071af414c18933981a48a886afadfaba330f6baf741965",
+      "bytes": 231,
+      "mode": 420
+    }
+  },
+  "verifiedFiles": 1,
+  "tarSha256": "9d24ae0834a15b105473286d76822291deb211b8ed84bd59b2b49a8fa2f0ad41",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}

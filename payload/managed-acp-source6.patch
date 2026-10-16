@@ -1,0 +1,2339 @@
+diff --git a/.agents/plugins/marketplace.json b/.agents/plugins/marketplace.json
+index a3c55744..a6b311b6 100644
+--- a/.agents/plugins/marketplace.json
++++ b/.agents/plugins/marketplace.json
+@@ -4,7 +4,7 @@
+   "plugins": [
+     {
+       "name": "bitrouter",
+-      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Built-in Goal workers use retained native Thread/Turn execution with one-time permission replies; the skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal resource edits are versioned and reach replacement execution after old-work reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v5 does not replay older outboxes.",
++      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal resource edits are versioned and reach replacement execution after old-work reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v5 does not replay older outboxes.",
+       "source": "."
+     }
+   ]
+diff --git a/.claude-plugin/plugin.json b/.claude-plugin/plugin.json
+index 57f341d2..ccd95a94 100644
+--- a/.claude-plugin/plugin.json
++++ b/.claude-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Built-in Goal workers use retained native Thread/Turn execution with one-time permission replies; the skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal resource edits are versioned and reach replacement execution after old-work reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v5 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal resource edits are versioned and reach replacement execution after old-work reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v5 does not replay older outboxes.",
+   "author": {
+     "name": "BitRouterAI"
+   },
+diff --git a/.codex-plugin/plugin.json b/.codex-plugin/plugin.json
+index 09e5cdbc..8c5a9038 100644
+--- a/.codex-plugin/plugin.json
++++ b/.codex-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Built-in Goal workers use retained native Thread/Turn execution with one-time permission replies; the skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal resource edits are versioned and reach replacement execution after old-work reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v5 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting and remaining recovery/budget-wait limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal resource edits are versioned and reach replacement execution after old-work reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v5 does not replay older outboxes.",
+   "homepage": "https://bitrouter.ai",
+   "repository": "https://github.com/bitrouter/bitrouter",
+   "license": "Apache-2.0",
+diff --git a/apps/bitrouter/src/goal_runtime.rs b/apps/bitrouter/src/goal_runtime.rs
+index d6b621d6..83f38185 100644
+--- a/apps/bitrouter/src/goal_runtime.rs
++++ b/apps/bitrouter/src/goal_runtime.rs
+@@ -29,6 +29,7 @@ use crate::supervisor::{
+     SessionResponse, SessionScope, StartRunRequest, Supervisor,
+ };
+ 
++mod acp;
+ mod checks;
+ mod completion;
+ mod dependencies;
+@@ -1479,8 +1480,24 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
+                 .await?;
+             return Ok(());
+         }
+-        if task.spec.harness.is_none() {
+-            return self.drive_native(goal, task, execution).await;
++        let admitted_worker = if execution.thread.is_none()
++            && execution.dispatch_requested
++            && goal.workflow.owner_thread_id.is_some()
++        {
++            let source = native::source(goal, task, execution)?;
++            self.native_workspace(goal, execution)?;
++            Box::pin(self.threads.find_thread_admission(
++                &self.threads.capabilities().server_instance_id,
++                &CallerContext::local(),
++                &bitrouter_orchestrator::service::worker::thread_key(&source)?,
++            ))
++            .await?
++            .is_some()
++        } else {
++            false
++        };
++        if task.spec.harness.is_none() || execution.thread.is_some() || admitted_worker {
++            return Box::pin(self.drive_worker(goal, task, execution)).await;
+         }
+         if execution.dispatch_requested
+             && matches!(
+@@ -1879,45 +1896,12 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
+             )
+             .await?;
+             let Some(harness) = &task.spec.harness else {
+-                return self
+-                    .launch_native(&current, task, &id, prompt)
++                return Box::pin(self.launch_native(&current, task, &id, prompt))
+                     .await
+                     .map(|()| None);
+             };
+-            let response = Box::pin(self.supervisor.dispatch(SessionRequest::authorized(
+-                &self.grant,
+-                SessionCommand::Start(Box::new(StartRunRequest {
+-                    action_request_id: id.clone(),
+-                    client_id: Some(self.grant.client_id.clone()),
+-                    label: Some(format!("{} / {}", goal.title, task.spec.title)),
+-                    agent_id: harness.clone(),
+-                    prompt: Some(prompt),
+-                    cwd: workspace,
+-                    routing: Default::default(),
+-                    launch: crate::acp_cli::LaunchOptions {
+-                        required_session_route: task.spec.resources.model_route.clone(),
+-                        mcp_servers,
+-                        ..Default::default()
+-                    },
+-                    session: Default::default(),
+-                    presentation: crate::supervisor::Presentation::Background,
+-                    parent_run_id: None,
+-                    allow_shared_directory: false,
+-                    permission_policy: Default::default(),
+-                    result_schema: None,
+-                })),
+-            )))
+-            .await?;
+-            Ok(Some(match response {
+-                SessionResponse::Started { snapshot, .. } => Observation::Running {
+-                    run_id: Some(snapshot.run_id),
+-                    native_session_id: snapshot.native_session_id,
+-                },
+-                _ => Observation::Unknown {
+-                    run_id: None,
+-                    reason: "ACP startup returned no run mapping".into(),
+-                },
+-            }))
++            Box::pin(self.launch_acp(&current, task, &id, prompt, harness, mcp_servers)).await?;
++            Ok(None)
+         }
+         .await;
+         let observation = match result {
+diff --git a/apps/bitrouter/src/goal_runtime/native.rs b/apps/bitrouter/src/goal_runtime/native.rs
+index 4e6d0c32..c5d11ad7 100644
+--- a/apps/bitrouter/src/goal_runtime/native.rs
++++ b/apps/bitrouter/src/goal_runtime/native.rs
+@@ -25,7 +25,11 @@ pub(super) fn turn_key(execution_id: &str) -> String {
+ }
+ 
+ impl Coordinator {
+-    fn native_workspace(&self, goal: &GoalSnapshot, execution: &Execution) -> Result<PathBuf> {
++    pub(super) fn native_workspace(
++        &self,
++        goal: &GoalSnapshot,
++        execution: &Execution,
++    ) -> Result<PathBuf> {
+         let expected = self.workspaces.join(&goal.id).join(&execution.id);
+         let workspace = execution.workspace.canonicalize()?;
+         anyhow::ensure!(
+@@ -211,7 +215,7 @@ impl Coordinator {
+         Ok(())
+     }
+ 
+-    pub(super) async fn drive_native(
++    pub(super) async fn drive_worker(
+         &self,
+         goal: &GoalSnapshot,
+         task: &Task,
+@@ -290,7 +294,23 @@ impl Coordinator {
+                     )
+                     .await?,
+                 )?;
+-                return self.launch_native(goal, task, &execution.id, prompt).await;
++                return match &task.spec.harness {
++                    Some(harness) => {
++                        Box::pin(self.launch_acp(
++                            goal,
++                            task,
++                            &execution.id,
++                            prompt,
++                            harness,
++                            super::resources::servers(
++                                &self.routing.snapshot_config(),
++                                &prepared.selection,
++                            )?,
++                        ))
++                        .await
++                    }
++                    None => Box::pin(self.launch_native(goal, task, &execution.id, prompt)).await,
++                };
+             }
+             if matches!(execution.observation, Observation::Requested) {
+                 self.change(goal, Change::ObserveExecution { execution_id: execution.id.clone(),
+@@ -306,6 +326,46 @@ impl Coordinator {
+             .threads
+             .read_stored_turn(&target, &caller, &binding.turn_id)
+             .await?;
++        let external = task.spec.harness.is_some();
++        if let Some(session) = &turn.acp {
++            anyhow::ensure!(
++                task.spec.harness.as_ref() == Some(&session.agent_id),
++                "worker session belongs to another harness"
++            );
++            if execution.confirmed_model_route.is_none()
++                && let Some(route) = execution
++                    .resources
++                    .as_ref()
++                    .and_then(|prepared| prepared.selection.model_route.as_ref())
++                && session.confirmed_model_route.as_ref() == Some(route)
++                && match &execution.observation {
++                    Observation::Running { run_id, .. }
++                    | Observation::Candidate { run_id, .. }
++                    | Observation::Failed { run_id, .. }
++                    | Observation::Unknown { run_id, .. } => {
++                        run_id.as_ref() == Some(&session.run_id)
++                    }
++                    _ => false,
++                }
++            {
++                return self
++                    .change(
++                        goal,
++                        Change::ConfirmModelRoute {
++                            execution_id: execution.id.clone(),
++                            run_id: session.run_id.clone(),
++                            route: route.clone(),
++                        },
++                    )
++                    .await;
++            }
++        }
++        let run_id = turn
++            .acp
++            .as_ref()
++            .map(|session| session.run_id.clone())
++            .or_else(|| turn.acp_stop.as_ref().and_then(|stop| stop.run_id.clone()));
++        let session_id = turn.acp.as_ref().map(|session| session.session_id.clone());
+         let terminal = matches!(
+             turn.status,
+             TurnStatus::Completed
+@@ -351,7 +411,11 @@ impl Coordinator {
+                 .context("native stop source disappeared")?;
+             let operation_id = match &current_execution.stop {
+                 None => {
+-                    let operation_id = format!("native-stop-{}", execution.id);
++                    let operation_id = format!(
++                        "{}-stop-{}",
++                        if external { "acp" } else { "native" },
++                        execution.id
++                    );
+                     self.change(
+                         &current,
+                         Change::RequestStop {
+@@ -368,15 +432,20 @@ impl Coordinator {
+                 Some(_) => return Ok(()),
+             };
+             let was_unknown = matches!(current_execution.stop, Some(StopState::Unknown { .. }));
++            let stopped = if external {
++                turn.acp_stop.as_ref().is_some_and(|stop| stop.confirmed)
++            } else {
++                terminal && !turn.unknown_effect
++            };
+             if (terminal || turn.status == TurnStatus::RecoveryRequired)
+-                && (!was_unknown || terminal && !turn.unknown_effect)
++                && (!was_unknown || stopped)
+             {
+                 self.change(
+                     &current,
+                     Change::ObserveStop {
+                         execution_id: execution.id.clone(),
+                         operation_id,
+-                        confirmed: terminal && !turn.unknown_effect,
++                        confirmed: stopped,
+                         detail: format!(
+                             "Native Turn {:?}; unknown_effect={}",
+                             turn.status, turn.unknown_effect
+@@ -408,10 +477,14 @@ impl Coordinator {
+             Observation::Requested | Observation::Running { .. } | Observation::Unknown { .. }
+         ) {
+             let observation = match turn.status {
+-                TurnStatus::Running | TurnStatus::WaitingForInput => Some(Observation::Running {
+-                    run_id: None,
+-                    native_session_id: None,
+-                }),
++                TurnStatus::Running | TurnStatus::WaitingForInput
++                    if !external || run_id.is_some() =>
++                {
++                    Some(Observation::Running {
++                        run_id: run_id.clone(),
++                        native_session_id: session_id.clone(),
++                    })
++                }
+                 TurnStatus::Completed if !turn.unknown_effect => {
+                     let text = turn
+                         .final_answer
+@@ -424,8 +497,8 @@ impl Coordinator {
+                     )
+                     .await?;
+                     Some(Observation::Candidate {
+-                        run_id: None,
+-                        native_session_id: None,
++                        run_id: run_id.clone(),
++                        native_session_id: session_id.clone(),
+                         report,
+                     })
+                 }
+@@ -433,7 +506,7 @@ impl Coordinator {
+                     if !turn.unknown_effect =>
+                 {
+                     Some(Observation::Failed {
+-                        run_id: None,
++                        run_id: run_id.clone(),
+                         reason: turn
+                             .detail
+                             .unwrap_or_else(|| format!("Native Turn {:?}", turn.status)),
+@@ -444,8 +517,9 @@ impl Coordinator {
+                 | TurnStatus::Failed
+                 | TurnStatus::Cancelled
+                 | TurnStatus::Interrupted => Some(Observation::Unknown {
+-                    run_id: None,
+-                    reason: "Native execution requires effect recovery; no automatic replay".into(),
++                    run_id: run_id.clone(),
++                    reason: "Shared worker execution requires effect recovery; no automatic replay"
++                        .into(),
+                 }),
+                 _ => None,
+             };
+diff --git a/apps/bitrouter/src/goal_runtime/permissions.rs b/apps/bitrouter/src/goal_runtime/permissions.rs
+index 84822899..c1399433 100644
+--- a/apps/bitrouter/src/goal_runtime/permissions.rs
++++ b/apps/bitrouter/src/goal_runtime/permissions.rs
+@@ -6,6 +6,34 @@ use bitrouter_orchestrator::goal::decision::{
+ 
+ impl Coordinator {
+     pub(super) async fn drive_permissions(&self, goal: &GoalSnapshot) -> Result<()> {
++        // Workflow admission may itself be waiting for capacity. Keep actual
++        // accepted worker observations and permission cards moving independently.
++        for task in &goal.workflow.tasks {
++            if let Some(execution) = task.executions.last()
++                && execution.thread.is_some()
++                && matches!(execution.observation, Observation::Requested)
++                && bitrouter_orchestrator::goal::workflow::worker_requested(
++                    goal,
++                    &super::native::source(goal, task, execution)?,
++                )
++            {
++                Box::pin(self.drive_worker(goal, task, execution)).await?;
++            }
++        }
++        let GoalReply::Snapshot { goal: latest } = self
++            .goals
++            .execute(
++                "local",
++                GoalCommand::Get {
++                    goal_id: goal.id.clone(),
++                },
++                now()?,
++            )
++            .await?
++        else {
++            anyhow::bail!("permission worker projection snapshot unavailable");
++        };
++        let goal = &latest;
+         for task in &goal.workflow.tasks {
+             let Some(execution) = task.executions.last() else {
+                 continue;
+@@ -38,7 +66,30 @@ impl Coordinator {
+             let SessionResponse::Snapshot { snapshot } = response else {
+                 anyhow::bail!("unexpected permission snapshot");
+             };
++            let admitted = if let Some(link) = &execution.thread {
++                let target = bitrouter_orchestrator::thread::ThreadTarget {
++                    thread_id: link.thread_id.clone(),
++                    server_instance_id: self.threads.capabilities().server_instance_id,
++                };
++                Some(
++                    self.threads
++                        .read_stored_turn(&target, &CallerContext::local(), &link.turn_id)
++                        .await?
++                        .acp_permissions
++                        .into_iter()
++                        .map(|permission| permission.request_id)
++                        .collect::<BTreeSet<_>>(),
++                )
++            } else {
++                None
++            };
+             for permission in &snapshot.pending_permissions {
++                if admitted
++                    .as_ref()
++                    .is_some_and(|ids| !ids.contains(&permission.permission_id))
++                {
++                    continue;
++                }
+                 self.observe_permission(goal, task, execution, run_id, permission)
+                     .await?;
+             }
+@@ -294,6 +345,15 @@ impl Coordinator {
+                     .deliver_native_permission(goal, decision, operation_id, option_id)
+                     .await;
+             };
++            if let Some((target, answer)) = self
++                .managed_permission_answer(goal, decision, operation_id, option_id)
++                .await?
++            {
++                self.threads
++                    .answer_acp_permission(&target, &CallerContext::local(), answer)
++                    .await?;
++                return Ok(true);
++            }
+             let response = self
+                 .supervisor
+                 .dispatch(SessionRequest::authorized(
+@@ -339,7 +399,7 @@ impl Coordinator {
+         let (submitted, detail) = match result {
+             Ok(true) => (
+                 true,
+-                if decision.run_id.is_some() { "Controller confirms permission option selection; wire transmission and tool effects remain unconfirmed" }
++                if decision.run_id.is_some() { "Shared runtime or controller accepted the original option; delivery and tool effects require separate evidence" }
+                 else { "Native runtime durably accepted the choice; tool execution requires separate evidence" }.into(),
+             ),
+             Ok(false) => (
+@@ -446,6 +506,17 @@ impl Coordinator {
+                 .native_permission_selected(goal, decision, operation_id, option_id)
+                 .await;
+         };
++        if let Some((target, answer)) = self
++            .managed_permission_answer(goal, decision, operation_id, option_id)
++            .await?
++            && self
++                .threads
++                .find_acp_permission_answer(&target, &CallerContext::local(), &answer)
++                .await?
++                .is_some()
++        {
++            return Ok(true);
++        }
+         let response = self
+             .supervisor
+             .dispatch(SessionRequest::authorized(
+@@ -467,6 +538,63 @@ impl Coordinator {
+     }
+ }
+ 
++impl Coordinator {
++    async fn managed_permission_answer(
++        &self,
++        goal: &GoalSnapshot,
++        decision: &PermissionDecision,
++        operation_id: &str,
++        option_id: &str,
++    ) -> Result<
++        Option<(
++            bitrouter_orchestrator::thread::ThreadTarget,
++            bitrouter_orchestrator::service::worker::acp::Approval,
++        )>,
++    > {
++        let Some(execution) = goal
++            .workflow
++            .tasks
++            .iter()
++            .flat_map(|task| &task.executions)
++            .find(|execution| execution.id == decision.execution_id)
++        else {
++            return Ok(None);
++        };
++        let Some(binding) = &execution.thread else {
++            return Ok(None);
++        };
++        if decision.run_id.is_none() {
++            return Ok(None);
++        }
++        let target = bitrouter_orchestrator::thread::ThreadTarget {
++            thread_id: binding.thread_id.clone(),
++            server_instance_id: self.threads.capabilities().server_instance_id,
++        };
++        let turn = self
++            .threads
++            .read_stored_turn(&target, &CallerContext::local(), &binding.turn_id)
++            .await?;
++        anyhow::ensure!(
++            turn.acp.as_ref().map(|session| &session.run_id) == decision.run_id.as_ref(),
++            "ACP permission belongs to another accepted worker Turn"
++        );
++        use sha2::{Digest, Sha256};
++        let key = hex::encode(Sha256::digest(serde_json::to_vec(&(
++            &decision.id,
++            operation_id,
++        ))?));
++        Ok(Some((
++            target,
++            bitrouter_orchestrator::service::worker::acp::Approval {
++                turn_id: binding.turn_id.clone(),
++                request_id: decision.permission_id.clone(),
++                option_id: option_id.into(),
++                idempotency_key: format!("goal-permission-{key}"),
++            },
++        )))
++    }
++}
++
+ fn choice_was_selected(
+     events: &[crate::supervisor::SessionEvent],
+     permission: &str,
+diff --git a/apps/bitrouter/src/goal_runtime/runtime_evidence.rs b/apps/bitrouter/src/goal_runtime/runtime_evidence.rs
+index e7510e64..c02e3e02 100644
+--- a/apps/bitrouter/src/goal_runtime/runtime_evidence.rs
++++ b/apps/bitrouter/src/goal_runtime/runtime_evidence.rs
+@@ -26,11 +26,7 @@ pub(super) async fn collect(
+                 .native_execution_evidence(goal, task, execution)
+                 .await;
+         }
+-        let snapshot = coordinator
+-            .supervisor
+-            .start_snapshot(&coordinator.grant, &execution.id)
+-            .await?
+-            .context("original execution has no recorded run mapping")?;
++        let snapshot = coordinator.acp_run_snapshot(goal, task, execution).await?;
+         let response = coordinator
+             .supervisor
+             .dispatch(SessionRequest::authorized(
+diff --git a/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs b/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs
+index 15dfeeb5..c5153fdf 100644
+--- a/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs
++++ b/apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs
+@@ -74,11 +74,7 @@ async fn archive(
+     let record =
+         crate::goal_archive::decode(&goal.id, &task.spec.id, reference, &bytes, &operation)?;
+     let execution = &record.execution;
+-    let snapshot = coordinator
+-        .supervisor
+-        .start_snapshot(&coordinator.grant, &execution.id)
+-        .await?
+-        .context("archived execution mapping unavailable")?;
++    let snapshot = coordinator.acp_run_snapshot(goal, task, execution).await?;
+     let SessionResponse::Events { replay } = coordinator
+         .supervisor
+         .dispatch(SessionRequest::authorized(
+diff --git a/apps/bitrouter/src/goal_runtime/tests.rs b/apps/bitrouter/src/goal_runtime/tests.rs
+index 221fac13..ed811ad0 100644
+--- a/apps/bitrouter/src/goal_runtime/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/tests.rs
+@@ -27,6 +27,7 @@ mod provider;
+ 
+ mod fixture;
+ mod live_input;
++mod managed_acp;
+ mod native;
+ mod review_barrier;
+ mod start_recovery;
+@@ -157,7 +158,8 @@ async fn daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery() ->
+                 .is_none()
+         );
+         let id = fixture.create().await?;
+-        fixture.running(&id).await?;
++        let running = fixture.running(&id).await?;
++        managed_acp::assert_shared(&fixture, &running, false).await?;
+         fixture
+             .input(
+                 &id,
+@@ -196,6 +198,7 @@ async fn daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery() ->
+         assert!(!answered.workflow.completion.completed_for(1));
+         fixture.release().await?;
+         let completed = fixture.completed(&id, 1).await?;
++        managed_acp::assert_shared(&fixture, &completed, true).await?;
+         let delivery = completed
+             .workflow
+             .completion
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index d438b9f1..ff940752 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -399,7 +399,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
+             let task = &goal.workflow.tasks[0];
+             let mut outside = task.executions[0].clone();
+             outside.workspace = home.path().into();
+-            assert!(reopened.drive_native(&goal, task, &outside).await.is_err());
++            assert!(reopened.drive_worker(&goal, task, &outside).await.is_err());
+             #[cfg(unix)]
+             if !accepted_thread && !paused {
+                 let moved = home.path().join("outside-worker");
+@@ -407,7 +407,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
+                 std::os::unix::fs::symlink(&moved, &workspace)?;
+                 assert!(
+                     reopened
+-                        .drive_native(&goal, task, &task.executions[0])
++                        .drive_worker(&goal, task, &task.executions[0])
+                         .await
+                         .is_err()
+                 );
+@@ -415,7 +415,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
+                 tokio::fs::rename(&moved, &workspace).await?;
+             }
+             reopened
+-                .drive_native(&goal, task, &task.executions[0])
++                .drive_worker(&goal, task, &task.executions[0])
+                 .await?;
+             let current = read(&reopened, &id).await?;
+             assert_eq!(current.workflow.tasks[0].executions.len(), 1);
+@@ -465,7 +465,7 @@ async fn native_dispatch_before_turn_acceptance_uses_original_input_and_keys_aft
+                     if turn_id == &receipt.turn_id && prompt == "Original saved worker input")));
+             // A stale coordinator snapshot cannot admit another action.
+             reopened
+-                .drive_native(&goal, task, &task.executions[0])
++                .drive_worker(&goal, task, &task.executions[0])
+                 .await?;
+             let repeated = reopened
+                 .threads
+diff --git a/apps/bitrouter/src/goal_runtime/threads.rs b/apps/bitrouter/src/goal_runtime/threads.rs
+index 3fee43b6..73875817 100644
+--- a/apps/bitrouter/src/goal_runtime/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/threads.rs
+@@ -126,7 +126,11 @@ impl Coordinator {
+                             ThreadRequest {
+                                 caller,
+                                 workspace: goal.workspace.clone(),
+-                                config: owner_view.config,
++                                config: owner_view
++                                    .config
++                                    .native()
++                                    .map_err(anyhow::Error::msg)?
++                                    .clone(),
+                                 permission_profile: PermissionProfile::ReadOnly,
+                                 verification_command: None,
+                                 idempotency_key: key.clone(),
+diff --git a/apps/bitrouter/src/native_code.rs b/apps/bitrouter/src/native_code.rs
+index 815f1f5c..317c6d92 100644
+--- a/apps/bitrouter/src/native_code.rs
++++ b/apps/bitrouter/src/native_code.rs
+@@ -1026,6 +1026,10 @@ mod tests {
+         };
+         show_event(&mut state, &event);
+         let snapshot = TurnSnapshot {
++            acp_permissions: Vec::new(),
++            acp_selected: Default::default(),
++            acp: None,
++            acp_stop: None,
+             generation: None,
+             context_routing: None,
+             resources: None,
+diff --git a/apps/bitrouter/src/supervisor.rs b/apps/bitrouter/src/supervisor.rs
+index fe464653..54bc4006 100644
+--- a/apps/bitrouter/src/supervisor.rs
++++ b/apps/bitrouter/src/supervisor.rs
+@@ -36,6 +36,8 @@ use crate::acp_cli::{
+ };
+ use crate::paths::ConfigSource;
+ 
++pub(crate) mod managed;
++
+ /// Version of the local session-control JSON contract.
+ pub const SESSION_PROTOCOL_VERSION: u16 = 1;
+ 
+@@ -427,6 +429,8 @@ pub enum SessionEventKind {
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct RunSnapshot {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
+     pub run_id: String,
+     pub label: String,
+     pub agent_id: String,
+@@ -760,6 +764,8 @@ struct LedgerFile {
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ struct LedgerEntry {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
+     run_id: String,
+     label: String,
+     agent_id: String,
+@@ -1005,6 +1011,7 @@ impl LedgerStore {
+ impl From<&RunSnapshot> for LedgerEntry {
+     fn from(snapshot: &RunSnapshot) -> Self {
+         Self {
++            managed_by: snapshot.managed_by.clone(),
+             run_id: snapshot.run_id.clone(),
+             label: snapshot.label.clone(),
+             agent_id: snapshot.agent_id.clone(),
+@@ -1135,7 +1142,9 @@ impl Supervisor {
+             SessionCommand::Authorize { .. } => {
+                 Err(anyhow::anyhow!("grant issuance was not dispatched"))
+             }
+-            SessionCommand::Start(request) => self.start(*request).await,
++            // Keep process/session preparation out of every read-only query's
++            // future frame. Start remains the same awaited, owned operation.
++            SessionCommand::Start(request) => Box::pin(self.start(*request)).await,
+             SessionCommand::List => self.list().await,
+             SessionCommand::PeekAll => self.peek_all().await,
+             SessionCommand::Snapshot { run_id } => Ok(SessionResponse::Snapshot {
+@@ -1261,12 +1270,20 @@ impl Supervisor {
+                 cursor,
+             } => {
+                 let run = self.run(&run_id).await?;
++                anyhow::ensure!(
++                    run.snapshot().await.managed_by.is_none(),
++                    "managed ACP requests belong to its Thread/Turn"
++                );
+                 let client = run.client().await?;
+                 let response = client.list_sessions(cwd, cursor).await?;
+                 Ok(SessionResponse::NativeSessions { response })
+             }
+             SessionCommand::RouteList { run_id } => {
+                 let run = self.run(&run_id).await?;
++                anyhow::ensure!(
++                    run.snapshot().await.managed_by.is_none(),
++                    "managed ACP requests belong to its Thread/Turn"
++                );
+                 let (client, session_id) = run.client_and_session().await?;
+                 let state = client.route_list(&session_id).await?;
+                 Ok(SessionResponse::RouteState {
+@@ -1516,13 +1533,38 @@ impl Supervisor {
+     }
+ 
+     async fn start(&self, request: StartRunRequest) -> Result<SessionResponse> {
++        self.start_owned(request, None, None).await
++    }
++
++    pub(super) async fn start_managed(
++        &self,
++        request: StartRunRequest,
++        owner: bitrouter_orchestrator::service::worker::acp::Owner,
++        control: &dyn managed::DispatchGuard,
++    ) -> Result<SessionResponse> {
++        anyhow::ensure!(
++            request.prompt.is_none() && request.presentation == Presentation::Background,
++            "managed startup cannot submit a prompt or acquire another control lease"
++        );
++        self.start_owned(request, Some(owner), Some(control)).await
++    }
++
++    async fn start_owned(
++        &self,
++        request: StartRunRequest,
++        managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
++        control: Option<&dyn managed::DispatchGuard>,
++    ) -> Result<SessionResponse> {
+         validate_identifier("action request", &request.action_request_id)?;
+         anyhow::ensure!(
+             !self.inner.shutting_down.load(Ordering::SeqCst),
+             "the session supervisor is shutting down"
+         );
+-        let fingerprint =
+-            serde_json::to_string(&request).context("fingerprinting start request")?;
++        let fingerprint = match &managed_by {
++            Some(owner) => serde_json::to_string(&(&request, owner)),
++            None => serde_json::to_string(&request),
++        }
++        .context("fingerprinting start request")?;
+         loop {
+             let wait = {
+                 let mut starts = self.inner.starts.lock().await;
+@@ -1563,6 +1605,42 @@ impl Supervisor {
+                         Some(notify.clone())
+                     }
+                     None => {
++                        // The process cache is empty after a daemon restart.
++                        // A durable managed start still names the original Run;
++                        // never start another process under that action key.
++                        let existing = {
++                            let entries = self.inner.ledger.entries.lock().await;
++                            let mut found = entries.values().filter(|entry| {
++                                entry.start.as_ref().is_some_and(|start| {
++                                    start.action_request_id == request.action_request_id
++                                })
++                            });
++                            let entry = found.next().cloned();
++                            anyhow::ensure!(
++                                found.next().is_none(),
++                                "original start has multiple durable mappings"
++                            );
++                            entry
++                        };
++                        if let Some(entry) = existing
++                            && (entry.managed_by.is_some() || managed_by.is_some())
++                        {
++                            use sha2::{Digest, Sha256};
++                            let request_sha256 =
++                                hex::encode(Sha256::digest(serde_json::to_vec(&request)?));
++                            anyhow::ensure!(
++                                entry.managed_by == managed_by
++                                    && entry.start.as_ref().is_some_and(|start| {
++                                        start.request_sha256 == request_sha256
++                                    }),
++                                "original managed start belongs to another request or Thread/Turn owner"
++                            );
++                            drop(starts);
++                            return Ok(SessionResponse::Started {
++                                snapshot: Box::new(self.run(&entry.run_id).await?.snapshot().await),
++                                diagnostics: Vec::new(),
++                            });
++                        }
+                         anyhow::ensure!(
+                             !self.inner.shutting_down.load(Ordering::SeqCst),
+                             "the session supervisor is shutting down"
+@@ -1586,7 +1664,9 @@ impl Supervisor {
+                 }
+                 continue;
+             }
+-            let result = self.start_new(request.clone()).await;
++            let result = self
++                .start_new(request.clone(), managed_by.clone(), control)
++                .await;
+             let mut starts = self.inner.starts.lock().await;
+             let notify = match starts.get(&request.action_request_id) {
+                 Some(StartState::Starting { notify, .. }) => Some(notify.clone()),
+@@ -1628,7 +1708,12 @@ impl Supervisor {
+         }
+     }
+ 
+-    async fn start_new(&self, request: StartRunRequest) -> Result<SessionResponse> {
++    async fn start_new(
++        &self,
++        request: StartRunRequest,
++        managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
++        control: Option<&dyn managed::DispatchGuard>,
++    ) -> Result<SessionResponse> {
+         anyhow::ensure!(
+             !self.inner.shutting_down.load(Ordering::SeqCst),
+             "the session supervisor is shutting down"
+@@ -1665,6 +1750,7 @@ impl Supervisor {
+         self.reserve_claim(&claim_key, &run_id, request.allow_shared_directory)
+             .await?;
+         let snapshot = RunSnapshot {
++            managed_by,
+             run_id: run_id.clone(),
+             label: request
+                 .label
+@@ -1762,6 +1848,23 @@ impl Supervisor {
+                 return Err(error);
+             }
+         };
++        // Preparation can await configuration, installation or credentials.
++        // Recheck the common owner/source before opening any ACP session.
++        if let Some(control) = control
++            && let Err(error) = control.authorize().await
++        {
++            run.state
++                .lock()
++                .await
++                .snapshot
++                .startup_aborted_before_session = true;
++            run.fail_launch(format!(
++                "managed dispatch closed before session open: {error:#}"
++            ))
++            .await;
++            run.finish_startup(true).await;
++            return Err(error);
++        }
+         let mut handle = match host
+             .open_supervised_with_cancel(&request.session, cwd, &run.startup_cancel)
+             .await
+@@ -2027,6 +2130,10 @@ impl Supervisor {
+         }
+         let run = self.run(run_id).await?;
+         let snapshot = run.snapshot().await;
++        anyhow::ensure!(
++            snapshot.managed_by.is_none(),
++            "managed ACP metadata belongs to its Thread/Turn"
++        );
+         anyhow::ensure!(
+             matches!(
+                 snapshot.process,
+@@ -2106,6 +2213,7 @@ impl Run {
+         claims: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
+     ) -> Self {
+         let snapshot = RunSnapshot {
++            managed_by: entry.managed_by,
+             run_id: entry.run_id,
+             label: entry.label,
+             agent_id: entry.agent_id,
+@@ -3274,6 +3382,10 @@ impl Run {
+         validate_identifier("client", client_id)?;
+         self.expire_lease().await;
+         let mut state = self.state.lock().await;
++        anyhow::ensure!(
++            state.snapshot.managed_by.is_none(),
++            "managed ACP control belongs to its Thread/Turn"
++        );
+         let lease = match &state.snapshot.lease {
+             Some(lease) if lease.owner_client_id == client_id => ControlLease {
+                 owner_client_id: client_id.to_string(),
+@@ -3339,6 +3451,10 @@ impl Run {
+         validate_identifier("action request", &fence.action_request_id)?;
+         self.expire_lease().await;
+         let state = self.state.lock().await;
++        anyhow::ensure!(
++            state.snapshot.managed_by.is_none(),
++            "managed ACP control belongs to its Thread/Turn"
++        );
+         let lease = state
+             .snapshot
+             .lease
+@@ -3819,6 +3935,7 @@ mod tests {
+         let (ledger, _) = LedgerStore::open(temporary.path().join("ledger.json")).await?;
+         let now = Utc::now();
+         let snapshot = RunSnapshot {
++            managed_by: None,
+             run_id: "run-1".to_string(),
+             label: "test".to_string(),
+             agent_id: "stub".to_string(),
+@@ -4712,6 +4829,87 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[tokio::test]
++    async fn managed_start_uses_durable_receipt_after_its_process_cache_is_lost() -> Result<()> {
++        struct Closed(std::sync::atomic::AtomicUsize);
++        #[async_trait::async_trait]
++        impl managed::DispatchGuard for Closed {
++            async fn authorize(&self) -> Result<()> {
++                self.0.fetch_add(1, Ordering::SeqCst);
++                anyhow::bail!("no new session is authorized")
++            }
++        }
++        let directory = tempfile::tempdir()?;
++        let (_ledger_directory, run) = test_run(directory.path(), "original-client").await?;
++        let supervisor = test_supervisor(directory.path(), run.clone());
++        let owner = bitrouter_orchestrator::service::worker::acp::Owner {
++            server_instance_id: "original-host".into(),
++            thread_id: "original-thread".into(),
++            turn_id: "original-turn".into(),
++        };
++        {
++            let mut state = run.state.lock().await;
++            state.snapshot.managed_by = Some(owner.clone());
++            state.snapshot.lease = None;
++            state.snapshot.process = ProcessState::Interrupted;
++        }
++        let request = StartRunRequest {
++            action_request_id: "original-managed-start".into(),
++            client_id: None,
++            label: None,
++            agent_id: "configured-peer".into(),
++            prompt: None,
++            cwd: directory.path().into(),
++            routing: Default::default(),
++            launch: Default::default(),
++            session: Default::default(),
++            presentation: Presentation::Background,
++            parent_run_id: None,
++            allow_shared_directory: false,
++            permission_policy: Default::default(),
++            result_schema: None,
++        };
++        let snapshot = run.snapshot().await;
++        supervisor
++            .inner
++            .ledger
++            .record_start(&snapshot, &request)
++            .await?;
++        let closed = Closed(std::sync::atomic::AtomicUsize::new(0));
++        assert!(supervisor.inner.starts.lock().await.is_empty());
++        let SessionResponse::Started {
++            snapshot: original, ..
++        } = supervisor
++            .start_managed(request.clone(), owner.clone(), &closed)
++            .await?
++        else {
++            anyhow::bail!("original receipt missing");
++        };
++        assert_eq!(original.run_id, snapshot.run_id);
++        assert_eq!(original.process, ProcessState::Interrupted);
++        assert!(supervisor.start(request.clone()).await.is_err());
++        let mut changed = request.clone();
++        changed.agent_id = "another-harness".into();
++        assert!(
++            supervisor
++                .start_managed(changed, owner.clone(), &closed)
++                .await
++                .is_err()
++        );
++        let mut another_owner = owner;
++        another_owner.server_instance_id = "another-host".into();
++        assert!(
++            supervisor
++                .start_managed(request, another_owner, &closed)
++                .await
++                .is_err()
++        );
++        assert_eq!(closed.0.load(Ordering::SeqCst), 0);
++        assert_eq!(supervisor.inner.runs.read().await.len(), 1);
++        assert!(supervisor.inner.starts.lock().await.is_empty());
++        Ok(())
++    }
++
+     #[tokio::test]
+     async fn original_start_lookup_is_durable_readonly_and_credential_free() -> Result<()> {
+         let directory = tempfile::tempdir()?;
+diff --git a/crates/bitrouter-orchestrator/README.md b/crates/bitrouter-orchestrator/README.md
+index 0fa97ce7..74922601 100644
+--- a/crates/bitrouter-orchestrator/README.md
++++ b/crates/bitrouter-orchestrator/README.md
+@@ -31,7 +31,7 @@ reattachment and durable cancel/close controls. The app supplies an authenticate
+ local caller, host-authorized immutable resources and an OS-local stdio bridge.
+ EOF affects observation only. The core owns single-Thread closure and records
+ cancelled queued Turns before joining active cleanup; completion retries do not
+-cancel newer work. Runtime format 8 retains supported 2/3/4/5/6/7 reads.
++cancel newer work. Runtime format 9 retains supported 2/3/4/5/6/7/8 reads.
+ 
+ See [the native ACP contract](../../docs/BRO_NATIVE_ACP_SERVER_SPEC.md) and
+ [local acceptance](../../docs/BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md). External
+diff --git a/crates/bitrouter-orchestrator/src/goal/workflow.rs b/crates/bitrouter-orchestrator/src/goal/workflow.rs
+index 275911ba..8334e7ad 100644
+--- a/crates/bitrouter-orchestrator/src/goal/workflow.rs
++++ b/crates/bitrouter-orchestrator/src/goal/workflow.rs
+@@ -1966,7 +1966,7 @@ fn apply(
+                                     run_id: Some(_),
+                                     ..
+                                 }
+-                        ) || task.spec.harness.is_none() && execution.thread.is_some()) => {}
++                        ) || execution.thread.is_some()) => {}
+                 _ => return Err(GoalError::Conflict),
+             }
+             match observation {
+diff --git a/crates/bitrouter-orchestrator/src/service/admission.rs b/crates/bitrouter-orchestrator/src/service/admission.rs
+index a8e1ab73..3d2852dc 100644
+--- a/crates/bitrouter-orchestrator/src/service/admission.rs
++++ b/crates/bitrouter-orchestrator/src/service/admission.rs
+@@ -289,6 +289,7 @@ impl ThreadService {
+         };
+         let worker = match &managed {
+             Some(super::worker::Managed::Native { source, control }) => Some((source, control)),
++            Some(super::worker::Managed::Acp(job)) => Some((&job.source, &job.control)),
+             _ => None,
+         };
+         self.ensure_instance(Some(&target.server_instance_id))?;
+@@ -393,7 +394,7 @@ impl ThreadService {
+                     .len(),
+                 None => request.prompt.len().saturating_mul(2),
+             };
+-            if generation.is_some() && extra > thread.config.max_context_bytes {
++            if generation.is_some() && extra > thread.config.native()?.max_context_bytes {
+                 return Err("generation prompt exceeds the recorded Thread context bound".into());
+             }
+             if thread.context_bytes().saturating_add(extra)
+@@ -438,12 +439,15 @@ impl ThreadService {
+                 clear_pause,
+             )
+         };
+-        let agent = if start && generation.is_none() {
++        let agent = if start
++            && generation.is_none()
++            && !matches!(managed, Some(super::worker::Managed::Acp(_)))
++        {
+             let agent = Agent::new(
+                 Arc::clone(&self.inner.app),
+                 caller.clone(),
+                 &workspace,
+-                config.clone(),
++                config.native()?.clone(),
+             )?
+             .with_tool_workers(
+                 Arc::clone(&self.inner.tool_workers),
+@@ -464,7 +468,7 @@ impl ThreadService {
+                 user_item_id: queued.user_item_id.clone(),
+                 prompt: queued.prompt.clone(),
+                 workspace: workspace.clone(),
+-                model: config.model.clone(),
++                model: config.model().into(),
+                 tool_mode: config.tool_mode(),
+                 idempotency_key: Some(request.idempotency_key.clone()),
+                 request_fingerprint: Some(hash.clone()),
+@@ -555,6 +559,10 @@ impl ThreadService {
+                 thread.snapshot.queued.push(receipt.clone());
+             }
+             let snapshot = TurnSnapshot {
++                acp_permissions: Vec::new(),
++                acp_selected: Default::default(),
++                acp: None,
++                acp_stop: None,
+                 generation: generation
+                     .as_ref()
+                     .map(|job| crate::turn::GenerationProgress {
+@@ -566,7 +574,7 @@ impl ThreadService {
+                 steering: Vec::new(),
+                 thread_id: target.thread_id.clone(),
+                 server_instance_id: self.inner.instance_id.clone(),
+-                model: config.model.clone(),
++                model: config.model().into(),
+                 turn_id: queued.turn_id.clone(),
+                 status: receipt.status,
+                 cursor: 0,
+@@ -584,6 +592,7 @@ impl ThreadService {
+             state.turns.insert(
+                 queued.turn_id.clone(),
+                 TurnRecord {
++                    acp_replies: Default::default(),
+                     queue_order: Some(queued.order),
+                     user_item_id: Some(queued.user_item_id.clone()),
+                     fence: Arc::new(crate::control::LaunchFence::default()),
+@@ -617,6 +626,22 @@ impl ThreadService {
+                 verification,
+                 cancel,
+             );
++        } else if let Some(super::worker::Managed::Acp(job)) = managed {
++            self.inner.workers.spawn(self.run_turn(
++                queued.turn_id,
++                super::runner::Driver::Acp(*job),
++                crate::agent::RunInput {
++                    prompt: queued.prompt,
++                    messages: Vec::new(),
++                    user_item_id: queued.user_item_id,
++                    context_version,
++                    checkpoint: None,
++                    complete_checkpoint: false,
++                    restored_verification: None,
++                },
++                None,
++                cancel,
++            ));
+         } else if let Some(super::worker::Managed::Generation(job)) = managed {
+             self.inner.workers.spawn(self.run_turn(
+                 queued.turn_id,
+diff --git a/crates/bitrouter-orchestrator/src/service/approval.rs b/crates/bitrouter-orchestrator/src/service/approval.rs
+index 7f47e3e1..34b8adc7 100644
+--- a/crates/bitrouter-orchestrator/src/service/approval.rs
++++ b/crates/bitrouter-orchestrator/src/service/approval.rs
+@@ -20,6 +20,7 @@ impl ThreadService {
+             if record.snapshot.status != TurnStatus::WaitingForInput
+                 || record.snapshot.pending_input_id.as_deref() != Some(request_id)
+                 || record.cancel.is_cancelled()
++                || record.pending.is_none()
+             {
+                 return Err(ServiceError::new(
+                     ErrorCode::Conflict,
+@@ -36,13 +37,13 @@ impl ThreadService {
+             extra_facts,
+         )
+         .await?;
+-        let sender = self
++        let pending = self
+             .lock_state()
+             .turns
+             .get_mut(turn_id)
+             .and_then(|record| record.pending.take())
+-            .ok_or_else(|| "pending input channel is unavailable".to_string())?
+-            .response;
++            .ok_or_else(|| "pending input channel is unavailable".to_string())?;
++        let sender = pending.response;
+         sender.send(approved).map_err(|_| {
+             ServiceError::new(ErrorCode::Conflict, "task stopped before accepting input")
+         })
+diff --git a/crates/bitrouter-orchestrator/src/service/commit.rs b/crates/bitrouter-orchestrator/src/service/commit.rs
+index 34175169..13403fc9 100644
+--- a/crates/bitrouter-orchestrator/src/service/commit.rs
++++ b/crates/bitrouter-orchestrator/src/service/commit.rs
+@@ -319,7 +319,7 @@ impl ThreadService {
+                 .get_mut(turn_id)
+                 .and_then(|record| record.pending.take())
+             {
+-                let _ = pending.response.send(false);
++                pending.cancel();
+             }
+         }
+         Ok(())
+@@ -521,6 +521,39 @@ impl ThreadService {
+                         thread.instructions_epoch = Some(self.inner.instance_id.clone());
+                     }
+                 }
++                ExecutionRecord::AcpObservation { observation } => {
++                    if let Some(task) = state.turns.get_mut(turn_id) {
++                        task.snapshot.acp_permissions = observation.permissions.clone();
++                        task.snapshot.refresh_acp_input_status();
++                    }
++                }
++                ExecutionRecord::AcpPermissionChoice {
++                    request_id,
++                    option_id,
++                    action_id,
++                } => {
++                    if let Some(task) = state.turns.get_mut(turn_id) {
++                        task.acp_replies.push_back(super::worker::acp::Choice {
++                            request_id: request_id.clone(),
++                            option_id: option_id.clone(),
++                            action_id: action_id.clone(),
++                        });
++                        task.snapshot
++                            .acp_selected
++                            .insert(request_id.clone(), option_id.clone());
++                        task.snapshot.refresh_acp_input_status();
++                    }
++                }
++                ExecutionRecord::AcpProcessStop { observation } => {
++                    if let Some(task) = state.turns.get_mut(turn_id) {
++                        task.snapshot.acp_stop = Some(observation.clone());
++                    }
++                }
++                ExecutionRecord::AcpSession { binding } => {
++                    if let Some(task) = state.turns.get_mut(turn_id) {
++                        task.snapshot.acp = Some(binding.as_ref().clone());
++                    }
++                }
+                 ExecutionRecord::HarnessInventory { inventory, .. } => {
+                     if let Some(task) = state.turns.get_mut(turn_id) {
+                         task.snapshot.resources = Some(inventory.as_ref().clone());
+diff --git a/crates/bitrouter-orchestrator/src/service/generation.rs b/crates/bitrouter-orchestrator/src/service/generation.rs
+index befcb857..503350b3 100644
+--- a/crates/bitrouter-orchestrator/src/service/generation.rs
++++ b/crates/bitrouter-orchestrator/src/service/generation.rs
+@@ -192,8 +192,8 @@ impl ThreadService {
+             (
+                 thread.snapshot.context_version,
+                 thread.caller.clone(),
+-                thread.config.max_duration,
+-                if thread.config.model_mode == crate::core::protocol::ModelMode::Fixed {
++                thread.config.max_duration(),
++                if thread.config.native()?.model_mode == crate::core::protocol::ModelMode::Fixed {
+                     NativeModelSelection::Fixed
+                 } else {
+                     NativeModelSelection::Policy
+diff --git a/crates/bitrouter-orchestrator/src/service/observation.rs b/crates/bitrouter-orchestrator/src/service/observation.rs
+index a6efa0d8..4d52a8b2 100644
+--- a/crates/bitrouter-orchestrator/src/service/observation.rs
++++ b/crates/bitrouter-orchestrator/src/service/observation.rs
+@@ -10,7 +10,6 @@ use tokio::sync::broadcast;
+ use super::{
+     ErrorCode, MAX_EVENT_PAGE, RuntimeLimits, ServiceError, ThreadService, now_ms, threads,
+ };
+-use crate::agent::AgentConfig;
+ use crate::store::{EffectStatus, ExecutionRecord};
+ use crate::thread::{
+     ThreadChange, ThreadEvent, ThreadHistoryPage, ThreadHistoryRequest, ThreadObservation,
+@@ -403,6 +402,27 @@ pub(super) fn project_with_native(
+ ) {
+     let turn = turn_id.map_or_else(String::new, str::to_owned);
+     let change = match record {
++        ExecutionRecord::AcpObservation { observation } => ThreadChange::AcpPermissions {
++            turn_id: turn,
++            pending: observation.permissions.clone(),
++        },
++        ExecutionRecord::AcpPermissionChoice {
++            request_id,
++            option_id,
++            ..
++        } => ThreadChange::AcpPermissionChoice {
++            turn_id: turn,
++            request_id: request_id.clone(),
++            option_id: option_id.clone(),
++        },
++        ExecutionRecord::AcpProcessStop { observation } => ThreadChange::AcpProcessStop {
++            turn_id: turn,
++            observation: observation.clone(),
++        },
++        ExecutionRecord::AcpSession { binding } => ThreadChange::AcpSession {
++            turn_id: turn,
++            binding: binding.clone(),
++        },
+         ExecutionRecord::CoreCheckpoint { batch, limits } => {
+             let decoded;
+             let snapshot = match native_snapshot {
+@@ -611,6 +631,44 @@ impl ThreadView {
+         }
+         for change in &event.changes {
+             match change {
++                ThreadChange::AcpPermissions { turn_id, pending } => {
++                    if let Some(turn) = &mut self.latest_turn
++                        && &turn.turn_id == turn_id
++                    {
++                        turn.acp_permissions = pending.clone();
++                        turn.refresh_acp_input_status();
++                    }
++                }
++                ThreadChange::AcpPermissionChoice {
++                    turn_id,
++                    request_id,
++                    option_id,
++                } => {
++                    if let Some(turn) = &mut self.latest_turn
++                        && &turn.turn_id == turn_id
++                    {
++                        turn.acp_selected
++                            .insert(request_id.clone(), option_id.clone());
++                        turn.refresh_acp_input_status();
++                    }
++                }
++                ThreadChange::AcpProcessStop {
++                    turn_id,
++                    observation,
++                } => {
++                    if let Some(turn) = &mut self.latest_turn
++                        && &turn.turn_id == turn_id
++                    {
++                        turn.acp_stop = Some(observation.clone());
++                    }
++                }
++                ThreadChange::AcpSession { turn_id, binding } => {
++                    if let Some(turn) = &mut self.latest_turn
++                        && &turn.turn_id == turn_id
++                    {
++                        turn.acp = Some(binding.as_ref().clone());
++                    }
++                }
+                 ThreadChange::ContextRouting {
+                     turn_id,
+                     inspection,
+@@ -730,10 +788,14 @@ impl ThreadView {
+ 
+ pub(super) fn empty_turn(
+     thread: &ThreadSnapshot,
+-    config: &AgentConfig,
++    config: &crate::thread::executor::Config,
+     turn_id: &str,
+ ) -> TurnSnapshot {
+     TurnSnapshot {
++        acp_permissions: Vec::new(),
++        acp_selected: Default::default(),
++        acp: None,
++        acp_stop: None,
+         generation: None,
+         context_routing: None,
+         resources: None,
+diff --git a/crates/bitrouter-orchestrator/src/service/queue.rs b/crates/bitrouter-orchestrator/src/service/queue.rs
+index 00183e9e..d5c69be8 100644
+--- a/crates/bitrouter-orchestrator/src/service/queue.rs
++++ b/crates/bitrouter-orchestrator/src/service/queue.rs
+@@ -188,7 +188,7 @@ impl ThreadService {
+                 Arc::clone(&self.inner.app),
+                 caller.clone(),
+                 &thread.snapshot.workspace,
+-                thread.config.clone(),
++                thread.config.native()?.clone(),
+             )?;
+             let mut snapshot = thread.snapshot.clone();
+             snapshot.waiting_for_capacity = !thread.queued.is_empty()
+@@ -328,12 +328,14 @@ impl ThreadService {
+                 )
+             };
+             let (entry, caller, config, workspace, messages, version, verification) = activation;
+-            let agent = match Agent::new(
+-                Arc::clone(&self.inner.app),
+-                caller,
+-                &workspace,
+-                config.clone(),
+-            ) {
++            let agent = match config.native().and_then(|config| {
++                Agent::new(
++                    Arc::clone(&self.inner.app),
++                    caller,
++                    &workspace,
++                    config.clone(),
++                )
++            }) {
+                 Ok(agent) => agent.with_tool_workers(
+                     Arc::clone(&self.inner.tool_workers),
+                     self.inner.limits.tools_per_turn,
+@@ -367,7 +369,7 @@ impl ThreadService {
+                 user_item_id: entry.user_item_id.clone(),
+                 prompt: entry.prompt.clone(),
+                 workspace: workspace.clone(),
+-                model: config.model.clone(),
++                model: config.model().into(),
+                 tool_mode: config.tool_mode(),
+                 idempotency_key: None,
+                 request_fingerprint: None,
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery.rs b/crates/bitrouter-orchestrator/src/service/recovery.rs
+index e9b7283f..4e3ef5c2 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery.rs
+@@ -324,7 +324,7 @@ impl ThreadService {
+                     self.inner.app.clone(),
+                     thread.caller.clone(),
+                     &thread.snapshot.workspace,
+-                    thread.config.clone(),
++                    thread.config.native()?.clone(),
+                 )
+                 .map_err(storage)?
+                 .with_native_record_limit(self.inner.limits.recovery_page_bytes)
+@@ -857,7 +857,10 @@ impl ThreadService {
+                 .ok_or("missing reconstruction report")?;
+             // Optional historical usage cannot block a new Turn under the
+             // same live owner. Lost/active continuation still needs every budget fact.
+-            let optional_usage_only = thread.config.max_spend_microusd.is_none()
++            let optional_usage_only = thread
++                .config
++                .native()
++                .is_ok_and(|config| config.max_spend_microusd.is_none())
+                 && report.turn.as_ref().is_some_and(|turn| {
+                     !turn.budget.active_duration_unknown
+                         && !turn.budget.tool_calls_unknown
+@@ -1096,7 +1099,7 @@ impl Rebuild {
+             queued: VecDeque::new(),
+             next_order: 0,
+             active: None,
+-            blockers: if snapshot.model != config.model
++            blockers: if snapshot.model != config.model()
+                 || snapshot.status != ThreadStatus::Idle
+                 || snapshot.active_turn_id.is_some()
+                 || !snapshot.queued.is_empty()
+@@ -1533,6 +1536,13 @@ impl Rebuild {
+         }
+         let stored_pause_reason = self.view.thread.pause_reason.clone();
+         let mut context_valid = crate::context::validate_history(&self.messages).is_ok();
++        if matches!(
++            self.view.config,
++            crate::thread::executor::Config::Acp { .. }
++        ) {
++            context_valid = false;
++            self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
++        }
+         let mut report_turn = None;
+         if let Some(active) = &mut self.active {
+             context_valid &= crate::context::validate_history(&active.messages).is_ok();
+@@ -1548,7 +1558,11 @@ impl Rebuild {
+                 .chain(active.native_unknown_usage.iter().cloned())
+                 .collect();
+             active.budget.usage_unknown_steps.sort();
+-            active.budget.estimated_spend_available = self.view.config.estimate_rates.is_some()
++            active.budget.estimated_spend_available = self
++                .view
++                .config
++                .native()
++                .is_ok_and(|config| config.estimate_rates.is_some())
+                 && active.budget.usage_unknown_steps.is_empty()
+                 && active.native_unpriced_decisions.is_empty();
+             active.budget.active_duration_unknown = !active.exact_budget;
+@@ -1755,6 +1769,7 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
+     let cancel = CancellationToken::new();
+     cancel.cancel();
+     TurnRecord {
++        acp_replies: Default::default(),
+         queue_order: None,
+         user_item_id: None,
+         fence: Arc::new(crate::control::LaunchFence::default()),
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery/tests.rs b/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
+index e2843b69..3cc74d15 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
+@@ -27,7 +27,7 @@ fn recovery_rejects_checkpoint_goal_ownership_changes() -> Result<(), Box<dyn st
+         let header = ExecutionRecord::ThreadCreated {
+             caller: CallerContext::local(),
+             snapshot: snapshot.clone(),
+-            config: Box::new(AgentConfig::fixed("model", None).read_only()),
++            config: Box::new(AgentConfig::fixed("model", None).read_only().into()),
+             verification_command: None,
+         };
+         let mut rebuild = Rebuild::new(&header, "thread", RuntimeLimits::default())?;
+@@ -76,7 +76,7 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
+     let header = ExecutionRecord::ThreadCreated {
+         caller: CallerContext::local(),
+         snapshot,
+-        config: Box::new(AgentConfig::fixed("model", None).read_only()),
++        config: Box::new(AgentConfig::fixed("model", None).read_only().into()),
+         verification_command: None,
+     };
+     let mut audit = StartupAudit::new(&header, "thread", limits.clone())?;
+diff --git a/crates/bitrouter-orchestrator/src/service/runner.rs b/crates/bitrouter-orchestrator/src/service/runner.rs
+index 49e047f1..30b68eda 100644
+--- a/crates/bitrouter-orchestrator/src/service/runner.rs
++++ b/crates/bitrouter-orchestrator/src/service/runner.rs
+@@ -22,6 +22,7 @@ struct TurnWorker {
+ pub(super) enum Driver {
+     Native(Agent),
+     Generation(super::generation::Job),
++    Acp(super::worker::acp::Job),
+ }
+ 
+ impl Drop for TurnWorker {
+@@ -57,6 +58,12 @@ impl ThreadService {
+         Box::pin(async move {
+             let _worker = worker;
+             match driver {
++                Driver::Acp(job) => {
++                    service
++                        .run_acp_turn(turn_id, job, prompt.prompt, cancel)
++                        .await;
++                    service.drive_queues().await;
++                }
+                 Driver::Native(agent) => {
+                     service
+                         .run_turn_inner(turn_id, agent, prompt, verification_command, cancel)
+diff --git a/crates/bitrouter-orchestrator/src/service/state.rs b/crates/bitrouter-orchestrator/src/service/state.rs
+index 9c3effca..5d1f6606 100644
+--- a/crates/bitrouter-orchestrator/src/service/state.rs
++++ b/crates/bitrouter-orchestrator/src/service/state.rs
+@@ -13,7 +13,6 @@ use tokio_util::sync::CancellationToken;
+ use tokio_util::task::TaskTracker;
+ 
+ use super::{ErrorCode, RuntimeLimits, ServiceError, startup, steering, workspace};
+-use crate::agent::AgentConfig;
+ use crate::store::ExecutionStore;
+ use crate::thread::{PermissionProfile, ThreadSnapshot};
+ use crate::turn::TurnSnapshot;
+@@ -22,6 +21,12 @@ pub(super) struct PendingInput {
+     pub(super) response: oneshot::Sender<bool>,
+ }
+ 
++impl PendingInput {
++    pub(super) fn cancel(self) {
++        let _ = self.response.send(false);
++    }
++}
++
+ pub(super) struct VerificationBudget {
+     pub(super) work_control: Option<Arc<dyn crate::control::WorkControl>>,
+     pub(super) duration: Duration,
+@@ -31,6 +36,7 @@ pub(super) struct VerificationBudget {
+ }
+ 
+ pub(super) struct TurnRecord {
++    pub(super) acp_replies: VecDeque<super::worker::acp::Choice>,
+     /// Admission metadata cached for resident turns. Recovery may populate it
+     /// lazily from the journal when answering a historical idempotency key.
+     pub(super) queue_order: Option<u64>,
+@@ -96,7 +102,7 @@ pub(super) struct ThreadRecord {
+     pub(super) presentation: super::observation::Presentation,
+     pub(super) snapshot: ThreadSnapshot,
+     pub(super) caller: CallerContext,
+-    pub(super) config: AgentConfig,
++    pub(super) config: crate::thread::executor::Config,
+     pub(super) verification_command: Option<String>,
+     pub(super) messages: Vec<Message>,
+     pub(super) instructions: Option<crate::harness::instructions::InstructionSnapshot>,
+diff --git a/crates/bitrouter-orchestrator/src/service/steering.rs b/crates/bitrouter-orchestrator/src/service/steering.rs
+index 689108ee..5c94519f 100644
+--- a/crates/bitrouter-orchestrator/src/service/steering.rs
++++ b/crates/bitrouter-orchestrator/src/service/steering.rs
+@@ -225,7 +225,7 @@ impl ThreadService {
+         });
+         task.native.push(receipt.input_id.clone(), request.text);
+         if let Some(pending) = task.pending.take() {
+-            let _ = pending.response.send(false);
++            pending.cancel();
+         }
+         Ok(receipt)
+     }
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/generation.rs b/crates/bitrouter-orchestrator/src/service/tests/generation.rs
+index 9725988e..260623aa 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/generation.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/generation.rs
+@@ -363,7 +363,7 @@ async fn input_generation_overlaps_owner_work_without_bypassing_thread_or_global
+             crate::thread::ThreadRequest {
+                 caller: CallerContext::local(),
+                 workspace: directory.path().into(),
+-                config: view.config,
++                config: view.config.native()?.clone(),
+                 permission_profile: PermissionProfile::ReadOnly,
+                 verification_command: None,
+                 idempotency_key: crate::goal::workflow::input_thread_key("goal"),
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/generation/waiting.rs b/crates/bitrouter-orchestrator/src/service/tests/generation/waiting.rs
+index b6d999f3..81b008fa 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/generation/waiting.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/generation/waiting.rs
+@@ -97,7 +97,9 @@ impl Capacity {
+         let mut config = service
+             .read_stored_thread_view(&root_target, &CallerContext::local())
+             .await?
+-            .config;
++            .config
++            .native()?
++            .clone();
+         config.max_duration = duration;
+         let input = service
+             .create_goal_input_thread(
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/instructions.rs b/crates/bitrouter-orchestrator/src/service/tests/instructions.rs
+index b96dee2d..116ad3cf 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/instructions.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/instructions.rs
+@@ -53,7 +53,7 @@ async fn agents_md_is_durable_user_context_in_both_tool_modes()
+             .create_thread(&service.inner.instance_id, request)
+             .await?;
+         let view = service.read_thread_view(&target(&created), &CallerContext::local())?;
+-        assert_eq!(view.config.instructions, base);
++        assert_eq!(view.config.native()?.instructions, base);
+         assert!(
+             service
+                 .lock_state()
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/support.rs b/crates/bitrouter-orchestrator/src/service/tests/support.rs
+index 14a2da7a..270981cb 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/support.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/support.rs
+@@ -366,7 +366,7 @@ impl ThreadService {
+                 .get_mut(turn_id)
+                 .and_then(|record| record.pending.take())
+             {
+-                let _ = pending.response.send(false);
++                pending.cancel();
+             }
+         }
+         Ok(())
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/worker.rs b/crates/bitrouter-orchestrator/src/service/tests/worker.rs
+index 55becbaf..f88c7e88 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/worker.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/worker.rs
+@@ -1,4 +1,5 @@
+ //! Delegated native work shares admission, aggregate control and Core evidence.
++mod acp;
+ mod decisions;
+ mod waiting;
+ 
+diff --git a/crates/bitrouter-orchestrator/src/service/threads.rs b/crates/bitrouter-orchestrator/src/service/threads.rs
+index 22b86e1e..2554c51e 100644
+--- a/crates/bitrouter-orchestrator/src/service/threads.rs
++++ b/crates/bitrouter-orchestrator/src/service/threads.rs
+@@ -13,11 +13,34 @@ use super::state::{State, ThreadRecord};
+ use super::{ErrorCode, ServiceError, ThreadService, unknown_turn};
+ use crate::agent::{Agent, ToolMode};
+ use crate::store::{AcceptedKey, ExecutionRecord, ExecutionStore};
++use crate::thread::executor::{AcpThreadRequest, Config};
+ use crate::thread::{
+     GoalWork, PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget,
+     WorkspaceGrant,
+ };
+ 
++struct Definition {
++    caller: CallerContext,
++    workspace: std::path::PathBuf,
++    config: Config,
++    permission_profile: PermissionProfile,
++    verification_command: Option<String>,
++    idempotency_key: String,
++}
++
++impl From<ThreadRequest> for Definition {
++    fn from(request: ThreadRequest) -> Self {
++        Self {
++            caller: request.caller,
++            workspace: request.workspace,
++            config: Config::Native(request.config),
++            permission_profile: request.permission_profile,
++            verification_command: request.verification_command,
++            idempotency_key: request.idempotency_key,
++        }
++    }
++}
++
+ enum Binding<'a> {
+     Ordinary,
+     Owner(&'a str),
+@@ -120,10 +143,12 @@ impl ThreadService {
+             entries.push(crate::thread::ThreadDirectoryEntry {
+                 turn_status: view.latest_turn.as_ref().map(|turn| turn.status),
+                 turn_id: view.latest_turn.as_ref().map(|turn| turn.turn_id.clone()),
+-                needs_input: view
+-                    .latest_turn
+-                    .as_ref()
+-                    .is_some_and(|turn| turn.pending_input_id.is_some()),
++                needs_input: view.latest_turn.as_ref().is_some_and(|turn| {
++                    turn.pending_input_id.is_some()
++                        || turn.acp_permissions.iter().any(|permission| {
++                            !turn.acp_selected.contains_key(&permission.request_id)
++                        })
++                }),
+                 thread: view.thread,
+             });
+         }
+@@ -168,8 +193,13 @@ impl ThreadService {
+         request: ThreadRequest,
+         servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
+     ) -> Result<ThreadSnapshot, ServiceError> {
+-        self.create_thread_bound(server_instance_id, request, servers, Binding::Ordinary)
+-            .await
++        self.create_thread_bound(
++            server_instance_id,
++            request.into(),
++            servers,
++            Binding::Ordinary,
++        )
++        .await
+     }
+ 
+     /// Admit the Goal's owner through the ordinary durable Thread path. Only a
+@@ -184,8 +214,13 @@ impl ThreadService {
+         if request.idempotency_key != crate::goal::workflow::owner_thread_key(goal_id) {
+             return Err("Goal owner requires its stable admission key".into());
+         }
+-        self.create_thread_bound(server_instance_id, request, None, Binding::Owner(goal_id))
+-            .await
++        self.create_thread_bound(
++            server_instance_id,
++            request.into(),
++            None,
++            Binding::Owner(goal_id),
++        )
++        .await
+     }
+ 
+     /// The input interpreter has its own sequential Turns, so a long planning
+@@ -206,7 +241,7 @@ impl ThreadService {
+         }
+         self.create_thread_bound(
+             &owner.server_instance_id,
+-            request,
++            request.into(),
+             None,
+             Binding::Input(&owner.thread_id),
+         )
+@@ -230,13 +265,47 @@ impl ThreadService {
+         }
+         self.create_thread_bound(
+             &owner.server_instance_id,
+-            request,
++            request.into(),
+             servers,
+             Binding::Work(source),
+         )
+         .await
+     }
+ 
++    /// ACP workers share Thread creation and workspace grants without a dummy
++    /// native Agent. Only the trusted Goal host supplies this association.
++    pub async fn create_goal_acp_thread(
++        &self,
++        owner: &ThreadTarget,
++        source: &GoalWork,
++        request: AcpThreadRequest,
++    ) -> Result<ThreadSnapshot, ServiceError> {
++        source.validate()?;
++        let parent = self.read_stored_thread_view(owner, &request.caller).await?;
++        if parent.thread.owned_goal_id.as_ref() != Some(&source.goal_id)
++            || owner.thread_id != source.owner_thread_id
++            || request.idempotency_key != super::worker::thread_key(source)?
++        {
++            return Err("worker admission requires its original Goal owner and action key".into());
++        }
++        self.create_thread_bound(
++            &owner.server_instance_id,
++            Definition {
++                caller: request.caller,
++                workspace: request.workspace,
++                config: Config::Acp {
++                    acp: request.config,
++                },
++                permission_profile: request.permission_profile,
++                verification_command: None,
++                idempotency_key: request.idempotency_key,
++            },
++            None,
++            Binding::Work(source),
++        )
++        .await
++    }
++
+     /// Find an already accepted create by its original caller-scoped key.
+     /// Reconciliation reads no new request/config and never starts execution.
+     pub async fn find_thread_admission(
+@@ -264,7 +333,7 @@ impl ThreadService {
+     async fn create_thread_bound(
+         &self,
+         server_instance_id: &str,
+-        request: ThreadRequest,
++        request: Definition,
+         servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
+         binding: Binding<'_>,
+     ) -> Result<ThreadSnapshot, ServiceError> {
+@@ -352,33 +421,56 @@ impl ThreadService {
+         } else {
+             request.permission_profile
+         };
+-        let config = if profile == PermissionProfile::ReadOnly {
+-            request.config.read_only()
+-        } else {
+-            request.config
++        let config = match request.config {
++            Config::Native(native) => {
++                let native = if profile == PermissionProfile::ReadOnly {
++                    native.read_only()
++                } else {
++                    native
++                };
++                if native.model.len()
++                    + native.instructions.len()
++                    + request.verification_command.as_ref().map_or(0, String::len)
++                    > self.inner.limits.request_bytes
++                    || native.max_steps > 256
++                    || native.max_tool_calls > 1024
++                    || native.max_context_bytes > self.inner.limits.context_bytes_per_thread
++                    || native.max_duration > Duration::from_secs(86400)
++                {
++                    return Err("Thread settings exceed runtime bounds".into());
++                }
++                if !coordination {
++                    Agent::new(
++                        Arc::clone(&self.inner.app),
++                        request.caller.clone(),
++                        &workspace,
++                        native.clone(),
++                    )?;
++                }
++                Config::Native(native)
++            }
++            Config::Acp { acp } => {
++                crate::goal::identifier(&acp.agent_id).map_err(|error| error.to_string())?;
++                if profile != PermissionProfile::Ask
++                    || request.verification_command.is_some()
++                    || acp.max_duration.is_zero()
++                    || acp.max_duration > Duration::from_secs(86400)
++                    || acp
++                        .requested_model_route
++                        .as_ref()
++                        .is_some_and(|route| route.trim().is_empty() || route.len() > 4096)
++                {
++                    return Err(
++                        "ACP Thread requires bounded settings and explicit permission requests"
++                            .into(),
++                    );
++                }
++                Config::Acp { acp }
++            }
+         };
+-        if config.model.len()
+-            + config.instructions.len()
+-            + request.verification_command.as_ref().map_or(0, String::len)
+-            > self.inner.limits.request_bytes
+-            || config.max_steps > 256
+-            || config.max_tool_calls > 1024
+-            || config.max_context_bytes > self.inner.limits.context_bytes_per_thread
+-            || config.max_duration > Duration::from_secs(86400)
+-        {
+-            return Err("Thread settings exceed runtime bounds".into());
+-        }
+         if profile == PermissionProfile::ReadOnly && request.verification_command.is_some() {
+             return Err("read-only Threads cannot run verification".into());
+         }
+-        if !coordination {
+-            Agent::new(
+-                Arc::clone(&self.inner.app),
+-                request.caller.clone(),
+-                &workspace,
+-                config.clone(),
+-            )?;
+-        }
+         self.reclaim_hot_capacity(0)?;
+         {
+             let state = self.lock_state();
+@@ -416,7 +508,7 @@ impl ThreadService {
+             goal_work: goal_work.cloned(),
+             status: ThreadStatus::Idle,
+             workspace,
+-            model: config.model.clone(),
++            model: config.model().into(),
+             permission_profile: profile,
+             context_version: 0,
+             cursor: 2,
+diff --git a/crates/bitrouter-orchestrator/src/service/waiting.rs b/crates/bitrouter-orchestrator/src/service/waiting.rs
+index 85ee5c97..57aa811d 100644
+--- a/crates/bitrouter-orchestrator/src/service/waiting.rs
++++ b/crates/bitrouter-orchestrator/src/service/waiting.rs
+@@ -12,6 +12,28 @@ use crate::thread::{GoalWork, ThreadStatus, ThreadTarget};
+ use crate::turn::{TurnReceipt, TurnRequest};
+ 
+ impl ThreadService {
++    pub async fn wait_goal_acp_turn(
++        &self,
++        target: &ThreadTarget,
++        caller: &CallerContext,
++        source: GoalWork,
++        request: TurnRequest,
++        control: Arc<dyn WorkControl>,
++        driver: Arc<dyn super::worker::acp::Driver>,
++    ) -> Result<TurnReceipt, ServiceError> {
++        Box::pin(self.wait_managed_turn(
++            target,
++            caller,
++            request,
++            Managed::Acp(Box::new(super::worker::acp::Job {
++                source,
++                control,
++                driver,
++            })),
++        ))
++        .await
++    }
++
+     /// The recorded Thread duration also bounds pre-admission capacity waiting.
+     /// Replays inspect the original receipt; only a new acceptance needs live
+     /// authorization. No waiting state grants execution or consumes a Turn slot.
+@@ -59,7 +81,7 @@ impl ThreadService {
+         managed: Managed,
+     ) -> Result<TurnReceipt, ServiceError> {
+         let view = self.read_stored_thread_view(target, caller).await?;
+-        let deadline = tokio::time::Instant::now() + view.config.max_duration;
++        let deadline = tokio::time::Instant::now() + view.config.max_duration();
+         let key = &request.idempotency_key;
+         let scope =
+             admission::key_scope(caller, Some(&target.thread_id), managed.operation(), key)?;
+@@ -69,6 +91,7 @@ impl ThreadService {
+                 .map_err(|error| error.to_string())?
+                 .len(),
+             Managed::Native { .. } => request.prompt.len().saturating_mul(2),
++            Managed::Acp(_) => request.prompt.len().saturating_mul(2),
+         };
+         let mut refusal: Option<ServiceError> = None;
+         loop {
+@@ -113,6 +136,17 @@ impl ThreadService {
+                     ))
+                     .await
+                 }
++                Managed::Acp(job) => {
++                    Box::pin(self.start_goal_acp_turn(
++                        target,
++                        caller,
++                        job.source,
++                        request.clone(),
++                        job.control,
++                        job.driver,
++                    ))
++                    .await
++                }
+             };
+             match result {
+                 Ok(receipt) => return Ok(receipt),
+@@ -165,6 +199,10 @@ impl ThreadService {
+                 !thread.snapshot.is_goal_coordination()
+                     && thread.snapshot.goal_work.as_ref() == Some(source)
+             }
++            Managed::Acp(job) => {
++                !thread.snapshot.is_goal_coordination()
++                    && thread.snapshot.goal_work.as_ref() == Some(&job.source)
++            }
+         };
+         if !source_matches
+             || thread.storage_error.is_some()
+@@ -174,7 +212,7 @@ impl ThreadService {
+             )
+             || !thread.queued.is_empty()
+             || (matches!(managed, Managed::Generation(_))
+-                && extra > thread.config.max_context_bytes)
++                && extra > thread.config.native()?.max_context_bytes)
+             || thread.context_bytes().saturating_add(extra)
+                 > self.inner.limits.context_bytes_per_thread
+             || state
+@@ -187,7 +225,7 @@ impl ThreadService {
+         {
+             return Ok(false);
+         }
+-        let workspace_owner = if matches!(managed, Managed::Native { .. }) {
++        let workspace_owner = if matches!(managed, Managed::Native { .. } | Managed::Acp(_)) {
+             self.workspace_owner_error(&state, &thread.snapshot.workspace)
+         } else {
+             None
+diff --git a/crates/bitrouter-orchestrator/src/service/worker.rs b/crates/bitrouter-orchestrator/src/service/worker.rs
+index 0470cdf3..089ef5bf 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker.rs
+@@ -8,6 +8,8 @@ use crate::control::WorkControl;
+ use crate::thread::{GoalWork, ThreadTarget};
+ use crate::turn::{TurnReceipt, TurnRequest};
+ 
++pub mod acp;
++
+ pub fn thread_key(source: &GoalWork) -> Result<String, ServiceError> {
+     super::admission::fingerprint(source).map(|hash| format!("goal-worker-{hash}"))
+ }
+@@ -19,13 +21,14 @@ pub(super) enum Managed {
+         source: GoalWork,
+         control: Arc<dyn WorkControl>,
+     },
++    Acp(Box<acp::Job>),
+ }
+ 
+ impl Managed {
+     pub(super) fn operation(&self) -> &'static str {
+         match self {
+             Self::Generation(_) => "generation",
+-            Self::Native { .. } => "goal_work",
++            Self::Native { .. } | Self::Acp(_) => "goal_work",
+         }
+     }
+ 
+@@ -35,6 +38,7 @@ impl Managed {
+                 super::admission::fingerprint(&(&job.request.origin, &job.request.prompt))
+             }
+             Self::Native { source, .. } => super::admission::fingerprint(&(source, prompt)),
++            Self::Acp(job) => super::admission::fingerprint(&(&job.source, prompt)),
+         }
+     }
+ 
+@@ -42,6 +46,7 @@ impl Managed {
+         match self {
+             Self::Generation(job) => &job.control,
+             Self::Native { control, .. } => control,
++            Self::Acp(job) => &job.control,
+         }
+     }
+ }
+diff --git a/crates/bitrouter-orchestrator/src/store.rs b/crates/bitrouter-orchestrator/src/store.rs
+index 98485f31..9e18cef2 100644
+--- a/crates/bitrouter-orchestrator/src/store.rs
++++ b/crates/bitrouter-orchestrator/src/store.rs
+@@ -8,7 +8,6 @@ use bitrouter_ai::types::{Message, Prompt, Usage};
+ use serde::{Deserialize, Serialize};
+ use tokio::sync::oneshot;
+ 
+-use crate::agent::AgentConfig;
+ use crate::item::CallRecord;
+ use crate::thread::{ThreadEvent, ThreadSnapshot};
+ use crate::turn::{SteeringReceipt, VerificationEvidence};
+@@ -57,6 +56,34 @@ pub struct SettlementOutcome {
+ #[derive(Clone, Serialize, Deserialize)]
+ #[serde(tag = "record", rename_all = "snake_case")]
+ pub enum ExecutionRecord {
++    AcpDispatch {
++        owner: crate::service::worker::acp::Owner,
++        action: crate::service::worker::acp::Action,
++        action_id: String,
++    },
++    AcpDispatchGate {
++        owner: crate::service::worker::acp::Owner,
++        action_id: String,
++    },
++    AcpSession {
++        binding: Box<crate::service::worker::acp::Binding>,
++    },
++    AcpObservation {
++        observation: Box<crate::service::worker::acp::Observation>,
++    },
++    AcpPermissionChoice {
++        request_id: String,
++        option_id: String,
++        action_id: String,
++    },
++    AcpPermissionDispatch {
++        request_id: String,
++        option_id: String,
++        action_id: String,
++    },
++    AcpProcessStop {
++        observation: crate::service::worker::acp::Stop,
++    },
+     GenerationInput {
+         context_version: u64,
+         origin: crate::turn::GenerationOrigin,
+@@ -130,7 +157,7 @@ pub enum ExecutionRecord {
+     ThreadCreated {
+         caller: bitrouter_sdk::caller::CallerContext,
+         snapshot: ThreadSnapshot,
+-        config: Box<AgentConfig>,
++        config: Box<crate::thread::executor::Config>,
+         verification_command: Option<String>,
+     },
+     AcceptedKey {
+@@ -262,10 +289,10 @@ pub enum EffectStatus {
+     Unknown,
+ }
+ 
+-pub const RUNTIME_FORMAT_VERSION: u32 = 8;
++pub const RUNTIME_FORMAT_VERSION: u32 = 9;
+ 
+ pub fn validate_runtime_format(version: u32) -> Result<(), String> {
+-    if !matches!(version, 2 | 3 | 4 | 5 | 6 | 7 | RUNTIME_FORMAT_VERSION) {
++    if !matches!(version, 2 | 3 | 4 | 5 | 6 | 7 | 8 | RUNTIME_FORMAT_VERSION) {
+         return Err(format!("unsupported_runtime_format: {version}"));
+     }
+     Ok(())
+diff --git a/crates/bitrouter-orchestrator/src/thread.rs b/crates/bitrouter-orchestrator/src/thread.rs
+index 8ebaa36f..6fbdbd12 100644
+--- a/crates/bitrouter-orchestrator/src/thread.rs
++++ b/crates/bitrouter-orchestrator/src/thread.rs
+@@ -13,6 +13,8 @@ use crate::turn::{
+     SteeringReceipt, TurnEvent, TurnLifecycle, TurnReceipt, TurnSnapshot, TurnStatus,
+ };
+ 
++pub mod executor;
++
+ #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "snake_case")]
+ pub enum PermissionProfile {
+@@ -129,7 +131,7 @@ pub struct ThreadView {
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub recovery: Option<RecoveryState>,
+     pub thread: ThreadSnapshot,
+-    pub config: AgentConfig,
++    pub config: executor::Config,
+     pub verification_command: Option<String>,
+     /// Active Turn, or the last activated Turn after it settles.
+     pub latest_turn: Option<TurnSnapshot>,
+@@ -200,6 +202,7 @@ pub struct RecoveredSteering {
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[serde(tag = "kind", rename_all = "snake_case")]
+ pub enum RecoveryBlocker {
++    AcpSessionUnconfirmed,
+     OwnershipUnconfirmed,
+     EffectUnconfirmed { item_id: String, tool_name: String },
+     UnsettledCall { item_id: String, tool_name: String },
+@@ -211,6 +214,23 @@ pub enum RecoveryBlocker {
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[serde(tag = "kind", rename_all = "snake_case")]
+ pub enum ThreadChange {
++    AcpPermissions {
++        turn_id: String,
++        pending: Vec<crate::service::worker::acp::Permission>,
++    },
++    AcpPermissionChoice {
++        turn_id: String,
++        request_id: String,
++        option_id: String,
++    },
++    AcpProcessStop {
++        turn_id: String,
++        observation: crate::service::worker::acp::Stop,
++    },
++    AcpSession {
++        turn_id: String,
++        binding: Box<crate::service::worker::acp::Binding>,
++    },
+     ContextRouting {
+         turn_id: String,
+         inspection: Box<crate::core::context_router::inspection::Inspection>,
+diff --git a/crates/bitrouter-orchestrator/src/turn.rs b/crates/bitrouter-orchestrator/src/turn.rs
+index a9c21cd3..42b9264e 100644
+--- a/crates/bitrouter-orchestrator/src/turn.rs
++++ b/crates/bitrouter-orchestrator/src/turn.rs
+@@ -114,6 +114,14 @@ pub struct TurnEvent {
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct TurnSnapshot {
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub acp_permissions: Vec<crate::service::worker::acp::Permission>,
++    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
++    pub acp_selected: std::collections::BTreeMap<String, String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub acp: Option<crate::service::worker::acp::Binding>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub acp_stop: Option<crate::service::worker::acp::Stop>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub generation: Option<GenerationProgress>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+@@ -194,6 +202,25 @@ impl TurnStatus {
+ }
+ 
+ impl TurnSnapshot {
++    pub(crate) fn refresh_acp_input_status(&mut self) {
++        if self.acp.is_some()
++            && matches!(
++                self.status,
++                TurnStatus::Running | TurnStatus::WaitingForInput
++            )
++        {
++            self.status = if self
++                .acp_permissions
++                .iter()
++                .any(|permission| !self.acp_selected.contains_key(&permission.request_id))
++            {
++                TurnStatus::WaitingForInput
++            } else {
++                TurnStatus::Running
++            };
++        }
++    }
++
+     pub fn apply(&mut self, event: &TurnEvent) {
+         if event.server_instance_id != self.server_instance_id
+             || event.turn_id != self.turn_id
+diff --git a/docs/BRO_AGENT_RUNTIME_SPEC.md b/docs/BRO_AGENT_RUNTIME_SPEC.md
+index 5df2cd64..9b4b681f 100644
+--- a/docs/BRO_AGENT_RUNTIME_SPEC.md
++++ b/docs/BRO_AGENT_RUNTIME_SPEC.md
+@@ -330,7 +330,7 @@ If all candidates are ineligible, return overloaded rather than steal a worker o
+ observer. Cold public queries do not load SDK context. Reload reserves reader/hot
+ capacity and cannot create a second gate for a Thread still referenced elsewhere.
+ 
+-Runtime root format is 8. Formats 2/3/4/5/6/7 remain readable; a new append upgrades its
++Runtime root format is 9. Formats 2/3/4/5/6/7/8 remain readable; a new append upgrades its
+ envelope atomically without rewriting history. Migration 000026 labels existing development roots 0;
+ unsupported roots fail before execution, without legacy conversion or deleting
+ facts/owner/markers. Format rejection cannot become stopped-owner proof. Developer
+@@ -342,6 +342,16 @@ binary before it can start a Goal writer that ignores new execution links.
+ Removing this marker is rejected. This is a startup gate; cutover still requires
+ stopping old running writers before enabling the new path.
+ 
++Managed Goal workers use the same ThreadService as native work. Thread settings
++explicitly select native or ACP execution; legacy native settings retain their
++JSON shape. ACP records preserve the real run/session, public observations,
++permission choices and owned-process stop separately from native checkpoints.
++Generic supervisor controls cannot acquire another owner for those Turns.
++The current ACP worker duration is 600 seconds. Session-private context and
++provider/model use are unreported unless actually observed; cold inspection
++does not authorize session continuation. Full ACP recovery remains in progress;
++see the refactor implementation ledger for current validation limits.
++
+ ## Native ACP control
+ 
+ `acp/native` adapts v1/draft v2 to this same service. Its app stdio bridge is local
+diff --git a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+index 5a27ccc8..c9ce7b8e 100644
+--- a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
++++ b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+@@ -21,16 +21,17 @@ hierarchical sub-Goals and owner handoff are outside this delivery.
+ 
+ | Topic | Concrete direction and boundary |
+ | --- | --- |
+-| D1: Goal owner | One accepted owner Thread referenced by `Workflow.owner_thread_id`; the Thread records `owned_goal_id`. The existing Goal coordinator lease remains a host fencing fact, distinct from the logical agent identity. A separate `input_thread_id` points to a metadata-only input Thread whose `input_for_thread_id` records the owner. Trusted native worker Threads carry immutable `goal_work` sources; app Goal attempts link actual Thread/Turn identities. Managed ACP associations remain pending. |
++| D1: Goal owner | One accepted owner Thread referenced by `Workflow.owner_thread_id`; the Thread records `owned_goal_id`. The existing Goal coordinator lease remains a host fencing fact, distinct from the logical agent identity. A separate `input_thread_id` points to a metadata-only input Thread whose `input_for_thread_id` records the owner. Trusted native worker Threads carry immutable `goal_work` sources; app Goal attempts link actual Thread/Turn identities. Managed ACP worker associations now use the same execution authority; complete recovery remains pending. |
+ | D1: admission recovery | Owner creation uses a deterministic, namespaced key derived from the already saved Goal ID. `ThreadService.find_thread_admission` reads the original caller-scoped receipt without a new request or model call. After acceptance, the Goal association can be retried with the same action identity. This key is not reused for worker or Turn admissions. |
+ | D1: persistence | `ThreadCreated` and checkpoints retain the optional associations. Goal model actions link their original purpose/source/requirements revision to actual Thread/Turn IDs in operation history. Action keys derive from those persisted identities. Legacy missing fields mean no recorded association; neither a read nor a projection invents one. No new database/table or cross-store transaction is introduced. |
+ | D2: generation and input | Planning, input scope selection, input interpretation, branch review and completion evaluation now use tool-free Turns through the existing admission, runner, commit, owner and shutdown authority. The input Thread can overlap owner planning without a second active Turn in either Thread. Both consume shared active-Turn capacity. Bounded typed decisions retain their existing operation/accounting path. |
+ | D3: resources | Coordination Threads record the configured route selector. Exact supplied prompts, credential-free prepared plans, admitted route indices and actual SDK attempt reports are retained in ExecutionStore; Goal model-control callbacks retain existing reservations/accounting and live source checks. A completed response requires acknowledgements from both stores. A selector is not actual provider/model evidence. Existing Core per-step context preparation and SDK fallback remain; complete native/ACP worker report association is pending. |
+ 
+ The daemon passes its existing ThreadService to GoalRuntime. It does not create
+-a second ExecutionStore owner. App generation now submits managed model work;
+-only its common runner invokes the SDK. Worker dispatch still uses the previous
+-ACP coordinator and remains a migration source. An owner link does not imply a
++a second ExecutionStore owner. App generation submits managed model work;
++only its common runner invokes the SDK. New native and managed ACP dispatches
++use common accepted Turns. Unbound historical ACP runs retain their original
++read/control reconciliation path until cutover is proven. An owner link does not imply a
+ dispatched Turn, adoption, verification, recovered execution, or file permission.
+ 
+ Coordination Threads are metadata-only: no native tools, MCP, skills, startup
+@@ -54,7 +55,7 @@ not claim the target shared-runner architecture is complete.
+ | Goal planning/input/review/completion generation | `ThreadService.start_goal_generation`, common admission/runner/commit | Owner or input Thread route selector; exact prompt, SDK plans and attempt reports in ExecutionStore, Root source/budget accounting. Tool-free. Current SDK fallback remains; no full Turn-fixed context guarantee. |
+ | Native Goal work | `ThreadService.start_goal_worker_turn`, native Agent/Core driver | Selected/default route, actual saved prompt, selected MCP configuration and Ask permissions. Core checkpoints retain model/tool evidence; the app's worker projection does not yet expose a complete provider/resource/activity association. A recorded selection is not proof of use. |
+ | Existing standalone native work | Native Thread/Turn entrypoints on that same ThreadService | Existing grants, native context/routing, permissions, verification and recovery remain authoritative. Goal-associated Threads reject the ordinary entrypoint. |
+-| Managed external ACP Goal work | App coordinator plus the existing supervisor; common Thread/Turn migration pending | Only negotiated session/model controls and actual public observations are available. Harness private context, model usage and unsupported controls remain unknown. This path is still an execution-authority migration source. |
++| Managed external ACP Goal work | Common ThreadService admission/runner/commit; supervisor adapts process/protocol transport | Explicit ACP configuration and actual run/session mapping, bounded sequenced public observations, original permission options and stop receipts. Generic supervisor controls reject managed ownership. Private context, physical provider/model and unsupported controls remain unknown. Cold session continuation and the full failure matrix remain unqualified. |
+ | Direct harness and transparent ACP serving | Existing direct/transparent entrypoints | Preserve the original harness interaction and protocol capabilities; do not fabricate Goal/Thread/Turn bindings or turn private harness behavior into native evidence. |
+ 
+ The owner/input Thread split preserves input-model availability while owner
+@@ -195,23 +196,53 @@ regressions are being validated separately from the earlier full run. The native
+ negative case refuses the actual SQLite terminal-fact transaction; recovery
+ must leave the stop unknown and the original Turn in place.
+ 
+-### Managed ACP migration boundary
+-
+-The next integration must change the actual driver and authority. Current
+-`ThreadRecord`, `ThreadCreated` and `ThreadView` require native `AgentConfig`;
+-ordinary admission constructs a native Agent. Adding ACP IDs to that path would
+-still describe a native executor that never ran. Managed ACP needs an explicit
+-executor/session representation, a shared accepted Turn and the common
+-workspace/slot/commit/stop lifecycle. No placeholder native model, empty Core
+-checkpoint or fabricated provider evidence is acceptable.
+-
+-The app supervisor already owns process/protocol transport, its original-action
+-start receipts, negotiated session facts and journal. Preserve those adapters
+-and direct/transparent entrypoints, while moving managed lifecycle decisions
+-under ThreadService. Its in-memory directory claims do not substitute for the
+-shared runtime's OS workspace fence. Ordinary supervisor mutation entrypoints
+-must not become a second controller for a managed Turn. This migration is still
+-pending; the stop-evidence correction alone does not implement S3.
++### Managed ACP migration in progress
++
++Thread configuration now explicitly distinguishes native `AgentConfig` from
++ACP harness/model-request/duration configuration. Existing native JSON remains
++unchanged; mixed native/ACP headers are rejected. An ACP Turn creates no native
++Agent, model placeholder or Core checkpoint. Both drivers use common admission,
++active-Turn capacity, the OS workspace fence, commits, cancellation and shutdown.
++
++The supervisor retains actual process/protocol mechanics and records its shared
++Thread/Turn owner. Managed startup sends no prompt and acquires no independent
++lease. Generic mutation, lease takeover/removal and private session/model queries
++cannot become a second controller. Adapter dispatch rechecks the common durable
++owner and live Goal source after preparation or a transport mutation wait.
++Original managed start receipts survive a lost process cache; a changed body or
++owner cannot reuse them to launch another process. Missing Goal links query
++original independent Thread/Turn keys before entering the historical path.
++
++Public ACP observations carry bounded original sequence numbers, actual session
++and negotiated route/capability reports. Multiple original permission requests
++retain their offered options; a common committed choice is distinct from its
++outbound dispatch and actual tool effects. A protocol end-turn response remains
++separate from owned process termination and Goal verification. Incomplete prompt
++history, uncertain stop or a failed durable ACK stays recovery-required. ACP
++private history/context and physical model/provider usage are not native facts.
++
++Cold reads retain associations but cannot authorize continuation. Confirmed same
++session recovery, late stop/effect reconciliation, replacement and complete fault
++coverage remain S3 work. The shared default ACP duration is 600 seconds; private
++harness spending cannot be qualified by that bound. Direct harness and transparent
++ACP serving retain their original mode.
++
++The exact `managed-acp-source2.json` passes 26 focused app/service cases, including
++actual ACP parallel handoff/delivery, no generic takeover, supplied model/MCP/skill
++material and native permission/effect regressions. Source3 adds owner/source/grant
++and durable-start-cache regressions: both pass, but its wider 74-case run has
++53 passes and 21 stack-overflow aborts. It is not a passing acceptance result.
++Source3's surviving crash fixtures are archived separately (2,103 regular files;
++15 sockets/symlinks/other entries explicitly omitted). Independent extraction
++verified every saved checksum; case-to-directory mapping and lost process/memory
++state remain unknown.
++
++Diagnostic probes found that supervisor queries included the startup future.
++Boxing the awaited startup and receipt-query boundaries reduces the measured
++dispatch future from 32,880 to 8,912 bytes, Goal task from 38,384 to 16,888 and
++worker from 40,720 to 18,304 on this toolchain. The temporary probe is archived,
++not retained as a product test. No stack limit or test requirement changed.
++The wider regression must be rerun on the final source; S3–S6 are incomplete.
+ 
+ ## Compatibility
+ 
+@@ -223,8 +254,8 @@ pending; the stop-evidence correction alone does not implement S3.
+ - Native Thread projection adds optional Goal/input associations. Ordinary Threads
+   still have no Goal. Generation source/request identity uses optional fields on
+   the existing context/response projection. Native transport stays unchanged, but runtime root format
+-  becomes **8** so older writers cannot ignore and erase ownership. Formats
+-  2–7 remain readable; appending upgrades the existing envelope atomically,
++  becomes **9** so older writers cannot ignore and erase ownership. Formats
++  2–8 remain readable; appending upgrades the existing envelope atomically,
+   without history rewriting. New generation records carry exact inputs and
+   SDK evidence; native records/checkpoints retain their existing semantics.
+ - A manually restarted old app Goal writer is a separate compatibility gate:
+diff --git a/docs/CLI.md b/docs/CLI.md
+index a6374595..8ee48760 100644
+--- a/docs/CLI.md
++++ b/docs/CLI.md
+@@ -110,7 +110,7 @@ profile, current workspace grant, and instance. Local and HTTP callers have
+ distinct ownership. Knowing a Thread ID does not authorize access.
+ 
+ Native task APIs retain Thread/Turn, tools, model/context and recovery contracts.
+-Goals use separate persistent state and do not reinterpret native Thread IDs or FIFO input.
++Goal requirements/arrangements retain their existing store and reference accepted native or managed ACP Thread/Turn execution. Managed ACP sessions have no independent supervisor control lease. Cold session continuation remains gated; direct harness and transparent ACP modes retain their original behavior.
+ See the Goal interface section below.
+ 
+ The same Thread service can expose an optional HTTP listener:
+diff --git a/docs/DEVELOPMENT.md b/docs/DEVELOPMENT.md
+index 2256f27f..72f28bed 100644
+--- a/docs/DEVELOPMENT.md
++++ b/docs/DEVELOPMENT.md
+@@ -143,7 +143,7 @@ checkpoint recovery preserve identities and budgets without replaying completed
+ effects; lost owners, unknown effects and uncertain accounting remain blocked.
+ 
+ Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
+-requirements, including root format 8 (reading formats 2–7) and local v17/HTTP v2. The
++requirements, including root format 9 (reading formats 2–8) and local v17/HTTP v2. The
+ [runtime acceptance index](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) separates local
+ fixtures, historical provider/platform checks and remaining product gates.
+ [Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and
+diff --git a/skills/bitrouter/SKILL.md b/skills/bitrouter/SKILL.md
+index 824f3129..cb9f8ba4 100644
+--- a/skills/bitrouter/SKILL.md
++++ b/skills/bitrouter/SKILL.md
+@@ -123,7 +123,7 @@ Native `launch <agent>` accepts catalog harnesses; `claude`, `claude-code` and
+ `codex` are shortcuts. User configuration is not edited. Existing harness processes
+ need a new launch to adopt overrides; `bro acp serve <agent>` serves ACP clients.
+ Background runs survive client exit; attach/stop/remove remain separate.
+-Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Goal workers share Thread/Turn execution and retain Goal controls.
++Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Native and managed ACP Goal workers share Thread/Turn ownership and Goal controls; generic supervisor controls cannot take over managed Turns.
+ See `references/sessions.md` for ownership and `references/decision-native.md`
+ for bounded model/context routing, MCP/skills, token reservations and its cost scope.
+ For the native BRO ACP endpoint, use bare `bro acp serve --model openai/gpt-5`.
+diff --git a/skills/bitrouter/references/cli.md b/skills/bitrouter/references/cli.md
+index 04cd26bc..c68b3fde 100644
+--- a/skills/bitrouter/references/cli.md
++++ b/skills/bitrouter/references/cli.md
+@@ -119,7 +119,7 @@ Startup claims one database owner and completes bounded cold discovery before
+ admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
+ Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
+ records per Thread. Capabilities expose aggregate progress, not root identities
+-or prompts. New/updated roots use runtime format 8; formats 2/3/4/5/6/7 remain readable without history rewriting. Migration adds metadata with
++or prompts. New/updated roots use runtime format 9; formats 2/3/4/5/6/7/8 remain readable without history rewriting. Migration adds metadata with
+ **default 0** for old roots; unsupported formats fail before payload decoding
+ or execution, with `recovery_required` / `unsupported_runtime_format`.
+ They are not converted or marked safe.
+@@ -718,8 +718,8 @@ Turns, including an empty snapshot. A new Thread discovers again. After server
+ restart, authorized continuation refreshes instructions only at a settled model
+ boundary and records replacements/removals explicitly; known effects are never
+ replayed. Completing an already settled outcome and cold browsing reread no
+-instruction files. Runtime format 8 retains snapshots, private ACP bindings/close
+-results and explicit Goal execution associations; formats 2–7 remain readable.
++instruction files. Runtime format 9 retains snapshots, private ACP bindings/close
++results and explicit native/managed ACP Goal execution associations; formats 2–8 remain readable.
+ 
+ The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
+ use the existing approval, exclusive execution and durable result barriers;

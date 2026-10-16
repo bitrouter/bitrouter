@@ -1,0 +1,52 @@
+{
+  "id": "acp-metadata-green2",
+  "scope": "Never-started ACP metadata uses existing shared idle checkpoint recovery only when the journal accepted no Turn; original source/config is validated first, stopped owner/workspace/live control fences remain. Real SQLite and actual first Rust-peer session; no private ACP session restore or full-refactor claim.",
+  "jobs": [
+    {
+      "name": "unopened-metadata",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown)"
+      ]
+    },
+    {
+      "name": "shared-worker-recovery",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter-orchestrator",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(service::tests::worker::) | test(service::tests::recovery::)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    }
+  ]
+}

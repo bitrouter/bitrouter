@@ -1,0 +1,20 @@
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 11s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 6109d145-33c9-4e41-8cbd-db3aed09cf6c with nextest profile: default
+    Starting 2 tests across 1 binary (1829 tests skipped)
+        PASS [   0.094s] (1/2) bitrouter db::migration::m20240101_000030_bro_goal_execution_format::tests::legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals
+        PASS [   0.250s] (2/2) bitrouter goal_runtime::model_control::tests::worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope
+────────────
+     Summary [   0.260s] 2 tests run: 2 passed, 1829 skipped

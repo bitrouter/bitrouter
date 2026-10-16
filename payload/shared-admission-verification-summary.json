@@ -1,0 +1,23 @@
+{
+  "capturedAt": "2026-10-16T07:23:45.596Z",
+  "source": "shared-admission-source1.json",
+  "passed": false,
+  "open": [
+    "S3 managed ACP driver and shared authority",
+    "S4-S6 acceptance",
+    "Token-quote waiting and persistent UI waiting phase",
+    "Earlier intermittent PTY and route-startup causes"
+  ],
+  "sha256": {
+    "shared-admission-source1.json": "db944ebaea5e09b6f11880e993dfc67c374bfde99f1d674dc3626b0b76933a25",
+    "shared-admission-gates1.json": "6ef31f1255c61ddb8bcee32f74b2517c2af587256aafa7bfff9cef82ff59ec87",
+    "shared-admission-source-audit1.json": "5d9c1a764f3e854491fd0c363ec482b585ec05f8a3efd46fd4ea676c5e8e642b",
+    "shared-admission-full1.log": "96624d7cfe2c66d7b3f1eb7d8122d7f03f875c9db7f844384ffc162240713027",
+    "shared-admission-clippy1.log": "3f8601569a509b899f9cdfd2d73caa96356285e0ec6617246b8dbb2e0f2f021d",
+    "shared-admission-fmt1.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "shared-admission-doctests1.log": "832b4adc687db6fdba9bdd7a0b886e1e65890b759f1a2d3cdcb52375c8cf231b",
+    "shared-admission-focused1.log": "b25e27916b5c63c963f8e421fef16694d7a2d80c38abc8fb19ad508414a77776",
+    "shared-admission-focused2.log": "866d70174296b8cc38dab78d5bb510eda24b8581ab735650c7a6b7b28710d9d8",
+    "shared-admission-focused3.log": "c64ce2e0d9f30566ab490e17ae74e80c1e9934c8465d493e3492addbdde83fe5"
+  }
+}

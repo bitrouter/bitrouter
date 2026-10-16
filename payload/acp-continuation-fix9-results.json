@@ -1,0 +1,67 @@
+{
+  "source": "acp-continuation-fix9-source.json",
+  "scope": "Focused proof after test-only future boxing (no stack limit increase), failure-image retention and full-session fixture resource weights. Runtime production unchanged from final4. Original timeouts, internal branch overlap, owner/effect and output assertions remain.",
+  "startedAt": "2026-10-16T19:41:58.929Z",
+  "runs": [
+    {
+      "name": "boundaries",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "test(native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading) | binary(goal_tui_pty) | binary(native_harness_resources)"
+      ],
+      "log": "acp-continuation-fix9-boundaries.log",
+      "startedAt": "2026-10-16T19:41:58.929Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:44:10.754Z",
+      "summaries": [
+        "     Summary [  60.775s] 6 tests run: 6 passed, 4775 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "acp-continuation-fix9-clippy.log",
+      "startedAt": "2026-10-16T19:44:10.754Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:45:06.169Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "acp-continuation-fix9-fmt.log",
+      "startedAt": "2026-10-16T19:45:06.169Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:45:26.416Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T19:45:26.529Z",
+  "changed": [],
+  "passed": true
+}

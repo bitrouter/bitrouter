@@ -1,0 +1,25 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.20s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID ec857028-24fd-4dc4-af1b-56c1affda72f with nextest profile: default
+    Starting 1 test across 1 binary (1835 tests skipped)
+────────────
+ Stress test iteration 1/3 (00:00:00 elapsed so far, 3 iterations remaining)
+        PASS [  17.181s] [1/3] (1/1) bitrouter goal_runtime::tests::native::superseded_native_execution_keeps_receipt_verified_history_without_replay
+ Stress test [  17.186s] iteration 1/3: 1 test run: 1 passed, 1835 skipped
+────────────
+ Stress test iteration 2/3 (00:00:17 elapsed so far, 2 iterations remaining)
+        PASS [  16.680s] [2/3] (1/1) bitrouter goal_runtime::tests::native::superseded_native_execution_keeps_receipt_verified_history_without_replay
+ Stress test [  16.685s] iteration 2/3: 1 test run: 1 passed, 1835 skipped
+────────────
+ Stress test iteration 3/3 (00:00:33 elapsed so far, 1 iteration remaining)
+        PASS [  20.335s] [3/3] (1/1) bitrouter goal_runtime::tests::native::superseded_native_execution_keeps_receipt_verified_history_without_replay
+ Stress test [  20.341s] iteration 3/3: 1 test run: 1 passed, 1835 skipped
+────────────
+     Summary [  54.212s] 3/3 stress run iterations: 3 passed

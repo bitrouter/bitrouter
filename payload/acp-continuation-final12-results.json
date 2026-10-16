@@ -1,0 +1,32 @@
+{
+  "source": "acp-continuation-final12-source.json",
+  "scope": "Final complete validation after all focused fixes. Two real ACP capability probes additionally retain failures, reserve global slots and assert typed teardown/phase receipts instead of brittle presentation text. Startup11 passed 10 repetitions before this stricter assertion. Runtime production is unchanged from final4; no timeouts, stack limits, product bounds or actual overlap/business assertions are relaxed. All original failed/interrupted runs remain separate.",
+  "startedAt": "2026-10-16T19:53:38.281Z",
+  "runs": [
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-final12-typed-startup.log",
+      "startedAt": "2026-10-16T19:53:38.281Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:54:57.244Z",
+      "summaries": [
+        "     Summary [   0.788s] 2 tests run: 1 passed, 1 failed, 3664 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T19:54:57.481Z",
+  "changed": [],
+  "passed": false
+}

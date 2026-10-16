@@ -1,0 +1,58 @@
+{
+  "source": "native-history-follow4-source.json",
+  "scope": "Byte-identical follow-up to green3: all Goal runtime regressions and three actual native archive-reader matrices, including the unchanged 48 KiB bound and no read-side work. Final whole-refactor, ACP/session, live, main integration and full workspace gates remain open.",
+  "startedAt": "2026-10-16T17:36:06.349Z",
+  "runs": [
+    {
+      "name": "goal-runtime",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::)"
+      ],
+      "log": "native-history-follow4-goal-runtime.log",
+      "startedAt": "2026-10-16T17:36:06.349Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:37:08.243Z",
+      "summaries": [
+        "     Summary [  60.956s] 86 tests run: 86 passed, 1750 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "archive-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "3",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ],
+      "log": "native-history-follow4-archive-stress.log",
+      "startedAt": "2026-10-16T17:37:08.243Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:38:02.974Z",
+      "summaries": [
+        "     Summary [  54.212s] 3/3 stress run iterations: 3 passed"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:38:03.046Z",
+  "changed": [],
+  "passed": true
+}

@@ -1,0 +1,33 @@
+{
+  "source": "token-wait-red8-source.json",
+  "scope": "Deterministic real SQLite regression for redundant elapsed-limit writes after an already recorded budget halt. Logical historical timestamps, no model or harness execution. Production source remains as in final7.",
+  "startedAt": "2026-10-16T17:08:14.869Z",
+  "runs": [
+    {
+      "name": "elapsed-halt",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(exhausted_elapsed_budget_stays_quiet_and_raised_limit_retains_actual_age)"
+      ],
+      "log": "token-wait-red8-elapsed-halt.log",
+      "startedAt": "2026-10-16T17:08:14.869Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T17:09:12.862Z",
+      "summaries": [
+        "     Summary [   0.079s] 1 test run: 0 passed, 1 failed, 1834 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T17:09:13.062Z",
+  "changed": [],
+  "passed": false
+}

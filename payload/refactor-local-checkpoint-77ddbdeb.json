@@ -1,0 +1,11 @@
+{
+  "capturedAt": "2026-10-16T13:12:02.550Z",
+  "commit": "77ddbdebd33eccbb4949a50a692642d3b0a8cc2d",
+  "bundle": "refactor-local-checkpoint-77ddbdeb.bundle",
+  "sha256": "490f7b85a70dd7a81446d59013c409b099ddd8b01718b6de411aa0d93eb401ae",
+  "bundleVerified": true,
+  "latestChecks": "mcp-binding-metadata5-results.json",
+  "sourceApplicability": "mcp-binding-applicability6.json",
+  "archiveIndex": "MCP_BINDING_INDEX.md",
+  "scope": "Eight completed local refactor commits after fe9; full S0-S6/A01-A22 objective remains active. No refactor push, PR comment update, hosted CI or live-provider/harness qualification is claimed."
+}

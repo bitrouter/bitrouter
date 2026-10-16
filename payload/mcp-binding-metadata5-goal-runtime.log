@@ -1,0 +1,92 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.26s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 20f5c76c-10e3-47d2-bc8c-d8a3c1f71deb with nextest profile: default
+    Starting 79 tests across 1 binary (1749 tests skipped)
+        PASS [   0.016s] ( 1/79) bitrouter goal_runtime::model_control::tests::typed_quotes_require_bounds_for_every_nonzero_price
+        PASS [   0.067s] ( 2/79) bitrouter goal_runtime::model_control::tests::model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability
+        PASS [   0.102s] ( 3/79) bitrouter goal_runtime::model_control::tests::recovered_intent_receipt_does_not_authorize_work_after_pause
+        PASS [   0.106s] ( 4/79) bitrouter goal_runtime::model_control::tests::bounded_accounting_conflicts_do_not_poison_model_admission
+        PASS [   0.106s] ( 5/79) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work
+        PASS [   0.109s] ( 6/79) bitrouter goal_runtime::model_control::tests::received_content_survives_lost_outcome_reply_and_replay_after_pause
+        PASS [   0.123s] ( 7/79) bitrouter goal_runtime::model_control::tests::persistent_accounting_failure_retains_its_cause_and_fences_new_work
+        PASS [   0.026s] ( 8/79) bitrouter goal_runtime::permissions::tests::local_file_policy_rejects_control_metadata_through_workspace_symlinks
+        PASS [   0.061s] ( 9/79) bitrouter goal_runtime::permissions::tests::captured_context_allows_only_declared_workspace_reads_and_keeps_all_paths
+        PASS [   0.127s] (10/79) bitrouter goal_runtime::model_control::tests::worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope
+        PASS [   0.009s] (11/79) bitrouter goal_runtime::permissions::tests::selected_option_requires_choice_origin_and_unique_actual_resolution
+        PASS [   0.016s] (12/79) bitrouter goal_runtime::recovery::native::tests::native_effect_scope_distinguishes_known_local_search_from_external_or_unscoped_work
+        PASS [   0.009s] (13/79) bitrouter goal_runtime::recovery::tests::denied_local_tool_requires_actual_rejection_origin_and_failed_terminal
+        PASS [   0.018s] (14/79) bitrouter goal_runtime::recovery::native::tests::native_replacement_requires_matching_settled_effects_and_terminal_history
+        PASS [   0.056s] (15/79) bitrouter goal_runtime::permissions::tests::local_file_policy_rejects_paths_through_an_external_symlink
+        PASS [   0.009s] (16/79) bitrouter goal_runtime::recovery::tests::later_local_kind_cannot_hide_prior_execute_or_fetch
+        PASS [   0.009s] (17/79) bitrouter goal_runtime::recovery::tests::unopened_startup_rejects_prompt_updates_gaps_and_missing_history
+        PASS [   0.009s] (18/79) bitrouter goal_runtime::repair::tests::current_known_failure_does_not_grant_retry_to_unknown_or_stale_review
+        PASS [   0.024s] (19/79) bitrouter goal_runtime::resources::tests::context_capture_is_bounded_and_rejects_escape_and_non_files
+        PASS [   0.024s] (20/79) bitrouter goal_runtime::recovery::tests::unrequested_failed_local_work_is_not_consent_or_proof_of_no_effects
+        PASS [   0.028s] (21/79) bitrouter goal_runtime::resources::tests::advertised_skills_have_stable_distinct_ids_and_validation_rejects_invention
+        PASS [   0.010s] (22/79) bitrouter goal_runtime::resources::tests::selected_descriptors_preserve_config_without_exposing_the_other_servers
+        PASS [   0.027s] (23/79) bitrouter goal_runtime::resources::tests::context_capture_refuses_symlink_components_and_special_files
+        PASS [   0.018s] (24/79) bitrouter goal_runtime::runtime_evidence::tests::actual_worker_updates_are_private_and_coalesced_only_within_their_turn
+        PASS [   0.018s] (25/79) bitrouter goal_runtime::runtime_evidence::tests::missing_omitted_unordered_or_bounded_history_is_never_complete_timing_proof
+        PASS [   0.143s] (26/79) bitrouter goal_runtime::permissions::tests::local_file_policy_uses_declared_kind_and_paths_without_granting_execute
+        PASS [   0.129s] (27/79) bitrouter goal_runtime::permissions::tests::native_material_keeps_real_input_identity_and_reuses_only_local_file_policy
+        PASS [   0.260s] (28/79) bitrouter goal_runtime::model_control::tests::native_typed_callback_settles_original_receipt_after_pause_and_lost_reply
+        PASS [   0.013s] (29/79) bitrouter goal_runtime::stop_boundary::tests::an_announced_write_without_its_permission_defers_cancellation
+        PASS [   0.016s] (30/79) bitrouter goal_runtime::runtime_evidence::tests::runtime_metadata_binds_identity_and_never_copies_private_content
+        PASS [   0.195s] (31/79) bitrouter goal_runtime::permissions::tests::explicit_argument_paths_preserve_missing_scope_and_conflict_guards
+        PASS [   0.140s] (32/79) bitrouter goal_runtime::review_inputs::tests::baseline_verifier_bytes_survive_worker_test_changes_and_mark_omissions
+        PASS [   0.367s] (33/79) bitrouter goal_runtime::model_control::tests::typed_quotes_share_goal_budget_and_preserve_unknown_or_excess_usage
+        PASS [   0.419s] (34/79) bitrouter goal_runtime::completion::evidence::tests::source_observation_uses_frozen_dirty_input_and_detects_later_changes
+        PASS [   0.405s] (35/79) bitrouter goal_runtime::tests::live_input::corpus::corpus_seeds_keep_actual_original_input_receipts_without_model_work
+        PASS [   0.563s] (36/79) bitrouter goal_runtime::resources::tests::unconfirmed_model_route_never_prompts_and_reaps_the_actual_adapter
+        PASS [   0.677s] (37/79) bitrouter goal_runtime::resources::tests::unsupported_mcp_transports_are_rejected_before_session_open_and_reaped
+        PASS [   1.804s] (38/79) bitrouter goal_runtime::tests::live_input::offline_faults::unknown_reasoning_http_outcome_preserves_request_and_budget_without_effects
+        PASS [   3.580s] (39/79) bitrouter goal_runtime::tests::live_input::offline_faults::typed_http_faults_upgrade_to_local_reasoning_and_persist_feedback
+        PASS [   9.392s] (40/79) bitrouter goal_runtime::tests::native::native_explicit_denial_is_a_reply_but_never_verifies_the_missing_output
+        PASS [   9.516s] (41/79) bitrouter goal_runtime::tests::managed_acp::generic_supervisor_control_cannot_take_over_a_managed_turn
+        PASS [   9.662s] (42/79) bitrouter goal_runtime::tests::goal_selected_resources_are_persisted_and_sent_as_actual_acp_material
+        PASS [   0.341s] (43/79) bitrouter goal_runtime::tests::start_recovery::initialize_failure_retains_actual_phase_and_reaped_process_receipt
+        PASS [   0.801s] (44/79) bitrouter goal_runtime::tests::start_recovery::paused_goal_recovers_original_start_and_stops_without_relaunch
+        PASS [  10.820s] (45/79) bitrouter goal_runtime::tests::goal_model_route_is_confirmed_before_prompt_and_persisted_through_delivery
+        PASS [   0.123s] (46/79) bitrouter goal_runtime::tests::threads::interrupted_owner_link_reconciles_the_original_thread_after_database_reopen
+        PASS [  11.054s] (47/79) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [   0.625s] (48/79) bitrouter goal_runtime::tests::threads::accepted_native_and_acp_receipts_keep_original_resources_after_mcp_config_change
+        PASS [   0.776s] (49/79) bitrouter goal_runtime::tests::threads::native_late_stop_evidence_uses_the_original_turn_even_after_resume
+        PASS [  11.334s] (50/79) bitrouter goal_runtime::tests::native::native_fallback_evidence_retains_failed_candidate_and_actual_serving_identity
+        PASS [  10.278s] (51/79) bitrouter goal_runtime::tests::native::native_local_write_uses_a_durable_one_time_policy_choice_and_verified_delivery
+        PASS [   1.274s] (52/79) bitrouter goal_runtime::tests::threads::native_dispatch_before_turn_acceptance_uses_original_input_and_keys_after_reopen
+        PASS [  11.807s] (53/79) bitrouter goal_runtime::tests::native::native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
+        PASS [   1.071s] (54/79) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration
+        PASS [   4.731s] (55/79) bitrouter goal_runtime::tests::native::paused_native_permission_cannot_admit_a_late_allow_or_count_cancellation_as_consent
+        PASS [   3.592s] (56/79) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action
+        PASS [  12.297s] (57/79) bitrouter goal_runtime::tests::native::native_manual_choice_is_persisted_replayed_and_does_not_repeat_the_shell_effect
+        PASS [   3.848s] (58/79) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause
+        PASS [   3.513s] (59/79) bitrouter goal_runtime::tests::workflow_edits::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [  19.322s] (60/79) bitrouter goal_runtime::tests::native::native_failed_check_repairs_from_original_effect_evidence_without_replaying_the_old_turn
+        PASS [   3.458s] (61/79) bitrouter goal_runtime::tests::workflow_edits::unconfigured_worker_request_is_retained_as_clarification_without_replacement
+        PASS [   3.328s] (62/79) bitrouter goal_runtime::tests::workflow_permissions::rejected_local_failed_tool_can_reconcile_without_a_user_permission_submission
+        PASS [  10.911s] (63/79) bitrouter goal_runtime::tests::workflow_edits::active_input_adds_machine_checks_to_the_actual_replacement_and_delivery
+        PASS [  12.596s] (64/79) bitrouter goal_runtime::tests::workflow_edits::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [  12.421s] (65/79) bitrouter goal_runtime::tests::workflow_edits::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [   5.932s] (66/79) bitrouter goal_runtime::tests::workflow_permissions::confirmed_stop_keeps_original_permission_history_after_cold_reopen
+        PASS [  14.027s] (67/79) bitrouter goal_runtime::tests::workflow_edits::independent_review_recovers_from_goal_revision_without_worker_replay
+        PASS [  14.239s] (68/79) bitrouter goal_runtime::tests::workflow_edits::active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version
+        PASS [   5.753s] (69/79) bitrouter goal_runtime::tests::workflow_permissions::teardown_denial_has_controller_origin_and_does_not_become_user_consent
+        PASS [   8.887s] (70/79) bitrouter goal_runtime::tests::workflow_permissions::sparse_permission_keeps_original_rpc_and_uses_prior_tool_context_for_delivery
+        PASS [   4.513s] (71/79) bitrouter goal_runtime::tests::workflow_recovery::unknown_review_outcome_never_authorizes_a_repair
+        PASS [   4.363s] (72/79) bitrouter goal_runtime::tests::workflow_recovery::user_pause_prevents_pre_session_recovery_from_admitting_new_work
+        PASS [  10.802s] (73/79) bitrouter goal_runtime::tests::workflow_recovery::confirmed_pre_session_failure_retries_without_replaying_goal_work
+        PASS [   9.691s] (74/79) bitrouter goal_runtime::tests::workflow_recovery::pre_session_recovery_exhausts_its_bound_without_prompt_or_delivery
+        PASS [  11.741s] (75/79) bitrouter goal_runtime::tests::workflow_recovery::known_check_failure_repairs_with_actual_evidence_and_same_requirements
+        PASS [  11.783s] (76/79) bitrouter goal_runtime::tests::workflow_recovery::known_review_failure_repairs_without_restarting_independent_work
+        PASS [  27.853s] (77/79) bitrouter goal_runtime::tests::native_parallel::native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies
+        PASS [  11.461s] (78/79) bitrouter goal_runtime::tests::workflow_recovery::repeated_review_failure_stops_at_three_executions_per_version
+        PASS [  30.488s] (79/79) bitrouter goal_runtime::tests::workflow_edits::requested_worker_replacement_keeps_old_session_source_and_independent_work
+────────────
+     Summary [  46.178s] 79 tests run: 79 passed, 1749 skipped

@@ -1,0 +1,440 @@
+diff --git a/.agents/plugins/marketplace.json b/.agents/plugins/marketplace.json
+index 1a7ef69c..b8e98d63 100644
+--- a/.agents/plugins/marketplace.json
++++ b/.agents/plugins/marketplace.json
+@@ -4,7 +4,7 @@
+   "plugins": [
+     {
+       "name": "bitrouter",
+-      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and remaining ACP recovery limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
++      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and never-started ACP metadata recovery with private-session limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+       "source": "."
+     }
+   ]
+diff --git a/.claude-plugin/plugin.json b/.claude-plugin/plugin.json
+index adcc4c44..31eca52f 100644
+--- a/.claude-plugin/plugin.json
++++ b/.claude-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and remaining ACP recovery limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and never-started ACP metadata recovery with private-session limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+   "author": {
+     "name": "BitRouterAI"
+   },
+diff --git a/.codex-plugin/plugin.json b/.codex-plugin/plugin.json
+index 8ed1a0ba..3d276ab3 100644
+--- a/.codex-plugin/plugin.json
++++ b/.codex-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and remaining ACP recovery limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and never-started ACP metadata recovery with private-session limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+   "homepage": "https://bitrouter.ai",
+   "repository": "https://github.com/bitrouter/bitrouter",
+   "license": "Apache-2.0",
+diff --git a/apps/bitrouter/src/goal_runtime/tests/threads.rs b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+index 4af15ab7..ccbe3182 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/threads.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/threads.rs
+@@ -12,6 +12,8 @@ use bitrouter_orchestrator::thread::{
+ };
+ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+ 
++#[path = "acp_recovery.rs"]
++mod acp_recovery;
+ #[path = "native_recovery.rs"]
+ mod native_recovery;
+ 
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery.rs b/crates/bitrouter-orchestrator/src/service/recovery.rs
+index 24d695a5..1a1395e8 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery.rs
+@@ -1547,7 +1547,11 @@ impl Rebuild {
+         if matches!(
+             self.view.config,
+             crate::thread::executor::Config::Acp { .. }
+-        ) {
++        ) && self.next_order != 0
++        {
++            // Before any Turn was accepted, this is only idle metadata: no
++            // harness session could have been started by this Thread. Its
++            // ordinary owner/workspace recovery still requires stopped proof.
+             context_valid = false;
+             self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
+         }
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs b/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
+index 24fc5283..1de4b5ac 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
+@@ -6,6 +6,40 @@ use crate::thread::executor::{AcpConfig, AcpThreadRequest};
+ use std::time::Duration;
+ use tokio::sync::Notify;
+ 
++async fn worker_thread(
++    service: &ThreadService,
++    directory: &tempfile::TempDir,
++    execution_id: &str,
++) -> Result<(GoalWork, ThreadSnapshot), Box<dyn std::error::Error>> {
++    let root = root(service, directory).await?;
++    let source = GoalWork {
++        owner_thread_id: root.thread_id.clone(),
++        goal_id: "goal".into(),
++        task_id: "work".into(),
++        execution_id: execution_id.into(),
++        task_revision: 1,
++        control_source_revision: 0,
++    };
++    let thread = service
++        .create_goal_acp_thread(
++            &target(&root),
++            &source,
++            AcpThreadRequest {
++                caller: CallerContext::local(),
++                workspace: directory.path().into(),
++                config: AcpConfig {
++                    agent_id: "test-peer".into(),
++                    requested_model_route: None,
++                    max_duration: Duration::from_secs(10),
++                },
++                permission_profile: PermissionProfile::Ask,
++                idempotency_key: crate::service::worker::thread_key(&source)?,
++            },
++        )
++        .await?;
++    Ok((source, thread))
++}
++
+ #[derive(Default)]
+ struct Held {
+     entered: Notify,
+@@ -54,32 +88,7 @@ async fn acp_last_dispatch_check_rejects_changed_owner_source_and_workspace_gran
+     let store = Arc::new(MemoryExecutionStore::default());
+     let service =
+         ThreadService::with_store(app(vec![])?, &[directory.path().into()], store.clone())?;
+-    let root = root(&service, &directory).await?;
+-    let source = GoalWork {
+-        owner_thread_id: root.thread_id.clone(),
+-        goal_id: "goal".into(),
+-        task_id: "work".into(),
+-        execution_id: "attempt".into(),
+-        task_revision: 1,
+-        control_source_revision: 0,
+-    };
+-    let thread = service
+-        .create_goal_acp_thread(
+-            &target(&root),
+-            &source,
+-            AcpThreadRequest {
+-                caller: CallerContext::local(),
+-                workspace: directory.path().into(),
+-                config: AcpConfig {
+-                    agent_id: "test-peer".into(),
+-                    requested_model_route: None,
+-                    max_duration: Duration::from_secs(10),
+-                },
+-                permission_profile: PermissionProfile::Ask,
+-                idempotency_key: crate::service::worker::thread_key(&source)?,
+-            },
+-        )
+-        .await?;
++    let (source, thread) = worker_thread(&service, &directory, "attempt").await?;
+     let control = decisions::control(1, true);
+     let driver = Arc::new(Held::default());
+     let turn = service
+@@ -147,3 +156,174 @@ async fn acp_last_dispatch_check_rejects_changed_owner_source_and_workspace_gran
+     service.shutdown().await;
+     Ok(())
+ }
++
++#[tokio::test]
++async fn unopened_acp_metadata_cannot_retire_a_live_execution_owner()
++-> Result<(), Box<dyn std::error::Error>> {
++    let directory = tempfile::tempdir()?;
++    let store = Arc::new(MemoryExecutionStore::default());
++    let original =
++        ThreadService::with_store(app(vec![])?, &[directory.path().into()], store.clone())?;
++    let (source, thread) = worker_thread(&original, &directory, "unstarted").await?;
++    let restarted =
++        ThreadService::with_store(app(vec![])?, &[directory.path().into()], store.clone())?;
++    let target = crate::thread::ThreadTarget {
++        thread_id: thread.thread_id.clone(),
++        server_instance_id: restarted.capabilities().server_instance_id,
++    };
++    let view = restarted
++        .load_thread(&target, &CallerContext::local())
++        .await?;
++    let report = view
++        .recovery
++        .as_ref()
++        .ok_or("metadata inspection missing")?;
++    assert!(report.context_valid && report.terminal_checkpoint);
++    assert!(!report.blockers.iter().any(|blocker| matches!(
++        blocker,
++        crate::thread::RecoveryBlocker::AcpSessionUnconfirmed
++    )));
++    let driver = Arc::new(Held::default());
++    let admission = restarted
++        .start_goal_acp_turn(
++            &target,
++            &CallerContext::local(),
++            source,
++            input("original unsubmitted task", "first-admission"),
++            decisions::control(1, true),
++            driver.clone(),
++        )
++        .await;
++    let receipt = restarted
++        .find_goal_worker_turn(&target, &CallerContext::local(), "first-admission")
++        .await;
++    // Even an unexpected admission must be released and joined before an
++    // assertion unwinds; this adapter never creates a real process/session.
++    driver.release.notify_one();
++    restarted.shutdown().await;
++    let old_owner = store
++        .read_owner(&original.capabilities().server_instance_id)
++        .await?;
++    original.shutdown().await;
++    assert!(admission.is_err_and(|error| error.code == ErrorCode::RecoveryRequired));
++    assert!(receipt?.is_none(), "live-owner refusal accepted a Turn");
++    assert!(
++        old_owner.is_some_and(|owner| owner.stopped_at_ms.is_none()),
++        "another runtime retired the live source owner"
++    );
++    assert_eq!(driver.prompts.load(Ordering::SeqCst), 0);
++    Ok(())
++}
++
++/// A journal fixture: session metadata is selected, then the prompt response is
++/// lost. This adapter never creates an actual process or qualifies a harness.
++#[derive(Default)]
++struct Reported {
++    prompts: AtomicUsize,
++}
++
++#[async_trait::async_trait]
++impl Driver for Reported {
++    async fn start(&self, _: &Owner, _: &str) -> Result<Binding, String> {
++        Ok(Binding {
++            run_id: "synthetic-run".into(),
++            session_id: "synthetic-session".into(),
++            agent_id: "test-peer".into(),
++            confirmed_model_route: None,
++            capabilities: None,
++        })
++    }
++    async fn prompt(&self, _: &Owner, _: &Binding, _: &str, _: &str) -> Result<(), String> {
++        self.prompts.fetch_add(1, Ordering::SeqCst);
++        Err("prompt response lost; its effects remain unknown".into())
++    }
++    async fn observe(&self, _: &Owner, _: &Binding, _: u64) -> Result<Observation, String> {
++        Err("journal fixture has no complete prompt outcome".into())
++    }
++    async fn permission(
++        &self,
++        _: &Owner,
++        _: &Binding,
++        _: &str,
++        _: &str,
++        _: &str,
++    ) -> Result<(), String> {
++        Err("journal fixture offers no permission".into())
++    }
++    async fn stop(&self, _: &Owner, binding: Option<&Binding>, _: &str) -> Result<Stop, String> {
++        Ok(Stop {
++            run_id: binding.map(|binding| binding.run_id.clone()),
++            confirmed: true,
++            session_never_started: false,
++            detail: "synthetic controller stopped; submitted effects remain unknown".into(),
++        })
++    }
++}
++
++#[tokio::test]
++async fn submitted_acp_prompt_is_not_recovered_as_unopened_metadata()
++-> Result<(), Box<dyn std::error::Error>> {
++    let directory = tempfile::tempdir()?;
++    let store = Arc::new(MemoryExecutionStore::default());
++    let original =
++        ThreadService::with_store(app(vec![])?, &[directory.path().into()], store.clone())?;
++    let (source, thread) = worker_thread(&original, &directory, "submitted").await?;
++    let driver = Arc::new(Reported::default());
++    let turn = original
++        .start_goal_acp_turn(
++            &target(&thread),
++            &CallerContext::local(),
++            source.clone(),
++            input("original task", "submitted"),
++            decisions::control(1, true),
++            driver.clone(),
++        )
++        .await?;
++    let unknown = wait_for(&original, &turn.turn_id, TurnStatus::RecoveryRequired).await?;
++    assert!(unknown.unknown_effect && unknown.acp.is_some());
++    original.shutdown().await;
++    drop(original);
++    let restarted = ThreadService::with_store(app(vec![])?, &[directory.path().into()], store)?;
++    let target = crate::thread::ThreadTarget {
++        thread_id: thread.thread_id,
++        server_instance_id: restarted.capabilities().server_instance_id,
++    };
++    let view = restarted
++        .load_thread(&target, &CallerContext::local())
++        .await?;
++    let report = view
++        .recovery
++        .as_ref()
++        .ok_or("submitted session inspection missing")?;
++    assert!(!report.context_valid);
++    assert!(report.blockers.iter().any(|blocker| matches!(
++        blocker,
++        crate::thread::RecoveryBlocker::AcpSessionUnconfirmed
++    )));
++    let closed = Arc::new(Held::default());
++    let admission = restarted
++        .start_goal_acp_turn(
++            &target,
++            &CallerContext::local(),
++            source,
++            input("must not replay", "must-not-start"),
++            decisions::control(1, true),
++            closed.clone(),
++        )
++        .await;
++    let receipt = restarted
++        .find_goal_worker_turn(&target, &CallerContext::local(), "submitted")
++        .await;
++    closed.release.notify_one();
++    restarted.shutdown().await;
++    assert!(admission.is_err_and(|error| error.code == ErrorCode::RecoveryRequired));
++    assert_eq!(
++        receipt?
++            .ok_or("original submitted receipt missing")?
++            .turn_id,
++        turn.turn_id
++    );
++    assert_eq!(driver.prompts.load(Ordering::SeqCst), 1);
++    assert_eq!(closed.prompts.load(Ordering::SeqCst), 0);
++    Ok(())
++}
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp.rs b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+index 25acc576..06d92702 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+@@ -204,20 +204,38 @@ impl ThreadService {
+             .await
+             .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
+         let view = self.load_thread(target, caller).await?;
+-        if view.recovery.is_some() {
+-            return Err(ServiceError::new(
+-                ErrorCode::RecoveryRequired,
+-                "ACP continuation requires the original session and stopped-owner evidence",
+-            ));
+-        }
+         if view.thread.goal_work.as_ref() != Some(&source)
+-            || !matches!(view.config, crate::thread::executor::Config::Acp { .. })
++            || !matches!(&view.config, crate::thread::executor::Config::Acp { .. })
+         {
+             return Err(ServiceError::new(
+                 ErrorCode::Unauthorized,
+                 "ACP source does not match this Thread",
+             ));
+         }
++        if let Some(recovery) = view.recovery {
++            if view.latest_turn.is_some() || !recovery.terminal_checkpoint {
++                return Err(ServiceError::new(
++                    ErrorCode::RecoveryRequired,
++                    "ACP continuation requires the original session and stopped-owner evidence",
++                ));
++            }
++            // Reuse idle recovery only for metadata that never admitted a
++            // Turn. This cannot import private ACP state or resubmit a prompt.
++            self.recover_thread_controlled(
++                target,
++                caller,
++                crate::thread::ThreadRecoveryRequest {
++                    source_server_instance_id: recovery.source_server_instance_id,
++                    source_cursor: recovery.source_cursor,
++                    idempotency_key: format!(
++                        "{}-restore-{}",
++                        request.idempotency_key, recovery.source_cursor
++                    ),
++                },
++                Some(control.clone()),
++            )
++            .await?;
++        }
+         self.admit_turn(
+             target,
+             caller,
+diff --git a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+index 5d3f5e85..b187db10 100644
+--- a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
++++ b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+@@ -107,6 +107,7 @@ sequenceDiagram
+ | 从未接纳且原来源已撤销 | 锁内确认缺失后，允许既有业务重试规则下的新准备 |
+ | 安全 native checkpoint、已停止 owner、效果和预算可核对 | 经既有恢复引擎继续原 Thread/Turn，不重新提交 prompt、不重放已确认读取 |
+ | 原 owner 仍活跃、pending read、来源已暂停或迟到撤销 | 拒绝继续，保留恢复/阻塞事实 |
++| ACP Thread 仅有元数据、从未接纳 Turn | 原 owner 已确认停止且工作区与来源检查通过后，沿用原 Thread 和接纳 key 创建首个 session；不声称恢复私有 session |
+ | ACP 私有会话冷恢复 | **尚未接通已确认同 session 的继续执行；保持 AcpSessionUnconfirmed** |
+ | 旧 ACP run 的迟到停止/效果观察 | 保留原身份对账；不能直接覆盖新绑定或验证新要求 |
+ 
+@@ -171,6 +172,7 @@ Goal 默认交付经过验证、可 review 的结果即完成；人工验收只
+ | Native 三节点 workflow | 实际接收区间重叠、隔离的冲突 scratch 写入、读取已检查依赖、根交付验证 |
+ | Native 冷恢复矩阵 | 安全读取、活跃旧 owner、pending read、预先暂停与接纳期间迟到暂停；保留原 Thread/Turn 与累计核算 |
+ | Managed ACP / 接替 | Rust 协议进程、共同控制拒绝通用接管、已知/未知停止与工具效果、独立分支保留、原 key 对账 |
++| ACP 元数据中断 | 实际 SQLite 关闭重开与 Rust peer；32 项共享恢复检查、11 项 Goal Thread 检查、3 次重复，以及活跃 owner / 已提交未知 prompt 拒绝；严格 Clippy 与 fmt |
+ | 预算与输入 | release/pause/SDK admission drop、丢失 ACK、冻结 quote、未知 usage 保留、真实 SQLite 时钟与显式恢复 |
+ | 当前 native 历史 checkpoint | 86 项 Goal runtime 检查、6 项证据检查、归档矩阵 3 次重复、严格全 workspace Clippy 与 fmt |
+ | 前一预算 checkpoint | 735 项 SDK 检查、4 项 Goal PTY、编辑器 10 次重复、6 个 doctest（1 ignored）；源码适用性单独核对 |
+@@ -203,4 +205,4 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
+ | S5 | native/ACP 依赖与验收接入共同执行；完成剩余恢复场景和实际 harness 资格核对 |
+ | S6 | 审计替代路径的消费者，只删除已被替代的逻辑；完成全量回归、证据发布和 PR 更新 |
+ 
+-最终交付还需：合入已获取的 main 更新；逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。
++main 的目录更新已在本地合入；registry validate/build/check 通过，产物没有漂移。最终交付还需：逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。
+diff --git a/docs/DEVELOPMENT.md b/docs/DEVELOPMENT.md
+index 18a85b58..27d2e392 100644
+--- a/docs/DEVELOPMENT.md
++++ b/docs/DEVELOPMENT.md
+@@ -57,7 +57,8 @@ remains blocked. Native workers retain the same action and frozen quote while wa
+ for current workers' provider reservations; settled unknown-cost holds remain blocked.
+ Wait begin/end facts drive the read-only projection. SDK cancellation before executor
+ dispatch reconciles the original admission without inventing actual serving evidence.
+-Confirmed ACP continuation still needs closure.
++Never-started ACP metadata can retain its Thread after confirmed owner shutdown;
++its first session is still new. Accepted private-session continuation remains blocked.
+ Managed ACP uses the same acceptance/control owner;
+ the supervisor supplies protocol/process facts. Historical unbound runs retain
+ their reconciliation path. Worker changes version the existing work and create
+diff --git a/skills/bitrouter/SKILL.md b/skills/bitrouter/SKILL.md
+index caa696e8..c3e40416 100644
+--- a/skills/bitrouter/SKILL.md
++++ b/skills/bitrouter/SKILL.md
+@@ -123,7 +123,7 @@ Native `launch <agent>` accepts catalog harnesses; `claude`, `claude-code` and
+ `codex` are shortcuts. User configuration is not edited. Existing harness processes
+ need a new launch to adopt overrides; `bro acp serve <agent>` serves ACP clients.
+ Background runs survive client exit; attach/stop/remove remain separate.
+-Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Native and managed ACP Goal workers share Thread/Turn ownership and Goal controls; generic supervisor controls cannot take over managed Turns.
++Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Native and managed ACP Goal workers share Thread/Turn ownership and Goal controls; generic supervisor controls cannot take over managed Turns. Never-started ACP metadata can recover after confirmed shutdown; private-session continuation remains limited.
+ See `references/sessions.md` for ownership and `references/decision-native.md`
+ for bounded model/context routing, MCP/skills, token reservations and its cost scope.
+ For the native BRO ACP endpoint, use bare `bro acp serve --model openai/gpt-5`.
+diff --git a/skills/bitrouter/references/cli.md b/skills/bitrouter/references/cli.md
+index 99154901..fe766aa9 100644
+--- a/skills/bitrouter/references/cli.md
++++ b/skills/bitrouter/references/cli.md
+@@ -750,6 +750,9 @@ seconds. Generic supervisor lease/control commands cannot take over those Turns.
+ Actual session/model-route acknowledgements and public observations are retained;
+ private context/provider/model usage remains unreported. Cold inspection alone
+ does not resume a session; confirmed session recovery remains under qualification.
++Metadata that never accepted a Turn can recover its original Thread only after
++confirmed source-owner shutdown and ordinary workspace/source checks; it then
++creates its first session, without replaying an earlier prompt.
+ 
+ The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
+ use the existing approval, exclusive execution and durable result barriers;

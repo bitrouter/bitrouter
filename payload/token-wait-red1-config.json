@@ -1,0 +1,19 @@
+{
+  "id": "token-wait-red1",
+  "scope": "Reproduce current worker refusal instead of waiting for another current worker's in-flight quote; domain/real SQLite accounting fixture, no provider dispatched",
+  "jobs": [
+    {
+      "name": "contention",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope)"
+      ]
+    }
+  ]
+}

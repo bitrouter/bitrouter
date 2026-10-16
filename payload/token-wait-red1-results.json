@@ -1,0 +1,33 @@
+{
+  "source": "token-wait-red1-source.json",
+  "scope": "Reproduce current worker refusal instead of waiting for another current worker's in-flight quote; domain/real SQLite accounting fixture, no provider dispatched",
+  "startedAt": "2026-10-16T15:18:57.895Z",
+  "runs": [
+    {
+      "name": "contention",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope)"
+      ],
+      "log": "token-wait-red1-contention.log",
+      "startedAt": "2026-10-16T15:18:57.895Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:20:06.592Z",
+      "summaries": [
+        "     Summary [   0.121s] 1 test run: 0 passed, 1 failed, 1830 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T15:20:06.807Z",
+  "changed": [],
+  "passed": false
+}

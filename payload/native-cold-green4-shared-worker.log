@@ -1,0 +1,17 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 27.85s
+────────────
+ Nextest run ID 623b4154-0bcd-4cf1-adae-c59a0df01c75 with nextest profile: default
+    Starting 10 tests across 3 binaries (622 tests skipped)
+        PASS [   0.036s] ( 1/10) bitrouter-orchestrator service::tests::worker::waiting::revoked_worker_waiting_on_admission_lock_cannot_accept_a_turn
+        PASS [   0.117s] ( 2/10) bitrouter-orchestrator service::tests::worker::acp::acp_last_dispatch_check_rejects_changed_owner_source_and_workspace_grant
+        PASS [   0.347s] ( 3/10) bitrouter-orchestrator service::tests::worker::decisions::revoked_native_decision_waits_for_usage_settlement_before_finishing
+        PASS [   0.407s] ( 4/10) bitrouter-orchestrator service::tests::worker::failed_host_outcome_ack_retains_provider_evidence_without_running_its_tools
+        PASS [   0.481s] ( 5/10) bitrouter-orchestrator service::tests::worker::revoked_worker_source_cannot_ask_for_or_launch_configured_verification
+        PASS [   0.548s] ( 6/10) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention
+        PASS [   0.663s] ( 7/10) bitrouter-orchestrator service::tests::worker::native_workers_share_one_budget_and_ordinary_rpcs_cannot_bypass_it
+        PASS [   0.997s] ( 8/10) bitrouter-orchestrator service::tests::worker::decisions::native_decisions_use_shared_admission_and_require_host_outcome_ack
+        PASS [   1.480s] ( 9/10) bitrouter-orchestrator service::tests::worker::waiting::native_worker_waits_for_known_capacity_and_replays_only_original_admission
+        PASS [   2.740s] (10/10) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_refuses_withdrawn_sources_deadlines_and_unknown_workspace_owners
+────────────
+     Summary [   2.745s] 10 tests run: 10 passed, 622 skipped

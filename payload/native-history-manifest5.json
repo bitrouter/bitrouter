@@ -1,0 +1,197 @@
+{
+  "createdAt": "2026-10-16T17:44:24.444Z",
+  "files": {
+    "NATIVE_HISTORY_INDEX.md": {
+      "bytes": 3499,
+      "sha256": "91bdeaea478ef083e2cd733687e3597a8dfa4bbd8bdbf935cc341961852cbeb8"
+    },
+    "native-history-applicability5.json": {
+      "bytes": 2189,
+      "sha256": "005665cca472224df503a5f75099c3b4959659eb2bc643c35c618dc42f2ef166"
+    },
+    "native-history-final5-files.tar.gz": {
+      "bytes": 45507,
+      "sha256": "53819431a1417dd46b1368e5618121e85019651965536dabcd3df0bbf66a910f"
+    },
+    "native-history-final5.patch": {
+      "bytes": 129308,
+      "sha256": "0771f8a87909853d83f586980e7cebd41224ec160bfa133ea7c6ee8f4f211426"
+    },
+    "native-history-follow4-archive-stress.log": {
+      "bytes": 1891,
+      "sha256": "fa1c1dc3ad30c78e44513c40bcaafae75ac2181ae90513d8bbde33251ddfedc4"
+    },
+    "native-history-follow4-audit.json": {
+      "bytes": 94,
+      "sha256": "a53552cc34ed4ec45e2ebf05eed12b73a58c44e92c5396cb370a183e68d00fe0"
+    },
+    "native-history-follow4-config.json": {
+      "bytes": 885,
+      "sha256": "08a2a735b1b547b411554e5b08f8b1cd333933a7b53bbe35b20696cee84b92fe"
+    },
+    "native-history-follow4-files.tar.gz": {
+      "bytes": 15979,
+      "sha256": "496383962ca5e6a622c65cb8a428d3f9e04d2053edfc7de2fea3a840eaaadd39"
+    },
+    "native-history-follow4-goal-runtime.log": {
+      "bytes": 13675,
+      "sha256": "5cbffd31d1647bbd96d0b40b2fa295b76b87cba9774b7e941e8dc405fa762daf"
+    },
+    "native-history-follow4-results.json": {
+      "bytes": 1699,
+      "sha256": "872f9b2a9c0bd318f3c7d2b0f6d871bbe7680693503405e61a0df9e61442dbae"
+    },
+    "native-history-follow4-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-history-follow4-source.json": {
+      "bytes": 160558,
+      "sha256": "0213f1d9dcf6d7f647fa8aa3be30ce307976a4a29e0347d1c12d297f0fde4c07"
+    },
+    "native-history-follow4-source.patch": {
+      "bytes": 11413,
+      "sha256": "eea878dadd764d0c77f0e1e484b13ef1dfb2e14282ed92973592a85e841685e5"
+    },
+    "native-history-green1-archive-boundary.log": {
+      "bytes": 1997,
+      "sha256": "3c18a79aba02047d04b463e2fc525b6888ce0a95b0df92d78ccf82ff26d60ec8"
+    },
+    "native-history-green1-audit.json": {
+      "bytes": 93,
+      "sha256": "366c1d4cd87c6897e388e970b6e9f1870bd9f5c3b872f4da6f4c2c4a9b6dc633"
+    },
+    "native-history-green1-config.json": {
+      "bytes": 1016,
+      "sha256": "63210cdd94c1586b86144bb531f9544aea9169daafc0a3bb8050fa413ccd3969"
+    },
+    "native-history-green1-files.tar.gz": {
+      "bytes": 14254,
+      "sha256": "05769779771c6a34160ff483874b650f2ed4f09fb452467dcc334473b515b395"
+    },
+    "native-history-green1-fixture-audit.json": {
+      "bytes": 122492,
+      "sha256": "5e3fbc36941ae4f6926302ed9a8f2469492924477eb056e7d40fa7fee6a91c06"
+    },
+    "native-history-green1-fixture-runner.mjs": {
+      "bytes": 1836,
+      "sha256": "7f35cf93f54c6b2cac230e6528bc73f940a0a1d0acd9740089a19d4e3aedcc05"
+    },
+    "native-history-green1-fixture.tar.gz": {
+      "bytes": 6320191,
+      "sha256": "0c3c8daa6d9451c26cded37e476ce2e3247c4262672657727e6631a5b6f10226"
+    },
+    "native-history-green1-results.json": {
+      "bytes": 1200,
+      "sha256": "f3262cc28a7ea34920a499301b55a3c05c9fc61ca7a52802431fe29976c728cf"
+    },
+    "native-history-green1-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-history-green1-source.json": {
+      "bytes": 160558,
+      "sha256": "2101cc3e73daf1cee57b96b78652b0e5074e2c72b3c3969717f28204b7cea92b"
+    },
+    "native-history-green1-source.patch": {
+      "bytes": 8470,
+      "sha256": "ba546c5255541332336f534e281aa7fa71438e68dfa580642fe3ff4be2ec8083"
+    },
+    "native-history-green2-archive-boundary.log": {
+      "bytes": 2630,
+      "sha256": "1b93cd0cb1622d34ed7d8c7f1702ecf13e68dae307e5471358b5dd626a2e4820"
+    },
+    "native-history-green2-audit.json": {
+      "bytes": 93,
+      "sha256": "da9eaa78d6395fb083a9f6bdaf4e86d7225d9791649d21ed2285263d59b81a79"
+    },
+    "native-history-green2-config.json": {
+      "bytes": 537,
+      "sha256": "6ec218710128630e3155059ede3ece5ba42a1295a24867cb0647bf868f6af7f3"
+    },
+    "native-history-green2-files.tar.gz": {
+      "bytes": 14309,
+      "sha256": "0f0119e12cbc8d1aa3ba4849f37d19fe816ca29afc0e5e726937f092a449020d"
+    },
+    "native-history-green2-fixture-audit.json": {
+      "bytes": 122672,
+      "sha256": "5b58a83b86321f7df38477e8e5a9c4490c21ad953b3468fa658f4339d0d64279"
+    },
+    "native-history-green2-fixture-runner.mjs": {
+      "bytes": 1836,
+      "sha256": "7f35cf93f54c6b2cac230e6528bc73f940a0a1d0acd9740089a19d4e3aedcc05"
+    },
+    "native-history-green2-fixture.tar.gz": {
+      "bytes": 6306003,
+      "sha256": "c82d14f36d8364a62fb5c389ecc155fc610905057299e582edc42119146be1ae"
+    },
+    "native-history-green2-results.json": {
+      "bytes": 1026,
+      "sha256": "deb2652114f1c1d669f96443cadb971d0311fb4e326ee5762a07a7aff961af7c"
+    },
+    "native-history-green2-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-history-green2-source.json": {
+      "bytes": 160558,
+      "sha256": "688855e5836991d80c04d2b1378c46c95f4e120a90bb2b3c0c1fbb288473cdef"
+    },
+    "native-history-green2-source.patch": {
+      "bytes": 8627,
+      "sha256": "cf986c3b7079fa9a3391c74932151d40978439753c222986c712d8325c1d9839"
+    },
+    "native-history-green3-archive-boundary.log": {
+      "bytes": 1121,
+      "sha256": "39c28446b288c7bfffff683cafb1270e0a69805e31a26f6ef5d8210e525b3848"
+    },
+    "native-history-green3-audit.json": {
+      "bytes": 93,
+      "sha256": "e4d405351ae376a6bd174b69d225aa8be06c1ef6a4f8665660f0f3db8ce51b62"
+    },
+    "native-history-green3-clippy.log": {
+      "bytes": 418,
+      "sha256": "f9d9b603b7975cf2fd92d389db976f4d91ef9387ada81b7d957614ccfc9a48f4"
+    },
+    "native-history-green3-config.json": {
+      "bytes": 1375,
+      "sha256": "c824b1c88a3df6e5203af08eda2b26e6e9283dbb6b09aa5d358069629be2ecf4"
+    },
+    "native-history-green3-evidence.log": {
+      "bytes": 1756,
+      "sha256": "3bc3a565423865275e1fa09a9c140c6cdac8fb47ea7327404612a7a88a602838"
+    },
+    "native-history-green3-files.tar.gz": {
+      "bytes": 15979,
+      "sha256": "52e0763080eeaf4c0d31fb04403b104b638da04884b7f1c3eab3985ac57b5fe3"
+    },
+    "native-history-green3-fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "native-history-green3-results.json": {
+      "bytes": 2681,
+      "sha256": "9c034b2a11406047b2d43f2eb8918ac0dcab1e61290323b3064ff350d6e38466"
+    },
+    "native-history-green3-runner.mjs": {
+      "bytes": 3766,
+      "sha256": "307d83feade8f2452e7da7ee2b9d7ed9080c542a62df7d6c64b694eb909b1a95"
+    },
+    "native-history-green3-source.json": {
+      "bytes": 160558,
+      "sha256": "3b94eecf138eba4a4da83b670f696455b3d21571ac58c8c3c496e684c3b2ad02"
+    },
+    "native-history-green3-source.patch": {
+      "bytes": 11413,
+      "sha256": "eea878dadd764d0c77f0e1e484b13ef1dfb2e14282ed92973592a85e841685e5"
+    },
+    "native-history-index5-runner.mjs": {
+      "bytes": 4063,
+      "sha256": "ea4be375ef7c6d0d702abd5f5f03c52bb7100b386389c1d506a90f65c50eff6e"
+    },
+    "native-history-prior-ledger5.md": {
+      "bytes": 95602,
+      "sha256": "ae9db9c233905bac64375ef811265664869c4de89d96cd22c7e956c190bccb5a"
+    }
+  }
+}

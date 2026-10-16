@@ -1,0 +1,15 @@
+{
+  "createdAt": "2026-10-16T20:33:35.305Z",
+  "head": "6a72cfb1da0e2d4641a96097e09a507d7d032189",
+  "base": "fe9df6f8157945d3559789926326a7effb468db1",
+  "bundle": "refactor-local-checkpoint-6a72cfb1.bundle",
+  "bundleSha256": "97baf152f7f694e83f21481574debf36586bbae6a848aee4f707b374ec8aa818",
+  "bundleVerification": "refactor-local-checkpoint-6a72cfb1.bundle.verify.log",
+  "manifest": "acp-continuation-manifest16.json",
+  "manifestSha256": "d3b8eee66d1563c961607bd59b6255f9796c207ea59fc3d3b1dc9cc8a811a038",
+  "verifiedCommittedFiles": 29,
+  "workingTreeClean": true,
+  "pushed": false,
+  "goalComplete": false,
+  "scope": "Completed local refactor checkpoint. Bundle requires its recorded public PR base. Final15 passed full regression without LEAK or source drift; actual vendor/provider live requalification remains unpassed. Independent archive publication and exact-head hosted CI follow separately."
+}

@@ -1,0 +1,22 @@
+import {execFileSync} from 'node:child_process';
+import {readFileSync,writeFileSync,mkdtempSync,readdirSync,statSync,existsSync,copyFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import path from 'node:path';
+const cwd='/Users/kelsen/.codex/worktrees/d91b/bitrouter',a='/Users/kelsen/.codex/archives/bro-refactor/2026-10-16',sha=b=>createHash('sha256').update(b).digest('hex');
+const source=JSON.parse(readFileSync(`${a}/mcp-binding-metadata5-source.json`)),result=JSON.parse(readFileSync(`${a}/mcp-binding-metadata5-results.json`));
+if(!result.passed||result.changed.length||result.runs.some(r=>r.leaks.length))throw Error('gates are not clean');
+const audits=[];for(const id of ['mcp-binding-red1','mcp-binding-focus2','mcp-binding-focus3','mcp-binding-metadata5']){const manifest=JSON.parse(readFileSync(`${a}/${id}-source.json`)),dir=mkdtempSync(`/tmp/${id}-audit-`);execFileSync('tar',['-xzf',`${a}/${id}-files.tar.gz`,'-C',dir]);const walk=d=>readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):[path.join(d,e.name)]);const files=walk(dir).map(p=>path.relative(dir,p));if(files.some(n=>sha(readFileSync(path.join(dir,n)))!==manifest.files[n]))throw Error('tar source mismatch');audits.push({source:`${id}-source.json`,extracted:dir,verifiedFiles:files.length,passed:true});}
+const names=[...new Set(execFileSync('git',['ls-files','-c','-o','--exclude-standard','-z'],{cwd}).toString().split('\0').filter(Boolean))];const files=Object.fromEntries(names.filter(n=>existsSync(path.join(cwd,n))).map(n=>[n,sha(readFileSync(path.join(cwd,n)))]));const changed=Object.keys(files).filter(n=>source.files[n]!==files[n]);if(changed.some(n=>!n.endsWith('.md')))throw Error('unexpected executable drift');
+writeFileSync(`${a}/mcp-binding-applicability6.json`,JSON.stringify({capturedAt:new Date().toISOString(),base:source.head,audits,changedSinceGates:changed,onlyDocumentationChanged:true,files},null,2)+'\n');
+writeFileSync(`${a}/mcp-binding-final6.patch`,execFileSync('git',['diff','--binary'],{cwd}));const dirty=execFileSync('git',['ls-files','-m','-o','--exclude-standard','-z'],{cwd}).toString().split('\0').filter(Boolean);execFileSync('tar',['-czf',`${a}/mcp-binding-final6-files.tar.gz`,'--',...dirty],{cwd});copyFileSync('/tmp/bro-mcp-binding-index6.mjs',`${a}/mcp-binding-index-runner6.mjs`);
+writeFileSync(`${a}/MCP_BINDING_INDEX.md`,`# Frozen MCP binding local checkpoint
+
+Parent ${source.head}; existing PR unpushed.
+
+Red1 actually returns Ok for native admission after selected descriptors change; no MCP tool-use claim. Focus2 retains a test result type inference compile failure. Focus3 fixes that and passes79 Goal cases,strict Clippy/fmt; separate8-case boundary run has1 LEAK in native late-stop regression. Cause unconfirmed. Process-probe4 samples only the owned tree while3 cases run x5;49 processes seen,none remain observed,no leaks,no limits/timeouts changed,no signals. Instrumented repeats do not fix or explain the prior event. Source5 adds the ACP existing-metadata/no-Turn boundary and passes8 cases,strict Clippy/fmt,79 Goal cases without leaks or source drift.
+
+New native Thread and ACP Thread/Turn admission verify existing saved selected descriptor hashes; accepted receipts remain original after config changes. Test hashes now use actual descriptors. No store/API format or permission changes. Complete no-acceptance re-preparation after a rejected preflight remains pending A16 work. All four original code tars independently extracted and verified; applicability6 proves final differences are documentation only. Manual test temporary directories/memory DBs were not captured; Cargo-built Rust reproduction fixtures remain versioned. Full native/ACP cold/session recovery, token quote wait/UI, live provider/harness and full final regression still open.
+
+See mcp-binding-manifest6.json and process-probe4 JSON/logs. Nextest semantics: https://www.nexte.st/docs/features/leaky-tests/ . Preserve all original results.
+`);
+const namesForManifest=readdirSync(a).filter(n=>n.startsWith('mcp-binding-')||n==='MCP_BINDING_INDEX.md').filter(n=>n!=='mcp-binding-manifest6.json').sort();writeFileSync(`${a}/mcp-binding-manifest6.json`,JSON.stringify({base:source.head,files:namesForManifest.map(n=>({file:n,bytes:statSync(`${a}/${n}`).size,sha256:sha(readFileSync(`${a}/${n}`))}))},null,2)+'\n');console.log(JSON.stringify({audits,onlyDocumentationChanged:changed,archivedFiles:namesForManifest.length}));

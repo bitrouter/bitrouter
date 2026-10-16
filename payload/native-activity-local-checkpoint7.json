@@ -1,0 +1,8 @@
+{
+  "commit": "65e4150d6533ea42762331b991a04b0eafbd6a95",
+  "bundle": "native-activity-local-checkpoint7.bundle",
+  "sha256": "77bed6a836265de67af85d636cca9e01653efa62c9902eb0e0726287e36ff67b",
+  "bytes": 284131,
+  "bundleVerified": true,
+  "publication": "local only; original PR remains fe9; full goal incomplete"
+}

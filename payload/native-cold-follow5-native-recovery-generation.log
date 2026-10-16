@@ -1,0 +1,50 @@
+    Finished `test` profile [unoptimized] target(s) in 0.13s
+────────────
+ Nextest run ID 44620244-831b-40f1-93fb-1ad783f30b7f with nextest profile: default
+    Starting 43 tests across 3 binaries (589 tests skipped)
+        PASS [   0.475s] ( 1/43) bitrouter-orchestrator agent::tests::native_reasoning_requires_host_authority_for_model_followup
+        PASS [   0.019s] ( 2/43) bitrouter-orchestrator service::tests::generation::cancelled_provider_work_settles_before_shutdown_releases_ownership
+        PASS [   0.021s] ( 3/43) bitrouter-orchestrator service::tests::generation::generation_replay_cold_reads_and_direct_native_rpcs_preserve_goal_authority
+        PASS [   0.525s] ( 4/43) bitrouter-orchestrator agent::tests::native::native_spend_limit_stops_new_model_work_without_losing_settlement
+        PASS [   0.022s] ( 5/43) bitrouter-orchestrator service::tests::generation::input_generation_overlaps_owner_work_without_bypassing_thread_or_global_capacity
+        PASS [   0.019s] ( 6/43) bitrouter-orchestrator service::tests::generation::owner_changed_during_goal_callback_blocks_provider_dispatch
+        PASS [   0.025s] ( 7/43) bitrouter-orchestrator service::tests::generation::routing::policy_decisions_are_durable_and_root_ack_precedes_generation
+        PASS [   0.028s] ( 8/43) bitrouter-orchestrator service::tests::generation::stopped_generation_reopens_without_workspace_or_replaying_the_original_request
+        PASS [   0.019s] ( 9/43) bitrouter-orchestrator service::tests::generation::tool_output_is_retained_as_attempt_evidence_but_never_executed_or_completed
+        PASS [   0.016s] (10/43) bitrouter-orchestrator service::tests::generation::unacknowledged_generation_outcome_never_becomes_a_completed_turn
+        PASS [   0.591s] (11/43) bitrouter-orchestrator agent::tests::native::native_output_budget_follows_the_effort_eligible_route
+        PASS [   0.016s] (12/43) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_reuses_its_key_and_rejects_conflicting_input
+        PASS [   0.013s] (13/43) bitrouter-orchestrator service::tests::recovery::cold_load_rechecks_owner_grants_epoch_and_record_capacity_without_partial_hot_install
+        PASS [   0.411s] (14/43) bitrouter-orchestrator service::tests::generation::waiting::generation_capacity_wait_bounds_time_and_honors_revocation_and_input_limits
+        PASS [   1.024s] (15/43) bitrouter-orchestrator agent::tests::native::native_cumulative_tool_limit_rejects_later_effects
+        PASS [   1.085s] (16/43) bitrouter-orchestrator agent::tests::native::native_legacy_capacity_upgrades_between_runs_and_replays
+        PASS [   0.023s] (17/43) bitrouter-orchestrator service::tests::recovery::later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_epochs
+        PASS [   1.177s] (18/43) bitrouter-orchestrator agent::tests::native::native_agent_executes_context_decision_through_core_and_thread_commit_channel
+        PASS [   1.270s] (19/43) bitrouter-orchestrator agent::tests::native::native_subscription_reservation_survives_configuration_restore
+        PASS [   0.462s] (20/43) bitrouter-orchestrator service::tests::recovery::empty_thread_inspection_releases_a_valid_marker_after_confirmed_recovery
+        PASS [   0.520s] (21/43) bitrouter-orchestrator service::tests::recovery::missing_stable_identity_is_reported_as_invalid_and_never_regenerated
+        PASS [   1.715s] (22/43) bitrouter-orchestrator agent::tests::native::native_core_tool_effect_still_requires_native_approval
+        PASS [   0.736s] (23/43) bitrouter-orchestrator service::tests::recovery::interrupted_stream_recovery_keeps_display_evidence_out_of_context_and_usage_unknown
+        PASS [   0.035s] (24/43) bitrouter-orchestrator service::tests::recovery::recovery_commit_failure_stays_blocked_and_lost_ack_adopts_only_the_exact_committed_batch
+        PASS [   0.027s] (25/43) bitrouter-orchestrator service::tests::recovery::recovery_operation_survives_caller_disconnect_and_serializes_duplicate_acceptance
+        PASS [   0.018s] (26/43) bitrouter-orchestrator service::tests::recovery::recovery_reader_limit_does_not_hold_admission_and_releases_after_loading
+        PASS [   0.977s] (27/43) bitrouter-orchestrator service::tests::recovery::load_restores_fifo_pause_cancel_and_pending_approval_but_old_reply_cannot_authorize
+        PASS [   0.540s] (28/43) bitrouter-orchestrator service::tests::recovery::recovered_verification_result_must_match_the_exact_committed_invocation
+        PASS [   1.691s] (29/43) bitrouter-orchestrator service::tests::recovery::native_checkpoint_spans_small_pages_and_incomplete_prefix_cannot_recover
+        PASS [   2.494s] (30/43) bitrouter-orchestrator service::tests::recovery::committed_windows_rebuild_calls_context_and_budgets_without_replaying_completed_write
+        PASS [   1.573s] (31/43) bitrouter-orchestrator service::tests::recovery::steering_retries_use_bounded_receipt_pages
+        PASS [   1.979s] (32/43) bitrouter-orchestrator service::tests::recovery::steering_application_rebuild_uses_committed_prompt_once_and_preserves_terminal_receipts
+        PASS [   4.180s] (33/43) bitrouter-orchestrator agent::tests::native::oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_task_scope
+        PASS [   2.487s] (34/43) bitrouter-orchestrator service::tests::recovery::pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_after_recovery
+        PASS [   3.661s] (35/43) bitrouter-orchestrator service::tests::recovery::continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_without_reexecution
+        PASS [   0.528s] (36/43) bitrouter-orchestrator service::tests::recovery::uncached_acceptance_retry_pages_share_reader_limits_without_holding_admission
+        PASS [   1.415s] (37/43) bitrouter-orchestrator service::tests::recovery::terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_foreign_caller
+        PASS [   3.239s] (38/43) bitrouter-orchestrator service::tests::recovery::native_cold_recovery_reuses_core_evidence_and_views
+        PASS [   3.200s] (39/43) bitrouter-orchestrator service::tests::recovery::settled_turn_recovery_finishes_original_outcome_without_model_or_verification_replay
+        PASS [   2.891s] (40/43) bitrouter-orchestrator service::tests::recovery::stopped_terminal_thread_reopens_with_original_context_and_idempotent_recovery
+        PASS [  32.916s] (41/43) bitrouter-orchestrator agent::tests::native::native_checkpoint_capacity_failure_reports_the_resource_cause
+        PASS [  58.587s] (42/43) bitrouter-orchestrator agent::tests::native::native_long_tool_loop_completes_beyond_old_checkpoint_capacity
+        SLOW [> 60.000s] (─────) bitrouter-orchestrator service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery
+        PASS [  82.869s] (43/43) bitrouter-orchestrator service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery
+────────────
+     Summary [ 174.374s] 43 tests run: 43 passed (1 slow), 589 skipped

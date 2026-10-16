@@ -1,0 +1,55 @@
+{
+  "source": "token-wait-final4-source.json",
+  "scope": "Frozen reservation-wait source plus explicit two-branch startup barrier in the missing-tool-result Rust fixture; retain final3 failed full suite and its independently verified 116-file image. Local source qualification, not the complete refactor/live/CI exit.",
+  "startedAt": "2026-10-16T15:49:08.249Z",
+  "runs": [
+    {
+      "name": "worker-switch-stress",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "--stress-count",
+        "5",
+        "-E",
+        "test(requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause)"
+      ],
+      "log": "token-wait-final4-worker-switch-stress.log",
+      "startedAt": "2026-10-16T15:49:08.249Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:49:24.092Z",
+      "summaries": [
+        "     Summary [  15.045s] 5/5 stress run iterations: 5 passed"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "token-wait-final4-workspace.log",
+      "startedAt": "2026-10-16T15:49:24.092Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T15:59:12.096Z",
+      "summaries": [
+        "     Summary [ 587.305s] 4750 tests run: 4749 passed (6 slow), 1 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T15:59:12.323Z",
+  "changed": [],
+  "passed": false
+}

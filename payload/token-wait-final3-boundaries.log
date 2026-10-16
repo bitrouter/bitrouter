@@ -1,0 +1,20 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 06s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID fa53e47f-4ca0-4c93-8a7e-4046566322f3 with nextest profile: default
+    Starting 5 tests across 1 binary (1829 tests skipped)
+        PASS [   0.053s] (1/5) bitrouter goal_code::tests::quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion
+        PASS [   0.081s] (2/5) bitrouter goal_runtime::native_evidence::tests::undispatched_admission_and_resource_wait_never_claim_a_serving_model
+        PASS [   0.116s] (3/5) bitrouter goal_runtime::model_control::tests::frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_once
+        PASS [   0.141s] (4/5) bitrouter db::migration::m20240101_000030_bro_goal_execution_format::tests::legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals
+        PASS [   0.424s] (5/5) bitrouter goal_runtime::model_control::tests::worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope
+────────────
+     Summary [   0.437s] 5 tests run: 5 passed, 1829 skipped

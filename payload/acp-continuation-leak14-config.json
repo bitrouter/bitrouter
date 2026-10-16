@@ -1,0 +1,39 @@
+{
+  "id": "acp-continuation-leak14",
+  "scope": "Same Rust production/tests as final13, with complete Goal coordinator transport fixtures reserved globally as one workload. Investigate four reported output-pipe leaks with the original nextest detector and no runtime/stack/timeout/retry relaxation. v3 rejects any reported LEAK even with process exit code zero. Three diagnostic repetitions do not replace the final complete suite.",
+  "jobs": [
+    {
+      "name": "closed-fixtures-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "test(pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration) | test(saved_acp_intent_without_any_thread_admission_uses_its_original_action) | test(requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause) | test(active_branch_edit_preserves_independent_run_and_renews_pending_permission)"
+      ]
+    },
+    {
+      "name": "closed-fixtures-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "test(pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration) | test(saved_acp_intent_without_any_thread_admission_uses_its_original_action) | test(requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause) | test(active_branch_edit_preserves_independent_run_and_renews_pending_permission)"
+      ]
+    },
+    {
+      "name": "closed-fixtures-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "test(pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration) | test(saved_acp_intent_without_any_thread_admission_uses_its_original_action) | test(requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause) | test(active_branch_edit_preserves_independent_run_and_renews_pending_permission)"
+      ]
+    }
+  ]
+}

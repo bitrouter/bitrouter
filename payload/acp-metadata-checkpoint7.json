@@ -1,0 +1,15 @@
+{
+  "createdAt": "2026-10-16T18:27:34.305Z",
+  "head": "ebbbc000a500486889be80dfc87bf180cc0d7a69",
+  "base": "fe9df6f8157945d3559789926326a7effb468db1",
+  "bundle": "refactor-local-checkpoint-ebbbc000.bundle",
+  "bundleSha256": "2635cf85c535f03854e9f938d671b72a673f070af75f81bc9a222c6441917535",
+  "bundleVerification": "refactor-local-checkpoint-ebbbc000.bundle.verify.log",
+  "manifest": "acp-metadata-manifest6.json",
+  "manifestSha256": "e3a4df573c6e642ff65a90cfba29ed781d82b23a852946c7b293ec723632d1aa",
+  "verifiedCommittedFiles": 12,
+  "workingTreeClean": true,
+  "pushed": false,
+  "goalComplete": false,
+  "scope": "Local acp-metadata checkpoint only. Bundle requires its existing public PR base commit. Final full-source, remaining refactor/live, independent publication and hosted CI gates remain open."
+}

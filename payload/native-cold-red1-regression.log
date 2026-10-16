@@ -1,0 +1,37 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 53.46s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 9cf8efb0-7b6c-4702-ad2d-f0d551220c0e with nextest profile: default
+    Starting 1 test across 1 binary (1830 tests skipped)
+        FAIL [   0.783s] (1/1) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading ... FAILED
+
+    failures:
+
+    failures:
+        goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1830 filtered out; finished in 0.77s
+
+  stderr ───
+    Native recovery fixture safe: /var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpvatoNC
+
+    thread 'goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading' (1753009) panicked at apps/bitrouter/src/goal_runtime/tests/native_recovery.rs:380:17:
+    safe accepted native checkpoint was only projected as unknown
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.801s] 1 test run: 0 passed, 1 failed, 1830 skipped
+        FAIL [   0.783s] (1/1) bitrouter goal_runtime::tests::threads::native_recovery::native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading
+error: test run failed

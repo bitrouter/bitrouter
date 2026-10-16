@@ -1,0 +1,29 @@
+{
+  "source": "native-activity-source2.json",
+  "startedAt": "2026-10-16T11:33:46.984Z",
+  "scope": "S4 bounded native SDK/material projection; full refactor and native activity gates remain open",
+  "runs": [
+    {
+      "id": "nextest",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_goal_uses_real_thread_turn) | test(received_content_survives)"
+      ],
+      "log": "native-activity-focus2.log",
+      "startedAt": "2026-10-16T11:33:46.984Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T11:35:01.957Z"
+    }
+  ],
+  "finishedAt": "2026-10-16T11:35:02.149Z",
+  "changed": [],
+  "passed": true
+}

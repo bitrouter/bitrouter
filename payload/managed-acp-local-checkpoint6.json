@@ -1,0 +1,26 @@
+{
+  "capturedAt": "2026-10-16T09:28:39.678Z",
+  "commit": "9d0460696b39b12b8585334b401224fbafde6494",
+  "parent": "d2c5ad519c438d655b3ac43786c8e4a832d4f9b8",
+  "qualifiedSource": "managed-acp-source6.json",
+  "gates": "managed-acp-gates6.json",
+  "executableSourceMatches": true,
+  "postGateChanges": [
+    "crates/bitrouter-orchestrator/README.md",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "skills/bitrouter/references/cli.md"
+  ],
+  "postGateChangesAreMarkdownOnly": true,
+  "postGateMarkdownSha256": {
+    "crates/bitrouter-orchestrator/README.md": "3fe39ebbd1887568967e5eb8a4a5f0d3bee9105a12944c494335d8e20f19be30",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "a0fee0b2dfc5e26641c9489dca1af8f6cb2c1cc84e7345015522f51af5d9377a",
+    "skills/bitrouter/references/cli.md": "ff6378bb4545430d16b690b23d3cea7a79343c6fc8e2592caa7638310ae55697"
+  },
+  "workingTreeClean": true,
+  "bundle": "managed-acp-local-checkpoints6.bundle",
+  "bundleSha256": "24eefeb6065b136df8829eadb7453a58be85d38e185a83c447c3670324935b86",
+  "published": false,
+  "pullRequest": "https://github.com/bitrouter/bitrouter/pull/981",
+  "remoteHeadLastVerified": "fe9df6f8157945d3559789926326a7effb468db1",
+  "qualification": "Local partial S3 checkpoint. Complete refactor, final acceptance, archive publication, PR update and hosted CI remain outstanding."
+}

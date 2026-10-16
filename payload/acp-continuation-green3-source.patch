@@ -1,0 +1,1332 @@
+diff --git a/apps/bitrouter/src/goal_runtime/acp.rs b/apps/bitrouter/src/goal_runtime/acp.rs
+index 7105d391..ab2a200e 100644
+--- a/apps/bitrouter/src/goal_runtime/acp.rs
++++ b/apps/bitrouter/src/goal_runtime/acp.rs
+@@ -1,7 +1,9 @@
+ //! External Goal workers are adapters of the same Thread/Turn service as native work.
+ use super::*;
+ use bitrouter_orchestrator::control::WorkControl;
+-use bitrouter_orchestrator::service::worker::acp::{Binding, Driver, Outcome, Owner, Stop};
++use bitrouter_orchestrator::service::worker::acp::{
++    Binding, Continuation, Driver, Outcome, Owner, Stop,
++};
+ use bitrouter_orchestrator::thread::executor::{AcpConfig, AcpThreadRequest};
+ use bitrouter_orchestrator::thread::{PermissionProfile, ThreadTarget};
+ use bitrouter_orchestrator::turn::TurnRequest;
+@@ -11,6 +13,7 @@ struct Adapter {
+     threads: bitrouter_orchestrator::service::ThreadService,
+     request: StartRunRequest,
+     control: Arc<dyn WorkControl>,
++    grant: SessionGrant,
+ }
+ 
+ struct Dispatch<'a> {
+@@ -55,6 +58,7 @@ impl Driver for Adapter {
+             return Err("Original ACP process is not confirmed running; no startup replay".into());
+         }
+         Ok(Binding {
++            restored_from: None,
+             run_id: snapshot.run_id,
+             session_id: snapshot
+                 .native_session_id
+@@ -68,6 +72,87 @@ impl Driver for Adapter {
+                 .map_err(|error| error.to_string())?,
+         })
+     }
++    async fn restore(
++        &self,
++        owner: &Owner,
++        key: &str,
++        saved: &Continuation,
++    ) -> std::result::Result<Binding, String> {
++        let result = async {
++            let previous = &saved.binding;
++            let SessionResponse::Snapshot { snapshot } = self
++                .supervisor
++                .dispatch(SessionRequest::authorized(
++                    &self.grant,
++                    SessionCommand::Snapshot {
++                        run_id: previous.run_id.clone(),
++                    },
++                ))
++                .await?
++            else {
++                anyhow::bail!("original ACP snapshot missing");
++            };
++            let original_owner = snapshot
++                .managed_by
++                .as_ref()
++                .context("original session owner missing")?;
++            // Cold supervisor summaries intentionally omit capabilities. The
++            // original Turn binding owns that declaration; the new controller
++            // must independently negotiate and accept the exact session/load.
++            anyhow::ensure!(
++                original_owner == &saved.owner
++                    && original_owner.thread_id == owner.thread_id
++                    && original_owner.turn_id == owner.turn_id
++                    && original_owner.server_instance_id != owner.server_instance_id
++                    && snapshot.native_session_id.as_ref() == Some(&previous.session_id)
++                    && snapshot.agent_id == previous.agent_id
++                    && snapshot.owned_process_terminated()
++                    && snapshot.pending_permissions.is_empty()
++                    && previous
++                        .capabilities
++                        .as_ref()
++                        .is_some_and(|caps| caps["load"] == true),
++                "original ACP session lacks stopped-owner/load evidence"
++            );
++            let (_, replay) = self
++                .supervisor
++                .managed_observation(original_owner, &previous.run_id, 0)
++                .await?;
++            anyhow::ensure!(
++                replay.history_complete
++                    && replay.events.iter().all(|event| !matches!(
++                        event.kind,
++                        crate::supervisor::SessionEventKind::UserPrompt { .. }
++                            | crate::supervisor::SessionEventKind::Update { .. }
++                            | crate::supervisor::SessionEventKind::PayloadOmitted { .. }
++                            | crate::supervisor::SessionEventKind::Permission { .. }
++                    )),
++                "original ACP startup has incomplete or possibly executed activity"
++            );
++            let mut request = self.request.clone();
++            request.session = crate::acp_cli::SessionSelection::Load(previous.session_id.clone());
++            request.parent_run_id = Some(previous.run_id.clone());
++            let restored = Adapter {
++                supervisor: self.supervisor.clone(),
++                threads: self.threads.clone(),
++                control: self.control.clone(),
++                grant: self.grant.clone(),
++                request,
++            };
++            let mut binding = restored
++                .start(owner, key)
++                .await
++                .map_err(anyhow::Error::msg)?;
++            anyhow::ensure!(
++                binding.session_id == previous.session_id,
++                "ACP did not restore the requested session"
++            );
++            binding.restored_from = Some(previous.run_id.clone());
++            Ok::<_, anyhow::Error>(binding)
++        }
++        .await;
++        result.map_err(|error| format!("{error:#}"))
++    }
+     async fn prompt(
+         &self,
+         owner: &Owner,
+@@ -204,6 +289,87 @@ impl Driver for Adapter {
+ }
+ 
+ impl Coordinator {
++    fn acp_driver(
++        &self,
++        goal: &GoalSnapshot,
++        task: &Task,
++        execution: &Execution,
++        mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
++        control: Arc<dyn WorkControl>,
++    ) -> Result<Arc<Adapter>> {
++        super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
++        let workspace = self.native_workspace(goal, execution)?;
++        let harness = task
++            .execution_harness(execution)
++            .context("ACP worker harness missing")?;
++        Ok(Arc::new(Adapter {
++            supervisor: self.supervisor.clone(),
++            threads: self.threads.clone(),
++            control: control.clone(),
++            grant: self.grant.clone(),
++            request: StartRunRequest {
++                action_request_id: String::new(),
++                client_id: None,
++                label: Some(format!("{} / {}", goal.title, task.spec.title)),
++                agent_id: harness.into(),
++                prompt: None,
++                cwd: workspace,
++                routing: Default::default(),
++                launch: crate::acp_cli::LaunchOptions {
++                    required_session_route: task.spec.resources.model_route.clone(),
++                    mcp_servers,
++                    ..Default::default()
++                },
++                session: Default::default(),
++                presentation: crate::supervisor::Presentation::Background,
++                parent_run_id: None,
++                allow_shared_directory: false,
++                permission_policy: Default::default(),
++                result_schema: None,
++            },
++        }))
++    }
++
++    pub(super) async fn resume_acp_worker(
++        &self,
++        goal: &GoalSnapshot,
++        task: &Task,
++        execution: &Execution,
++    ) -> Result<bitrouter_orchestrator::turn::TurnReceipt> {
++        let source = super::native::source(goal, task, execution)?;
++        let link = execution
++            .thread
++            .as_ref()
++            .context("original ACP Thread missing")?;
++        let control = model_control::ModelControl::for_worker(self, goal, source.clone());
++        let prepared = execution
++            .resources
++            .as_ref()
++            .context("saved ACP resources missing")?;
++        let mcp_servers =
++            super::resources::servers(&self.routing.snapshot_config(), &prepared.selection)?;
++        let driver = self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
++        let receipt = self
++            .threads
++            .resume_goal_acp_turn(
++                &ThreadTarget {
++                    thread_id: link.thread_id.clone(),
++                    server_instance_id: self.threads.capabilities().server_instance_id,
++                },
++                &CallerContext::local(),
++                source,
++                &super::native::turn_key(&execution.id),
++                control,
++                driver,
++            )
++            .await?;
++        anyhow::ensure!(
++            receipt.thread_id == link.thread_id && receipt.turn_id == link.turn_id,
++            "ACP continuation changed its accepted identity"
++        );
++        Ok(receipt)
++    }
++
+     pub(super) async fn acp_run_snapshot(
+         &self,
+         goal: &GoalSnapshot,
+@@ -329,37 +495,37 @@ impl Coordinator {
+             .find_goal_worker_turn(&target, &caller, &key)
+             .await?
+         {
+-            Some(turn) => turn,
++            Some(turn) => {
++                if self
++                    .threads
++                    .read_stored_thread_view(&target, &caller)
++                    .await?
++                    .recovery
++                    .is_some()
++                {
++                    let driver =
++                        self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
++                    self.threads
++                        .resume_goal_acp_turn(
++                            &target,
++                            &caller,
++                            source.clone(),
++                            &key,
++                            control,
++                            driver,
++                        )
++                        .await?
++                } else {
++                    turn
++                }
++            }
+             None => {
+                 // Thread metadata can outlive a missing Turn admission. Check
+                 // the exact descriptors again before constructing its driver;
+                 // an existing Turn receipt remains readable after config edits.
+                 super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
+-                let driver = Arc::new(Adapter {
+-                    supervisor: self.supervisor.clone(),
+-                    threads: self.threads.clone(),
+-                    control: control.clone(),
+-                    request: StartRunRequest {
+-                        action_request_id: String::new(),
+-                        client_id: None,
+-                        label: Some(format!("{} / {}", goal.title, task.spec.title)),
+-                        agent_id: harness.into(),
+-                        prompt: None,
+-                        cwd: workspace,
+-                        routing: Default::default(),
+-                        launch: crate::acp_cli::LaunchOptions {
+-                            required_session_route: task.spec.resources.model_route.clone(),
+-                            mcp_servers,
+-                            ..Default::default()
+-                        },
+-                        session: Default::default(),
+-                        presentation: crate::supervisor::Presentation::Background,
+-                        parent_run_id: None,
+-                        allow_shared_directory: false,
+-                        permission_policy: Default::default(),
+-                        result_schema: None,
+-                    },
+-                });
++                let driver =
++                    self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
+                 self.threads
+                     .wait_goal_acp_turn(
+                         &target,
+diff --git a/apps/bitrouter/src/goal_runtime/native.rs b/apps/bitrouter/src/goal_runtime/native.rs
+index bfa97dbd..449ea5ce 100644
+--- a/apps/bitrouter/src/goal_runtime/native.rs
++++ b/apps/bitrouter/src/goal_runtime/native.rs
+@@ -343,27 +343,31 @@ impl Coordinator {
+             .read_stored_turn(&target, &caller, &binding.turn_id)
+             .await?;
+         let external = task.execution_harness(execution).is_some();
+-        if !external && turn.status == TurnStatus::RecoveryRequired {
++        if turn.status == TurnStatus::RecoveryRequired {
+             let source = source(goal, task, execution)?;
+             if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
+                 let control = model_control::ModelControl::for_worker(self, goal, source.clone());
+-                match self
+-                    .threads
+-                    .resume_goal_worker_turn(
+-                        &target,
+-                        &caller,
+-                        &source,
+-                        &binding.turn_id,
+-                        &turn_key(&execution.id),
+-                        control,
+-                    )
+-                    .await
+-                {
++                let continuation = if external {
++                    self.resume_acp_worker(goal, task, execution).await
++                } else {
++                    self.threads
++                        .resume_goal_worker_turn(
++                            &target,
++                            &caller,
++                            &source,
++                            &binding.turn_id,
++                            &turn_key(&execution.id),
++                            control,
++                        )
++                        .await
++                        .map_err(anyhow::Error::from)
++                };
++                match continuation {
+                     Ok(receipt) => {
+                         anyhow::ensure!(
+                             receipt.thread_id == binding.thread_id
+                                 && receipt.turn_id == binding.turn_id,
+-                            "native continuation changed its original execution identity"
++                            "worker continuation changed its original execution identity"
+                         );
+                         turn = self
+                             .threads
+@@ -379,8 +383,8 @@ impl Coordinator {
+                                     observation: Observation::Unknown {
+                                         run_id: None,
+                                         reason: format!(
+-                                            "Native checkpoint continuation was not admitted: {}",
+-                                            bounded_error(&anyhow::Error::from(error))
++                                            "Worker checkpoint continuation was not admitted: {}",
++                                            bounded_error(&error)
+                                         ),
+                                     },
+                                 },
+diff --git a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+index 43b2d526..3e17ee08 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+@@ -163,3 +163,309 @@ async fn unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown() -> Re
+     }
+     result
+ }
++
++/// Capture the fully committed pre-prompt boundary, then really join the source
++/// before transferring only its stopped-owner proof into that exact SQLite image.
++/// A fresh process must load the original private nonce; no session/new fallback.
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Result<()> {
++    use super::native_recovery::{BarrierStore, Boundary, stopped_source};
++    use std::sync::atomic::AtomicBool;
++    use tokio::sync::Semaphore;
++    for (label, retired, private_present, load_supported, paused) in [
++        ("same-session", true, true, true, false),
++        ("live-owner", false, true, true, false),
++        ("missing-private", true, false, true, false),
++        ("unsupported-load", true, true, false, false),
++        ("paused-source", true, true, true, true),
++    ] {
++        let mut home = tempfile::tempdir()?;
++        let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
++        home.disable_cleanup(keep);
++        if keep {
++            eprintln!(
++                "ACP continuation fixture {label}: {}",
++                home.path().display()
++            );
++        }
++        let mut extra = mcp_worker_configuration(home.path()).await?;
++        extra.push_str("        BRO_GOAL_FIXTURE_PERSIST_SESSION: '1'\n");
++        if !load_supported {
++            extra.push_str("        BRO_GOAL_FIXTURE_NO_LOAD: '1'\n");
++        }
++        let url = format!(
++            "sqlite://{}?mode=rwc",
++            home.path().join("source.db").display()
++        );
++        let (mut original, db) = coordinator_with_config(home.path(), &url, &extra).await?;
++        original.threads.shutdown().await;
++        let barrier = Arc::new(BarrierStore {
++            inner: Arc::new(crate::agent_store::DatabaseExecutionStore::new(db.clone())),
++            boundary: Boundary::AcpSession,
++            result_seen: AtomicBool::new(false),
++            fired: AtomicBool::new(false),
++            ready: Semaphore::new(0),
++            release: Semaphore::new(0),
++        });
++        original.threads = ThreadService::with_store(original.app.clone(), &[], barrier.clone())?;
++        let mut destination = None;
++        let result: Result<()> = async {
++            let id = prepared_worker_attempt(
++                &original,
++                home.path(),
++                Some("goal-peer"),
++                Selection::default(),
++            )
++            .await?;
++            let before = read(&original, &id).await?;
++            original
++                .drive_task(&before, &before.workflow.tasks[0])
++                .await?;
++            tokio::time::timeout(Duration::from_secs(10), barrier.ready.acquire())
++                .await??
++                .forget();
++            let saved = read(&original, &id).await?;
++            let execution = saved.workflow.tasks[0].executions[0].clone();
++            let link = execution
++                .thread
++                .as_ref()
++                .context("original ACP binding missing")?
++                .clone();
++            let old_epoch = original.threads.capabilities().server_instance_id;
++            let private = home.path().join("controls/private-session.json");
++            let original_private: serde_json::Value =
++                serde_json::from_slice(&tokio::fs::read(&private).await?)?;
++            assert_eq!(
++                original_private["prompts"], 0,
++                "source prompt was already dispatched"
++            );
++            let image = home.path().join("checkpoint.db");
++            crate::upgrade_preflight::snapshot(&db, &image).await?;
++            if retired {
++                stopped_source(&original, &barrier, &execution.workspace).await?;
++                original.supervisor.shutdown().await;
++            }
++            let image_url = format!("sqlite://{}?mode=rwc", image.display());
++            let (current, image_db) =
++                coordinator_with_config(home.path(), &image_url, &extra).await?;
++            destination = Some((current, image_db));
++            let (current, image_db) = destination.as_ref().context("destination missing")?;
++            if retired {
++                let stopped = barrier
++                    .read_owner(&old_epoch)
++                    .await
++                    .map_err(anyhow::Error::msg)?
++                    .context("source stopped proof missing")?;
++                anyhow::ensure!(
++                    stopped.stopped_at_ms.is_some(),
++                    "source was not actually stopped"
++                );
++                let store = crate::agent_store::DatabaseExecutionStore::new(image_db.clone());
++                let copied = store
++                    .read_owner(&old_epoch)
++                    .await
++                    .map_err(anyhow::Error::msg)?
++                    .context("copied owner missing")?;
++                let mut expected = stopped.clone();
++                expected.stopped_at_ms = None;
++                assert_eq!(copied, expected);
++                store
++                    .stop_owner(&copied)
++                    .await
++                    .map_err(anyhow::Error::msg)?;
++            }
++            if !private_present {
++                tokio::fs::remove_file(&private).await?;
++            }
++            let mut current_goal = read(current, &id).await?;
++            current.claim_owner(&current_goal).await?;
++            if paused {
++                current.goals.execute("local", GoalCommand::Control {
++                    operation_id: "pause-acp-continuation".into(), goal_id: id.clone(),
++                    expected_revision: current_goal.revision, intent: RunIntent::Pause,
++                }, now()?).await?;
++                current_goal = read(current, &id).await?;
++            }
++            let target = ThreadTarget {
++                thread_id: link.thread_id.clone(),
++                server_instance_id: current.threads.capabilities().server_instance_id,
++            };
++            current
++                .native_workspace(&current_goal, &current_goal.workflow.tasks[0].executions[0])?;
++            let restored = current
++                .resume_acp_worker(
++                    &current_goal,
++                    &current_goal.workflow.tasks[0],
++                    &current_goal.workflow.tasks[0].executions[0],
++                )
++                .await;
++            if retired && private_present && load_supported && !paused {
++                let receipt = restored?;
++                assert_eq!(receipt.turn_id, link.turn_id);
++                let resumed = tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current
++                            .threads
++                            .read_stored_turn(&target, &CallerContext::local(), &link.turn_id)
++                            .await?;
++                        if turn
++                            .acp
++                            .as_ref()
++                            .is_some_and(|session| session.restored_from.is_some())
++                        {
++                            break Ok::<_, anyhow::Error>(turn);
++                        }
++                        anyhow::ensure!(
++                            !turn.status.terminal()
++                                && turn.status
++                                    != bitrouter_orchestrator::turn::TurnStatus::RecoveryRequired,
++                            "same session restoration failed: {:?}",
++                            turn.detail
++                        );
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                })
++                .await??;
++                let binding = resumed.acp.context("restored binding missing")?;
++                assert_eq!(
++                    binding.session_id,
++                    original_private["session"]
++                        .as_str()
++                        .context("private session missing")?
++                );
++                assert_eq!(
++                    tokio::fs::read_to_string(home.path().join("controls/loaded-private-nonce"))
++                        .await?,
++                    original_private["nonce"]
++                        .as_str()
++                        .context("nonce missing")?
++                );
++                tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let state: serde_json::Value =
++                            serde_json::from_slice(&tokio::fs::read(&private).await?)?;
++                        if state["prompts"] == 1 {
++                            break Ok::<_, anyhow::Error>(());
++                        }
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                })
++                .await??;
++                let permission = tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?;
++                        if let Some(permission) = turn.acp_permissions.first() {
++                            break Ok::<_, anyhow::Error>(permission.clone());
++                        }
++                        anyhow::ensure!(!turn.status.terminal(), "restored Turn ended before permission");
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                }).await??;
++                current.threads.answer_acp_permission(&target, &CallerContext::local(),
++                    bitrouter_orchestrator::service::worker::acp::Approval {
++                        turn_id: link.turn_id.clone(), request_id: permission.request_id,
++                        option_id: "allow-once".into(), idempotency_key: "allow-restored-write".into(),
++                    }).await?;
++                tokio::fs::write(home.path().join("controls/release"), "release").await?;
++                tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?;
++                        if turn.status.terminal() || turn.status == bitrouter_orchestrator::turn::TurnStatus::RecoveryRequired {
++                            anyhow::ensure!(turn.status == bitrouter_orchestrator::turn::TurnStatus::Completed
++                                && !turn.unknown_effect && turn.acp_stop.as_ref().is_some_and(|stop| stop.confirmed),
++                                "restored Turn did not finish safely: {:?}",turn.detail);
++                            break Ok::<_, anyhow::Error>(());
++                        }
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                }).await??;
++                assert_eq!(tokio::fs::read_to_string(execution.workspace.join("left.txt")).await?, "LEFT\n");
++                let mut methods = Vec::new();
++                let mut files = tokio::fs::read_dir(home.path().join("captures")).await?;
++                while let Some(file) = files.next_entry().await? {
++                    for line in tokio::fs::read_to_string(file.path()).await?.lines() {
++                        let event: serde_json::Value = serde_json::from_str(line)?;
++                        methods.push(event["method"].as_str().unwrap_or("").to_owned());
++                    }
++                }
++                assert_eq!(
++                    methods
++                        .iter()
++                        .filter(|method| method.as_str() == "session/new")
++                        .count(),
++                    1
++                );
++                assert_eq!(
++                    methods
++                        .iter()
++                        .filter(|method| method.as_str() == "session/load")
++                        .count(),
++                    1
++                );
++                assert_eq!(
++                    methods
++                        .iter()
++                        .filter(|method| method.as_str() == "session/prompt")
++                        .count(),
++                    1
++                );
++                assert_eq!(read(current, &id).await?.workflow.tasks[0].executions.len(), 1);
++                eprintln!("ACP_CONTINUATION_PROOF {}", serde_json::json!({
++                    "scenario":label,"thread_id":link.thread_id,"turn_id":link.turn_id,
++                    "session_id":binding.session_id,"restored_from":binding.restored_from,
++                    "new_run_id":binding.run_id,"session_new":1,"session_load":1,"prompt":1,
++                    "turn_completed":true,"process_stop_confirmed":true,"checked_file":"LEFT\n",
++                    "scope":"Controlled SQLite pre-prompt snapshot, actual source join, Rust peer persisted private nonce; no vendor/provider qualification"
++                }));
++            } else if !retired || paused {
++                assert!(restored.is_err(), "live or paused source resumed");
++            } else {
++                restored?; // shared recovery admission precedes protocol settlement
++                tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current
++                            .threads
++                            .read_stored_turn(&target, &CallerContext::local(), &link.turn_id)
++                            .await?;
++                        if turn.status == bitrouter_orchestrator::turn::TurnStatus::RecoveryRequired
++                            || turn.status.terminal()
++                        {
++                            anyhow::ensure!(
++                                turn.acp
++                                    .as_ref()
++                                    .is_none_or(|session| session.restored_from.is_none()),
++                                "unconfirmed session was adopted"
++                            );
++                            break Ok::<_, anyhow::Error>(());
++                        }
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                })
++                .await??;
++                if private_present {
++                    let state: serde_json::Value =
++                        serde_json::from_slice(&tokio::fs::read(&private).await?)?;
++                    assert_eq!(state["prompts"], 0, "failed load submitted a prompt");
++                }
++            }
++            Ok(())
++        }
++        .await;
++        // Release a still-live source even when assertions fail; all owned tasks
++        // and actual protocol processes are joined before reporting the result.
++        barrier.release.add_permits(1);
++        original.threads.shutdown().await;
++        original.supervisor.shutdown().await;
++        if let Some((current, image_db)) = destination {
++            current.threads.shutdown().await;
++            current.supervisor.shutdown().await;
++            image_db.close().await?;
++        }
++        db.close().await?;
++        if result.is_ok() {
++            home.disable_cleanup(false);
++        }
++        result.with_context(|| format!("ACP continuation scenario {label}"))?;
++    }
++    Ok(())
++}
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs b/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs
+index d7ed75b6..e7f828ef 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs
+@@ -9,19 +9,20 @@ use wiremock::matchers::{method, path};
+ use wiremock::{Mock, MockServer, Request};
+ 
+ #[derive(Clone, Copy)]
+-enum Boundary {
++pub(super) enum Boundary {
+     SettledRead,
+     PendingRead,
+     BeforeRestore,
++    AcpSession,
+ }
+ 
+-struct BarrierStore {
+-    inner: Arc<crate::agent_store::DatabaseExecutionStore>,
+-    boundary: Boundary,
+-    result_seen: AtomicBool,
+-    fired: AtomicBool,
+-    ready: Semaphore,
+-    release: Semaphore,
++pub(super) struct BarrierStore {
++    pub(super) inner: Arc<crate::agent_store::DatabaseExecutionStore>,
++    pub(super) boundary: Boundary,
++    pub(super) result_seen: AtomicBool,
++    pub(super) fired: AtomicBool,
++    pub(super) ready: Semaphore,
++    pub(super) release: Semaphore,
+ }
+ 
+ fn contains(
+@@ -94,11 +95,14 @@ impl ExecutionStore for BarrierStore {
+                         |fact| matches!(fact, execution::ExecutionRecord::ToolIntent { .. })
+                     }
+                     Boundary::BeforeRestore => |_| false,
++                    Boundary::AcpSession => {
++                        |fact| matches!(fact, execution::ExecutionRecord::AcpSession { .. })
++                    }
+                 },
+             )
+         });
+         if matched
+-            && (matches!(self.boundary, Boundary::PendingRead)
++            && (matches!(self.boundary, Boundary::PendingRead | Boundary::AcpSession)
+                 || self.result_seen.load(Ordering::SeqCst))
+             && self
+                 .fired
+@@ -191,7 +195,7 @@ fn model_app(routing: Arc<ConfigRoutingTable>) -> Result<Arc<App>> {
+     ))
+ }
+ 
+-async fn stopped_source(
++pub(super) async fn stopped_source(
+     source: &Coordinator,
+     barrier: &BarrierStore,
+     workspace: &Path,
+diff --git a/apps/bitrouter/src/supervisor.rs b/apps/bitrouter/src/supervisor.rs
+index 54bc4006..30459b8f 100644
+--- a/apps/bitrouter/src/supervisor.rs
++++ b/apps/bitrouter/src/supervisor.rs
+@@ -926,6 +926,7 @@ impl LedgerStore {
+             snapshot.owned_process_terminated()
+                 && snapshot.process == entry.process
+                 && snapshot.startup_aborted_before_session == entry.startup_aborted_before_session
++                && snapshot.managed_by == entry.managed_by
+                 && snapshot.run_id == entry.run_id
+                 && snapshot.agent_id == entry.agent_id
+                 && snapshot.native_session_id == entry.native_session_id
+@@ -4800,6 +4801,13 @@ mod tests {
+             .context("stopped row missing")?;
+         assert!(ledger.stopped_replay(&entry).await?.is_some());
+         let mut other = entry.clone();
++        other.managed_by = Some(bitrouter_orchestrator::service::worker::acp::Owner {
++            server_instance_id: "different-owner".into(),
++            thread_id: "thread".into(),
++            turn_id: "turn".into(),
++        });
++        assert!(ledger.stopped_replay(&other).await.is_err());
++        other = entry.clone();
+         other.run_id = "different-run".into();
+         assert!(ledger.stopped_replay(&other).await.is_err());
+         other = entry.clone();
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery.rs b/crates/bitrouter-orchestrator/src/service/recovery.rs
+index 1a1395e8..4e924d65 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery.rs
+@@ -1,6 +1,7 @@
+ //! Durable reconstruction and explicit checkpoint recovery. Loading alone never
+ //! grants execution ownership, resolves effects or permits replay.
+ 
++mod acp;
+ mod native;
+ 
+ use std::collections::{HashMap, VecDeque};
+@@ -50,6 +51,7 @@ struct Step {
+ #[derive(Serialize)]
+ struct Active {
+     generation: Option<crate::turn::GenerationOrigin>,
++    acp: acp::State,
+     native: bool,
+     native_runs: std::collections::BTreeMap<String, (u32, u64)>,
+     native_unknown_usage: std::collections::BTreeSet<String>,
+@@ -95,7 +97,7 @@ struct Rebuild {
+ struct RecoveredRun {
+     turn_id: String,
+     input: RunInput,
+-    agent: Agent,
++    driver: super::runner::Driver,
+     verification: Option<String>,
+     cancel: CancellationToken,
+ }
+@@ -120,6 +122,18 @@ impl ThreadService {
+         caller: &CallerContext,
+         request: ThreadRecoveryRequest,
+         control: Option<Arc<dyn crate::control::WorkControl>>,
++    ) -> Result<ThreadView, ServiceError> {
++        self.recover_thread_with_acp(target, caller, request, control, None)
++            .await
++    }
++
++    pub(super) async fn recover_thread_with_acp(
++        &self,
++        target: &ThreadTarget,
++        caller: &CallerContext,
++        request: ThreadRecoveryRequest,
++        control: Option<Arc<dyn crate::control::WorkControl>>,
++        acp: Option<super::worker::acp::Job>,
+     ) -> Result<ThreadView, ServiceError> {
+         let (send, receive) = oneshot::channel();
+         let service = self.clone();
+@@ -135,7 +149,7 @@ impl ThreadService {
+             }
+             self.inner.workers.spawn(async move {
+                 let result = service
+-                    .recover_thread_owned(&target, &caller, request, control)
++                    .recover_thread_owned(&target, &caller, request, control, acp)
+                     .await;
+                 let _ = send.send(result);
+             });
+@@ -149,6 +163,7 @@ impl ThreadService {
+         caller: &CallerContext,
+         request: ThreadRecoveryRequest,
+         control: Option<Arc<dyn crate::control::WorkControl>>,
++        acp: Option<super::worker::acp::Job>,
+     ) -> Result<ThreadView, ServiceError> {
+         self.ensure_instance(Some(&target.server_instance_id))?;
+         let coordination = self
+@@ -219,6 +234,12 @@ impl ThreadService {
+                     "Goal worker recovery requires its live source and budget control",
+                 ));
+             }
++            let acp_continuation = acp.is_some()
++                && matches!(thread.config, crate::thread::executor::Config::Acp { .. })
++                && report
++                    .turn
++                    .as_ref()
++                    .is_some_and(|turn| turn.acp_continuation.is_some());
+             let settled_generation = coordination
+                 && report.terminal_checkpoint
+                 && report.turn.as_ref().is_none_or(|turn| {
+@@ -236,6 +257,8 @@ impl ThreadService {
+                     ))
+                 || report.blockers.iter().any(|blocker| {
+                     !matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed)
++                        && !(acp_continuation
++                            && matches!(blocker, RecoveryBlocker::AcpSessionUnconfirmed))
+                         && !(settled_generation
+                             && matches!(
+                                 blocker,
+@@ -284,6 +307,43 @@ impl ThreadService {
+             };
+             let continuation = if report.terminal_checkpoint {
+                 None
++            } else if let Some(mut job) = acp {
++                let turn = report.turn.as_ref().ok_or("ACP recovery has no Turn")?;
++                let saved = turn.acp_continuation.clone().ok_or_else(|| {
++                    ServiceError::new(
++                        ErrorCode::RecoveryRequired,
++                        "ACP prompt/session continuity is unconfirmed",
++                    )
++                })?;
++                if thread.snapshot.active_turn_id.as_deref() != Some(&turn.turn_id) {
++                    return Err("ACP checkpoint differs from its accepted Turn".into());
++                }
++                let deadline = saved.accepted_at_ms.saturating_add(
++                    u64::try_from(thread.config.max_duration().as_millis()).unwrap_or(u64::MAX),
++                );
++                if super::now_ms() >= deadline {
++                    return Err(ServiceError::new(
++                        ErrorCode::RecoveryRequired,
++                        "original ACP duration expired",
++                    ));
++                }
++                let prompt = saved.prompt.clone();
++                job.continuation = Some(saved);
++                Some(RecoveredRun {
++                    turn_id: turn.turn_id.clone(),
++                    input: RunInput {
++                        prompt,
++                        messages: Vec::new(),
++                        user_item_id: turn.user_item_id.clone(),
++                        context_version: thread.snapshot.context_version,
++                        checkpoint: None,
++                        complete_checkpoint: false,
++                        restored_verification: None,
++                    },
++                    driver: super::runner::Driver::Acp(job),
++                    verification: None,
++                    cancel: CancellationToken::new(),
++                })
+             } else {
+                 let turn = report
+                     .turn
+@@ -375,7 +435,7 @@ impl ThreadService {
+                             None
+                         },
+                     },
+-                    agent,
++                    driver: super::runner::Driver::Native(agent),
+                     verification: thread.verification_command.clone(),
+                     cancel,
+                 })
+@@ -404,12 +464,10 @@ impl ThreadService {
+             ));
+         }
+         let owner = self.initialize_execution().await?;
+-        if let Some(run) = &continuation {
+-            let checkpoint = run
+-                .input
+-                .checkpoint
+-                .as_ref()
+-                .ok_or("recovered completion missing")?;
++        if let Some(checkpoint) = continuation
++            .as_ref()
++            .and_then(|run| run.input.checkpoint.as_ref())
++        {
+             messages = checkpoint.messages.clone();
+             snapshot.context_version = checkpoint.context_version;
+         }
+@@ -607,7 +665,7 @@ impl ThreadService {
+         if let Some(run) = continuation {
+             self.inner.workers.spawn(self.run_turn(
+                 run.turn_id,
+-                super::runner::Driver::Native(run.agent),
++                run.driver,
+                 run.input,
+                 run.verification,
+                 run.cancel,
+@@ -1177,6 +1235,9 @@ impl Rebuild {
+             }
+             let native_snapshot = self.consume(&record)?;
+             if let ExecutionRecord::ThreadEvent { event } = &record {
++                if let Some(active) = &mut self.active {
++                    active.acp.accepted_at_ms.get_or_insert(event.timestamp_ms);
++                }
+                 if event.seq != self.sequence || event.thread_id != self.view.thread.thread_id {
+                     self.invalid("public Thread event has a mismatched durable cursor or identity");
+                 }
+@@ -1250,9 +1311,19 @@ impl Rebuild {
+                     .remove(position)
+                     .ok_or("activation input disappeared")?;
+                 let mut messages = self.messages.clone();
+-                messages.push(Message::text(Role::User, entry.prompt));
++                messages.push(Message::text(Role::User, entry.prompt.clone()));
+                 self.active = Some(Active {
+                     generation: None,
++                    acp: acp::State::new(
++                        if matches!(
++                            self.view.config,
++                            crate::thread::executor::Config::Acp { .. }
++                        ) {
++                            entry.prompt.clone()
++                        } else {
++                            String::new()
++                        },
++                    ),
+                     native: false,
+                     native_runs: Default::default(),
+                     native_unknown_usage: Default::default(),
+@@ -1329,10 +1400,11 @@ impl Rebuild {
+                 if source_server_instance_id != &self.source_epoch
+                     || source_cursor.checked_add(1) != Some(self.sequence)
+                     || (self.view.thread.active_turn_id.is_some()
+-                        && self
+-                            .active
+-                            .as_ref()
+-                            .is_none_or(|active| !active.settled && !active.checkpointed))
++                        && self.active.as_ref().is_none_or(|active| {
++                            !active.settled
++                                && !active.checkpointed
++                                && active.acp_continuation().is_none()
++                        }))
+                 {
+                     self.invalid("recovery acceptance has the wrong source checkpoint");
+                 }
+@@ -1552,8 +1624,14 @@ impl Rebuild {
+             // Before any Turn was accepted, this is only idle metadata: no
+             // harness session could have been started by this Thread. Its
+             // ordinary owner/workspace recovery still requires stopped proof.
+-            context_valid = false;
+             self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
++            if let Some(active) = &mut self.active
++                && active.acp_continuation().is_some()
++            {
++                active.exact_budget = true;
++                active.budget.active_duration_ms =
++                    super::now_ms().saturating_sub(active.acp.accepted_at_ms.unwrap_or(0));
++            }
+         }
+         let mut report_turn = None;
+         if let Some(active) = &mut self.active {
+@@ -1638,6 +1716,7 @@ impl Rebuild {
+                 self.blockers.push(RecoveryBlocker::BudgetUncertain { detail: "lost execution has unconfirmed active time, call charging or provider usage".into() });
+             }
+             report_turn = Some(RecoveryTurn {
++                acp_continuation: active.acp_continuation(),
+                 resources: active.resources.clone(),
+                 turn_id: active.turn_id.clone(),
+                 user_item_id: active.user_item_id.clone(),
+@@ -1800,6 +1879,19 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
+ }
+ 
+ impl Active {
++    fn acp_continuation(&self) -> Option<super::worker::acp::Continuation> {
++        if self.native
++            || self.settled
++            || self.cancel_requested
++            || !self.steps.is_empty()
++            || !self.calls.is_empty()
++            || !self.steering.is_empty()
++        {
++            return None;
++        }
++        self.acp.continuation()
++    }
++
+     fn consumed_model_steps(&self) -> Result<u32, String> {
+         if self.native {
+             // Core charges provider attempts, including fallbacks. A prepared
+@@ -1822,6 +1914,7 @@ impl Active {
+         if self.native && native::is_projection(fact, &self.calls) {
+             return Ok(());
+         }
++        self.acp.consume(fact)?;
+         match fact {
+             ExecutionRecord::GenerationInput { origin, .. } => {
+                 if self.generation.is_some() || !self.steps.is_empty() {
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery/tests.rs b/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
+index 3cc74d15..27355311 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
+@@ -154,6 +154,7 @@ fn settlement_charges_native_fallback_attempts_and_legacy_requests()
+     ] {
+         let mut active = Active {
+             generation: None,
++            acp: acp::State::new(String::new()),
+             native,
+             native_runs: std::collections::BTreeMap::from([("run".into(), (attempts, 0))]),
+             native_unknown_usage: Default::default(),
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs b/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
+index 1de4b5ac..e2ed5f0c 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
+@@ -231,6 +231,7 @@ impl Driver for Reported {
+             agent_id: "test-peer".into(),
+             confirmed_model_route: None,
+             capabilities: None,
++            restored_from: None,
+         })
+     }
+     async fn prompt(&self, _: &Owner, _: &Binding, _: &str, _: &str) -> Result<(), String> {
+@@ -295,7 +296,12 @@ async fn submitted_acp_prompt_is_not_recovered_as_unopened_metadata()
+         .recovery
+         .as_ref()
+         .ok_or("submitted session inspection missing")?;
+-    assert!(!report.context_valid);
++    assert!(
++        report
++            .turn
++            .as_ref()
++            .is_none_or(|turn| turn.acp_continuation.is_none())
++    );
+     assert!(report.blockers.iter().any(|blocker| matches!(
+         blocker,
+         crate::thread::RecoveryBlocker::AcpSessionUnconfirmed
+diff --git a/crates/bitrouter-orchestrator/src/service/waiting.rs b/crates/bitrouter-orchestrator/src/service/waiting.rs
+index 57aa811d..f0b9a4a9 100644
+--- a/crates/bitrouter-orchestrator/src/service/waiting.rs
++++ b/crates/bitrouter-orchestrator/src/service/waiting.rs
+@@ -29,6 +29,7 @@ impl ThreadService {
+                 source,
+                 control,
+                 driver,
++                continuation: None,
+             })),
+         ))
+         .await
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp.rs b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+index 06d92702..16948985 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+@@ -25,6 +25,19 @@ pub struct Binding {
+     pub agent_id: String,
+     pub confirmed_model_route: Option<String>,
+     pub capabilities: Option<serde_json::Value>,
++    /// Previous owned run of this same private session; never a new session.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub restored_from: Option<String>,
++}
++
++/// Derived only from a complete accepted journal before the first prompt intent.
++/// Loading this description does not confirm private session continuity.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct Continuation {
++    pub owner: Owner,
++    pub binding: Binding,
++    pub prompt: String,
++    pub accepted_at_ms: u64,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -84,6 +97,11 @@ impl Action {
+ pub trait Driver: Send + Sync {
+     /// Start/select a session without submitting its first prompt.
+     async fn start(&self, owner: &Owner, action_id: &str) -> Result<Binding, String>;
++    /// Load the exact stopped session, without submitting any prompt. Drivers
++    /// that cannot prove this capability refuse; no fallback to session/new.
++    async fn restore(&self, _: &Owner, _: &str, _: &Continuation) -> Result<Binding, String> {
++        Err("ACP same-session restoration is unsupported".into())
++    }
+     async fn prompt(
+         &self,
+         owner: &Owner,
+@@ -119,6 +137,7 @@ pub(in crate::service) struct Job {
+     pub(in crate::service) source: GoalWork,
+     pub(in crate::service) control: Arc<dyn WorkControl>,
+     pub(in crate::service) driver: Arc<dyn Driver>,
++    pub(in crate::service) continuation: Option<Continuation>,
+ }
+ 
+ pub struct Approval {
+@@ -246,10 +265,79 @@ impl ThreadService {
+                 source,
+                 control,
+                 driver,
++                continuation: None,
+             }))),
+         )
+         .await
+     }
++    /// Continue only an already accepted, inspected pre-prompt session. The
++    /// original durable input/key remain authoritative; no new Turn is accepted.
++    pub async fn resume_goal_acp_turn(
++        &self,
++        target: &ThreadTarget,
++        caller: &CallerContext,
++        source: GoalWork,
++        key: &str,
++        control: Arc<dyn WorkControl>,
++        driver: Arc<dyn Driver>,
++    ) -> Result<TurnReceipt, ServiceError> {
++        control
++            .authorize()
++            .await
++            .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
++        let view = self.load_thread(target, caller).await?;
++        if view.thread.goal_work.as_ref() != Some(&source)
++            || !matches!(view.config, crate::thread::executor::Config::Acp { .. })
++        {
++            return Err(ServiceError::new(
++                ErrorCode::Unauthorized,
++                "ACP continuation source mismatch",
++            ));
++        }
++        let original = self
++            .find_goal_worker_turn(target, caller, key)
++            .await?
++            .ok_or_else(|| {
++                ServiceError::new(ErrorCode::UnknownTurn, "original ACP action missing")
++            })?;
++        if let Some(report) = view.recovery {
++            if report
++                .turn
++                .as_ref()
++                .is_none_or(|turn| turn.turn_id != original.turn_id)
++            {
++                return Err(ServiceError::new(
++                    ErrorCode::RecoveryRequired,
++                    "original ACP checkpoint missing",
++                ));
++            }
++            self.recover_thread_with_acp(
++                target,
++                caller,
++                crate::thread::ThreadRecoveryRequest {
++                    source_server_instance_id: report.source_server_instance_id,
++                    source_cursor: report.source_cursor,
++                    idempotency_key: format!("{key}-restore-{}", report.source_cursor),
++                },
++                Some(control.clone()),
++                Some(Job {
++                    source,
++                    control,
++                    driver,
++                    continuation: None,
++                }),
++            )
++            .await?;
++        }
++        self.find_goal_worker_turn(target, caller, key)
++            .await?
++            .ok_or_else(|| {
++                ServiceError::new(
++                    ErrorCode::StorageUnavailable,
++                    "original ACP receipt disappeared",
++                )
++            })
++    }
+ }
+ 
+ mod execution;
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs b/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
+index c14a2a64..624c4727 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
+@@ -35,7 +35,12 @@ impl ThreadService {
+             Some(thread) => thread.config.max_duration(),
+             None => return,
+         };
+-        let deadline = tokio::time::Instant::now() + duration;
++        let remaining = job.continuation.as_ref().map_or(duration, |saved| {
++            duration.saturating_sub(Duration::from_millis(
++                crate::service::now_ms().saturating_sub(saved.accepted_at_ms),
++            ))
++        });
++        let deadline = tokio::time::Instant::now() + remaining;
+         let mut progress = Progress {
+             owner: Owner {
+                 server_instance_id: self.inner.instance_id.clone(),
+@@ -171,7 +176,13 @@ impl ThreadService {
+         let turn = &progress.owner.turn_id;
+         self.append(turn, TurnEventPayload::Started).await?;
+         self.acp_gate(turn, job).await?;
+-        let start = Action::Start.key(turn);
++        if cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
++            return Err("Original ACP duration or execution control closed before startup".into());
++        }
++        let start = job.continuation.as_ref().map_or_else(
++            || Action::Start.key(turn),
++            |saved| format!("acp-{turn}-restore-{}", saved.binding.run_id),
++        );
+         self.commit_records(
+             turn,
+             &[ExecutionRecord::AcpDispatch {
+@@ -184,11 +195,11 @@ impl ThreadService {
+         progress.start_dispatched = true;
+         // Startup is owned and awaited to settlement. No prompt has been sent;
+         // dropping this future on a transport timeout would lose its mapping.
+-        let binding = job
+-            .driver
+-            .start(&progress.owner, &start)
+-            .await
+-            .map_err(ServiceError::storage)?;
++        let binding = match &job.continuation {
++            Some(saved) => job.driver.restore(&progress.owner, &start, saved).await,
++            None => job.driver.start(&progress.owner, &start).await,
++        }
++        .map_err(ServiceError::storage)?;
+         let config = {
+             let state = self.lock_state();
+             state
+@@ -202,7 +213,12 @@ impl ThreadService {
+             return Err("ACP driver has a native Thread".into());
+         };
+         progress.binding = Some(binding.clone());
+-        if binding.run_id.is_empty()
++        if job.continuation.as_ref().is_some_and(|saved| {
++            binding.session_id != saved.binding.session_id
++                || binding.agent_id != saved.binding.agent_id
++                || binding.restored_from.as_ref() != Some(&saved.binding.run_id)
++                || binding.run_id == saved.binding.run_id
++        }) || binding.run_id.is_empty()
+             || binding.session_id.is_empty()
+             || binding.agent_id != acp.agent_id
+             || acp
+diff --git a/crates/bitrouter-orchestrator/src/thread.rs b/crates/bitrouter-orchestrator/src/thread.rs
+index 6fbdbd12..3c156811 100644
+--- a/crates/bitrouter-orchestrator/src/thread.rs
++++ b/crates/bitrouter-orchestrator/src/thread.rs
+@@ -162,6 +162,8 @@ pub struct ThreadRecoveryRequest {
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct RecoveryTurn {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub acp_continuation: Option<crate::service::worker::acp::Continuation>,
+     #[serde(default)]
+     pub resources: Option<crate::harness::HarnessInventory>,
+     pub turn_id: String,
+diff --git a/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs b/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
+index bb1c4332..36f7c128 100644
+--- a/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
++++ b/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
+@@ -35,6 +35,7 @@ struct Peer {
+     fail_first_initialize: bool,
+     fail_initialize: bool,
+     fail_left_once: bool,
++    persist_session: bool,
+ }
+ 
+ fn lock<T>(value: &Mutex<T>) -> FixtureResult<std::sync::MutexGuard<'_, T>> {
+@@ -233,10 +234,18 @@ impl Peer {
+                         "code":-32603,"message":"fixture startup service unavailable"}}))?;
+                 } else {
+                     self.respond(id, json!({"protocolVersion":1,
+-                        "agentCapabilities":{},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?;
++                        "agentCapabilities":{"loadSession":self.persist_session
++                            && std::env::var_os("BRO_GOAL_FIXTURE_NO_LOAD").is_none()},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?;
+                 }
+             }
+             Some("session/new") => {
++                if self.persist_session {
++                    let mut file = OpenOptions::new().write(true).create_new(true)
++                        .open(self.control.join("private-session.json"))?;
++                    serde_json::to_writer(&mut file, &json!({"session":self.session,
++                        "nonce":format!("private-{}",std::process::id()),"prompts":0}))?;
++                    file.flush()?;
++                }
+                 lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing cwd")?);
+                 if std::env::var_os("BRO_GOAL_FIXTURE_REQUIRE_HANDOFF_LEFT").is_some() {
+                     let cwd = lock(&self.state)?.cwd.clone();
+@@ -246,7 +255,25 @@ impl Peer {
+                 }
+                 self.respond(id, json!({"sessionId":self.session}))?;
+             }
++            Some("session/load") if self.persist_session => {
++                let saved: Value = serde_json::from_slice(&std::fs::read(self.control.join("private-session.json"))?)?;
++                if message["params"]["sessionId"] != saved["session"] || saved["session"] != self.session {
++                    return Err("fixture cannot restore the original private session".into());
++                }
++                lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing load cwd")?);
++                std::fs::write(self.control.join("loaded-private-nonce"), saved["nonce"].as_str().ok_or("nonce missing")?)?;
++                self.respond(id, json!({}))?;
++            }
+             Some("session/prompt") => {
++                if self.persist_session {
++                    let file = self.control.join("private-session.json");
++                    let mut saved: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
++                    if saved["session"] != self.session || saved["prompts"] != 0 {
++                        return Err("fixture private session prompt was replayed".into());
++                    }
++                    saved["prompts"] = json!(1);
++                    std::fs::write(file, serde_json::to_vec(&saved)?)?;
++                }
+                 let text = message["params"]["prompt"].as_array().ok_or("missing prompt")?
+                     .iter().filter_map(|part| part["text"].as_str()).collect::<String>();
+                 let task = text.lines().find_map(|line| line.strip_prefix("Assigned task ")
+@@ -339,6 +366,17 @@ fn main() -> FixtureResult {
+         std::env::var_os("BRO_GOAL_FIXTURE_CAPTURE").ok_or("fixture capture directory missing")?,
+     )
+     .join(format!("{}.ndjson", std::process::id()));
++    let persist_session = std::env::var_os("BRO_GOAL_FIXTURE_PERSIST_SESSION").is_some();
++    let session = if persist_session && control.join("private-session.json").exists() {
++        let saved: Value =
++            serde_json::from_slice(&std::fs::read(control.join("private-session.json"))?)?;
++        saved["session"]
++            .as_str()
++            .ok_or("persisted session identity missing")?
++            .to_owned()
++    } else {
++        format!("goal-fixture-{}", std::process::id())
++    };
+     let peer = Arc::new(Peer {
+         state: Mutex::new(State {
+             provider: None,
+@@ -349,7 +387,8 @@ fn main() -> FixtureResult {
+         output: Mutex::new(()),
+         cancelled: AtomicBool::new(false),
+         control,
+-        session: format!("goal-fixture-{}", std::process::id()),
++        session,
++        persist_session,
+         right_manual: std::env::var("BRO_GOAL_FIXTURE_RIGHT_MANUAL")
+             .is_ok_and(|value| value == "1"),
+         right_gate: std::env::var("BRO_GOAL_FIXTURE_RIGHT_GATE").is_ok_and(|value| value == "1"),

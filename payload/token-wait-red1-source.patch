@@ -1,0 +1,152 @@
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/tests.rs b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+index 9f8e82ce..a123fccb 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+@@ -376,18 +376,43 @@ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stal
+             Some(quote.clone()),
+         )
+         .await?;
+-    assert!(
+-        control
++    assert!(bitrouter_orchestrator::goal::budget::waiting_on_workers(
++        &snapshot(&goals, &id).await?,
++        Some(&quote)
++    )?);
++    let waiting_control = control.clone();
++    let waiting_quote = quote.clone();
++    let waiter = tokio::spawn(async move {
++        waiting_control
+             .begin_with_reservation(
+                 WorkKind::ProviderAttempt,
+                 "waiting-worker-credit",
+                 Some("waiting-request"),
+                 serde_json::json!({"fixture":"admission only"}),
+-                Some(quote.clone())
++                Some(waiting_quote),
+             )
+             .await
+-            .is_err()
+-    );
++    });
++    tokio::time::timeout(Duration::from_secs(5), async {
++        loop {
++            if snapshot(&goals, &id)
++                .await?
++                .accounting
++                .in_flight
++                .iter()
++                .any(|work| work.kind == WorkKind::ResourceWait)
++            {
++                return Ok::<_, anyhow::Error>(());
++            }
++            anyhow::ensure!(
++                !waiter.is_finished(),
++                "worker refused transient quote contention instead of waiting"
++            );
++            tokio::time::sleep(Duration::from_millis(10)).await;
++        }
++    })
++    .await??;
++    assert!(!waiter.is_finished());
+     let waiting = snapshot(&goals, &id).await?;
+     assert!(waiting.budget.halt.is_none());
+     assert!(
+@@ -404,15 +429,19 @@ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stal
+             true,
+         )
+         .await?;
+-    control
+-        .begin_with_reservation(
+-            WorkKind::ProviderAttempt,
+-            "waiting-worker-credit",
+-            Some("waiting-request"),
+-            serde_json::json!({"fixture":"admission only"}),
+-            Some(quote),
+-        )
+-        .await?;
++    tokio::time::timeout(Duration::from_secs(5), waiter).await???;
++    let resumed = snapshot(&goals, &id).await?;
++    assert!(
++        resumed
++            .accounting
++            .in_flight
++            .iter()
++            .all(|work| work.kind != WorkKind::ResourceWait)
++    );
++    assert_eq!(
++        resumed.accounting.provider_attempts,
++        waiting.accounting.provider_attempts + 1
++    );
+     control
+         .observe_with_reservation(
+             "waiting-worker-credit",
+diff --git a/apps/bitrouter/src/goal_runtime/native_evidence.rs b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+index 9c379378..af5a7e10 100644
+--- a/apps/bitrouter/src/goal_runtime/native_evidence.rs
++++ b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+@@ -360,6 +360,11 @@ async fn observe(
+     report: Option<&ArtifactRef>,
+ ) -> Result<serde_json::Value> {
+     match work.kind {
++        WorkKind::ResourceWait => Ok(serde_json::json!({
++            "status":"observed", "stage":"token_reservation_wait",
++            "wait_finished":report.is_some(), "actual_provider":null,"actual_model":null,
++            "scope":"A pre-dispatch resource wait is not a provider attempt or evidence of execution."
++        })),
+         WorkKind::Preparation => {
+             let value: serde_json::Value =
+                 serde_json::from_slice(&read(root, &work.intent).await?)?;
+diff --git a/crates/bitrouter-orchestrator/src/goal/accounting.rs b/crates/bitrouter-orchestrator/src/goal/accounting.rs
+index a25d272b..18e38477 100644
+--- a/crates/bitrouter-orchestrator/src/goal/accounting.rs
++++ b/crates/bitrouter-orchestrator/src/goal/accounting.rs
+@@ -20,6 +20,8 @@ pub struct Accounting {
+ #[serde(rename_all = "snake_case")]
+ pub enum WorkKind {
+     Preparation,
++    /// Waiting for other current workers' quotes, before provider dispatch.
++    ResourceWait,
+     InputCount,
+     ContextValidation,
+     ProviderAttempt,
+diff --git a/crates/bitrouter-orchestrator/src/goal/budget.rs b/crates/bitrouter-orchestrator/src/goal/budget.rs
+index 5bb9d0f9..a33ec98d 100644
+--- a/crates/bitrouter-orchestrator/src/goal/budget.rs
++++ b/crates/bitrouter-orchestrator/src/goal/budget.rs
+@@ -85,6 +85,36 @@ impl Budget {
+     }
+ }
+ 
++/// A current worker may wait for other current workers' in-flight quotes.
++/// Settled calls with missing usage retain their bound and cannot release it
++/// merely because another worker wants to proceed.
++pub fn waiting_on_workers(
++    goal: &GoalSnapshot,
++    quote: Option<&NativeTokenReservation>,
++) -> Result<bool, GoalError> {
++    let spent = goal.accounting.estimated_model_tokens_micro_usd;
++    if goal.budget.can_reserve(spent, quote).is_ok() {
++        return Ok(false);
++    }
++    let mut available = goal.budget.clone();
++    available.held.retain(|held| {
++        !goal.accounting.in_flight.iter().any(|work| {
++            work.id == held.work_id
++                && work
++                    .source
++                    .as_ref()
++                    .is_some_and(|source| super::workflow::worker_requested(goal, source))
++                && matches!(
++                    work.kind,
++                    super::accounting::WorkKind::ProviderAttempt
++                        | super::accounting::WorkKind::TypedDecision
++                )
++        })
++    });
++    available.can_reserve(spent, quote)?;
++    Ok(true)
++}
++
+ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Result<(), GoalError> {
+     match event {
+         Event::ObserveElapsed => {

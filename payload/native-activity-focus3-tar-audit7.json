@@ -1,0 +1,7 @@
+{
+  "source": "native-activity-source3.json",
+  "legacyTar": "native-activity-source32-files.tar.gz",
+  "verifiedFiles": 10,
+  "extracted": "/tmp/bro-native-activity3-audit-hqqGZI",
+  "passed": true
+}

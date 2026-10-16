@@ -1,0 +1,55 @@
+{
+  "id": "acp-continuation-final10",
+  "scope": "Complete required final validation after focused fix9 passed all six cold-recovery/PTY/SQLite-resource cases plus strict Clippy/fmt. Production code unchanged since final4. Test changes: no fabricated stopped proof, boxed composed reader futures, global resource reservation for complete native/PTY/resource fixtures and opt-in failure retention. No increased stack/timeout/product limits, automatic retries or weakened overlap/business assertions. Prior complete failures and interrupted runs remain archived honestly.",
+  "jobs": [
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,266 @@
+{
+  "capturedAt": "2026-10-16T09:28:39.679Z",
+  "checkpoint": "9d0460696b39b12b8585334b401224fbafde6494",
+  "files": [
+    {
+      "path": "MANAGED_ACP_INDEX.md",
+      "bytes": 4341,
+      "sha256": "1bc0cb1218c28a3459af18a502f1c5194335f4cf50984421c14f7307bed75a48"
+    },
+    {
+      "path": "managed-acp-check1.log",
+      "bytes": 1582,
+      "sha256": "0c2c425e721dfb9dd3c3e819365cb9905ee76aef3e9f7916ae0ed537790b79a9"
+    },
+    {
+      "path": "managed-acp-check2.log",
+      "bytes": 1487,
+      "sha256": "db95af22c1a7c644beb0817577b37567c7fcd15fc6e440c9a56074667ef528c6"
+    },
+    {
+      "path": "managed-acp-check3.log",
+      "bytes": 548,
+      "sha256": "c98e47b3de3a89c67d174a162942e4957ed1f82c51a0f96f1552a11b6876bff3"
+    },
+    {
+      "path": "managed-acp-check4.log",
+      "bytes": 548,
+      "sha256": "c98e47b3de3a89c67d174a162942e4957ed1f82c51a0f96f1552a11b6876bff3"
+    },
+    {
+      "path": "managed-acp-check5.log",
+      "bytes": 1949,
+      "sha256": "abde8a595a6ccd3be1888cdf633fd9539a49e303d5ae68f0ed5e75911c75eafd"
+    },
+    {
+      "path": "managed-acp-clippy5.json",
+      "bytes": 540,
+      "sha256": "de88fa9240b2c728bf0b1e2cb8703d0fc68ac05fecaa42c5662f232625e0adf4"
+    },
+    {
+      "path": "managed-acp-clippy5.log",
+      "bytes": 1211,
+      "sha256": "86e7879af73ad6b684bba0b61664a42f56ace1be9d66079ed978475daf7ef43a"
+    },
+    {
+      "path": "managed-acp-clippy6.log",
+      "bytes": 418,
+      "sha256": "76ff7776644e6c9b375d63f62c9784d22be2aef5688737018e7b4cf05f9b3ca8"
+    },
+    {
+      "path": "managed-acp-debugger3.log",
+      "bytes": 416,
+      "sha256": "467879def1044cbc89d997d8dc98bed1ae3e2bbe85021dfbf01b467aaaa592d8"
+    },
+    {
+      "path": "managed-acp-doctests6.log",
+      "bytes": 2054,
+      "sha256": "281edc0df0f5f49bf27acf23c8f5fc9b7efcd77b5f22edc6d4ed4f8c208c0d11"
+    },
+    {
+      "path": "managed-acp-fixture-archive3.json",
+      "bytes": 297,
+      "sha256": "8dba5f45089ed9b027efdad4d92215529c7f4bb3ba89b556ad2414eb64ee066f"
+    },
+    {
+      "path": "managed-acp-fmt6.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "managed-acp-focused1.log",
+      "bytes": 9365,
+      "sha256": "5aaafe6cbe14aa7706a9232499fb361ce6b80630862a690d4e2a8bfe8283fd2a"
+    },
+    {
+      "path": "managed-acp-focused2.json",
+      "bytes": 976,
+      "sha256": "80ab430c1c6e3e3141ecb012c4233c5f765be7012d43b0fedc44e083f064608e"
+    },
+    {
+      "path": "managed-acp-focused2.log",
+      "bytes": 5439,
+      "sha256": "641ff5eac14937e22a333587c1454394258aa26074597936d590a994d98fc838"
+    },
+    {
+      "path": "managed-acp-focused3.json",
+      "bytes": 764,
+      "sha256": "c048a48b1e1d4ba35c335a6158d9a0a4456f0c8faf13ae1fe2f204dfe5be6a25"
+    },
+    {
+      "path": "managed-acp-focused3.log",
+      "bytes": 20339,
+      "sha256": "bf0fcf9347dcef75c5acfef3406266c0c15d43ac9b55ec170e11b1a866834009"
+    },
+    {
+      "path": "managed-acp-focused4.json",
+      "bytes": 816,
+      "sha256": "72df1736a628cbc62d812a1cf3fc0328d9abdf07c8ea72b34351a2faad484a0f"
+    },
+    {
+      "path": "managed-acp-focused4.log",
+      "bytes": 12608,
+      "sha256": "650c14e0a5e802a3f26e779fe3e4ac7b907ea7e30aa8c0aaa21d83d83e65ddb9"
+    },
+    {
+      "path": "managed-acp-frame-and-fixture-evidence4.json",
+      "bytes": 1101,
+      "sha256": "e9dacd1745e8f4e1403d21cdf03ece6c66fc45556fa0e9e5dc52391732b92487"
+    },
+    {
+      "path": "managed-acp-frame-probe.rs",
+      "bytes": 25852,
+      "sha256": "c851cfc86304500e53b40c2f6c3d200922175695555e4e365c86e0d377189bf2"
+    },
+    {
+      "path": "managed-acp-frame-sizes3.log",
+      "bytes": 1031,
+      "sha256": "45407e1354360f047c533320d28bd68fe35031a062a194af05ca7398ac14942b"
+    },
+    {
+      "path": "managed-acp-frame-sizes4.log",
+      "bytes": 1030,
+      "sha256": "1afca71619daf9699cc13a12447a5511a43da6334a9ab39f694247619e18eca1"
+    },
+    {
+      "path": "managed-acp-full6.log",
+      "bytes": 615525,
+      "sha256": "41237760bfe0f831961cedf9709eafb1e666625dbd694ae23c994373223882a8"
+    },
+    {
+      "path": "managed-acp-gates6.json",
+      "bytes": 1841,
+      "sha256": "bd1f408b1c6a7b8441e1073bdada08484255684079852efef0b8b378bc64fe93"
+    },
+    {
+      "path": "managed-acp-local-checkpoint6.json",
+      "bytes": 1360,
+      "sha256": "3c7fb7c40b2e36f9ebf91acd705aa90dc19d259fbe00d7b1ff00ef52e954a07b"
+    },
+    {
+      "path": "managed-acp-local-checkpoints6.bundle",
+      "bytes": 239060,
+      "sha256": "24eefeb6065b136df8829eadb7453a58be85d38e185a83c447c3670324935b86"
+    },
+    {
+      "path": "managed-acp-runner2.mjs",
+      "bytes": 3455,
+      "sha256": "97f39522053806075908c1d09fb349b8fea779f13e32c1d045ae5d9ce3346451"
+    },
+    {
+      "path": "managed-acp-runner3.mjs",
+      "bytes": 3224,
+      "sha256": "ac7f4ce7e9fafeb079f59dc2e76b5be267ddefbf0fc21d46c3e2ef8ea9e8ea4c"
+    },
+    {
+      "path": "managed-acp-runner4.mjs",
+      "bytes": 3277,
+      "sha256": "9b813ca139a0334198470eb836deecbe464daeed7d5251217e8e138994181b3a"
+    },
+    {
+      "path": "managed-acp-runner5.mjs",
+      "bytes": 3091,
+      "sha256": "0158f81b983d6820e947b48a2482dfc97b8b376b2f6e735c5d947fa6c026f538"
+    },
+    {
+      "path": "managed-acp-runner6.mjs",
+      "bytes": 3924,
+      "sha256": "dc13e48c58e2f705a7f612e99ba2bd3ba0e9c5c6bcbc075cb76da3c8f5eb6b38"
+    },
+    {
+      "path": "managed-acp-source-audit6.json",
+      "bytes": 128,
+      "sha256": "b1345f26e36796b2da6ab4798f3aec5137a7362d8e13aac7fb5dc2b7a95c728d"
+    },
+    {
+      "path": "managed-acp-source2-files.tar.gz",
+      "bytes": 197299,
+      "sha256": "aa0c1485ff7cdd63bd3aab63065a9fbf6651ca380b3b1c5bcd0c4d2b8e1044e5"
+    },
+    {
+      "path": "managed-acp-source2.json",
+      "bytes": 159192,
+      "sha256": "f0e6a4fbd821ff5f0dec526c33196b8d83b9d93fc889ba8f12e655b1b23372d2"
+    },
+    {
+      "path": "managed-acp-source2.patch",
+      "bytes": 80485,
+      "sha256": "5e25246c86c3cddeca36027d1d079979962f773df828649ac026f702527c5a0c"
+    },
+    {
+      "path": "managed-acp-source3-files.tar.gz",
+      "bytes": 202789,
+      "sha256": "20ed273bd8ab1b5a147750e30661ffe4c78ab8ce725116fbe638ee3fbebda844"
+    },
+    {
+      "path": "managed-acp-source3.json",
+      "bytes": 159329,
+      "sha256": "8d49b683319f2a59409ada2f709703d92eb4913176cf3e102dd1593d3117b8f7"
+    },
+    {
+      "path": "managed-acp-source3.patch",
+      "bytes": 88923,
+      "sha256": "eb7bf2b2e0bd3ed04f2a2b51a98fad36f5e21f920c9ed77b2f679764e5396c6c"
+    },
+    {
+      "path": "managed-acp-source4-files.tar.gz",
+      "bytes": 333460,
+      "sha256": "5934b3e6cb8a38b720681733cb036c177e14851e06d471785ce0336eee9b6228"
+    },
+    {
+      "path": "managed-acp-source4.json",
+      "bytes": 159329,
+      "sha256": "8d2f96d53c71c645bf008e600acbdc261b3f3f186f0167830196d081bc06f622"
+    },
+    {
+      "path": "managed-acp-source4.patch",
+      "bytes": 117053,
+      "sha256": "0f7a7d25c477f5ba57c16643e194ee48b8fa3411d546e6037e9ca1d91a4cd285"
+    },
+    {
+      "path": "managed-acp-source5-files.tar.gz",
+      "bytes": 333489,
+      "sha256": "2f4d813fbdc8c3a91c2f67ccf6aba45b4b828aeace7a025106d2a5b7fa030590"
+    },
+    {
+      "path": "managed-acp-source5.json",
+      "bytes": 159329,
+      "sha256": "007fbe81b23b8e3e649cf86e92e0cf21a85351f3f00e3f298d8fa597a12b8474"
+    },
+    {
+      "path": "managed-acp-source5.patch",
+      "bytes": 117246,
+      "sha256": "cba6a0774fa9afa83c767d3750ae0a5ea5237780000dca0fe331bbf4afa8eb12"
+    },
+    {
+      "path": "managed-acp-source6-files.tar.gz",
+      "bytes": 333481,
+      "sha256": "8f5c76d0d4f4c55d1bbb230a07fe2fb9892fad51b8e290d7ba070f1ae52188eb"
+    },
+    {
+      "path": "managed-acp-source6.json",
+      "bytes": 159329,
+      "sha256": "42b7b399241f9309bd7b010cfbbcfc7693eaaee895c853dc66bce4e6dd2c5248"
+    },
+    {
+      "path": "managed-acp-source6.patch",
+      "bytes": 117212,
+      "sha256": "feca5b8a027420918c8f2c36325575bbacd9b624bb40c7e3dea6ec6344f0ba99"
+    },
+    {
+      "path": "managed-acp-stack-overflow-fixtures3.tar.gz",
+      "bytes": 970091,
+      "sha256": "3f871e4e1c62376abcbe8e52f470b5dbb762a408906b60e67837c9653d2cb91c"
+    },
+    {
+      "path": "managed-acp-test-build1.log",
+      "bytes": 3743,
+      "sha256": "58128d8d9c2a73552b17d7eff7d76f663e35b7e26f112fd64ab829fb9f4dabd5"
+    },
+    {
+      "path": "managed-acp-test-build2.log",
+      "bytes": 5088,
+      "sha256": "fadab6fcaf7d336d3f4f84b5770ffaa01c739ad5dc27ebae00aeb49e35e9aa24"
+    }
+  ]
+}

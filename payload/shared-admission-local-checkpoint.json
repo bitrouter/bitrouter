@@ -1,0 +1,35 @@
+{
+  "capturedAt": "2026-10-16T07:48:37.263Z",
+  "checkpoint": "d2c5ad519c438d655b3ac43786c8e4a832d4f9b8",
+  "parent": "fe9df6f8157945d3559789926326a7effb468db1",
+  "branch": "codex/bro-goal-workflow-mvp",
+  "published": false,
+  "pr": 981,
+  "validatedSource": "shared-admission-source2.json",
+  "requiredCommandsExitZero": true,
+  "nextestSummary": "     Summary [ 582.802s] 4725 tests run: 4725 passed (8 slow, 1 leaky), 24 skipped",
+  "nextestCleanExit": false,
+  "changedSinceValidation": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_SPEC.md",
+    "docs/BRO_RUST_DESIGN_REVIEW.md",
+    "docs/README.md"
+  ],
+  "executableOrBuildSourceChanged": false,
+  "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)\nbinary: rustc\ncommit-hash: 2d8144b7880597b6e6d3dfd63a9a9efae3f533d3\ncommit-date: 2026-07-07\nhost: aarch64-apple-darwin\nrelease: 1.97.0\nLLVM version: 22.1.6",
+  "cargo": "cargo 1.97.0 (c980f4866 2026-06-30)",
+  "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t26.2\nBuildVersion:\t\t25C56",
+  "rustMinStack": null,
+  "buildEnvironment": {
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "remaining": [
+    "Managed ACP shared driver and authority",
+    "S3-S6 and A01-A22 acceptance",
+    "Token quote waiting and durable UI wait projection",
+    "Earlier intermittent PTY/startup and current leaky exit investigations",
+    "Hosted CI and live harness/provider qualification"
+  ]
+}

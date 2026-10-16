@@ -1,0 +1,680 @@
+diff --git a/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs b/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
+index 039d2fec..fb2ff539 100644
+--- a/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
++++ b/apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs
+@@ -72,6 +72,17 @@ mod tests {
+         }
+     }
+ 
++    struct BeforeResourceWaitMigrator;
++    #[async_trait::async_trait]
++    impl MigratorTrait for BeforeResourceWaitMigrator {
++        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
++            Migrator::migrations()
++                .into_iter()
++                .take_while(|migration| migration.name() != "m20240101_000033_bro_resource_wait")
++                .collect()
++        }
++    }
++
+     #[tokio::test]
+     async fn legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals()
+     -> anyhow::Result<()> {
+@@ -139,6 +150,18 @@ mod tests {
+                 .await
+                 .is_err()
+         );
++        assert!(
++            BeforeResourceWaitMigrator::up(&db, None)
++                .await
++                .err()
++                .is_some_and(|error| error.to_string().contains("000033_bro_resource_wait"))
++        );
++        assert!(
++            crate::db::migration::m20240101_000033_bro_resource_wait::Migration
++                .down(&SchemaManager::new(&db))
++                .await
++                .is_err()
++        );
+         drop(store);
+         db.close().await?;
+         let reopened = crate::db::connect(&url).await?;
+diff --git a/apps/bitrouter/src/db/migration/mod.rs b/apps/bitrouter/src/db/migration/mod.rs
+index 186cecdb..0b4ceba4 100644
+--- a/apps/bitrouter/src/db/migration/mod.rs
++++ b/apps/bitrouter/src/db/migration/mod.rs
+@@ -43,6 +43,7 @@ mod m20240101_000029_index_acp_resource_head;
+ mod m20240101_000030_bro_goal_execution_format;
+ mod m20240101_000031_bro_worker_source_format;
+ mod m20240101_000032_bro_admission_verdict;
++mod m20240101_000033_bro_resource_wait;
+ 
+ use sea_orm_migration::{MigrationTrait, MigratorTrait};
+ 
+@@ -85,6 +86,7 @@ impl MigratorTrait for Migrator {
+             Box::new(m20240101_000030_bro_goal_execution_format::Migration),
+             Box::new(m20240101_000031_bro_worker_source_format::Migration),
+             Box::new(m20240101_000032_bro_admission_verdict::Migration),
++            Box::new(m20240101_000033_bro_resource_wait::Migration),
+         ]
+     }
+ }
+diff --git a/apps/bitrouter/src/goal_code/projection.rs b/apps/bitrouter/src/goal_code/projection.rs
+index 947d8df5..5928b062 100644
+--- a/apps/bitrouter/src/goal_code/projection.rs
++++ b/apps/bitrouter/src/goal_code/projection.rs
+@@ -83,6 +83,17 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+                 _ => "Continuing within current requirements".into(),
+             },
+         });
++    let waiting_for_quote = |task_id: &str| {
++        snapshot.accounting.in_flight.iter().any(|work| {
++            work.kind == bitrouter_orchestrator::goal::accounting::WorkKind::ResourceWait
++                && work.source.as_ref().is_some_and(|source| {
++                    source.task_id == task_id
++                        && bitrouter_orchestrator::goal::workflow::worker_requested(
++                            snapshot, source,
++                        )
++                })
++        })
++    };
+     let mut execution = if snapshot.workflow.tasks.is_empty() {
+         "No worker execution recorded"
+     } else {
+@@ -213,6 +224,15 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+                     detail.push(reason.clone());
+                     "effects unknown"
+                 }
++                Observation::Running { .. } | Observation::Requested
++                    if waiting_for_quote(&task.spec.id) =>
++                {
++                    if execution != "Effects unknown" {
++                        execution = "Waiting for shared token reservation".into();
++                    }
++                    detail.push("Provider dispatch has not started for this request. Waiting for other current workers' in-flight quotes to settle; unknown-cost holds cannot release budget. Pause and cancellation remain available.".into());
++                    "waiting for shared token reservation"
++                }
+                 Observation::Running { run_id, .. } => {
+                     if let Some(run_id) = run_id {
+                         detail.push(format!("Supervisor run: {run_id}"));
+diff --git a/apps/bitrouter/src/goal_runtime/model_control.rs b/apps/bitrouter/src/goal_runtime/model_control.rs
+index 79432f89..96e74d8a 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control.rs
+@@ -12,6 +12,7 @@ use bitrouter_sdk::language_model::native_work::{NativeProviderWork, NativeProvi
+ use std::sync::atomic::{AtomicBool, Ordering};
+ 
+ pub(super) mod activity;
++mod quote_wait;
+ 
+ pub(super) struct ModelControl {
+     goals: Arc<GoalService>,
+@@ -368,49 +369,12 @@ impl ModelControl {
+         let provider_attempt =
+             matches!(&event, Event::Begin { work } if work.kind == WorkKind::ProviderAttempt);
+         let change = Change::Accounting { event };
+-        let mut result = self
+-            .goals
+-            .workflow_change(
+-                WorkflowActor {
+-                    owner: "local",
+-                    coordinator_id: &self.coordinator_id,
+-                },
+-                &self.goal.id,
+-                operation,
+-                requirements_revision,
+-                change.clone(),
+-                now().map_err(|_| unavailable())?,
+-            )
++        let result = self
++            .commit_fact(operation, requirements_revision, change.clone())
+             .await;
+-        // Retry only this exact durable fact. The SDK does not repeat any
+-        // preparation, provider call or tool effect during this confirmation.
+-        // Every retry rechecks the current source/lease or replays its matching
+-        // receipt, so competing updates and a lost reply cannot poison the
+-        // acknowledgement before the bounded confirmation has finished.
+-        for retry in 0..3 {
+-            if !matches!(
+-                &result,
+-                Err(bitrouter_orchestrator::goal::GoalError::Conflict
+-                    | bitrouter_orchestrator::goal::GoalError::Storage { .. })
+-            ) {
+-                break;
+-            }
+-            tokio::time::sleep(Duration::from_millis(5 << retry)).await;
+-            result = self
+-                .goals
+-                .workflow_change(
+-                    WorkflowActor {
+-                        owner: "local",
+-                        coordinator_id: &self.coordinator_id,
+-                    },
+-                    &self.goal.id,
+-                    operation,
+-                    requirements_revision,
+-                    change.clone(),
+-                    now().map_err(|_| unavailable())?,
+-                )
+-                .await;
+-        }
++        let result = self
++            .wait_for_quote(operation, requirements_revision, &change, result)
++            .await?;
+         if matches!(
+             &result,
+             Err(bitrouter_orchestrator::goal::GoalError::BudgetExceeded { .. })
+@@ -627,22 +591,35 @@ impl NativeExecutionControl for ModelControl {
+         };
+         let indices = (0..plan.routes.len())
+             .filter(|index| {
+-                goal.budget
+-                    .can_reserve(
+-                        goal.accounting.estimated_model_tokens_micro_usd,
+-                        reservations.get(*index).and_then(Option::as_ref),
+-                    )
+-                    .is_ok()
++                let quote = reservations.get(*index).and_then(Option::as_ref);
++                if self.worker.is_some() {
++                    bitrouter_orchestrator::goal::budget::waiting_on_workers(&goal, quote).is_ok()
++                } else {
++                    goal.budget
++                        .can_reserve(goal.accounting.estimated_model_tokens_micro_usd, quote)
++                        .is_ok()
++                }
+             })
+             .map(u32::try_from)
+             .collect::<std::result::Result<Vec<_>, _>>()
+             .map_err(|_| unavailable())?;
+-        self.observe(
+-            &key,
+-            serde_json::json!({"accepted_routes":indices,"token_reservations":reservations}),
+-            None,
+-        )
+-        .await?;
++        // Replayed admission retains its original routes and quotes even if
++        // another worker has since settled or consumed budget.
++        let indices = match self.plan_outcome(&key).await? {
++            Some(saved) => {
++                if saved["token_reservations"]
++                    != serde_json::to_value(&reservations).map_err(|_| unavailable())?
++                {
++                    return Err(diagnostic("frozen plan reservation changed on replay"));
++                }
++                serde_json::from_value::<Vec<u32>>(saved["accepted_routes"].clone())
++                    .map_err(|_| unavailable())?
++            }
++            None => {
++                self.observe(&key, serde_json::json!({"accepted_routes":indices,"token_reservations":reservations}), None).await?;
++                indices
++            }
++        };
+         if indices.is_empty() {
+             if self.worker.is_some() {
+                 return Err(diagnostic(
+@@ -677,14 +654,25 @@ impl NativeExecutionControl for ModelControl {
+         attempt_index: u32,
+         reservation: Option<&NativeTokenReservation>,
+     ) -> bitrouter_sdk::Result<()> {
+-        let plans = self.plans.lock().await;
+-        let plan = plans.get(request_id).ok_or_else(unavailable)?;
+-        let route = plan
+-            .routes
+-            .get(attempt_index as usize)
++        let route = self
++            .plans
++            .lock()
++            .await
++            .get(request_id)
++            .and_then(|plan| plan.routes.get(attempt_index as usize))
++            .cloned()
+             .ok_or_else(unavailable)?;
+         self.begin_with_reservation(WorkKind::ProviderAttempt, &format!("{request_id}/attempt/{attempt_index}"), Some(request_id), serde_json::json!({"request_id":request_id,"attempt_index":attempt_index,"route":route}), reservation.cloned()).await
+     }
++    async fn admission_aborted(&self, request_id: &str, attempt_index: u32) {
++        if let Err(error) = self.abort_admission(request_id, attempt_index).await {
++            self.fail_ack(&format!(
++                "undispatched admission could not be reconciled: {error}"
++            ))
++            .await;
++        }
++    }
++
+     async fn before_provider_work(&self, work: &NativeProviderWork) -> bitrouter_sdk::Result<()> {
+         self.begin(
+             WorkKind::ProviderIntegration,
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/tests.rs b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+index 9f8e82ce..489fb644 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+@@ -376,18 +376,43 @@ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stal
+             Some(quote.clone()),
+         )
+         .await?;
+-    assert!(
+-        control
++    assert!(bitrouter_orchestrator::goal::budget::waiting_on_workers(
++        &snapshot(&goals, &id).await?,
++        Some(&quote)
++    )?);
++    let waiting_control = control.clone();
++    let waiting_quote = quote.clone();
++    let waiter = tokio::spawn(async move {
++        waiting_control
+             .begin_with_reservation(
+                 WorkKind::ProviderAttempt,
+                 "waiting-worker-credit",
+                 Some("waiting-request"),
+                 serde_json::json!({"fixture":"admission only"}),
+-                Some(quote.clone())
++                Some(waiting_quote),
+             )
+             .await
+-            .is_err()
+-    );
++    });
++    tokio::time::timeout(Duration::from_secs(5), async {
++        loop {
++            if snapshot(&goals, &id)
++                .await?
++                .accounting
++                .in_flight
++                .iter()
++                .any(|work| work.kind == WorkKind::ResourceWait)
++            {
++                return Ok::<_, anyhow::Error>(());
++            }
++            anyhow::ensure!(
++                !waiter.is_finished(),
++                "worker refused transient quote contention instead of waiting"
++            );
++            tokio::time::sleep(Duration::from_millis(10)).await;
++        }
++    })
++    .await??;
++    assert!(!waiter.is_finished());
+     let waiting = snapshot(&goals, &id).await?;
+     assert!(waiting.budget.halt.is_none());
+     assert!(
+@@ -404,23 +429,68 @@ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stal
+             true,
+         )
+         .await?;
++    tokio::time::timeout(Duration::from_secs(5), waiter).await???;
++    let resumed = snapshot(&goals, &id).await?;
++    assert!(
++        resumed
++            .accounting
++            .in_flight
++            .iter()
++            .all(|work| work.kind != WorkKind::ResourceWait)
++    );
++    assert_eq!(
++        resumed.accounting.provider_attempts,
++        waiting.accounting.provider_attempts + 1
++    );
++    control
++        .observe_with_reservation(
++            "waiting-worker-credit",
++            serde_json::json!({"not_dispatched":true}),
++            Some(0),
++            true,
++        )
++        .await?;
++    // A settled outcome with missing usage keeps its full quote. It must
++    // refuse promptly rather than wait for an outcome that already arrived.
+     control
+         .begin_with_reservation(
+             WorkKind::ProviderAttempt,
+-            "waiting-worker-credit",
+-            Some("waiting-request"),
+-            serde_json::json!({"fixture":"admission only"}),
+-            Some(quote),
++            "unknown-bill",
++            Some("unknown-request"),
++            serde_json::json!({"fixture":"no actual provider"}),
++            Some(quote.clone()),
+         )
+         .await?;
+     control
+         .observe_with_reservation(
+-            "waiting-worker-credit",
+-            serde_json::json!({"not_dispatched":true}),
+-            Some(0),
+-            true,
++            "unknown-bill",
++            serde_json::json!({"usage_missing":true}),
++            None,
++            false,
+         )
+         .await?;
++    let unknown = snapshot(&goals, &id).await?;
++    assert!(
++        bitrouter_orchestrator::goal::budget::waiting_on_workers(&unknown, Some(&quote)).is_err()
++    );
++    assert!(
++        tokio::time::timeout(
++            Duration::from_secs(2),
++            control.begin_with_reservation(
++                WorkKind::ProviderAttempt,
++                "after-unknown-bill",
++                Some("refused-request"),
++                serde_json::json!({}),
++                Some(quote.clone())
++            )
++        )
++        .await?
++        .is_err()
++    );
++    assert_eq!(
++        snapshot(&goals, &id).await?.budget.held,
++        unknown.budget.held
++    );
+     let current = snapshot(&goals, &id).await?;
+     goals
+         .execute(
+diff --git a/apps/bitrouter/src/goal_runtime/native_evidence.rs b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+index 9c379378..47287552 100644
+--- a/apps/bitrouter/src/goal_runtime/native_evidence.rs
++++ b/apps/bitrouter/src/goal_runtime/native_evidence.rs
+@@ -360,6 +360,22 @@ async fn observe(
+     report: Option<&ArtifactRef>,
+ ) -> Result<serde_json::Value> {
+     match work.kind {
++        WorkKind::ResourceWait => {
++            let _intent: serde_json::Value =
++                serde_json::from_slice(&read(root, &work.intent).await?)?;
++            if let Some(report) = report {
++                let value: serde_json::Value = serde_json::from_slice(&read(root, report).await?)?;
++                anyhow::ensure!(
++                    value["waiting_finished"] == true,
++                    "resource wait has no confirmed finish"
++                );
++            }
++            Ok(
++                serde_json::json!({"status":"observed", "stage":"token_reservation_wait",
++                "wait_finished":report.is_some(), "actual_provider":null,"actual_model":null,
++                "scope":"A pre-dispatch resource wait is not a provider attempt or evidence of execution."}),
++            )
++        }
+         WorkKind::Preparation => {
+             let value: serde_json::Value =
+                 serde_json::from_slice(&read(root, &work.intent).await?)?;
+diff --git a/crates/bitrouter-orchestrator/src/core/session.rs b/crates/bitrouter-orchestrator/src/core/session.rs
+index 68528471..95242a6a 100644
+--- a/crates/bitrouter-orchestrator/src/core/session.rs
++++ b/crates/bitrouter-orchestrator/src/core/session.rs
+@@ -4703,6 +4703,12 @@ impl NativeExecutionControl for StepControl {
+             .map_err(sdk_error)
+     }
+ 
++    async fn admission_aborted(&self, request_id: &str, index: u32) {
++        if let Some(host) = &self.host {
++            host.admission_aborted(request_id, index).await;
++        }
++    }
++
+     async fn before_provider_work(
+         &self,
+         work: &bitrouter_sdk::language_model::native_work::NativeProviderWork,
+diff --git a/crates/bitrouter-orchestrator/src/goal.rs b/crates/bitrouter-orchestrator/src/goal.rs
+index 97677b5d..18330063 100644
+--- a/crates/bitrouter-orchestrator/src/goal.rs
++++ b/crates/bitrouter-orchestrator/src/goal.rs
+@@ -22,7 +22,7 @@ pub const MAX_PAGE_ITEMS: usize = 16;
+ /// Bound on a serialized snapshot, operation or query page.
+ pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
+ /// Goal requests are a separate local protocol from native Thread operations.
+-pub const PROTOCOL_VERSION: u32 = 7;
++pub const PROTOCOL_VERSION: u32 = 8;
+ 
+ #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "snake_case")]
+diff --git a/crates/bitrouter-orchestrator/src/goal/accounting.rs b/crates/bitrouter-orchestrator/src/goal/accounting.rs
+index a25d272b..18e38477 100644
+--- a/crates/bitrouter-orchestrator/src/goal/accounting.rs
++++ b/crates/bitrouter-orchestrator/src/goal/accounting.rs
+@@ -20,6 +20,8 @@ pub struct Accounting {
+ #[serde(rename_all = "snake_case")]
+ pub enum WorkKind {
+     Preparation,
++    /// Waiting for other current workers' quotes, before provider dispatch.
++    ResourceWait,
+     InputCount,
+     ContextValidation,
+     ProviderAttempt,
+diff --git a/crates/bitrouter-orchestrator/src/goal/budget.rs b/crates/bitrouter-orchestrator/src/goal/budget.rs
+index 5bb9d0f9..a33ec98d 100644
+--- a/crates/bitrouter-orchestrator/src/goal/budget.rs
++++ b/crates/bitrouter-orchestrator/src/goal/budget.rs
+@@ -85,6 +85,36 @@ impl Budget {
+     }
+ }
+ 
++/// A current worker may wait for other current workers' in-flight quotes.
++/// Settled calls with missing usage retain their bound and cannot release it
++/// merely because another worker wants to proceed.
++pub fn waiting_on_workers(
++    goal: &GoalSnapshot,
++    quote: Option<&NativeTokenReservation>,
++) -> Result<bool, GoalError> {
++    let spent = goal.accounting.estimated_model_tokens_micro_usd;
++    if goal.budget.can_reserve(spent, quote).is_ok() {
++        return Ok(false);
++    }
++    let mut available = goal.budget.clone();
++    available.held.retain(|held| {
++        !goal.accounting.in_flight.iter().any(|work| {
++            work.id == held.work_id
++                && work
++                    .source
++                    .as_ref()
++                    .is_some_and(|source| super::workflow::worker_requested(goal, source))
++                && matches!(
++                    work.kind,
++                    super::accounting::WorkKind::ProviderAttempt
++                        | super::accounting::WorkKind::TypedDecision
++                )
++        })
++    });
++    available.can_reserve(spent, quote)?;
++    Ok(true)
++}
++
+ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Result<(), GoalError> {
+     match event {
+         Event::ObserveElapsed => {
+diff --git a/crates/bitrouter-orchestrator/src/service/generation.rs b/crates/bitrouter-orchestrator/src/service/generation.rs
+index 503350b3..284b29db 100644
+--- a/crates/bitrouter-orchestrator/src/service/generation.rs
++++ b/crates/bitrouter-orchestrator/src/service/generation.rs
+@@ -660,6 +660,9 @@ impl NativeExecutionControl for Control {
+             .await?;
+         self.gate().await
+     }
++    async fn admission_aborted(&self, request_id: &str, index: u32) {
++        self.parent.admission_aborted(request_id, index).await;
++    }
+     async fn before_provider_work(&self, work: &NativeProviderWork) -> bitrouter_sdk::Result<()> {
+         self.gate().await?;
+         self.parent.before_provider_work(work).await?;
+diff --git a/crates/bitrouter-sdk/src/app.rs b/crates/bitrouter-sdk/src/app.rs
+index 02202097..a282910b 100644
+--- a/crates/bitrouter-sdk/src/app.rs
++++ b/crates/bitrouter-sdk/src/app.rs
+@@ -535,6 +535,9 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
+             .before_attempt_with_token_reservation(request_id, index, reservation)
+             .await
+     }
++    async fn admission_aborted(&self, request_id: &str, index: u32) {
++        self.inner.admission_aborted(request_id, index).await;
++    }
+     async fn after_attempt(&self, report: crate::language_model::native::NativeAttemptReport) {
+         self.inner.after_attempt(report).await
+     }
+diff --git a/crates/bitrouter-sdk/src/language_model/native.rs b/crates/bitrouter-sdk/src/language_model/native.rs
+index 48ccb74c..04caf16f 100644
+--- a/crates/bitrouter-sdk/src/language_model/native.rs
++++ b/crates/bitrouter-sdk/src/language_model/native.rs
+@@ -658,6 +658,11 @@ pub trait NativeExecutionControl: Send + Sync {
+         self.before_attempt(request_id, attempt_index).await
+     }
+ 
++    /// The SDK did not poll the provider executor: attempt admission was
++    /// rejected or cancelled. Reconcile only this exact pre-dispatch intent;
++    /// this callback says nothing about earlier attempts or external charges.
++    async fn admission_aborted(&self, _request_id: &str, _attempt_index: u32) {}
++
+     /// Persist integration work before any actual authentication or HTTP I/O.
+     /// Implementations recheck live dispatch gates and reserve internal retries.
+     async fn before_provider_work(
+diff --git a/crates/bitrouter-sdk/src/language_model/pipeline.rs b/crates/bitrouter-sdk/src/language_model/pipeline.rs
+index 1e0a4a0e..3f9fcf41 100644
+--- a/crates/bitrouter-sdk/src/language_model/pipeline.rs
++++ b/crates/bitrouter-sdk/src/language_model/pipeline.rs
+@@ -2386,23 +2386,23 @@ impl Pipeline {
+             self.wait_before_fallback(dispatched).await;
+             dispatched += 1;
+             self.observe_hop_start(ctx, target).await;
+-            if let Some((control, route)) = attempt_control
+-                && let Err(error) = control
+-                    .before_attempt_with_token_reservation(
+-                        ctx.request_id(),
+-                        index,
+-                        self.native_cost_estimator
+-                            .as_ref()
+-                            .and_then(|estimator| {
+-                                estimator.reservation_for_attempt(route, prompt, ctx, target)
+-                            })
+-                            .as_ref(),
+-                    )
+-                    .await
+-            {
+-                self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
+-                    .await;
+-                return Err(error);
++            if let Some((control, route)) = attempt_control {
++                let reservation = self.native_cost_estimator.as_ref().and_then(|estimator| {
++                    estimator.reservation_for_attempt(route, prompt, ctx, target)
++                });
++                let admitted = tokio::select! {
++                    biased;
++                    () = control.provider_cancelled() => Err(BitrouterError::internal(
++                        "managed attempt admission cancelled before provider dispatch")),
++                    result = control.before_attempt_with_token_reservation(
++                        ctx.request_id(), index, reservation.as_ref()) => result,
++                };
++                if let Err(error) = admitted {
++                    control.admission_aborted(ctx.request_id(), index).await;
++                    self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
++                        .await;
++                    return Err(error);
++                }
+             }
+             let private_context =
+                 ctx.extension::<super::native_context::NativePrivateContextRuntime>();
+diff --git a/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs b/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs
+index d8ffb04e..e91e15b6 100644
+--- a/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs
++++ b/crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs
+@@ -41,9 +41,14 @@ impl native_accounting::NativeCostEstimator for QuotedEstimator {
+     }
+ }
+ 
++#[derive(Default)]
+ struct QuotedControl {
+     reject: bool,
+     attempts: AtomicUsize,
++    wait: bool,
++    deny_attempt: bool,
++    cancellation: CancellationToken,
++    aborted: AtomicUsize,
+ }
+ 
+ struct QuotedExecutor {
+@@ -104,8 +109,22 @@ impl native::NativeExecutionControl for QuotedControl {
+         assert_eq!(index, 0);
+         assert_eq!(quote, Some(&fixture_quote()));
+         self.attempts.fetch_add(1, Ordering::SeqCst);
++        if self.wait {
++            std::future::pending::<()>().await;
++        }
++        if self.deny_attempt {
++            return Err(BitrouterError::bad_request("fixture rejects admission"));
++        }
+         Ok(())
+     }
++    async fn provider_cancelled(&self) {
++        self.cancellation.cancelled().await;
++    }
++    async fn admission_aborted(&self, request: &str, index: u32) {
++        assert!(!request.is_empty());
++        assert_eq!(index, 0);
++        self.aborted.fetch_add(1, Ordering::SeqCst);
++    }
+     async fn after_attempt(&self, _: native::NativeAttemptReport) {}
+ }
+ 
+@@ -126,7 +145,7 @@ async fn app_preserves_budget_quotes_for_plan_and_attempt_admission() -> Result<
+             .build()?;
+         let control = Arc::new(QuotedControl {
+             reject,
+-            attempts: AtomicUsize::new(0),
++            ..Default::default()
+         });
+         let result = app
+             .execute_native_controlled(prompt(), CallerContext::local(), control.clone())
+@@ -141,6 +160,53 @@ async fn app_preserves_budget_quotes_for_plan_and_attempt_admission() -> Result<
+     Ok(())
+ }
+ 
++#[tokio::test]
++async fn cancelled_or_refused_attempt_admission_reports_no_dispatch_without_polling_executor()
++-> Result<()> {
++    for waiting in [false, true] {
++        let executor = Arc::new(QuotedExecutor {
++            inner: MockExecutor::always_text("must not run"),
++            calls: AtomicUsize::new(0),
++        });
++        let app = crate::App::builder()
++            .language_model(|builder| {
++                builder
++                    .routing_table(routing_table(&["first"]))
++                    .executor(executor.clone())
++                    .native_cost_estimator(Arc::new(QuotedEstimator));
++            })
++            .build()?;
++        let control = Arc::new(QuotedControl {
++            wait: waiting,
++            deny_attempt: !waiting,
++            ..Default::default()
++        });
++        let running_control = control.clone();
++        let task = tokio::spawn(async move {
++            app.execute_native_controlled(prompt(), CallerContext::local(), running_control)
++                .await
++        });
++        tokio::time::timeout(std::time::Duration::from_secs(3), async {
++            while control.attempts.load(Ordering::SeqCst) == 0 {
++                tokio::task::yield_now().await;
++            }
++        })
++        .await
++        .map_err(|_| BitrouterError::internal("admission did not start"))?;
++        if waiting {
++            control.cancellation.cancel();
++        }
++        let result = tokio::time::timeout(std::time::Duration::from_secs(3), task)
++            .await
++            .map_err(|_| BitrouterError::internal("admission cancellation did not settle"))?
++            .map_err(|error| BitrouterError::internal(error.to_string()))?;
++        assert!(result.is_err());
++        assert_eq!(control.aborted.load(Ordering::SeqCst), 1);
++        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
++    }
++    Ok(())
++}
++
+ #[derive(Default)]
+ struct SemanticFixture(Mutex<Vec<serde_json::Value>>);
+ 

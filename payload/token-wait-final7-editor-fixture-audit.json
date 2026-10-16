@@ -1,0 +1,84 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpZOd6ZX",
+  "restored": "/tmp/token-wait-final7-editor-fixture-audit-3ZXdOR",
+  "files": {
+    ".bitrouter-daemon-ee3121c05c4058a54eacf68d70120927cbf7904628ae25a7418062345c36d0cd.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    ".telemetry-notice-shown": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "bitrouter.acp.sock.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "bitrouter.agent.sock.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "bitrouter.db": {
+      "sha256": "e7dbb93fa171c73f16f9f687eade6d39edcdc21cfc84dbf59fcae1369923568a",
+      "bytes": 471040,
+      "mode": 384
+    },
+    "bitrouter.sock.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 384
+    },
+    "bitrouter.yaml": {
+      "sha256": "51f7d55f99aedac53d76a560a79877b79cbe97137675067fc4e254cd650349ba",
+      "bytes": 218,
+      "mode": 420
+    },
+    "editor-input": {
+      "sha256": "6dbaa0c823e41b6b95c932a0cd70cb7a2d2e28587a9d41cce541c4b8d1fcf6a5",
+      "bytes": 69,
+      "mode": 420
+    },
+    "editor-release": {
+      "sha256": "a4d451ec23463726f72c43d64c710968f6b602cd653b4de8adee1b556240a829",
+      "bytes": 7,
+      "mode": 420
+    },
+    "editor-replacement": {
+      "sha256": "e43ec484235769267732773ea08aa2e3b94b1c229f7c1e19e26f9bd397b6bf57",
+      "bytes": 51,
+      "mode": 420
+    },
+    "logs/session-20261016T125755-76551.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "logs/session-20261016T125758-76862.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "supervisor-runs-v1-ee3121c05c4058a54eacf68d70120927cbf7904628ae25a7418062345c36d0cd.json": {
+      "sha256": "54da247d61faf1235db34e198ff222c46525a1174a98f465c30163c203116cdb",
+      "bytes": 32,
+      "mode": 420
+    },
+    "tmp/bitrouter-draft-6eZfST.md": {
+      "sha256": "e43ec484235769267732773ea08aa2e3b94b1c229f7c1e19e26f9bd397b6bf57",
+      "bytes": 51,
+      "mode": 384
+    },
+    "tmp/bitrouter-draft-xtJ3iH.md": {
+      "sha256": "e43ec484235769267732773ea08aa2e3b94b1c229f7c1e19e26f9bd397b6bf57",
+      "bytes": 51,
+      "mode": 384
+    }
+  },
+  "verifiedFiles": 15,
+  "tarSha256": "ba847b0355701d849cc2d7cf33dec918f8bdb91c921af6dcf839fcae0af41e5f",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}

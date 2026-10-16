@@ -1,0 +1,25 @@
+{
+  "source": "managed-acp-source3.json",
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "-p",
+    "bitrouter-orchestrator",
+    "--all-features",
+    "--lib",
+    "--no-fail-fast",
+    "-E",
+    "test(goal_runtime::tests) | test(supervisor::tests) | test(service::tests::worker) | test(service::tests::generation) | test(thread::executor::tests)"
+  ],
+  "startedAt": "2026-10-16T08:57:34.472Z",
+  "log": "managed-acp-focused3.log",
+  "priorRun": "focused2 passed 26 tests on source2; this run adds dispatch and receipt recovery fences",
+  "code": 100,
+  "signal": null,
+  "finishedAt": "2026-10-16T08:59:08.970Z",
+  "changed": [],
+  "summary": "     Summary [  21.777s] 74 tests run: 53 passed, 21 failed, 2034 skipped",
+  "passed": false
+}

@@ -1,0 +1,33 @@
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.19s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 5ad761e0-8033-4eae-be8e-938ac9921cf1 with nextest profile: default
+    Starting 1 test across 1 binary (1822 tests skipped)
+────────────
+ Stress test iteration 1/5 (00:00:00 elapsed so far, 5 iterations remaining)
+        PASS [   0.062s] [1/5] (1/1) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work
+ Stress test [   0.068s] iteration 1/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 2/5 (00:00:00 elapsed so far, 4 iterations remaining)
+        PASS [   0.059s] [2/5] (1/1) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work
+ Stress test [   0.064s] iteration 2/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 3/5 (00:00:00 elapsed so far, 3 iterations remaining)
+        PASS [   0.070s] [3/5] (1/1) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work
+ Stress test [   0.080s] iteration 3/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 4/5 (00:00:00 elapsed so far, 2 iterations remaining)
+        PASS [   0.054s] [4/5] (1/1) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work
+ Stress test [   0.060s] iteration 4/5: 1 test run: 1 passed, 1822 skipped
+────────────
+ Stress test iteration 5/5 (00:00:00 elapsed so far, 1 iteration remaining)
+        PASS [   0.052s] [5/5] (1/1) bitrouter goal_runtime::model_control::tests::lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work
+ Stress test [   0.057s] iteration 5/5: 1 test run: 1 passed, 1822 skipped
+────────────
+     Summary [   0.329s] 5/5 stress run iterations: 5 passed

@@ -1,0 +1,1807 @@
+diff --git a/.agents/plugins/marketplace.json b/.agents/plugins/marketplace.json
+index b8e98d63..e1648340 100644
+--- a/.agents/plugins/marketplace.json
++++ b/.agents/plugins/marketplace.json
+@@ -4,7 +4,7 @@
+   "plugins": [
+     {
+       "name": "bitrouter",
+-      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and never-started ACP metadata recovery with private-session limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
++      "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and confirmed pre-prompt ACP session recovery with private-context and unknown-effect limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+       "source": "."
+     }
+   ]
+diff --git a/.claude-plugin/plugin.json b/.claude-plugin/plugin.json
+index 31eca52f..89c36404 100644
+--- a/.claude-plugin/plugin.json
++++ b/.claude-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and never-started ACP metadata recovery with private-session limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and confirmed pre-prompt ACP session recovery with private-context and unknown-effect limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+   "author": {
+     "name": "BitRouterAI"
+   },
+diff --git a/.codex-plugin/plugin.json b/.codex-plugin/plugin.json
+index 3d276ab3..68d9cb23 100644
+--- a/.codex-plugin/plugin.json
++++ b/.codex-plugin/plugin.json
+@@ -2,7 +2,7 @@
+   "name": "bitrouter",
+   "displayName": "BitRouter",
+   "version": "0.1.0",
+-  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and never-started ACP metadata recovery with private-session limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
++  "description": "Route model calls through BitRouter and delegate long-running, parallel workflows to BRO Goals with ACP-compatible harnesses. Native and managed ACP Goal workers share Thread/Turn ownership; generic session controls cannot take over managed Turns. The skill documents bounded model-admission waiting, safe native checkpoint continuation, and cancellable native quote waits and confirmed pre-prompt ACP session recovery with private-context and unknown-effect limits. The bro and bro code interfaces show Goals, current-Goal input and a read-only Workflow. Native harness launchers, headless run, native BRO ACP v1/v2 and transparent external acp serve and separately privileged native task APIs remain available. Bundles the BitRouter setup and operations skill. Finished scoped local work has evidence-gated recovery; unresolved effects remain blocked. Tasks can select acknowledged BRO model routes, configured MCP and versioned skill/context material; supplied configuration does not prove actual use. Current-Goal worker/resource edits are versioned; old attempts retain their requested worker and replacement waits for stop/effect reconciliation. Unresolved Goal inputs persist across queries; exact input references and reasoned dispositions preserve scope. Exact input withdrawal remains available without a model; Goal IPC v8 does not replay older outboxes.",
+   "homepage": "https://bitrouter.ai",
+   "repository": "https://github.com/bitrouter/bitrouter",
+   "license": "Apache-2.0",
+diff --git a/.config/nextest.toml b/.config/nextest.toml
+index ce689a1e..2bf74ba1 100644
+--- a/.config/nextest.toml
++++ b/.config/nextest.toml
+@@ -18,6 +18,18 @@ slow-timeout = { period = "60s", terminate-after = 5 }
+ [test-groups]
+ core-tree-pressure = { max-threads = 1 }
+ 
++# Complete Goal coordinator fixtures run concurrent services and subprocesses
++# internally. Partial grouping still overlapped unrelated heavy tests, hitting
++# original waits and output-leak detection. Reserve global slots per complete
++# fixture, including native, ACP, input and handoff paths. Keep their internal
++# concurrency, all product/fixture/stack bounds, and nextest's leak detector.
++# Terminal Goal and SQLite/MCP resource fixtures own the same full workload;
++# ACP capability probes also own real subprocess lifecycles.
++# https://nexte.st/docs/configuration/threads-required/
++[[profile.default.overrides]]
++filter = 'test(goal_runtime::tests::) | binary(goal_tui_pty) | binary(native_harness_resources) | test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)'
++threads-required = "num-test-threads"
++
+ [[profile.default.overrides]]
+ filter = 'test(capacity::tree_limits::maximum_tree_)'
+ test-group = 'core-tree-pressure'
+diff --git a/apps/bitrouter/src/goal_runtime/acp.rs b/apps/bitrouter/src/goal_runtime/acp.rs
+index 7105d391..ab2a200e 100644
+--- a/apps/bitrouter/src/goal_runtime/acp.rs
++++ b/apps/bitrouter/src/goal_runtime/acp.rs
+@@ -1,7 +1,9 @@
+ //! External Goal workers are adapters of the same Thread/Turn service as native work.
+ use super::*;
+ use bitrouter_orchestrator::control::WorkControl;
+-use bitrouter_orchestrator::service::worker::acp::{Binding, Driver, Outcome, Owner, Stop};
++use bitrouter_orchestrator::service::worker::acp::{
++    Binding, Continuation, Driver, Outcome, Owner, Stop,
++};
+ use bitrouter_orchestrator::thread::executor::{AcpConfig, AcpThreadRequest};
+ use bitrouter_orchestrator::thread::{PermissionProfile, ThreadTarget};
+ use bitrouter_orchestrator::turn::TurnRequest;
+@@ -11,6 +13,7 @@ struct Adapter {
+     threads: bitrouter_orchestrator::service::ThreadService,
+     request: StartRunRequest,
+     control: Arc<dyn WorkControl>,
++    grant: SessionGrant,
+ }
+ 
+ struct Dispatch<'a> {
+@@ -55,6 +58,7 @@ impl Driver for Adapter {
+             return Err("Original ACP process is not confirmed running; no startup replay".into());
+         }
+         Ok(Binding {
++            restored_from: None,
+             run_id: snapshot.run_id,
+             session_id: snapshot
+                 .native_session_id
+@@ -68,6 +72,87 @@ impl Driver for Adapter {
+                 .map_err(|error| error.to_string())?,
+         })
+     }
++    async fn restore(
++        &self,
++        owner: &Owner,
++        key: &str,
++        saved: &Continuation,
++    ) -> std::result::Result<Binding, String> {
++        let result = async {
++            let previous = &saved.binding;
++            let SessionResponse::Snapshot { snapshot } = self
++                .supervisor
++                .dispatch(SessionRequest::authorized(
++                    &self.grant,
++                    SessionCommand::Snapshot {
++                        run_id: previous.run_id.clone(),
++                    },
++                ))
++                .await?
++            else {
++                anyhow::bail!("original ACP snapshot missing");
++            };
++            let original_owner = snapshot
++                .managed_by
++                .as_ref()
++                .context("original session owner missing")?;
++            // Cold supervisor summaries intentionally omit capabilities. The
++            // original Turn binding owns that declaration; the new controller
++            // must independently negotiate and accept the exact session/load.
++            anyhow::ensure!(
++                original_owner == &saved.owner
++                    && original_owner.thread_id == owner.thread_id
++                    && original_owner.turn_id == owner.turn_id
++                    && original_owner.server_instance_id != owner.server_instance_id
++                    && snapshot.native_session_id.as_ref() == Some(&previous.session_id)
++                    && snapshot.agent_id == previous.agent_id
++                    && snapshot.owned_process_terminated()
++                    && snapshot.pending_permissions.is_empty()
++                    && previous
++                        .capabilities
++                        .as_ref()
++                        .is_some_and(|caps| caps["load"] == true),
++                "original ACP session lacks stopped-owner/load evidence"
++            );
++            let (_, replay) = self
++                .supervisor
++                .managed_observation(original_owner, &previous.run_id, 0)
++                .await?;
++            anyhow::ensure!(
++                replay.history_complete
++                    && replay.events.iter().all(|event| !matches!(
++                        event.kind,
++                        crate::supervisor::SessionEventKind::UserPrompt { .. }
++                            | crate::supervisor::SessionEventKind::Update { .. }
++                            | crate::supervisor::SessionEventKind::PayloadOmitted { .. }
++                            | crate::supervisor::SessionEventKind::Permission { .. }
++                    )),
++                "original ACP startup has incomplete or possibly executed activity"
++            );
++            let mut request = self.request.clone();
++            request.session = crate::acp_cli::SessionSelection::Load(previous.session_id.clone());
++            request.parent_run_id = Some(previous.run_id.clone());
++            let restored = Adapter {
++                supervisor: self.supervisor.clone(),
++                threads: self.threads.clone(),
++                control: self.control.clone(),
++                grant: self.grant.clone(),
++                request,
++            };
++            let mut binding = restored
++                .start(owner, key)
++                .await
++                .map_err(anyhow::Error::msg)?;
++            anyhow::ensure!(
++                binding.session_id == previous.session_id,
++                "ACP did not restore the requested session"
++            );
++            binding.restored_from = Some(previous.run_id.clone());
++            Ok::<_, anyhow::Error>(binding)
++        }
++        .await;
++        result.map_err(|error| format!("{error:#}"))
++    }
+     async fn prompt(
+         &self,
+         owner: &Owner,
+@@ -204,6 +289,87 @@ impl Driver for Adapter {
+ }
+ 
+ impl Coordinator {
++    fn acp_driver(
++        &self,
++        goal: &GoalSnapshot,
++        task: &Task,
++        execution: &Execution,
++        mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
++        control: Arc<dyn WorkControl>,
++    ) -> Result<Arc<Adapter>> {
++        super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
++        let workspace = self.native_workspace(goal, execution)?;
++        let harness = task
++            .execution_harness(execution)
++            .context("ACP worker harness missing")?;
++        Ok(Arc::new(Adapter {
++            supervisor: self.supervisor.clone(),
++            threads: self.threads.clone(),
++            control: control.clone(),
++            grant: self.grant.clone(),
++            request: StartRunRequest {
++                action_request_id: String::new(),
++                client_id: None,
++                label: Some(format!("{} / {}", goal.title, task.spec.title)),
++                agent_id: harness.into(),
++                prompt: None,
++                cwd: workspace,
++                routing: Default::default(),
++                launch: crate::acp_cli::LaunchOptions {
++                    required_session_route: task.spec.resources.model_route.clone(),
++                    mcp_servers,
++                    ..Default::default()
++                },
++                session: Default::default(),
++                presentation: crate::supervisor::Presentation::Background,
++                parent_run_id: None,
++                allow_shared_directory: false,
++                permission_policy: Default::default(),
++                result_schema: None,
++            },
++        }))
++    }
++
++    pub(super) async fn resume_acp_worker(
++        &self,
++        goal: &GoalSnapshot,
++        task: &Task,
++        execution: &Execution,
++    ) -> Result<bitrouter_orchestrator::turn::TurnReceipt> {
++        let source = super::native::source(goal, task, execution)?;
++        let link = execution
++            .thread
++            .as_ref()
++            .context("original ACP Thread missing")?;
++        let control = model_control::ModelControl::for_worker(self, goal, source.clone());
++        let prepared = execution
++            .resources
++            .as_ref()
++            .context("saved ACP resources missing")?;
++        let mcp_servers =
++            super::resources::servers(&self.routing.snapshot_config(), &prepared.selection)?;
++        let driver = self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
++        let receipt = self
++            .threads
++            .resume_goal_acp_turn(
++                &ThreadTarget {
++                    thread_id: link.thread_id.clone(),
++                    server_instance_id: self.threads.capabilities().server_instance_id,
++                },
++                &CallerContext::local(),
++                source,
++                &super::native::turn_key(&execution.id),
++                control,
++                driver,
++            )
++            .await?;
++        anyhow::ensure!(
++            receipt.thread_id == link.thread_id && receipt.turn_id == link.turn_id,
++            "ACP continuation changed its accepted identity"
++        );
++        Ok(receipt)
++    }
++
+     pub(super) async fn acp_run_snapshot(
+         &self,
+         goal: &GoalSnapshot,
+@@ -329,37 +495,37 @@ impl Coordinator {
+             .find_goal_worker_turn(&target, &caller, &key)
+             .await?
+         {
+-            Some(turn) => turn,
++            Some(turn) => {
++                if self
++                    .threads
++                    .read_stored_thread_view(&target, &caller)
++                    .await?
++                    .recovery
++                    .is_some()
++                {
++                    let driver =
++                        self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
++                    self.threads
++                        .resume_goal_acp_turn(
++                            &target,
++                            &caller,
++                            source.clone(),
++                            &key,
++                            control,
++                            driver,
++                        )
++                        .await?
++                } else {
++                    turn
++                }
++            }
+             None => {
+                 // Thread metadata can outlive a missing Turn admission. Check
+                 // the exact descriptors again before constructing its driver;
+                 // an existing Turn receipt remains readable after config edits.
+                 super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
+-                let driver = Arc::new(Adapter {
+-                    supervisor: self.supervisor.clone(),
+-                    threads: self.threads.clone(),
+-                    control: control.clone(),
+-                    request: StartRunRequest {
+-                        action_request_id: String::new(),
+-                        client_id: None,
+-                        label: Some(format!("{} / {}", goal.title, task.spec.title)),
+-                        agent_id: harness.into(),
+-                        prompt: None,
+-                        cwd: workspace,
+-                        routing: Default::default(),
+-                        launch: crate::acp_cli::LaunchOptions {
+-                            required_session_route: task.spec.resources.model_route.clone(),
+-                            mcp_servers,
+-                            ..Default::default()
+-                        },
+-                        session: Default::default(),
+-                        presentation: crate::supervisor::Presentation::Background,
+-                        parent_run_id: None,
+-                        allow_shared_directory: false,
+-                        permission_policy: Default::default(),
+-                        result_schema: None,
+-                    },
+-                });
++                let driver =
++                    self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
+                 self.threads
+                     .wait_goal_acp_turn(
+                         &target,
+diff --git a/apps/bitrouter/src/goal_runtime/native.rs b/apps/bitrouter/src/goal_runtime/native.rs
+index bfa97dbd..28fc481d 100644
+--- a/apps/bitrouter/src/goal_runtime/native.rs
++++ b/apps/bitrouter/src/goal_runtime/native.rs
+@@ -1,4 +1,4 @@
+-//! Built-in workers use ThreadService; Goal records only reference its facts.
++//! Built-in execution and shared worker observation reference ThreadService facts.
+ use super::*;
+ use bitrouter_orchestrator::agent::AgentConfig;
+ use bitrouter_orchestrator::goal::workflow::ThreadExecution;
+@@ -343,27 +343,31 @@ impl Coordinator {
+             .read_stored_turn(&target, &caller, &binding.turn_id)
+             .await?;
+         let external = task.execution_harness(execution).is_some();
+-        if !external && turn.status == TurnStatus::RecoveryRequired {
++        if turn.status == TurnStatus::RecoveryRequired {
+             let source = source(goal, task, execution)?;
+             if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
+                 let control = model_control::ModelControl::for_worker(self, goal, source.clone());
+-                match self
+-                    .threads
+-                    .resume_goal_worker_turn(
+-                        &target,
+-                        &caller,
+-                        &source,
+-                        &binding.turn_id,
+-                        &turn_key(&execution.id),
+-                        control,
+-                    )
+-                    .await
+-                {
++                let continuation = if external {
++                    self.resume_acp_worker(goal, task, execution).await
++                } else {
++                    self.threads
++                        .resume_goal_worker_turn(
++                            &target,
++                            &caller,
++                            &source,
++                            &binding.turn_id,
++                            &turn_key(&execution.id),
++                            control,
++                        )
++                        .await
++                        .map_err(anyhow::Error::from)
++                };
++                match continuation {
+                     Ok(receipt) => {
+                         anyhow::ensure!(
+                             receipt.thread_id == binding.thread_id
+                                 && receipt.turn_id == binding.turn_id,
+-                            "native continuation changed its original execution identity"
++                            "worker continuation changed its original execution identity"
+                         );
+                         turn = self
+                             .threads
+@@ -379,8 +383,8 @@ impl Coordinator {
+                                     observation: Observation::Unknown {
+                                         run_id: None,
+                                         reason: format!(
+-                                            "Native checkpoint continuation was not admitted: {}",
+-                                            bounded_error(&anyhow::Error::from(error))
++                                            "Worker checkpoint continuation was not admitted: {}",
++                                            bounded_error(&error)
+                                         ),
+                                     },
+                                 },
+diff --git a/apps/bitrouter/src/goal_runtime/resources/tests.rs b/apps/bitrouter/src/goal_runtime/resources/tests.rs
+index dcfde444..4869165e 100644
+--- a/apps/bitrouter/src/goal_runtime/resources/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/resources/tests.rs
+@@ -211,7 +211,15 @@ async fn startup_rejection(model_route: bool) -> Result<()> {
+         ]
+     };
+     for descriptor in descriptors {
+-        let directory = tempfile::tempdir()?;
++        let mut directory = tempfile::tempdir()?;
++        let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
++        directory.disable_cleanup(keep);
++        if keep {
++            eprintln!(
++                "Failure-retention resource startup fixture: {}",
++                directory.path().display()
++            );
++        }
+         let captures = directory.path().join("captures");
+         let controls = directory.path().join("controls");
+         std::fs::create_dir(&captures)?;
+@@ -302,7 +310,20 @@ async fn startup_rejection(model_route: bool) -> Result<()> {
+                 .count(),
+             usize::from(model_route)
+         );
+-        assert!(!error.to_string().contains("cleanup did not confirm"));
++        assert!(
++            !crate::acp_cli::is_lifecycle_teardown_unconfirmed(&error),
++            "resource rejection lacks confirmed controller teardown: {error:#}"
++        );
++        // This marker is positive evidence, not an exhaustive classification.
++        // Capability validation can reject before session/new without adding
++        // it; absence must remain unknown. Wire counts below pin each phase.
++        if crate::acp_cli::is_lifecycle_before_session(&error) {
++            assert!(
++                !model_route,
++                "before-session receipt conflicts with session/new"
++            );
++        }
++        directory.disable_cleanup(false);
+     }
+     Ok(())
+ }
+diff --git a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+index 43b2d526..3e17ee08 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+@@ -163,3 +163,309 @@ async fn unopened_acp_metadata_keeps_its_thread_after_confirmed_shutdown() -> Re
+     }
+     result
+ }
++
++/// Capture the fully committed pre-prompt boundary, then really join the source
++/// before transferring only its stopped-owner proof into that exact SQLite image.
++/// A fresh process must load the original private nonce; no session/new fallback.
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Result<()> {
++    use super::native_recovery::{BarrierStore, Boundary, stopped_source};
++    use std::sync::atomic::AtomicBool;
++    use tokio::sync::Semaphore;
++    for (label, retired, private_present, load_supported, paused) in [
++        ("same-session", true, true, true, false),
++        ("live-owner", false, true, true, false),
++        ("missing-private", true, false, true, false),
++        ("unsupported-load", true, true, false, false),
++        ("paused-source", true, true, true, true),
++    ] {
++        let mut home = tempfile::tempdir()?;
++        let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
++        home.disable_cleanup(keep);
++        if keep {
++            eprintln!(
++                "ACP continuation fixture {label}: {}",
++                home.path().display()
++            );
++        }
++        let mut extra = mcp_worker_configuration(home.path()).await?;
++        extra.push_str("        BRO_GOAL_FIXTURE_PERSIST_SESSION: '1'\n");
++        if !load_supported {
++            extra.push_str("        BRO_GOAL_FIXTURE_NO_LOAD: '1'\n");
++        }
++        let url = format!(
++            "sqlite://{}?mode=rwc",
++            home.path().join("source.db").display()
++        );
++        let (mut original, db) = coordinator_with_config(home.path(), &url, &extra).await?;
++        original.threads.shutdown().await;
++        let barrier = Arc::new(BarrierStore {
++            inner: Arc::new(crate::agent_store::DatabaseExecutionStore::new(db.clone())),
++            boundary: Boundary::AcpSession,
++            result_seen: AtomicBool::new(false),
++            fired: AtomicBool::new(false),
++            ready: Semaphore::new(0),
++            release: Semaphore::new(0),
++        });
++        original.threads = ThreadService::with_store(original.app.clone(), &[], barrier.clone())?;
++        let mut destination = None;
++        let result: Result<()> = async {
++            let id = prepared_worker_attempt(
++                &original,
++                home.path(),
++                Some("goal-peer"),
++                Selection::default(),
++            )
++            .await?;
++            let before = read(&original, &id).await?;
++            original
++                .drive_task(&before, &before.workflow.tasks[0])
++                .await?;
++            tokio::time::timeout(Duration::from_secs(10), barrier.ready.acquire())
++                .await??
++                .forget();
++            let saved = read(&original, &id).await?;
++            let execution = saved.workflow.tasks[0].executions[0].clone();
++            let link = execution
++                .thread
++                .as_ref()
++                .context("original ACP binding missing")?
++                .clone();
++            let old_epoch = original.threads.capabilities().server_instance_id;
++            let private = home.path().join("controls/private-session.json");
++            let original_private: serde_json::Value =
++                serde_json::from_slice(&tokio::fs::read(&private).await?)?;
++            assert_eq!(
++                original_private["prompts"], 0,
++                "source prompt was already dispatched"
++            );
++            let image = home.path().join("checkpoint.db");
++            crate::upgrade_preflight::snapshot(&db, &image).await?;
++            if retired {
++                stopped_source(&original, &barrier, &execution.workspace).await?;
++                original.supervisor.shutdown().await;
++            }
++            let image_url = format!("sqlite://{}?mode=rwc", image.display());
++            let (current, image_db) =
++                coordinator_with_config(home.path(), &image_url, &extra).await?;
++            destination = Some((current, image_db));
++            let (current, image_db) = destination.as_ref().context("destination missing")?;
++            if retired {
++                let stopped = barrier
++                    .read_owner(&old_epoch)
++                    .await
++                    .map_err(anyhow::Error::msg)?
++                    .context("source stopped proof missing")?;
++                anyhow::ensure!(
++                    stopped.stopped_at_ms.is_some(),
++                    "source was not actually stopped"
++                );
++                let store = crate::agent_store::DatabaseExecutionStore::new(image_db.clone());
++                let copied = store
++                    .read_owner(&old_epoch)
++                    .await
++                    .map_err(anyhow::Error::msg)?
++                    .context("copied owner missing")?;
++                let mut expected = stopped.clone();
++                expected.stopped_at_ms = None;
++                assert_eq!(copied, expected);
++                store
++                    .stop_owner(&copied)
++                    .await
++                    .map_err(anyhow::Error::msg)?;
++            }
++            if !private_present {
++                tokio::fs::remove_file(&private).await?;
++            }
++            let mut current_goal = read(current, &id).await?;
++            current.claim_owner(&current_goal).await?;
++            if paused {
++                current.goals.execute("local", GoalCommand::Control {
++                    operation_id: "pause-acp-continuation".into(), goal_id: id.clone(),
++                    expected_revision: current_goal.revision, intent: RunIntent::Pause,
++                }, now()?).await?;
++                current_goal = read(current, &id).await?;
++            }
++            let target = ThreadTarget {
++                thread_id: link.thread_id.clone(),
++                server_instance_id: current.threads.capabilities().server_instance_id,
++            };
++            current
++                .native_workspace(&current_goal, &current_goal.workflow.tasks[0].executions[0])?;
++            let restored = current
++                .resume_acp_worker(
++                    &current_goal,
++                    &current_goal.workflow.tasks[0],
++                    &current_goal.workflow.tasks[0].executions[0],
++                )
++                .await;
++            if retired && private_present && load_supported && !paused {
++                let receipt = restored?;
++                assert_eq!(receipt.turn_id, link.turn_id);
++                let resumed = tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current
++                            .threads
++                            .read_stored_turn(&target, &CallerContext::local(), &link.turn_id)
++                            .await?;
++                        if turn
++                            .acp
++                            .as_ref()
++                            .is_some_and(|session| session.restored_from.is_some())
++                        {
++                            break Ok::<_, anyhow::Error>(turn);
++                        }
++                        anyhow::ensure!(
++                            !turn.status.terminal()
++                                && turn.status
++                                    != bitrouter_orchestrator::turn::TurnStatus::RecoveryRequired,
++                            "same session restoration failed: {:?}",
++                            turn.detail
++                        );
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                })
++                .await??;
++                let binding = resumed.acp.context("restored binding missing")?;
++                assert_eq!(
++                    binding.session_id,
++                    original_private["session"]
++                        .as_str()
++                        .context("private session missing")?
++                );
++                assert_eq!(
++                    tokio::fs::read_to_string(home.path().join("controls/loaded-private-nonce"))
++                        .await?,
++                    original_private["nonce"]
++                        .as_str()
++                        .context("nonce missing")?
++                );
++                tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let state: serde_json::Value =
++                            serde_json::from_slice(&tokio::fs::read(&private).await?)?;
++                        if state["prompts"] == 1 {
++                            break Ok::<_, anyhow::Error>(());
++                        }
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                })
++                .await??;
++                let permission = tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?;
++                        if let Some(permission) = turn.acp_permissions.first() {
++                            break Ok::<_, anyhow::Error>(permission.clone());
++                        }
++                        anyhow::ensure!(!turn.status.terminal(), "restored Turn ended before permission");
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                }).await??;
++                current.threads.answer_acp_permission(&target, &CallerContext::local(),
++                    bitrouter_orchestrator::service::worker::acp::Approval {
++                        turn_id: link.turn_id.clone(), request_id: permission.request_id,
++                        option_id: "allow-once".into(), idempotency_key: "allow-restored-write".into(),
++                    }).await?;
++                tokio::fs::write(home.path().join("controls/release"), "release").await?;
++                tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?;
++                        if turn.status.terminal() || turn.status == bitrouter_orchestrator::turn::TurnStatus::RecoveryRequired {
++                            anyhow::ensure!(turn.status == bitrouter_orchestrator::turn::TurnStatus::Completed
++                                && !turn.unknown_effect && turn.acp_stop.as_ref().is_some_and(|stop| stop.confirmed),
++                                "restored Turn did not finish safely: {:?}",turn.detail);
++                            break Ok::<_, anyhow::Error>(());
++                        }
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                }).await??;
++                assert_eq!(tokio::fs::read_to_string(execution.workspace.join("left.txt")).await?, "LEFT\n");
++                let mut methods = Vec::new();
++                let mut files = tokio::fs::read_dir(home.path().join("captures")).await?;
++                while let Some(file) = files.next_entry().await? {
++                    for line in tokio::fs::read_to_string(file.path()).await?.lines() {
++                        let event: serde_json::Value = serde_json::from_str(line)?;
++                        methods.push(event["method"].as_str().unwrap_or("").to_owned());
++                    }
++                }
++                assert_eq!(
++                    methods
++                        .iter()
++                        .filter(|method| method.as_str() == "session/new")
++                        .count(),
++                    1
++                );
++                assert_eq!(
++                    methods
++                        .iter()
++                        .filter(|method| method.as_str() == "session/load")
++                        .count(),
++                    1
++                );
++                assert_eq!(
++                    methods
++                        .iter()
++                        .filter(|method| method.as_str() == "session/prompt")
++                        .count(),
++                    1
++                );
++                assert_eq!(read(current, &id).await?.workflow.tasks[0].executions.len(), 1);
++                eprintln!("ACP_CONTINUATION_PROOF {}", serde_json::json!({
++                    "scenario":label,"thread_id":link.thread_id,"turn_id":link.turn_id,
++                    "session_id":binding.session_id,"restored_from":binding.restored_from,
++                    "new_run_id":binding.run_id,"session_new":1,"session_load":1,"prompt":1,
++                    "turn_completed":true,"process_stop_confirmed":true,"checked_file":"LEFT\n",
++                    "scope":"Controlled SQLite pre-prompt snapshot, actual source join, Rust peer persisted private nonce; no vendor/provider qualification"
++                }));
++            } else if !retired || paused {
++                assert!(restored.is_err(), "live or paused source resumed");
++            } else {
++                restored?; // shared recovery admission precedes protocol settlement
++                tokio::time::timeout(Duration::from_secs(10), async {
++                    loop {
++                        let turn = current
++                            .threads
++                            .read_stored_turn(&target, &CallerContext::local(), &link.turn_id)
++                            .await?;
++                        if turn.status == bitrouter_orchestrator::turn::TurnStatus::RecoveryRequired
++                            || turn.status.terminal()
++                        {
++                            anyhow::ensure!(
++                                turn.acp
++                                    .as_ref()
++                                    .is_none_or(|session| session.restored_from.is_none()),
++                                "unconfirmed session was adopted"
++                            );
++                            break Ok::<_, anyhow::Error>(());
++                        }
++                        tokio::time::sleep(Duration::from_millis(10)).await;
++                    }
++                })
++                .await??;
++                if private_present {
++                    let state: serde_json::Value =
++                        serde_json::from_slice(&tokio::fs::read(&private).await?)?;
++                    assert_eq!(state["prompts"], 0, "failed load submitted a prompt");
++                }
++            }
++            Ok(())
++        }
++        .await;
++        // Release a still-live source even when assertions fail; all owned tasks
++        // and actual protocol processes are joined before reporting the result.
++        barrier.release.add_permits(1);
++        original.threads.shutdown().await;
++        original.supervisor.shutdown().await;
++        if let Some((current, image_db)) = destination {
++            current.threads.shutdown().await;
++            current.supervisor.shutdown().await;
++            image_db.close().await?;
++        }
++        db.close().await?;
++        if result.is_ok() {
++            home.disable_cleanup(false);
++        }
++        result.with_context(|| format!("ACP continuation scenario {label}"))?;
++    }
++    Ok(())
++}
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs b/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs
+index d7ed75b6..5b8e64e7 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native_recovery.rs
+@@ -9,19 +9,20 @@ use wiremock::matchers::{method, path};
+ use wiremock::{Mock, MockServer, Request};
+ 
+ #[derive(Clone, Copy)]
+-enum Boundary {
++pub(super) enum Boundary {
+     SettledRead,
+     PendingRead,
+     BeforeRestore,
++    AcpSession,
+ }
+ 
+-struct BarrierStore {
+-    inner: Arc<crate::agent_store::DatabaseExecutionStore>,
+-    boundary: Boundary,
+-    result_seen: AtomicBool,
+-    fired: AtomicBool,
+-    ready: Semaphore,
+-    release: Semaphore,
++pub(super) struct BarrierStore {
++    pub(super) inner: Arc<crate::agent_store::DatabaseExecutionStore>,
++    pub(super) boundary: Boundary,
++    pub(super) result_seen: AtomicBool,
++    pub(super) fired: AtomicBool,
++    pub(super) ready: Semaphore,
++    pub(super) release: Semaphore,
+ }
+ 
+ fn contains(
+@@ -94,11 +95,14 @@ impl ExecutionStore for BarrierStore {
+                         |fact| matches!(fact, execution::ExecutionRecord::ToolIntent { .. })
+                     }
+                     Boundary::BeforeRestore => |_| false,
++                    Boundary::AcpSession => {
++                        |fact| matches!(fact, execution::ExecutionRecord::AcpSession { .. })
++                    }
+                 },
+             )
+         });
+         if matched
+-            && (matches!(self.boundary, Boundary::PendingRead)
++            && (matches!(self.boundary, Boundary::PendingRead | Boundary::AcpSession)
+                 || self.result_seen.load(Ordering::SeqCst))
+             && self
+                 .fired
+@@ -191,7 +195,7 @@ fn model_app(routing: Arc<ConfigRoutingTable>) -> Result<Arc<App>> {
+     ))
+ }
+ 
+-async fn stopped_source(
++pub(super) async fn stopped_source(
+     source: &Coordinator,
+     barrier: &BarrierStore,
+     workspace: &Path,
+@@ -223,7 +227,7 @@ async fn stopped_source(
+ #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rereading()
+ -> Result<()> {
+-    for (label, boundary, retired, paused, revoke_after_check) in [
++    for (label, boundary, shutdown_source, paused, revoke_after_check) in [
+         ("safe", Boundary::SettledRead, true, false, false),
+         ("live-owner", Boundary::SettledRead, false, false, false),
+         ("pending-read", Boundary::PendingRead, true, false, false),
+@@ -278,7 +282,9 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
+         source.threads = ThreadService::with_store(source.app.clone(), &[], barrier.clone())?;
+         let mut destination = None;
+         let mut receipt_barrier = None;
+-        let result: Result<()> = async {
++        // The case composes several cold readers; keep its future off the
++        // default Tokio worker stack instead of increasing stack limits.
++        let result: Result<()> = Box::pin(async {
+             let id = prepared_worker_attempt(
+                 &source,
+                 home.path(),
+@@ -341,41 +347,51 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
+             destination = Some((resumed, image_db));
+             let (resumed, image_db) = destination.as_ref().context("destination missing")?;
+             let source_epoch = source.threads.capabilities().server_instance_id;
+-            if retired {
++            if shutdown_source {
+                 stopped_source(&source, &barrier, &original.workspace).await?;
+                 let stopped = barrier
+                     .read_owner(&source_epoch)
+                     .await
+                     .map_err(anyhow::Error::msg)?
+                     .context("source owner proof missing")?;
+-                assert!(
+-                    stopped.stopped_at_ms.is_some(),
+-                    "source did not join cleanly: {label}"
+-                );
+                 assert_eq!(
+                     read(&source, &id).await?.accounting.provider_attempts,
+                     saved.accounting.provider_attempts,
+                     "source admitted another provider attempt after the checkpoint"
+                 );
+-                let store = crate::agent_store::DatabaseExecutionStore::new(image_db.clone());
+-                let mut snapshot_owner = store
+-                    .read_owner(&source_epoch)
+-                    .await
+-                    .map_err(anyhow::Error::msg)?
+-                    .context("copied owner missing")?;
+-                assert!(snapshot_owner.stopped_at_ms.is_none());
+-                snapshot_owner.stopped_at_ms = stopped.stopped_at_ms;
+-                assert_eq!(
+-                    snapshot_owner, stopped,
+-                    "copied owner identity differs from the joined source"
+-                );
+-                snapshot_owner.stopped_at_ms = None;
+-                // Only after actual source join, affirm that same epoch's
+-                // stopped proof in its checkpoint image. Never retire a live owner.
+-                store
+-                    .stop_owner(&snapshot_owner)
+-                    .await
+-                    .map_err(anyhow::Error::msg)?;
++                if stopped.stopped_at_ms.is_some() {
++                    let store = crate::agent_store::DatabaseExecutionStore::new(image_db.clone());
++                    let mut snapshot_owner = store
++                        .read_owner(&source_epoch)
++                        .await
++                        .map_err(anyhow::Error::msg)?
++                        .context("copied owner missing")?;
++                    assert!(snapshot_owner.stopped_at_ms.is_none());
++                    snapshot_owner.stopped_at_ms = stopped.stopped_at_ms;
++                    assert_eq!(
++                        snapshot_owner, stopped,
++                        "copied owner identity differs from the joined source"
++                    );
++                    snapshot_owner.stopped_at_ms = None;
++                    // Only after actual source join, affirm that same epoch's
++                    // stopped proof in its checkpoint image. Never retire a live owner.
++                    store
++                        .stop_owner(&snapshot_owner)
++                        .await
++                        .map_err(anyhow::Error::msg)?;
++                } else {
++                    // A cancellation at the durable ToolIntent boundary can
++                    // retain unknown effects. Join alone must not manufacture
++                    // stopped-owner proof or retire that unresolved source.
++                    anyhow::ensure!(matches!(boundary, Boundary::PendingRead),
++                        "safe source did not join cleanly: {label}");
++                    let original_turn = Box::pin(source.threads.read_stored_turn(&ThreadTarget {
++                        thread_id: binding.thread_id.clone(), server_instance_id: source_epoch.clone(),
++                    }, &CallerContext::local(), &binding.turn_id)).await?;
++                    anyhow::ensure!(original_turn.unknown_effect
++                        && original_turn.status == TurnStatus::RecoveryRequired,
++                        "source owner lacks stopped proof without a durable uncertain outcome");
++                }
+             }
+             if paused {
+                 let current = read(resumed, &id).await?;
+@@ -406,7 +422,7 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
+                 server_instance_id: resumed.threads.capabilities().server_instance_id,
+             };
+             if matches!(boundary, Boundary::SettledRead)
+-                && retired
++                && shutdown_source
+                 && !paused
+                 && !revoke_after_check
+             {
+@@ -509,7 +525,7 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
+             );
+             assert!(!after.workflow.completion.completed_for(1));
+             if matches!(boundary, Boundary::SettledRead)
+-                && retired
++                && shutdown_source
+                 && !paused
+                 && !revoke_after_check
+             {
+@@ -595,6 +611,15 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
+                 resumed.drive_task(&after, &after.workflow.tasks[0]).await?;
+                 assert_eq!(calls.load(Ordering::SeqCst), 2);
+             } else {
++                if matches!(boundary, Boundary::PendingRead) {
++                    let report = Box::pin(resumed.threads.read_stored_thread_view(&target, &CallerContext::local())).await?
++                        .recovery.context("pending-read recovery evidence missing")?;
++                    anyhow::ensure!(report.turn.as_ref().is_some_and(|turn| !turn.unresolved_calls.is_empty())
++                        && report.blockers.iter().any(|blocker| matches!(blocker,
++                            bitrouter_orchestrator::thread::RecoveryBlocker::EffectUnconfirmed { .. }
++                            | bitrouter_orchestrator::thread::RecoveryBlocker::UnsettledCall { .. })),
++                        "pending-read rejection lost its independent effect blocker");
++                }
+                 assert_eq!(
+                     calls.load(Ordering::SeqCst),
+                     1,
+@@ -618,7 +643,7 @@ async fn native_goal_resumes_only_a_stopped_safe_original_checkpoint_without_rer
+                 );
+             }
+             Ok(())
+-        }
++        })
+         .await;
+         if let Some(gate) = &receipt_barrier {
+             gate.release.add_permits(1);
+diff --git a/apps/bitrouter/src/supervisor.rs b/apps/bitrouter/src/supervisor.rs
+index 54bc4006..30459b8f 100644
+--- a/apps/bitrouter/src/supervisor.rs
++++ b/apps/bitrouter/src/supervisor.rs
+@@ -926,6 +926,7 @@ impl LedgerStore {
+             snapshot.owned_process_terminated()
+                 && snapshot.process == entry.process
+                 && snapshot.startup_aborted_before_session == entry.startup_aborted_before_session
++                && snapshot.managed_by == entry.managed_by
+                 && snapshot.run_id == entry.run_id
+                 && snapshot.agent_id == entry.agent_id
+                 && snapshot.native_session_id == entry.native_session_id
+@@ -4800,6 +4801,13 @@ mod tests {
+             .context("stopped row missing")?;
+         assert!(ledger.stopped_replay(&entry).await?.is_some());
+         let mut other = entry.clone();
++        other.managed_by = Some(bitrouter_orchestrator::service::worker::acp::Owner {
++            server_instance_id: "different-owner".into(),
++            thread_id: "thread".into(),
++            turn_id: "turn".into(),
++        });
++        assert!(ledger.stopped_replay(&other).await.is_err());
++        other = entry.clone();
+         other.run_id = "different-run".into();
+         assert!(ledger.stopped_replay(&other).await.is_err());
+         other = entry.clone();
+diff --git a/apps/bitrouter/tests/goal_tui_pty.rs b/apps/bitrouter/tests/goal_tui_pty.rs
+index a04d4d1c..a2777fff 100644
+--- a/apps/bitrouter/tests/goal_tui_pty.rs
++++ b/apps/bitrouter/tests/goal_tui_pty.rs
+@@ -575,7 +575,15 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
+         matchers::{method, path},
+     };
+     let binary = fixture_binary::build("goal_acp_fixture").map_err(anyhow::Error::msg)?;
+-    let home = tempfile::tempdir()?;
++    let mut home = tempfile::tempdir()?;
++    let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
++    home.disable_cleanup(keep);
++    if keep {
++        eprintln!(
++            "Failure-retention active Goal PTY fixture: {}",
++            home.path().display()
++        );
++    }
+     let workspace = home.path().join("original");
+     let controls = home.path().join("controls");
+     let captures = home.path().join("captures");
+@@ -903,6 +911,9 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
+     }
+     let ended = tokio::time::timeout(Duration::from_secs(15), server.wait()).await;
+     ensure!(ended.is_ok(), "fixture daemon did not finish cleanup");
++    if result.is_ok() {
++        home.disable_cleanup(false);
++    }
+     result
+ }
+ 
+diff --git a/apps/bitrouter/tests/native_harness_resources.rs b/apps/bitrouter/tests/native_harness_resources.rs
+index 417fb9bf..71748bf0 100644
+--- a/apps/bitrouter/tests/native_harness_resources.rs
++++ b/apps/bitrouter/tests/native_harness_resources.rs
+@@ -74,7 +74,15 @@ async fn wait(
+ #[tokio::test]
+ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_connections()
+ -> Result<(), Box<dyn std::error::Error>> {
+-    let directory = tempfile::tempdir()?;
++    let mut directory = tempfile::tempdir()?;
++    let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
++    directory.disable_cleanup(keep);
++    if keep {
++        eprintln!(
++            "Failure-retention native resource fixture: {}",
++            directory.path().display()
++        );
++    }
+     let workspace = directory.path().join("workspace");
+     std::fs::create_dir(&workspace)?;
+     std::fs::write(workspace.join("AGENTS.md"), "SQLITE_STARTUP_INSTRUCTIONS")?;
+@@ -261,5 +269,6 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
+     destination.shutdown().await;
+     drop(destination);
+     reopened.close().await?;
++    directory.disable_cleanup(false);
+     Ok(())
+ }
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery.rs b/crates/bitrouter-orchestrator/src/service/recovery.rs
+index 1a1395e8..c56f0668 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery.rs
+@@ -1,6 +1,7 @@
+ //! Durable reconstruction and explicit checkpoint recovery. Loading alone never
+ //! grants execution ownership, resolves effects or permits replay.
+ 
++mod acp;
+ mod native;
+ 
+ use std::collections::{HashMap, VecDeque};
+@@ -50,6 +51,7 @@ struct Step {
+ #[derive(Serialize)]
+ struct Active {
+     generation: Option<crate::turn::GenerationOrigin>,
++    acp: acp::State,
+     native: bool,
+     native_runs: std::collections::BTreeMap<String, (u32, u64)>,
+     native_unknown_usage: std::collections::BTreeSet<String>,
+@@ -95,7 +97,7 @@ struct Rebuild {
+ struct RecoveredRun {
+     turn_id: String,
+     input: RunInput,
+-    agent: Agent,
++    driver: super::runner::Driver,
+     verification: Option<String>,
+     cancel: CancellationToken,
+ }
+@@ -120,6 +122,18 @@ impl ThreadService {
+         caller: &CallerContext,
+         request: ThreadRecoveryRequest,
+         control: Option<Arc<dyn crate::control::WorkControl>>,
++    ) -> Result<ThreadView, ServiceError> {
++        self.recover_thread_with_acp(target, caller, request, control, None)
++            .await
++    }
++
++    pub(super) async fn recover_thread_with_acp(
++        &self,
++        target: &ThreadTarget,
++        caller: &CallerContext,
++        request: ThreadRecoveryRequest,
++        control: Option<Arc<dyn crate::control::WorkControl>>,
++        acp: Option<super::worker::acp::Job>,
+     ) -> Result<ThreadView, ServiceError> {
+         let (send, receive) = oneshot::channel();
+         let service = self.clone();
+@@ -135,7 +149,7 @@ impl ThreadService {
+             }
+             self.inner.workers.spawn(async move {
+                 let result = service
+-                    .recover_thread_owned(&target, &caller, request, control)
++                    .recover_thread_owned(&target, &caller, request, control, acp)
+                     .await;
+                 let _ = send.send(result);
+             });
+@@ -149,6 +163,7 @@ impl ThreadService {
+         caller: &CallerContext,
+         request: ThreadRecoveryRequest,
+         control: Option<Arc<dyn crate::control::WorkControl>>,
++        acp: Option<super::worker::acp::Job>,
+     ) -> Result<ThreadView, ServiceError> {
+         self.ensure_instance(Some(&target.server_instance_id))?;
+         let coordination = self
+@@ -219,6 +234,12 @@ impl ThreadService {
+                     "Goal worker recovery requires its live source and budget control",
+                 ));
+             }
++            let acp_continuation = acp.is_some()
++                && matches!(thread.config, crate::thread::executor::Config::Acp { .. })
++                && report
++                    .turn
++                    .as_ref()
++                    .is_some_and(|turn| turn.acp_continuation.is_some());
+             let settled_generation = coordination
+                 && report.terminal_checkpoint
+                 && report.turn.as_ref().is_none_or(|turn| {
+@@ -236,6 +257,8 @@ impl ThreadService {
+                     ))
+                 || report.blockers.iter().any(|blocker| {
+                     !matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed)
++                        && !(acp_continuation
++                            && matches!(blocker, RecoveryBlocker::AcpSessionUnconfirmed))
+                         && !(settled_generation
+                             && matches!(
+                                 blocker,
+@@ -284,6 +307,52 @@ impl ThreadService {
+             };
+             let continuation = if report.terminal_checkpoint {
+                 None
++            } else if let Some(mut job) = acp {
++                let turn = report.turn.as_ref().ok_or("ACP recovery has no Turn")?;
++                let saved = turn.acp_continuation.clone().ok_or_else(|| {
++                    ServiceError::new(
++                        ErrorCode::RecoveryRequired,
++                        "ACP prompt/session continuity is unconfirmed",
++                    )
++                })?;
++                if thread.snapshot.active_turn_id.as_deref() != Some(&turn.turn_id) {
++                    return Err("ACP checkpoint differs from its accepted Turn".into());
++                }
++                if saved.owner.server_instance_id != report.source_server_instance_id
++                    || saved.owner.thread_id != target.thread_id
++                    || saved.owner.turn_id != turn.turn_id
++                {
++                    return Err(ServiceError::new(
++                        ErrorCode::RecoveryRequired,
++                        "ACP binding belongs to another source owner",
++                    ));
++                }
++                let deadline = saved.accepted_at_ms.saturating_add(
++                    u64::try_from(thread.config.max_duration().as_millis()).unwrap_or(u64::MAX),
++                );
++                if super::now_ms() >= deadline {
++                    return Err(ServiceError::new(
++                        ErrorCode::RecoveryRequired,
++                        "original ACP duration expired",
++                    ));
++                }
++                let prompt = saved.prompt.clone();
++                job.continuation = Some(saved);
++                Some(RecoveredRun {
++                    turn_id: turn.turn_id.clone(),
++                    input: RunInput {
++                        prompt,
++                        messages: Vec::new(),
++                        user_item_id: turn.user_item_id.clone(),
++                        context_version: thread.snapshot.context_version,
++                        checkpoint: None,
++                        complete_checkpoint: false,
++                        restored_verification: None,
++                    },
++                    driver: super::runner::Driver::Acp(job),
++                    verification: None,
++                    cancel: CancellationToken::new(),
++                })
+             } else {
+                 let turn = report
+                     .turn
+@@ -375,7 +444,7 @@ impl ThreadService {
+                             None
+                         },
+                     },
+-                    agent,
++                    driver: super::runner::Driver::Native(agent),
+                     verification: thread.verification_command.clone(),
+                     cancel,
+                 })
+@@ -404,12 +473,10 @@ impl ThreadService {
+             ));
+         }
+         let owner = self.initialize_execution().await?;
+-        if let Some(run) = &continuation {
+-            let checkpoint = run
+-                .input
+-                .checkpoint
+-                .as_ref()
+-                .ok_or("recovered completion missing")?;
++        if let Some(checkpoint) = continuation
++            .as_ref()
++            .and_then(|run| run.input.checkpoint.as_ref())
++        {
+             messages = checkpoint.messages.clone();
+             snapshot.context_version = checkpoint.context_version;
+         }
+@@ -607,7 +674,7 @@ impl ThreadService {
+         if let Some(run) = continuation {
+             self.inner.workers.spawn(self.run_turn(
+                 run.turn_id,
+-                super::runner::Driver::Native(run.agent),
++                run.driver,
+                 run.input,
+                 run.verification,
+                 run.cancel,
+@@ -1177,6 +1244,9 @@ impl Rebuild {
+             }
+             let native_snapshot = self.consume(&record)?;
+             if let ExecutionRecord::ThreadEvent { event } = &record {
++                if let Some(active) = &mut self.active {
++                    active.acp.accepted_at_ms.get_or_insert(event.timestamp_ms);
++                }
+                 if event.seq != self.sequence || event.thread_id != self.view.thread.thread_id {
+                     self.invalid("public Thread event has a mismatched durable cursor or identity");
+                 }
+@@ -1250,9 +1320,19 @@ impl Rebuild {
+                     .remove(position)
+                     .ok_or("activation input disappeared")?;
+                 let mut messages = self.messages.clone();
+-                messages.push(Message::text(Role::User, entry.prompt));
++                messages.push(Message::text(Role::User, entry.prompt.clone()));
+                 self.active = Some(Active {
+                     generation: None,
++                    acp: acp::State::new(
++                        if matches!(
++                            self.view.config,
++                            crate::thread::executor::Config::Acp { .. }
++                        ) {
++                            entry.prompt.clone()
++                        } else {
++                            String::new()
++                        },
++                    ),
+                     native: false,
+                     native_runs: Default::default(),
+                     native_unknown_usage: Default::default(),
+@@ -1329,10 +1409,11 @@ impl Rebuild {
+                 if source_server_instance_id != &self.source_epoch
+                     || source_cursor.checked_add(1) != Some(self.sequence)
+                     || (self.view.thread.active_turn_id.is_some()
+-                        && self
+-                            .active
+-                            .as_ref()
+-                            .is_none_or(|active| !active.settled && !active.checkpointed))
++                        && self.active.as_ref().is_none_or(|active| {
++                            !active.settled
++                                && !active.checkpointed
++                                && active.acp_continuation().is_none()
++                        }))
+                 {
+                     self.invalid("recovery acceptance has the wrong source checkpoint");
+                 }
+@@ -1552,8 +1633,14 @@ impl Rebuild {
+             // Before any Turn was accepted, this is only idle metadata: no
+             // harness session could have been started by this Thread. Its
+             // ordinary owner/workspace recovery still requires stopped proof.
+-            context_valid = false;
+             self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
++            if let Some(active) = &mut self.active
++                && active.acp_continuation().is_some()
++            {
++                active.exact_budget = true;
++                active.budget.active_duration_ms =
++                    super::now_ms().saturating_sub(active.acp.accepted_at_ms.unwrap_or(0));
++            }
+         }
+         let mut report_turn = None;
+         if let Some(active) = &mut self.active {
+@@ -1638,6 +1725,7 @@ impl Rebuild {
+                 self.blockers.push(RecoveryBlocker::BudgetUncertain { detail: "lost execution has unconfirmed active time, call charging or provider usage".into() });
+             }
+             report_turn = Some(RecoveryTurn {
++                acp_continuation: active.acp_continuation(),
+                 resources: active.resources.clone(),
+                 turn_id: active.turn_id.clone(),
+                 user_item_id: active.user_item_id.clone(),
+@@ -1800,6 +1888,19 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
+ }
+ 
+ impl Active {
++    fn acp_continuation(&self) -> Option<super::worker::acp::Continuation> {
++        if self.native
++            || self.settled
++            || self.cancel_requested
++            || !self.steps.is_empty()
++            || !self.calls.is_empty()
++            || !self.steering.is_empty()
++        {
++            return None;
++        }
++        self.acp.continuation()
++    }
++
+     fn consumed_model_steps(&self) -> Result<u32, String> {
+         if self.native {
+             // Core charges provider attempts, including fallbacks. A prepared
+@@ -1822,6 +1923,7 @@ impl Active {
+         if self.native && native::is_projection(fact, &self.calls) {
+             return Ok(());
+         }
++        self.acp.consume(fact)?;
+         match fact {
+             ExecutionRecord::GenerationInput { origin, .. } => {
+                 if self.generation.is_some() || !self.steps.is_empty() {
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery/tests.rs b/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
+index 3cc74d15..27355311 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery/tests.rs
+@@ -154,6 +154,7 @@ fn settlement_charges_native_fallback_attempts_and_legacy_requests()
+     ] {
+         let mut active = Active {
+             generation: None,
++            acp: acp::State::new(String::new()),
+             native,
+             native_runs: std::collections::BTreeMap::from([("run".into(), (attempts, 0))]),
+             native_unknown_usage: Default::default(),
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs b/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
+index 1de4b5ac..e2ed5f0c 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs
+@@ -231,6 +231,7 @@ impl Driver for Reported {
+             agent_id: "test-peer".into(),
+             confirmed_model_route: None,
+             capabilities: None,
++            restored_from: None,
+         })
+     }
+     async fn prompt(&self, _: &Owner, _: &Binding, _: &str, _: &str) -> Result<(), String> {
+@@ -295,7 +296,12 @@ async fn submitted_acp_prompt_is_not_recovered_as_unopened_metadata()
+         .recovery
+         .as_ref()
+         .ok_or("submitted session inspection missing")?;
+-    assert!(!report.context_valid);
++    assert!(
++        report
++            .turn
++            .as_ref()
++            .is_none_or(|turn| turn.acp_continuation.is_none())
++    );
+     assert!(report.blockers.iter().any(|blocker| matches!(
+         blocker,
+         crate::thread::RecoveryBlocker::AcpSessionUnconfirmed
+diff --git a/crates/bitrouter-orchestrator/src/service/waiting.rs b/crates/bitrouter-orchestrator/src/service/waiting.rs
+index 57aa811d..f0b9a4a9 100644
+--- a/crates/bitrouter-orchestrator/src/service/waiting.rs
++++ b/crates/bitrouter-orchestrator/src/service/waiting.rs
+@@ -29,6 +29,7 @@ impl ThreadService {
+                 source,
+                 control,
+                 driver,
++                continuation: None,
+             })),
+         ))
+         .await
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp.rs b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+index 06d92702..16948985 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+@@ -25,6 +25,19 @@ pub struct Binding {
+     pub agent_id: String,
+     pub confirmed_model_route: Option<String>,
+     pub capabilities: Option<serde_json::Value>,
++    /// Previous owned run of this same private session; never a new session.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub restored_from: Option<String>,
++}
++
++/// Derived only from a complete accepted journal before the first prompt intent.
++/// Loading this description does not confirm private session continuity.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct Continuation {
++    pub owner: Owner,
++    pub binding: Binding,
++    pub prompt: String,
++    pub accepted_at_ms: u64,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -84,6 +97,11 @@ impl Action {
+ pub trait Driver: Send + Sync {
+     /// Start/select a session without submitting its first prompt.
+     async fn start(&self, owner: &Owner, action_id: &str) -> Result<Binding, String>;
++    /// Load the exact stopped session, without submitting any prompt. Drivers
++    /// that cannot prove this capability refuse; no fallback to session/new.
++    async fn restore(&self, _: &Owner, _: &str, _: &Continuation) -> Result<Binding, String> {
++        Err("ACP same-session restoration is unsupported".into())
++    }
+     async fn prompt(
+         &self,
+         owner: &Owner,
+@@ -119,6 +137,7 @@ pub(in crate::service) struct Job {
+     pub(in crate::service) source: GoalWork,
+     pub(in crate::service) control: Arc<dyn WorkControl>,
+     pub(in crate::service) driver: Arc<dyn Driver>,
++    pub(in crate::service) continuation: Option<Continuation>,
+ }
+ 
+ pub struct Approval {
+@@ -246,10 +265,79 @@ impl ThreadService {
+                 source,
+                 control,
+                 driver,
++                continuation: None,
+             }))),
+         )
+         .await
+     }
++    /// Continue only an already accepted, inspected pre-prompt session. The
++    /// original durable input/key remain authoritative; no new Turn is accepted.
++    pub async fn resume_goal_acp_turn(
++        &self,
++        target: &ThreadTarget,
++        caller: &CallerContext,
++        source: GoalWork,
++        key: &str,
++        control: Arc<dyn WorkControl>,
++        driver: Arc<dyn Driver>,
++    ) -> Result<TurnReceipt, ServiceError> {
++        control
++            .authorize()
++            .await
++            .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
++        let view = self.load_thread(target, caller).await?;
++        if view.thread.goal_work.as_ref() != Some(&source)
++            || !matches!(view.config, crate::thread::executor::Config::Acp { .. })
++        {
++            return Err(ServiceError::new(
++                ErrorCode::Unauthorized,
++                "ACP continuation source mismatch",
++            ));
++        }
++        let original = self
++            .find_goal_worker_turn(target, caller, key)
++            .await?
++            .ok_or_else(|| {
++                ServiceError::new(ErrorCode::UnknownTurn, "original ACP action missing")
++            })?;
++        if let Some(report) = view.recovery {
++            if report
++                .turn
++                .as_ref()
++                .is_none_or(|turn| turn.turn_id != original.turn_id)
++            {
++                return Err(ServiceError::new(
++                    ErrorCode::RecoveryRequired,
++                    "original ACP checkpoint missing",
++                ));
++            }
++            self.recover_thread_with_acp(
++                target,
++                caller,
++                crate::thread::ThreadRecoveryRequest {
++                    source_server_instance_id: report.source_server_instance_id,
++                    source_cursor: report.source_cursor,
++                    idempotency_key: format!("{key}-restore-{}", report.source_cursor),
++                },
++                Some(control.clone()),
++                Some(Job {
++                    source,
++                    control,
++                    driver,
++                    continuation: None,
++                }),
++            )
++            .await?;
++        }
++        self.find_goal_worker_turn(target, caller, key)
++            .await?
++            .ok_or_else(|| {
++                ServiceError::new(
++                    ErrorCode::StorageUnavailable,
++                    "original ACP receipt disappeared",
++                )
++            })
++    }
+ }
+ 
+ mod execution;
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs b/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
+index c14a2a64..624c4727 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
+@@ -35,7 +35,12 @@ impl ThreadService {
+             Some(thread) => thread.config.max_duration(),
+             None => return,
+         };
+-        let deadline = tokio::time::Instant::now() + duration;
++        let remaining = job.continuation.as_ref().map_or(duration, |saved| {
++            duration.saturating_sub(Duration::from_millis(
++                crate::service::now_ms().saturating_sub(saved.accepted_at_ms),
++            ))
++        });
++        let deadline = tokio::time::Instant::now() + remaining;
+         let mut progress = Progress {
+             owner: Owner {
+                 server_instance_id: self.inner.instance_id.clone(),
+@@ -171,7 +176,13 @@ impl ThreadService {
+         let turn = &progress.owner.turn_id;
+         self.append(turn, TurnEventPayload::Started).await?;
+         self.acp_gate(turn, job).await?;
+-        let start = Action::Start.key(turn);
++        if cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
++            return Err("Original ACP duration or execution control closed before startup".into());
++        }
++        let start = job.continuation.as_ref().map_or_else(
++            || Action::Start.key(turn),
++            |saved| format!("acp-{turn}-restore-{}", saved.binding.run_id),
++        );
+         self.commit_records(
+             turn,
+             &[ExecutionRecord::AcpDispatch {
+@@ -184,11 +195,11 @@ impl ThreadService {
+         progress.start_dispatched = true;
+         // Startup is owned and awaited to settlement. No prompt has been sent;
+         // dropping this future on a transport timeout would lose its mapping.
+-        let binding = job
+-            .driver
+-            .start(&progress.owner, &start)
+-            .await
+-            .map_err(ServiceError::storage)?;
++        let binding = match &job.continuation {
++            Some(saved) => job.driver.restore(&progress.owner, &start, saved).await,
++            None => job.driver.start(&progress.owner, &start).await,
++        }
++        .map_err(ServiceError::storage)?;
+         let config = {
+             let state = self.lock_state();
+             state
+@@ -202,7 +213,12 @@ impl ThreadService {
+             return Err("ACP driver has a native Thread".into());
+         };
+         progress.binding = Some(binding.clone());
+-        if binding.run_id.is_empty()
++        if job.continuation.as_ref().is_some_and(|saved| {
++            binding.session_id != saved.binding.session_id
++                || binding.agent_id != saved.binding.agent_id
++                || binding.restored_from.as_ref() != Some(&saved.binding.run_id)
++                || binding.run_id == saved.binding.run_id
++        }) || binding.run_id.is_empty()
+             || binding.session_id.is_empty()
+             || binding.agent_id != acp.agent_id
+             || acp
+diff --git a/crates/bitrouter-orchestrator/src/thread.rs b/crates/bitrouter-orchestrator/src/thread.rs
+index 6fbdbd12..3c156811 100644
+--- a/crates/bitrouter-orchestrator/src/thread.rs
++++ b/crates/bitrouter-orchestrator/src/thread.rs
+@@ -162,6 +162,8 @@ pub struct ThreadRecoveryRequest {
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct RecoveryTurn {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub acp_continuation: Option<crate::service::worker::acp::Continuation>,
+     #[serde(default)]
+     pub resources: Option<crate::harness::HarnessInventory>,
+     pub turn_id: String,
+diff --git a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+index b187db10..e834063d 100644
+--- a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
++++ b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+@@ -1,6 +1,6 @@
+ # BRO 执行重构：当前设计与验收状态
+ 
+-本轮依据 [重构 spec v0.2](BRO_ORCHESTRATOR_REFACTOR_SPEC.md)，统一 BRO 的执行接纳与控制，保留现有存储职责。**重构仍在进行，尚未完成 S0–S6 全部退出条件，也未将本轮本地提交推送到 PR #981。**
++本轮依据 [重构 spec v0.2](BRO_ORCHESTRATOR_REFACTOR_SPEC.md)，统一 BRO 的执行接纳与控制，保留现有存储职责。**本轮 BRO 执行重构已完成本地实现与最终源码回归。** [验收映射](evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md)逐项说明 RF01–RF12 / A01–A22 的本地证明与范围；[最终摘要](evidence/bro-goal-workflow/2026-10-16-refactor-summary.json)记录源码绑定、归档发布和 CI 的分层状态。真实厂商 harness/provider 在本轮源码上的复验仍为未通过 gate。
+ 
+ BRO 面向 Goal 和长期并行工作流。它负责理解、规划、委派、协调和验收；实际工作统一交给 ThreadService。内置执行器可独立完成 Goal，外部 ACP harness 是可选 worker。未来 core persistent workflow state、状态权威迁移、通用动态图和 Goal owner handoff 不进入本轮。
+ 
+@@ -108,10 +108,11 @@ sequenceDiagram
+ | 安全 native checkpoint、已停止 owner、效果和预算可核对 | 经既有恢复引擎继续原 Thread/Turn，不重新提交 prompt、不重放已确认读取 |
+ | 原 owner 仍活跃、pending read、来源已暂停或迟到撤销 | 拒绝继续，保留恢复/阻塞事实 |
+ | ACP Thread 仅有元数据、从未接纳 Turn | 原 owner 已确认停止且工作区与来源检查通过后，沿用原 Thread 和接纳 key 创建首个 session；不声称恢复私有 session |
+-| ACP 私有会话冷恢复 | **尚未接通已确认同 session 的继续执行；保持 AcpSessionUnconfirmed** |
++| ACP 原 session 已记录、原 prompt 尚无派发 intent | 原 owner 与进程已确认停止、完整启动历史且支持 load 时，沿用原 Thread/Turn 加载原 session；保持原时限、MCP 摘要与原始输入 |
++| ACP prompt 可能已提交、恢复 start 映射未知、私有状态/历史缺失 | 保持恢复/未知与 AcpSessionUnconfirmed，不补造停止证明，不重放 prompt，不退回 session/new |
+ | 旧 ACP run 的迟到停止/效果观察 | 保留原身份对账；不能直接覆盖新绑定或验证新要求 |
+ 
+-Native 冷恢复证明使用受控 SQLite checkpoint 图像，并在实际原执行关闭、join 后转入同一 owner 的停止证明。它不证明任意崩溃后的强制接管，也不证明导入外部 ACP 私有状态。
++Native 与 ACP 冷恢复证明使用受控 SQLite checkpoint 图像；只有实际原执行关闭并 join、且 owner 确有停止证明时才转入该证明。pending read 若仍有未知效果，原 owner 不被强行退役，独立的效果 blocker 仍须保留。ACP Rust peer 会从原私有文件加载 nonce，再实际提交一次原 prompt、完成授权写入并确认停止；协议 load ACK 不证明所有厂商私有 context 无损。任意崩溃后的强制接管与导入外部私有状态不在该证明内。
+ 
+ ## 4 资源、预算与证据
+ 
+@@ -177,7 +178,7 @@ Goal 默认交付经过验证、可 review 的结果即完成；人工验收只
+ | 当前 native 历史 checkpoint | 86 项 Goal runtime 检查、6 项证据检查、归档矩阵 3 次重复、严格全 workspace Clippy 与 fmt |
+ | 前一预算 checkpoint | 735 项 SDK 检查、4 项 Goal PTY、编辑器 10 次重复、6 个 doctest（1 ignored）；源码适用性单独核对 |
+ 
+-**尚无这一最终重构版本的全 workspace 通过声明。** 最近完整运行是时间预算修正前的 4,749 通过、1 项编辑器 CAS 测试失败、24 skipped；原始失败已保留，后续修正与组件通过不能冒充当前源码全量通过。真实 harness/provider 与 hosted CI 另列，不由 Rust peer、HTTP fixture 或固定语义 verdict 代替。
++最终源码结果：**Summary [ 916.362s] 4757 tests run: 4757 passed (7 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、原 45 秒等等待、栈与产品上限保持原值。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
+ 
+ 必要的 Rust fixtures、输入评测案例与测试驱动保留在仓库。执行与测试夹具不要求 Python。常用本地入口：
+ 
+@@ -191,18 +192,18 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
+ 
+ 失败保留使用测试专用 `BRO_GOAL_FIXTURE_KEEP_FAILURES=1`。失败 filesystem/SQLite copy 不是进程图像或全部外部效果快照；历史未保留的文件和内存数据库不宣称已恢复。
+ 
+-独立本地归档根目录为 `/Users/kelsen/.codex/archives/bro-refactor/2026-10-16/`。各批次索引保存源码哈希、配置、原始失败、通过结果、独立解包校验及 Git bundle；当前尚未完成本轮独立远程发布。`native-history-prior-ledger5.md` 保存本文重写前的完整 1,339 行记录。主 PR 不复制这些多轮日志和快照。
++独立本地归档根目录为 `/Users/kelsen/.codex/archives/bro-refactor/2026-10-16/`。各批次索引保存源码哈希、配置、原始失败、通过结果、独立解包校验及 Git bundle；归档发布状态和不可变 commit 见最终摘要。`native-history-prior-ledger5.md` 保存本文重写前的完整 1,339 行记录。主 PR 不复制这些多轮日志和快照。
+ 
+-## 8 剩余退出条件
++## 8 阶段结论与后续边界
+ 
+-| 阶段 | 当前结论 / 剩余工作 |
++| 阶段 | 本轮结论 |
+ | --- | --- |
+-| S0 | 对象、事实职责和资源边界已明确；无未来 core persistence 前置依赖 |
+-| S1 | 关联、原 key 对账和格式 fence 已接入；与剩余恢复边界一起完成最终中断审计 |
+-| S2 | 内置闭环、权限/停止、等待与安全 native checkpoint 桥已有本地证明；最终源码回归仍需保留 |
+-| S3 | **待完成同 ACP session 的已确认恢复资格与完整中断矩阵**；私有连续性未确认时继续阻塞 |
+-| S4 | 资源来源、实际报告和 native 归档读取已有证明；完成最终当前/历史 UI 与能力范围核对 |
+-| S5 | native/ACP 依赖与验收接入共同执行；完成剩余恢复场景和实际 harness 资格核对 |
+-| S6 | 审计替代路径的消费者，只删除已被替代的逻辑；完成全量回归、证据发布和 PR 更新 |
+-
+-main 的目录更新已在本地合入；registry validate/build/check 通过，产物没有漂移。最终交付还需：逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。
++| S0 | 对象、事实职责和可控资源边界明确；没有未来 core persistence 前置依赖 |
++| S1 | 最小关联、原 key 对账、历史读取和格式 fence 接入；已确认无接纳与未知接纳分别处理 |
++| S2 | 内置独立闭环、权限/停止、额度等待与安全 native checkpoint 继续通过本地证明 |
++| S3 | Managed ACP 共同控制、worker 接替和受控同 session 恢复矩阵通过；恢复资格限首次 prompt 之前，未知效果保持阻塞 |
++| S4 | 要求/策略来源、实际报告、当前与历史 UI 证据有明确适用范围；完整 Turn 固定 model/context 仍是后续 core 工作 |
++| S5 | 两分支实际重叠、隔离写入、已检查依赖交接、要求修改及根验收接入共同执行 |
++| S6 | 已替代的执行路径收敛，仍有历史/停止对账消费者的无绑定记录保留；最终本地全量与证据分层完成 |
++
++main 的目录更新已合入；registry validate/build/check 通过且产物无漂移。独立归档、PR #981 和 exact-head hosted CI 状态见最终摘要；当前本地证明不扩展为真实厂商/provider 资格。未来 core persistent workflow state、完整 Turn 固定资源、动态节点/依赖编辑、子 Goal 分层和 Goal owner handoff 仍由后续 spec 处理。
+diff --git a/docs/DEVELOPMENT.md b/docs/DEVELOPMENT.md
+index 27d2e392..de0787c4 100644
+--- a/docs/DEVELOPMENT.md
++++ b/docs/DEVELOPMENT.md
+@@ -58,7 +58,7 @@ for current workers' provider reservations; settled unknown-cost holds remain bl
+ Wait begin/end facts drive the read-only projection. SDK cancellation before executor
+ dispatch reconciles the original admission without inventing actual serving evidence.
+ Never-started ACP metadata can retain its Thread after confirmed owner shutdown;
+-its first session is still new. Accepted private-session continuation remains blocked.
++its first session is still new. Confirmed pre-prompt ACP session loading can continue its original Thread/Turn; possibly submitted input or incomplete history remains blocked. Original elapsed duration, source owner, process stop and frozen MCP descriptors remain required.
+ Managed ACP uses the same acceptance/control owner;
+ the supervisor supplies protocol/process facts. Historical unbound runs retain
+ their reconciliation path. Worker changes version the existing work and create
+@@ -501,7 +501,7 @@ loopback exposure policy. It does not mount an MCP origin endpoint. See
+ 
+ ## CLI Surface
+ 
+-`bro <subcommand>` exposes lifecycle and reports plus agent-facing entries: `task run` (BRO headless), bare `code` (BRO interactive), `launch <agent>` (native interface), `code <agent>` (ACP UI), `run <agent>` (headless turn), and `acp serve` (native v1/v2 ingress) and `acp serve <agent>` (external manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
++`bro <subcommand>` exposes lifecycle and reports plus agent-facing entries: `task run` (BRO headless), bare `bro` / `code` (Goals), `launch <agent>` (native interface), `run <agent>` (headless turn), and `acp serve` (native v1/v2 ingress) and `acp serve <agent>` (external manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
+ 
+ ### Observability surface (`bro requests`)
+ 
+diff --git a/docs/evidence/bro-goal-workflow/README.md b/docs/evidence/bro-goal-workflow/README.md
+index fc84cdaf..7b3a2208 100644
+--- a/docs/evidence/bro-goal-workflow/README.md
++++ b/docs/evidence/bro-goal-workflow/README.md
+@@ -1,5 +1,7 @@
+ # BRO Goal workflow final acceptance evidence
+ 
++Current refactor: [design and diagrams](../../BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md), [RF/A acceptance mapping](2026-10-16-refactor-acceptance.md) and [source-bound final summary](2026-10-16-refactor-summary.json). The reports below bind the earlier pre-refactor source; current local/hosted/live qualification is recorded separately.
++
+ This directory keeps final acceptance summaries, source bindings, the two
+ unchanged input-evaluation fixtures and the material needed to reproduce the
+ controlled local workflow. Raw logs and intermediate evaluation snapshots are
+@@ -42,8 +44,7 @@ A bare historical filename in a retained JSON summary resolves under
+ `docs/evidence/bro-goal-workflow/` at the archive commit when it is absent here.
+ Original manifests bind their original evaluated source, not this later
+ documentation cleanup. No credentialed campaign or full local suite was rerun
+-merely to move evidence. Source/test code and the two compiled-in JSONL
+-fixtures remain unchanged.
++merely to move evidence. That evidence cleanup left source/tests and both compiled-in JSONL fixtures unchanged. The later execution refactor has its own source-bound acceptance above.
+ 
+ Hosted CI for the pre-cleanup functional head `4772d9e09deb9c69f539e97d2b24dda9ca770e0c`
+ [completed successfully](https://github.com/bitrouter/bitrouter/actions/runs/38737081691).
+diff --git a/docs/evidence/bro-goal-workflow/REPRODUCE.md b/docs/evidence/bro-goal-workflow/REPRODUCE.md
+index e391f0e5..0ccfaec8 100644
+--- a/docs/evidence/bro-goal-workflow/REPRODUCE.md
++++ b/docs/evidence/bro-goal-workflow/REPRODUCE.md
+@@ -123,3 +123,7 @@ Keep outputs private and retain failures. q03/q07 are human-reviewed;
+ remaining labels are drafts. Persisted forbidden effects, native predictions,
+ reasoning proposals and semantic quality are different measurements. All
+ current typed inputs upgrade; no calibrated typed fast-path benefit is claimed.
++
++## BRO execution refactor
++
++Use [current refactor acceptance](2026-10-16-refactor-acceptance.md) for the complete workspace command, focused original-session load case and current limits. [Final summary](2026-10-16-refactor-summary.json) pins the evaluated source inputs and independent raw archive. Current fixtures are Cargo-built Rust; BRO_GOAL_FIXTURE_KEEP_FAILURES=1 preserves subsequent failures when supported. Historical database/filesystem copies are forensic evidence and do not imply arbitrary process/state takeover.
+diff --git a/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs b/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
+index bb1c4332..36f7c128 100644
+--- a/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
++++ b/helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs
+@@ -35,6 +35,7 @@ struct Peer {
+     fail_first_initialize: bool,
+     fail_initialize: bool,
+     fail_left_once: bool,
++    persist_session: bool,
+ }
+ 
+ fn lock<T>(value: &Mutex<T>) -> FixtureResult<std::sync::MutexGuard<'_, T>> {
+@@ -233,10 +234,18 @@ impl Peer {
+                         "code":-32603,"message":"fixture startup service unavailable"}}))?;
+                 } else {
+                     self.respond(id, json!({"protocolVersion":1,
+-                        "agentCapabilities":{},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?;
++                        "agentCapabilities":{"loadSession":self.persist_session
++                            && std::env::var_os("BRO_GOAL_FIXTURE_NO_LOAD").is_none()},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?;
+                 }
+             }
+             Some("session/new") => {
++                if self.persist_session {
++                    let mut file = OpenOptions::new().write(true).create_new(true)
++                        .open(self.control.join("private-session.json"))?;
++                    serde_json::to_writer(&mut file, &json!({"session":self.session,
++                        "nonce":format!("private-{}",std::process::id()),"prompts":0}))?;
++                    file.flush()?;
++                }
+                 lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing cwd")?);
+                 if std::env::var_os("BRO_GOAL_FIXTURE_REQUIRE_HANDOFF_LEFT").is_some() {
+                     let cwd = lock(&self.state)?.cwd.clone();
+@@ -246,7 +255,25 @@ impl Peer {
+                 }
+                 self.respond(id, json!({"sessionId":self.session}))?;
+             }
++            Some("session/load") if self.persist_session => {
++                let saved: Value = serde_json::from_slice(&std::fs::read(self.control.join("private-session.json"))?)?;
++                if message["params"]["sessionId"] != saved["session"] || saved["session"] != self.session {
++                    return Err("fixture cannot restore the original private session".into());
++                }
++                lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing load cwd")?);
++                std::fs::write(self.control.join("loaded-private-nonce"), saved["nonce"].as_str().ok_or("nonce missing")?)?;
++                self.respond(id, json!({}))?;
++            }
+             Some("session/prompt") => {
++                if self.persist_session {
++                    let file = self.control.join("private-session.json");
++                    let mut saved: Value = serde_json::from_slice(&std::fs::read(&file)?)?;
++                    if saved["session"] != self.session || saved["prompts"] != 0 {
++                        return Err("fixture private session prompt was replayed".into());
++                    }
++                    saved["prompts"] = json!(1);
++                    std::fs::write(file, serde_json::to_vec(&saved)?)?;
++                }
+                 let text = message["params"]["prompt"].as_array().ok_or("missing prompt")?
+                     .iter().filter_map(|part| part["text"].as_str()).collect::<String>();
+                 let task = text.lines().find_map(|line| line.strip_prefix("Assigned task ")
+@@ -339,6 +366,17 @@ fn main() -> FixtureResult {
+         std::env::var_os("BRO_GOAL_FIXTURE_CAPTURE").ok_or("fixture capture directory missing")?,
+     )
+     .join(format!("{}.ndjson", std::process::id()));
++    let persist_session = std::env::var_os("BRO_GOAL_FIXTURE_PERSIST_SESSION").is_some();
++    let session = if persist_session && control.join("private-session.json").exists() {
++        let saved: Value =
++            serde_json::from_slice(&std::fs::read(control.join("private-session.json"))?)?;
++        saved["session"]
++            .as_str()
++            .ok_or("persisted session identity missing")?
++            .to_owned()
++    } else {
++        format!("goal-fixture-{}", std::process::id())
++    };
+     let peer = Arc::new(Peer {
+         state: Mutex::new(State {
+             provider: None,
+@@ -349,7 +387,8 @@ fn main() -> FixtureResult {
+         output: Mutex::new(()),
+         cancelled: AtomicBool::new(false),
+         control,
+-        session: format!("goal-fixture-{}", std::process::id()),
++        session,
++        persist_session,
+         right_manual: std::env::var("BRO_GOAL_FIXTURE_RIGHT_MANUAL")
+             .is_ok_and(|value| value == "1"),
+         right_gate: std::env::var("BRO_GOAL_FIXTURE_RIGHT_GATE").is_ok_and(|value| value == "1"),
+diff --git a/skills/bitrouter/SKILL.md b/skills/bitrouter/SKILL.md
+index c3e40416..afb8211c 100644
+--- a/skills/bitrouter/SKILL.md
++++ b/skills/bitrouter/SKILL.md
+@@ -123,7 +123,7 @@ Native `launch <agent>` accepts catalog harnesses; `claude`, `claude-code` and
+ `codex` are shortcuts. User configuration is not edited. Existing harness processes
+ need a new launch to adopt overrides; `bro acp serve <agent>` serves ACP clients.
+ Background runs survive client exit; attach/stop/remove remain separate.
+-Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Native and managed ACP Goal workers share Thread/Turn ownership and Goal controls; generic supervisor controls cannot take over managed Turns. Never-started ACP metadata can recover after confirmed shutdown; private-session continuation remains limited.
++Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Native and managed ACP Goal workers share Thread/Turn ownership and Goal controls; generic supervisor controls cannot take over managed Turns. ACP metadata and confirmed pre-prompt sessions can recover after source/process stop; unknown effects and possibly submitted prompts remain blocked.
+ See `references/sessions.md` for ownership and `references/decision-native.md`
+ for bounded model/context routing, MCP/skills, token reservations and its cost scope.
+ For the native BRO ACP endpoint, use bare `bro acp serve --model openai/gpt-5`.
+diff --git a/skills/bitrouter/references/cli.md b/skills/bitrouter/references/cli.md
+index fe766aa9..909b9f34 100644
+--- a/skills/bitrouter/references/cli.md
++++ b/skills/bitrouter/references/cli.md
+@@ -401,7 +401,7 @@ Workflow distinguishes this wait from exhausted budget. A settled outcome with
+ missing usage retains its quote and cannot be treated as a temporary wait. Pause,
+ revocation and SDK cancellation close admission; the executor is not polled after
+ cancelled admission. A saved wait or reservation is not provider/model execution.
+-Confirmed ACP continuation remains incomplete. Do not treat
++Confirmed ACP continuation is limited to a complete pre-prompt journal, original stopped owner/process and negotiated session/load; private context beyond the protocol remains unverified. Do not treat
+ controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
+ remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
+ Both `bro` and `bro code` open Goals; reading the directory does not create or
+@@ -749,7 +749,7 @@ permission commits and shutdown ownership. Their current Turn duration is 600
+ seconds. Generic supervisor lease/control commands cannot take over those Turns.
+ Actual session/model-route acknowledgements and public observations are retained;
+ private context/provider/model usage remains unreported. Cold inspection alone
+-does not resume a session; confirmed session recovery remains under qualification.
++does not resume a session. A complete pre-prompt journal can continue the same Thread/Turn only after confirmed source/process stop and negotiated load of its original session; duration and frozen MCP requirements are retained. Possibly submitted prompts, uncertain restore startup and missing history/private state remain blocked.
+ Metadata that never accepted a Turn can recover its original Thread only after
+ confirmed source-owner shutdown and ordinary workspace/source checks; it then
+ creates its first session, without replaying an earlier prompt.

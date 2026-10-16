@@ -1,0 +1,39 @@
+{
+  "id": "native-history-green1",
+  "scope": "Positive native historical/archive closure: actual built-in Goal execution and a user instruction revision, real SQLite archive receipts, production historical/UI readers, original Thread/Turn and actual SDK identity reports, corruption refusal and no read-side execution. Model judgments remain fixtures. No private ACP/cold restore or full refactor claim.",
+  "jobs": [
+    {
+      "name": "archive-boundary",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(superseded_native_execution_keeps_receipt_verified_history_without_replay)"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "source": "acp-continuation-green1-source.json",
+  "scope": "Controlled real SQLite pre-prompt image after actual source process/owner shutdown and Rust peer private nonce restore. Four cases: same session, live owner, missing private data, unsupported load. No submitted prompt replay or arbitrary crash takeover claim.",
+  "startedAt": "2026-10-16T18:32:36.029Z",
+  "runs": [
+    {
+      "name": "same-session",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session)"
+      ],
+      "log": "acp-continuation-green1-same-session.log",
+      "startedAt": "2026-10-16T18:32:36.029Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T18:33:58.144Z",
+      "summaries": [
+        "     Summary [   1.476s] 1 test run: 0 passed, 1 failed, 1837 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T18:33:58.350Z",
+  "changed": [],
+  "passed": false
+}

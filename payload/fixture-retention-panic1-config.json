@@ -1,0 +1,19 @@
+{
+  "id": "fixture-retention-panic1",
+  "scope": "Intentional impossible test assertion after actual native Goal completion to verify panic fixture preservation. Expected failure; final assertion must be restored exactly.",
+  "jobs": [
+    {
+      "name": "probe",
+      "args": [
+        "nextest",
+        "run",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(native_goal_uses_real_thread_turn)"
+      ]
+    }
+  ]
+}

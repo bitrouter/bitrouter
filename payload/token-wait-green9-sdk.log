@@ -1,0 +1,741 @@
+    Finished `test` profile [unoptimized] target(s) in 0.16s
+────────────
+ Nextest run ID 6d81b04e-0ee6-446c-99eb-98f14034fe4a with nextest profile: default
+    Starting 735 tests across 1 binary (2 tests skipped)
+        PASS [   0.014s] (  1/735) bitrouter-sdk caller::tests::a_launch_token_is_recognized_regardless_of_scheme_case
+        PASS [   0.014s] (  2/735) bitrouter-sdk caller::tests::a_bare_prefix_is_not_an_identifier
+        PASS [   0.014s] (  3/735) bitrouter-sdk caller::tests::tagging_adds_attribution_without_changing_identity
+        PASS [   0.014s] (  4/735) bitrouter-sdk caller::tests::a_real_key_is_never_mistaken_for_a_launch_tag
+        PASS [   0.015s] (  5/735) bitrouter-sdk config::agent::tests::validate_rejects_empty_name
+        PASS [   0.015s] (  6/735) bitrouter-sdk config::agent::tests::validate_rejects_slash_in_name
+        PASS [   0.015s] (  7/735) bitrouter-sdk config::agent::tests::validate_accepts_well_formed_stdio
+        PASS [   0.022s] (  8/735) bitrouter-sdk app::tests::registers_and_applies_prompt_transforms
+        PASS [   0.029s] (  9/735) bitrouter-sdk config::agent::tests::validate_rejects_empty_stdio_command
+        PASS [   0.019s] ( 10/735) bitrouter-sdk config::pattern::tests::resolve_picks_most_specific
+        PASS [   0.018s] ( 11/735) bitrouter-sdk config::presets::tests::bare_model_passes_through
+        PASS [   0.035s] ( 12/735) bitrouter-sdk config::agent::tests::stdio_round_trips_through_serde
+        PASS [   0.024s] ( 13/735) bitrouter-sdk config::presets::tests::at_preset_spelling_still_resolves_identically
+        PASS [   0.025s] ( 14/735) bitrouter-sdk config::presets::tests::canonical_auto_keeps_policy_and_variant_compatibility
+        PASS [   0.019s] ( 15/735) bitrouter-sdk config::presets::tests::canonical_auto_preserves_an_explicit_custom_policy_binding
+        PASS [   0.009s] ( 16/735) bitrouter-sdk config::presets::tests::canonical_router_resolves_without_a_same_named_preset
+        PASS [   0.008s] ( 17/735) bitrouter-sdk config::presets::tests::ordinary_bitrouter_provider_routes_are_untouched
+        PASS [   0.014s] ( 18/735) bitrouter-sdk config::presets::tests::canonical_router_rejects_variant_suffixes
+        PASS [   0.010s] ( 19/735) bitrouter-sdk config::presets::tests::legacy_router_address_keeps_known_variant_compatibility
+        PASS [   0.031s] ( 20/735) bitrouter-sdk config::pattern::tests::json_schema_is_array_of_single_key_objects
+        PASS [   0.031s] ( 21/735) bitrouter-sdk config::pattern::tests::parse_classifies_patterns
+        PASS [   0.033s] ( 22/735) bitrouter-sdk config::checker::tests::native_revision_is_bounded_diagnostic_metadata
+        PASS [   0.008s] ( 23/735) bitrouter-sdk config::presets::tests::reserved_auto_slug_composes_with_a_variant
+        PASS [   0.010s] ( 24/735) bitrouter-sdk config::presets::tests::preset_supplies_model_and_prefs_and_overrides
+        PASS [   0.010s] ( 25/735) bitrouter-sdk config::presets::tests::provider_prefix_is_not_mistaken_for_a_variant
+        PASS [   0.012s] ( 26/735) bitrouter-sdk config::presets::tests::preset_and_variant_compose
+        PASS [   0.009s] ( 27/735) bitrouter-sdk config::presets::tests::reserved_auto_slug_rejects_an_existing_preset_without_a_policy_binding
+        PASS [   0.010s] ( 28/735) bitrouter-sdk config::presets::tests::reserved_auto_slug_resolves_through_the_auto_preset
+        PASS [   0.010s] ( 29/735) bitrouter-sdk config::presets::tests::reserved_slug_in_colon_form_points_at_the_slash_spelling
+        PASS [   0.012s] ( 30/735) bitrouter-sdk config::presets::tests::reserved_colon_form_cannot_be_shadowed_by_an_auto_variant
+        PASS [   0.012s] ( 31/735) bitrouter-sdk config::presets::tests::reserved_fusion_slug_reaching_stage_0_reports_it_is_unconfigured
+        PASS [   0.013s] ( 32/735) bitrouter-sdk config::presets::tests::reserved_auto_slug_without_a_bound_preset_names_the_setup_step
+        PASS [   0.009s] ( 33/735) bitrouter-sdk config::presets::tests::unknown_preset_is_400
+        PASS [   0.009s] ( 34/735) bitrouter-sdk config::presets::tests::unknown_reserved_slug_is_400_not_a_provider_lookup
+        PASS [   0.008s] ( 35/735) bitrouter-sdk config::presets::tests::variant_refines_routing
+        PASS [   0.008s] ( 36/735) bitrouter-sdk config::presets::tests::unknown_variant_passes_through_untouched
+        PASS [   0.008s] ( 37/735) bitrouter-sdk config::router::tests::legacy_missing_model_remains_deferred_for_existing_consumers
+        PASS [   0.011s] ( 38/735) bitrouter-sdk config::router::tests::digest_excludes_default_values_but_tracks_keys_and_selection
+        PASS [   0.011s] ( 39/735) bitrouter-sdk config::router::tests::validation_reads_direct_config_mutations
+        PASS [   0.011s] ( 40/735) bitrouter-sdk config::router::tests::policy_bindings_follow_direct_config_mutation_without_a_cache
+        PASS [   0.011s] ( 41/735) bitrouter-sdk config::router::tests::legacy_model_preset_normalizes_to_model_selection
+        PASS [   0.011s] ( 42/735) bitrouter-sdk config::router::tests::legacy_policy_preset_keeps_exact_base_model
+        PASS [   0.010s] ( 43/735) bitrouter-sdk config::router::tests::validation_rejects_invalid_and_reserved_router_ids
+        PASS [   0.021s] ( 44/735) bitrouter-sdk config::routing_table::tests::balance_strategy_rotates_the_primary_round_robin
+        PASS [   0.025s] ( 45/735) bitrouter-sdk config::routing_table::tests::auto_cascade_expands_accounts_in_place
+        PASS [   0.025s] ( 46/735) bitrouter-sdk config::routing_table::tests::account_api_base_override_wins_over_provider_base
+        PASS [   0.023s] ( 47/735) bitrouter-sdk config::routing_table::tests::balance_strategy_keeps_every_account_in_the_chain
+        PASS [   0.025s] ( 48/735) bitrouter-sdk config::routing_table::tests::account_base_wins_over_per_protocol_endpoint
+        PASS [   0.017s] ( 49/735) bitrouter-sdk config::routing_table::tests::custom_provider_priority_reorders_the_cascade
+        PASS [   0.020s] ( 50/735) bitrouter-sdk config::routing_table::tests::explicit_upstream_id_reuses_registry_model_protocol
+        PASS [   0.022s] ( 51/735) bitrouter-sdk config::routing_table::tests::capability_metadata_is_positive_not_an_exhaustive_denylist
+        PASS [   0.021s] ( 52/735) bitrouter-sdk config::routing_table::tests::first_resolution_rejects_invalid_direct_config_mutation
+        PASS [   0.023s] ( 53/735) bitrouter-sdk config::routing_table::tests::canonical_id_routes_to_provider_model_id
+        PASS [   0.010s] ( 54/735) bitrouter-sdk config::routing_table::tests::inbound_protocol_survives_preset_resolution
+        PASS [   0.010s] ( 55/735) bitrouter-sdk config::routing_table::tests::model_catalog_exposes_only_selectors_that_route
+        PASS [   0.012s] ( 56/735) bitrouter-sdk config::routing_table::tests::inactive_provider_is_skipped
+        PASS [   0.012s] ( 57/735) bitrouter-sdk config::routing_table::tests::missing_provider_model_id_dispatches_the_requested_id
+        PASS [   0.009s] ( 58/735) bitrouter-sdk config::routing_table::tests::multi_account_expands_into_one_target_per_account
+        PASS [   0.013s] ( 59/735) bitrouter-sdk config::routing_table::tests::model_chat_compatibility_reaches_routing_target
+        PASS [   0.014s] ( 60/735) bitrouter-sdk config::routing_table::tests::list_models_unions_provider_models
+        PASS [   0.011s] ( 61/735) bitrouter-sdk config::routing_table::tests::native_routing_applies_through_a_virtual_model
+        PASS [   0.013s] ( 62/735) bitrouter-sdk config::routing_table::tests::named_router_routes_and_remains_visible_with_explicit_models
+        PASS [   0.012s] ( 63/735) bitrouter-sdk config::routing_table::tests::native_preference_does_not_reorder_the_cascade
+        PASS [   0.011s] ( 64/735) bitrouter-sdk config::routing_table::tests::native_routing_picks_inbound_protocol_over_per_protocol_endpoint
+        PASS [   0.012s] ( 65/735) bitrouter-sdk config::routing_table::tests::native_routing_picks_supported_non_head_protocol
+        PASS [   0.010s] ( 66/735) bitrouter-sdk config::routing_table::tests::no_default_provider_fallback_unknown_model_is_404
+        PASS [   0.011s] ( 67/735) bitrouter-sdk config::routing_table::tests::no_inbound_protocol_uses_default_head
+        PASS [   0.009s] ( 68/735) bitrouter-sdk config::routing_table::tests::preset_routing_flows_into_cascade
+        PASS [   0.011s] ( 69/735) bitrouter-sdk config::routing_table::tests::require_tags_filters_the_cascade
+        PASS [   0.013s] ( 70/735) bitrouter-sdk config::routing_table::tests::resolved_provider_model_is_not_reinterpreted_as_a_variant
+        PASS [   0.011s] ( 71/735) bitrouter-sdk config::routing_table::tests::single_credential_provider_still_yields_one_target
+        PASS [   0.010s] ( 72/735) bitrouter-sdk config::routing_table::tests::strategy_2_cascade_honors_ignore_pref
+        PASS [   0.009s] ( 73/735) bitrouter-sdk config::routing_table::tests::strategy_2_priority_ignores_require_tags
+        PASS [   0.014s] ( 74/735) bitrouter-sdk config::routing_table::tests::strategy_1_provider_prefix_routes_direct
+        PASS [   0.011s] ( 75/735) bitrouter-sdk config::routing_table::tests::strategy_2_cascade_reorders_endpoints_by_sort
+        PASS [   0.009s] ( 76/735) bitrouter-sdk config::routing_table::tests::strategy_2_priority_keeps_declared_endpoint_order
+        PASS [   0.012s] ( 77/735) bitrouter-sdk config::routing_table::tests::strategy_2_cascade_honors_require_tags
+        PASS [   0.011s] ( 78/735) bitrouter-sdk config::routing_table::tests::strategy_2_defaults_to_priority_order
+        PASS [   0.013s] ( 79/735) bitrouter-sdk config::routing_table::tests::strategy_2_priority_ignores_routing_prefs_filters
+        PASS [   0.011s] ( 80/735) bitrouter-sdk config::routing_table::tests::strategy_3_bare_name_auto_cascades_alphabetically
+        PASS [   0.012s] ( 81/735) bitrouter-sdk config::routing_table::tests::strategy_3_excludes_subscription_providers_from_cascade
+        PASS [   0.009s] ( 82/735) bitrouter-sdk config::routing_table::tests::strategy_3_explicit_priority_overrides_class
+        PASS [   0.014s] ( 83/735) bitrouter-sdk config::routing_table::tests::strategy_2_virtual_model_beats_auto_cascade
+        PASS [   0.009s] ( 84/735) bitrouter-sdk config::routing_table::tests::subscription_provider_reachable_by_explicit_route_and_only
+        PASS [   0.010s] ( 85/735) bitrouter-sdk config::tests::account_api_base_pointing_at_metadata_is_rejected
+        PASS [   0.012s] ( 86/735) bitrouter-sdk config::routing_table::tests::strategy_3_orders_by_provider_class_then_name
+        PASS [   0.012s] ( 87/735) bitrouter-sdk config::routing_table::tests::subscription_selector_keeps_canonical_id_and_maps_native_id
+        PASS [   0.012s] ( 88/735) bitrouter-sdk config::routing_table::tests::strategy_3_unclassed_provider_ranks_after_classed
+        PASS [   0.010s] ( 89/735) bitrouter-sdk config::tests::account_strategy_defaults_to_failover
+        PASS [   0.009s] ( 90/735) bitrouter-sdk config::tests::adequacy_defaults_when_section_omitted
+        PASS [   0.011s] ( 91/735) bitrouter-sdk config::tests::adaptive_runtime_mode_does_not_require_legacy_learner_configuration
+        PASS [   0.010s] ( 92/735) bitrouter-sdk config::tests::adequacy_enabled_without_escalation_target_is_a_400
+        PASS [   0.010s] ( 93/735) bitrouter-sdk config::tests::adequacy_unknown_escalation_tier_is_a_400
+        PASS [   0.012s] ( 94/735) bitrouter-sdk config::tests::auto_router_template_resolves_auto_and_cost_variant
+        PASS [   0.012s] ( 95/735) bitrouter-sdk config::tests::chat_is_optional
+        PASS [   0.010s] ( 96/735) bitrouter-sdk config::tests::continuation_config_rejects_unbounded_operational_values
+        PASS [   0.012s] ( 97/735) bitrouter-sdk config::tests::chat_prompt_commands_deserialize
+        PASS [   0.013s] ( 98/735) bitrouter-sdk config::tests::child_fields_win_over_parent_in_derives
+        PASS [   0.015s] ( 99/735) bitrouter-sdk config::tests::continuation_config_is_always_active_round_trippable_and_bounded
+        PASS [   0.008s] (100/735) bitrouter-sdk config::tests::defaults_are_sane
+        PASS [   0.012s] (101/735) bitrouter-sdk config::tests::decision_model_config_validates_bounds_without_loading_credentials
+        PASS [   0.013s] (102/735) bitrouter-sdk config::tests::decision_pricing_accepts_optional_aggregate_bounds_and_refuses_zero
+        PASS [   0.013s] (103/735) bitrouter-sdk config::tests::default_config_does_not_implicitly_create_coding_router
+        PASS [   0.010s] (104/735) bitrouter-sdk config::tests::derives_chain_cycle_is_a_400
+        PASS [   0.009s] (105/735) bitrouter-sdk config::tests::derives_inherits_empty_fields_from_parent_provider
+        PASS [   0.008s] (106/735) bitrouter-sdk config::tests::env_substitution_errors_on_undefined
+        PASS [   0.013s] (107/735) bitrouter-sdk config::tests::derives_from_unknown_provider_is_a_400
+        PASS [   0.011s] (108/735) bitrouter-sdk config::tests::env_substitution_handles_crlf_line_endings
+        PASS [   0.010s] (109/735) bitrouter-sdk config::tests::env_substitution_handles_multiple_and_literals
+        PASS [   0.012s] (110/735) bitrouter-sdk config::tests::env_substitution_in_comment_never_calls_lookup
+        PASS [   0.009s] (111/735) bitrouter-sdk config::tests::env_substitution_inside_quotes_ignores_hash
+        PASS [   0.009s] (112/735) bitrouter-sdk config::tests::env_substitution_replaces_vars
+        PASS [   0.008s] (113/735) bitrouter-sdk config::tests::env_substitution_still_runs_before_an_inline_comment
+        PASS [   0.010s] (114/735) bitrouter-sdk config::tests::env_substitution_skips_indented_comments
+        PASS [   0.010s] (115/735) bitrouter-sdk config::tests::env_substitution_skips_full_line_comments
+        PASS [   0.008s] (116/735) bitrouter-sdk config::tests::exploration_defaults_when_omitted
+        PASS [   0.008s] (117/735) bitrouter-sdk config::tests::env_substitution_uses_default_when_var_unset
+        PASS [   0.013s] (118/735) bitrouter-sdk config::tests::env_substitution_treats_hash_in_value_as_literal_not_comment
+        PASS [   0.008s] (119/735) bitrouter-sdk config::tests::exploration_unknown_explore_tier_is_a_400
+        PASS [   0.009s] (120/735) bitrouter-sdk config::tests::exploration_requires_adequacy_enabled
+        PASS [   0.011s] (121/735) bitrouter-sdk config::tests::exploration_enabled_without_target_is_a_400
+        PASS [   0.008s] (122/735) bitrouter-sdk config::tests::invalid_reliability_window_is_a_400
+        PASS [   0.010s] (123/735) bitrouter-sdk config::tests::invalid_reliability_error_rate_is_a_400
+        PASS [   0.009s] (124/735) bitrouter-sdk config::tests::malformed_config_diagnostics_omit_inline_and_expanded_credentials
+        PASS [   0.013s] (125/735) bitrouter-sdk config::tests::inert_policy_table_still_rejects_retired_route_key_shapes
+        PASS [   0.010s] (126/735) bitrouter-sdk config::tests::mcp_upstream_protocol_opts_in_by_version_string
+        PASS [   0.011s] (127/735) bitrouter-sdk config::tests::mcp_upstream_protocol_defaults_to_auto
+        PASS [   0.011s] (128/735) bitrouter-sdk config::tests::multi_protocol_provider_resolves_set_and_endpoints
+        PASS [   0.011s] (129/735) bitrouter-sdk config::tests::named_router_configuration_rejects_unknown_nested_fields
+        PASS [   0.008s] (130/735) bitrouter-sdk config::tests::parses_adequacy_section
+        PASS [   0.010s] (131/735) bitrouter-sdk config::tests::named_table_rejects_unknown_fields
+        PASS [   0.012s] (132/735) bitrouter-sdk config::tests::named_policy_accepts_explicit_model_effort_context_actions
+        PASS [   0.012s] (133/735) bitrouter-sdk config::tests::native_checker_config_rejects_mixed_transports_and_tracks_revision
+        PASS [   0.009s] (134/735) bitrouter-sdk config::tests::parses_exploration_section
+        PASS [   0.011s] (135/735) bitrouter-sdk config::tests::parses_context_tier_pricing
+        PASS [   0.009s] (136/735) bitrouter-sdk config::tests::parses_global_and_per_provider_timeouts
+        PASS [   0.010s] (137/735) bitrouter-sdk config::tests::parses_multi_account_provider
+        PASS [   0.011s] (138/735) bitrouter-sdk config::tests::parses_opt_in_fallback_backoff_schedule
+        PASS [   0.009s] (139/735) bitrouter-sdk config::tests::parses_policy_table_section
+        PASS [   0.010s] (140/735) bitrouter-sdk config::tests::parses_registry_style_provider
+        PASS [   0.011s] (141/735) bitrouter-sdk config::tests::parses_presets_and_variants
+        PASS [   0.010s] (142/735) bitrouter-sdk config::tests::parses_strict_named_router_configuration
+        PASS [   0.008s] (143/735) bitrouter-sdk config::tests::per_provider_override_layers_over_resolved_global
+        PASS [   0.009s] (144/735) bitrouter-sdk config::tests::parses_virtual_model_strategy_priority_and_cascade
+        PASS [   0.009s] (145/735) bitrouter-sdk config::tests::policy_key_strategy_serializes_as_the_only_canonical_strategy
+        PASS [   0.009s] (146/735) bitrouter-sdk config::tests::policy_runtime_mode_controls_effective_adequacy_flags
+        PASS [   0.011s] (147/735) bitrouter-sdk config::tests::policy_runtime_mode_accepts_adaptive_and_legacy_writeback_values
+        PASS [   0.009s] (148/735) bitrouter-sdk config::tests::policy_schema_hides_the_removed_session_downgrade_budget
+        PASS [   0.008s] (149/735) bitrouter-sdk config::tests::policy_table_rejects_progress_guard_with_named_policy_guidance
+        PASS [   0.009s] (150/735) bitrouter-sdk config::tests::policy_table_rejects_legacy_fingerprint_strategy_with_migration_guidance
+        PASS [   0.011s] (151/735) bitrouter-sdk config::tests::policy_runtime_mode_defaults_to_frozen
+        PASS [   0.011s] (152/735) bitrouter-sdk config::tests::policy_table_agent_trace_key_strategy_is_the_only_supported_strategy
+        PASS [   0.009s] (153/735) bitrouter-sdk config::tests::policy_table_rejects_unknown_compound_target_fields
+        PASS [   0.011s] (154/735) bitrouter-sdk config::tests::policy_table_rejects_the_removed_session_downgrade_budget
+        PASS [   0.012s] (155/735) bitrouter-sdk config::tests::policy_table_rejects_retired_route_key_shapes
+        PASS [   0.010s] (156/735) bitrouter-sdk config::tests::policy_table_tool_use_tier_must_be_tool_safe
+        PASS [   0.013s] (157/735) bitrouter-sdk config::tests::policy_table_schema_and_serialization_expose_no_progress_guard_sentinel
+        PASS [   0.010s] (158/735) bitrouter-sdk config::tests::policy_table_unknown_tier_is_a_400
+        PASS [   0.008s] (159/735) bitrouter-sdk config::tests::primary_api_key_prefers_top_level_then_first_account
+        PASS [   0.009s] (160/735) bitrouter-sdk config::tests::provider_headers_accept_static_and_passthrough_forms
+        PASS [   0.009s] (161/735) bitrouter-sdk config::tests::provider_headers_are_inherited_when_child_declares_none
+        PASS [   0.012s] (162/735) bitrouter-sdk config::tests::pricing_without_tiers_parses_flat
+        PASS [   0.013s] (163/735) bitrouter-sdk config::tests::pricing_preserves_missing_rates_and_cache_rates
+        PASS [   0.010s] (164/735) bitrouter-sdk config::tests::provider_headers_reject_invalid_reserved_and_duplicate_names
+        PASS [   0.009s] (165/735) bitrouter-sdk config::tests::provider_model_rejects_a_reasoning_effort_default_outside_its_levels
+        PASS [   0.011s] (166/735) bitrouter-sdk config::tests::provider_model_declares_an_exact_reasoning_effort_subset
+        PASS [   0.009s] (167/735) bitrouter-sdk config::tests::remote_control_is_explicitly_opt_in_and_keeps_loopback_default
+        PASS [   0.010s] (168/735) bitrouter-sdk config::tests::removed_global_policy_table_is_rejected
+        PASS [   0.009s] (169/735) bitrouter-sdk config::tests::request_checker_config_rejects_invalid_static_bindings
+        PASS [   0.010s] (170/735) bitrouter-sdk config::tests::request_checker_config_applies_binding_defaults
+        PASS [   0.013s] (171/735) bitrouter-sdk config::tests::provider_model_rejects_malformed_reasoning_effort_capabilities
+        PASS [   0.010s] (172/735) bitrouter-sdk config::tests::request_checker_config_rejects_unknown_refs_and_invalid_limits
+        PASS [   0.008s] (173/735) bitrouter-sdk config::tests::single_protocol_string_still_parses_as_one_element_set
+        PASS [   0.012s] (174/735) bitrouter-sdk config::tests::request_checker_revision_changes_router_binding_digest
+        PASS [   0.010s] (175/735) bitrouter-sdk config::tests::timeout_config_overrides_only_set_fields
+        PASS [   0.012s] (176/735) bitrouter-sdk config::tests::timeout_config_empty_inherits_base
+        PASS [   0.010s] (177/735) bitrouter-sdk config::tests::total_wall_clock_cap_is_off_by_default_and_opt_in
+        PASS [   0.015s] (178/735) bitrouter-sdk config::tests::retired_active_protocols_and_providers_require_explicit_migration
+        PASS [   0.009s] (179/735) bitrouter-sdk config::tests::trajectory_config_rejects_zero_and_oversized_operational_bounds
+        PASS [   0.010s] (180/735) bitrouter-sdk config::tests::trajectory_config_is_opt_in_round_trippable_and_schema_visible
+        PASS [   0.007s] (181/735) bitrouter-sdk error::tests::envelope_message_strips_status_prefix_for_payload_variants
+        PASS [   0.010s] (182/735) bitrouter-sdk config::tests::virtual_model_strategy_defaults_to_priority
+        PASS [   0.009s] (183/735) bitrouter-sdk error::tests::maps_to_envelope_kind_and_message
+        PASS [   0.012s] (184/735) bitrouter-sdk config::tests::valid_account_api_base_override_is_accepted
+        PASS [   0.007s] (185/735) bitrouter-sdk error::tests::upstream_payment_and_rate_details_stay_private
+        PASS [   0.011s] (186/735) bitrouter-sdk event::tests::dump_json_exports_all_events
+        PASS [   0.012s] (187/735) bitrouter-sdk error::tests::upstream_bad_request_error_contract
+        PASS [   0.012s] (188/735) bitrouter-sdk error::tests::upstream_auth_status_and_type
+        PASS [   0.011s] (189/735) bitrouter-sdk extension::request_check::tests::denial_codes_are_bounded_diagnostic_metadata
+        PASS [   0.010s] (190/735) bitrouter-sdk extension::tests::checker_id_uses_configuration_grammar
+        PASS [   0.012s] (191/735) bitrouter-sdk event::tests::emit_and_query_is_type_safe
+        PASS [   0.011s] (192/735) bitrouter-sdk extension::tests::ignored_error_keeps_partial_registry_inert
+        PASS [   0.011s] (193/735) bitrouter-sdk extension::tests::duplicate_id_is_rejected_without_overwriting
+        PASS [   0.012s] (194/735) bitrouter-sdk extension::tests::completed_registration_preserves_callback_and_revision
+        PASS [   0.010s] (195/735) bitrouter-sdk extension::tests::revision_must_match_configuration_bounds
+        PASS [   0.008s] (196/735) bitrouter-sdk invocation::tests::windows_executable_suffix_is_dropped
+        PASS [   0.011s] (197/735) bitrouter-sdk language_model::context::tests::apply_preset_overrides_merges_into_supplemental_params_without_clobbering
+        PASS [   0.009s] (198/735) bitrouter-sdk language_model::context::tests::apply_preset_overrides_promotes_normalized_protocol_fields
+        PASS [   0.010s] (199/735) bitrouter-sdk language_model::context::tests::authoritative_usage_overrides_disconnect_estimate
+        PASS [   0.010s] (200/735) bitrouter-sdk language_model::context::tests::apply_preset_overrides_sets_system_only_if_unset
+        PASS [   0.009s] (201/735) bitrouter-sdk language_model::context::tests::completed_stream_without_usage_bills_prompt_and_estimated_output
+        PASS [   0.010s] (202/735) bitrouter-sdk language_model::context::tests::disconnect_bills_prompt_and_estimated_output
+        PASS [   0.017s] (203/735) bitrouter-sdk invocation::tests::unrecorded_name_is_the_canonical_spelling
+        PASS [   0.012s] (204/735) bitrouter-sdk language_model::context::tests::disconnect_bills_prompt_tokens_without_output
+        PASS [   0.014s] (205/735) bitrouter-sdk language_model::context::tests::completed_stream_with_zero_usage_bills_estimated_usage
+        PASS [   0.008s] (206/735) bitrouter-sdk language_model::context::tests::native_responses_id_reaches_only_required_finalization_context
+        PASS [   0.012s] (207/735) bitrouter-sdk language_model::context::tests::empty_overrides_are_a_noop
+        PASS [   0.009s] (208/735) bitrouter-sdk language_model::context::tests::inbound_protocol_threads_from_request_to_context
+        PASS [   0.009s] (209/735) bitrouter-sdk language_model::context::tests::original_model_survives_effective_model_changes
+        PASS [   0.009s] (210/735) bitrouter-sdk language_model::context::tests::policy_default_effort_clears_a_caller_effort
+        PASS [   0.008s] (211/735) bitrouter-sdk language_model::context::tests::prompt_token_estimate_counts_tool_result_output
+        PASS [   0.008s] (212/735) bitrouter-sdk language_model::context::tests::settlement_context_preserves_usage_provenance_and_raw_payload
+        PASS [   0.009s] (213/735) bitrouter-sdk language_model::context::tests::streaming_continuation_requires_terminal_and_delta_commitment_parity
+        PASS [   0.014s] (214/735) bitrouter-sdk language_model::context::tests::prompt_token_estimate_counts_tool_call_payloads
+        PASS [   0.012s] (215/735) bitrouter-sdk language_model::context::tests::stream_context_seeds_prompt_token_estimate
+        PASS [   0.009s] (216/735) bitrouter-sdk language_model::executor::beta_forward_tests::forwards_pipeline_request_id_to_every_upstream
+        PASS [   0.010s] (217/735) bitrouter-sdk language_model::executor::beta_forward_tests::does_not_forward_to_non_messages_upstream
+        PASS [   0.012s] (218/735) bitrouter-sdk language_model::executor::beta_forward_tests::authenticated_request_applies_provider_headers
+        PASS [   0.012s] (219/735) bitrouter-sdk language_model::executor::beta_forward_tests::counted_request_revalidates_body_credential_headers_and_selected_candidate
+        PASS [   0.010s] (220/735) bitrouter-sdk language_model::executor::beta_forward_tests::managed_output_limit_is_checked_after_auth_body_mutation
+        PASS [   0.009s] (221/735) bitrouter-sdk language_model::executor::beta_forward_tests::managed_protocol_revalidates_every_authenticated_body_without_a_counter
+        PASS [   0.017s] (222/735) bitrouter-sdk language_model::executor::beta_forward_tests::forwards_anthropic_beta_to_messages_upstream
+        PASS [   0.008s] (223/735) bitrouter-sdk language_model::executor::beta_forward_tests::provider_headers_apply_passthrough_default_and_rejection
+        PASS [   0.011s] (224/735) bitrouter-sdk language_model::executor::beta_forward_tests::managed_output_limit_survives_each_builtin_wire_renderer
+        PASS [   0.016s] (225/735) bitrouter-sdk language_model::executor::beta_forward_tests::managed_auth_cannot_change_endpoint_even_before_proving_request
+        PASS [   0.010s] (226/735) bitrouter-sdk language_model::executor::beta_forward_tests::no_inbound_beta_is_a_noop
+        PASS [   0.009s] (227/735) bitrouter-sdk language_model::executor::beta_forward_tests::pipeline_request_id_replaces_untrusted_outbound_value
+        PASS [   0.010s] (228/735) bitrouter-sdk language_model::executor::beta_forward_tests::uncapped_managed_wire_requires_declared_support_and_model_bound
+        PASS [   0.010s] (229/735) bitrouter-sdk language_model::executor::beta_forward_tests::provider_headers_cannot_take_over_auth_or_internal_fields
+        PASS [   0.008s] (230/735) bitrouter-sdk language_model::executor::client_selection_tests::override_equal_to_default_builds_no_extra_client
+        PASS [   0.008s] (231/735) bitrouter-sdk language_model::executor::client_selection_tests::reload_provider_timeouts_replaces_selected_timeouts
+        PASS [   0.010s] (232/735) bitrouter-sdk language_model::executor::client_selection_tests::per_provider_override_selected_by_name_else_default
+        PASS [   0.010s] (233/735) bitrouter-sdk language_model::executor::error_classification_tests::credit_phrase_family_is_recognised
+        PASS [   0.011s] (234/735) bitrouter-sdk language_model::executor::error_classification_tests::malformed_success_is_upstream_502_for_every_builtin_protocol
+        PASS [   0.010s] (235/735) bitrouter-sdk language_model::executor::error_classification_tests::mid_stream_non_timeout_stays_a_502
+        PASS [   0.008s] (236/735) bitrouter-sdk language_model::executor::error_classification_tests::plain_401_stays_an_upstream_error
+        PASS [   0.012s] (237/735) bitrouter-sdk language_model::executor::error_classification_tests::credit_exhaustion_401_maps_to_payment_required
+        PASS [   0.011s] (238/735) bitrouter-sdk language_model::executor::error_classification_tests::mid_stream_timeout_maps_to_upstream_timeout
+        PASS [   0.008s] (239/735) bitrouter-sdk language_model::executor::error_classification_tests::server_error_stays_an_upstream_error
+        PASS [   0.009s] (240/735) bitrouter-sdk language_model::executor::error_classification_tests::stream_decoder_preserves_explicit_upstream_status
+        PASS [   0.007s] (241/735) bitrouter-sdk language_model::executor::error_classification_tests::upstream_400_carries_selected_error_payload
+        PASS [   0.008s] (242/735) bitrouter-sdk language_model::executor::error_classification_tests::upstream_429_has_a_distinct_safe_error
+        PASS [   0.009s] (243/735) bitrouter-sdk language_model::executor::error_classification_tests::stream_decoder_preserves_typed_upstream_policy_violation
+        PASS [   0.007s] (244/735) bitrouter-sdk language_model::executor::error_classification_tests::upstream_error_payload_selection_prefers_non_null_nested_error
+        PASS [   0.008s] (245/735) bitrouter-sdk language_model::executor::error_classification_tests::upstream_error_payload_selection_normalizes_non_object_values_to_strings
+        PASS [   0.010s] (246/735) bitrouter-sdk language_model::executor::error_classification_tests::stream_decoder_still_wraps_generic_parse_errors_as_upstream_502
+        PASS [   0.010s] (247/735) bitrouter-sdk language_model::executor::error_classification_tests::upstream_error_payload_selection_uses_whole_object_without_non_null_error
+        PASS [   0.012s] (248/735) bitrouter-sdk language_model::executor::input_count::tests::count_payload_preserves_input_fields_and_rejects_uncounted_context
+        PASS [   0.008s] (249/735) bitrouter-sdk language_model::executor::provider_continuation_tests::authority_requirement_fails_closed_only_for_responses_targets
+        PASS [   0.008s] (250/735) bitrouter-sdk language_model::executor::provider_continuation_tests::continuation_override_rewrites_only_the_bound_responses_target
+        PASS [   0.009s] (251/735) bitrouter-sdk language_model::executor::provider_continuation_tests::changed_credential_proof_blocks_dispatch_and_clears_stale_authority
+        PASS [   0.008s] (252/735) bitrouter-sdk language_model::executor::provider_continuation_tests::encoded_sensitive_query_value_is_scrubbed_without_touching_ordinary_query_values
+        PASS [   0.010s] (253/735) bitrouter-sdk language_model::executor::provider_continuation_tests::effective_target_key_is_scrubbed_from_custom_header_without_sensitive_name
+        PASS [   0.012s] (254/735) bitrouter-sdk language_model::executor::openai_codex_stream_bridge_tests::non_streaming_codex_request_uses_streaming_upstream_and_aggregates
+        PASS [   0.013s] (255/735) bitrouter-sdk language_model::executor::provider_continuation_tests::effective_target_key_is_seeded_before_authenticated_request_build
+        PASS [   0.010s] (256/735) bitrouter-sdk language_model::executor::provider_continuation_tests::plain_error_is_scrubbed_before_generic_upstream_truncation
+        PASS [   0.008s] (257/735) bitrouter-sdk language_model::executor::response_body::tests::exact_limit_and_unlimited_streams_preserve_the_original_bytes
+        PASS [   0.009s] (258/735) bitrouter-sdk language_model::executor::provider_continuation_tests::stock_responses_adapter_suppresses_only_the_detached_parent
+        PASS [   0.007s] (259/735) bitrouter-sdk language_model::executor::response_body::tests::unfinished_sse_events_cannot_accumulate_beyond_the_bound
+        PASS [   0.007s] (260/735) bitrouter-sdk language_model::executor::stream_bridge::lite_tests::codex_lite_terminal_retains_complete_calls_and_reasoning
+        PASS [   0.009s] (261/735) bitrouter-sdk language_model::executor::stream_bridge::lite_tests::codex_lite_terminal_rejects_unfinished_items
+        PASS [   0.012s] (262/735) bitrouter-sdk language_model::executor::provider_continuation_tests::unproven_auth_cannot_rewrite_scope_on_an_ordinary_request
+        PASS [   0.012s] (263/735) bitrouter-sdk language_model::executor::response_body::tests::stops_before_yielding_an_oversized_chunk_or_polling_further
+        PASS [   0.008s] (264/735) bitrouter-sdk language_model::native_accounting::tests::cache_absence_is_distinct_from_observed_zero_and_estimates
+        PASS [   0.007s] (265/735) bitrouter-sdk language_model::native_accounting::tests::malformed_missing_or_mismatched_raw_counters_do_not_price
+        PASS [   0.010s] (266/735) bitrouter-sdk language_model::native_accounting::tests::messages_cumulative_delta_zero_overrides_initial_usage
+        PASS [   0.010s] (267/735) bitrouter-sdk language_model::native_accounting::tests::partial_messages_output_and_malformed_containers_cannot_prove_zero
+        PASS [   0.010s] (268/735) bitrouter-sdk language_model::native_accounting::tests::raw_counter_addition_cannot_saturate_into_valid_evidence
+        PASS [   0.009s] (269/735) bitrouter-sdk language_model::native_accounting::tests::serving_protocols_validate_inclusive_totals_and_observed_cache
+        PASS [   0.010s] (270/735) bitrouter-sdk language_model::native_context::tests::native_continuation_binds_the_actual_http_prompt_and_redacts_unverified_output
+        PASS [   0.009s] (271/735) bitrouter-sdk language_model::native_context::tests::portable_rebuild_requires_capability_source_validation_and_nonpreserve_policy
+        PASS [   0.012s] (272/735) bitrouter-sdk language_model::native_auxiliary::tests::insufficient_auxiliary_envelope_rejects_before_callback_execution
+        PASS [   0.011s] (273/735) bitrouter-sdk language_model::native_context::tests::private_message_commitment_ignores_all_markers_but_binds_all_other_content
+        PASS [   0.009s] (274/735) bitrouter-sdk language_model::native_projection::tests::public_history_survives_without_relabelling_reasoning
+        PASS [   0.010s] (275/735) bitrouter-sdk language_model::native_projection::tests::nonportable_metadata_cannot_be_hidden
+        PASS [   0.011s] (276/735) bitrouter-sdk language_model::native_context::tests::private_output_never_promotes_unproven_mutated_or_stale_attempts
+        PASS [   0.009s] (277/735) bitrouter-sdk language_model::native_projection::tests::tool_arguments_and_results_are_exact_and_remote_tools_are_rejected
+        PASS [   0.018s] (278/735) bitrouter-sdk language_model::native_auxiliary::tests::exact_count_limit_preserves_evidence_and_larger_metadata_cannot_prove_fit
+        PASS [   0.009s] (279/735) bitrouter-sdk language_model::native_report::tests::exact_report_bound_preserves_content_and_one_more_byte_is_committed
+        PASS [   0.009s] (280/735) bitrouter-sdk language_model::native_report::tests::non_finite_pricing_is_committed_even_when_the_report_fits
+        PASS [   0.008s] (281/735) bitrouter-sdk language_model::native_work::tests::accepted_headers_keep_their_original_observation_after_flush
+        PASS [   0.008s] (282/735) bitrouter-sdk language_model::native_work::tests::cancelled_http_future_records_one_unknown_outcome
+        PASS [   0.009s] (283/735) bitrouter-sdk language_model::pipeline::fallback_error_tests::homogeneous_rate_limits_keep_retry_and_diagnostic
+        PASS [   0.010s] (284/735) bitrouter-sdk language_model::pipeline::fallback_error_tests::homogeneous_payment_failures_keep_diagnostic
+        PASS [   0.010s] (285/735) bitrouter-sdk language_model::native_work::tests::rejected_admission_does_not_report_an_uncommitted_intent
+        PASS [   0.012s] (286/735) bitrouter-sdk language_model::native_work::tests::cancelled_durable_admission_preserves_identity_without_dispatch
+        PASS [   0.009s] (287/735) bitrouter-sdk language_model::pipeline::fallback_error_tests::mixed_provider_failures_aggregate_to_unavailable
+        PASS [   0.008s] (288/735) bitrouter-sdk language_model::pipeline::policy_effort_target_tests::caller_effort_preserves_unknown_target_passthrough
+        PASS [   0.009s] (289/735) bitrouter-sdk language_model::pipeline::policy_effort_target_tests::caller_effort_drops_routes_with_known_incompatible_ladders
+        PASS [   0.009s] (290/735) bitrouter-sdk language_model::pipeline::policy_effort_target_tests::policy_effort_keeps_only_exact_positive_support
+        PASS [   0.008s] (291/735) bitrouter-sdk language_model::pipeline::policy_effort_target_tests::unsupported_policy_effort_fails_closed
+        PASS [   0.008s] (292/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::disconnect_maps_to_disconnect
+        PASS [   0.009s] (293/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::completion_maps_to_completed_without_error
+        PASS [   0.011s] (294/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::abort_maps_to_failed_settlement
+        PASS [   0.008s] (295/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::explicit_wire_failure_is_not_classified_as_disconnect
+        PASS [   0.011s] (296/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::dropping_permit_after_activation_signal_closes_terminal_commit
+        PASS [   0.008s] (297/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::invalid_stream_guard_processor_access_returns_without_panicking
+        PASS [   0.010s] (298/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::repeated_stream_guard_finalization_returns_typed_error
+        PASS [   0.010s] (299/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::upstream_error_maps_to_failed
+        PASS [   0.008s] (300/735) bitrouter-sdk language_model::request_checks::tests::projection_caps_empty_fragments
+        PASS [   0.008s] (301/735) bitrouter-sdk language_model::request_checks::tests::projection_counts_top_level_and_tool_result_media
+        PASS [   0.092s] (302/735) bitrouter-sdk language_model::executor::client_selection_tests::non_streaming_body_read_timeout_maps_to_upstream_timeout
+        PASS [   0.010s] (303/735) bitrouter-sdk language_model::server_tools::advisor::tests::advertises_only_when_declared
+        PASS [   0.009s] (304/735) bitrouter-sdk language_model::server_tools::advisor::tests::call_arg_model_overrides_when_unpinned
+        PASS [   0.008s] (305/735) bitrouter-sdk language_model::server_tools::classify::tests::done_when_owned_but_provider_executed
+        PASS [   0.008s] (306/735) bitrouter-sdk language_model::server_tools::classify::tests::done_when_no_tool_calls
+        PASS [   0.011s] (307/735) bitrouter-sdk language_model::server_tools::advisor::tests::pins_model_then_falls_back_to_parent
+        PASS [   0.013s] (308/735) bitrouter-sdk language_model::server_tools::advisor::tests::missing_prompt_is_an_error_result
+        PASS [   0.007s] (309/735) bitrouter-sdk language_model::server_tools::classify::tests::handback_when_mixed_router_and_client
+        PASS [   0.010s] (310/735) bitrouter-sdk language_model::server_tools::classify::tests::execute_when_all_calls_router_owned
+        PASS [   0.032s] (311/735) bitrouter-sdk language_model::pipeline::stream_outcome_tests::delivered_permit_waits_for_finalizer_post_ack_commit
+        PASS [   0.009s] (312/735) bitrouter-sdk language_model::server_tools::classify::tests::handback_when_only_client_call
+        PASS [   0.008s] (313/735) bitrouter-sdk language_model::server_tools::declarations::tests::bare_web_fetch_is_not_a_declaration
+        PASS [   0.027s] (314/735) bitrouter-sdk language_model::request_checks::tests::projection_bounds_json_serialization_by_remaining_bytes
+        PASS [   0.010s] (315/735) bitrouter-sdk language_model::server_tools::config::tests::server_tools_config_accepts_web_fetch
+        PASS [   0.008s] (316/735) bitrouter-sdk language_model::server_tools::declarations::tests::foreign_namespaced_web_search_is_not_a_declaration
+        PASS [   0.009s] (317/735) bitrouter-sdk language_model::server_tools::declarations::tests::foreign_namespaced_web_fetch_is_not_a_declaration
+        PASS [   0.010s] (318/735) bitrouter-sdk language_model::server_tools::declarations::tests::bare_web_search_is_a_native_tool_not_a_declaration
+        PASS [   0.010s] (319/735) bitrouter-sdk language_model::server_tools::declarations::tests::hook_no_stash_when_absent
+        PASS [   0.014s] (320/735) bitrouter-sdk language_model::server_tools::declarations::tests::forwards_worker_tools
+        PASS [   0.012s] (321/735) bitrouter-sdk language_model::server_tools::declarations::tests::hook_stashes_declarations_when_present
+        PASS [   0.009s] (322/735) bitrouter-sdk language_model::server_tools::declarations::tests::parses_advisor_subagent_and_fusion
+        PASS [   0.007s] (323/735) bitrouter-sdk language_model::server_tools::declarations::tests::parses_web_search_declaration
+        PASS [   0.011s] (324/735) bitrouter-sdk language_model::server_tools::declarations::tests::ignores_function_and_unrelated_tools
+        PASS [   0.009s] (325/735) bitrouter-sdk language_model::server_tools::declarations::tests::parses_web_fetch_declaration
+        PASS [   0.009s] (326/735) bitrouter-sdk language_model::server_tools::declarations::tests::tolerates_parameters_wrapper
+        PASS [   0.007s] (327/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::from_settings_is_none_when_nothing_configured
+        PASS [   0.012s] (328/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::built_from_settings_with_defaults
+        PASS [   0.008s] (329/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::forwards_synthesizer_when_configured
+        PASS [   0.007s] (330/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::leaves_non_alias_requests_untouched
+        PASS [   0.012s] (331/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::configured_aliases_cannot_claim_reserved_route_addresses
+        PASS [   0.010s] (332/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::rewrites_alias_and_injects_a_parseable_declaration
+        PASS [   0.008s] (333/735) bitrouter-sdk language_model::server_tools::fusion::config::tests::clamps_panel_over_eight
+        PASS [   0.011s] (334/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::ingress_transform_defensively_refuses_a_reserved_alias_collision
+        PASS [   0.007s] (335/735) bitrouter-sdk language_model::server_tools::fusion::config::tests::ignores_non_fusion_tools
+        PASS [   0.013s] (336/735) bitrouter-sdk language_model::server_tools::fusion::alias::tests::preserves_an_existing_system_prompt
+        PASS [   0.009s] (337/735) bitrouter-sdk language_model::server_tools::fusion::config::tests::empty_panel_falls_back_to_parent
+        PASS [   0.008s] (338/735) bitrouter-sdk language_model::server_tools::fusion::config::tests::recognises_namespaced_name_and_parameters_wrapper
+        PASS [   0.009s] (339/735) bitrouter-sdk language_model::server_tools::fusion::engine::tests::all_panel_failures_is_an_error
+        PASS [   0.010s] (340/735) bitrouter-sdk language_model::server_tools::fusion::engine::tests::fans_out_panel_then_judges_and_returns_analysis
+        PASS [   0.013s] (341/735) bitrouter-sdk language_model::server_tools::fusion::config::tests::parses_panel_judge_and_keeps_order
+        PASS [   0.007s] (342/735) bitrouter-sdk language_model::server_tools::fusion::judge::tests::missing_fields_default_to_empty
+        PASS [   0.007s] (343/735) bitrouter-sdk language_model::server_tools::fusion::judge::tests::no_json_object_is_an_error
+        PASS [   0.012s] (344/735) bitrouter-sdk language_model::server_tools::fusion::engine::tests::synthesizer_failure_falls_back_to_analysis
+        PASS [   0.013s] (345/735) bitrouter-sdk language_model::server_tools::fusion::engine::tests::surviving_panel_members_still_judge
+        PASS [   0.012s] (346/735) bitrouter-sdk language_model::server_tools::fusion::engine::tests::synthesizer_produces_text_and_adds_a_call
+        PASS [   0.009s] (347/735) bitrouter-sdk language_model::server_tools::fusion::judge::tests::parses_with_surrounding_prose
+        PASS [   0.011s] (348/735) bitrouter-sdk language_model::server_tools::fusion::judge::tests::parses_judge_json_even_when_fenced
+        PASS [   0.009s] (349/735) bitrouter-sdk language_model::server_tools::fusion::judge::tests::schema_has_the_five_analysis_fields
+        PASS [   0.010s] (350/735) bitrouter-sdk language_model::server_tools::fusion::tests::advertises_fusion_only_when_declared
+        PASS [   0.011s] (351/735) bitrouter-sdk language_model::server_tools::fusion::tests::executes_fusion_and_returns_analysis
+        PASS [   0.010s] (352/735) bitrouter-sdk language_model::server_tools::fusion::tests::undeclared_call_is_an_error_result
+        PASS [   0.011s] (353/735) bitrouter-sdk language_model::server_tools::fusion::tests::missing_prompt_is_an_error_result
+        PASS [   0.010s] (354/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::aggregated_usage_retains_provenance_and_every_raw_fragment
+        PASS [   0.096s] (355/735) bitrouter-sdk language_model::native_report::tests::maximal_rejection_evidence_fits_the_predispatch_envelope
+        PASS [   0.010s] (356/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::estimated_fragment_conservatively_marks_aggregate_estimated
+        PASS [   0.010s] (357/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::executes_router_call_then_returns_text
+        PASS [   0.008s] (358/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::inject_keeps_caller_provider_tool_the_registry_is_not_advertising
+        PASS [   0.011s] (359/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::hands_back_a_mixed_turn_without_executing
+        PASS [   0.009s] (360/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::inject_replaces_caller_provider_defined_with_function
+        PASS [   0.009s] (361/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::inject_strips_namespaced_declaration_owned_under_a_bare_name
+        PASS [   0.009s] (362/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::no_tool_choice_does_not_inject_or_execute_server_tools
+        PASS [   0.008s] (363/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::run_records_intermediate_provider_call
+        PASS [   0.010s] (364/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::terminates_at_max_iterations
+        PASS [   0.009s] (365/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::tool_error_is_fed_back_and_loop_continues
+        PASS [   0.012s] (366/735) bitrouter-sdk language_model::server_tools::loop_controller::tests::run_records_executed_router_call
+        PASS [   0.008s] (367/735) bitrouter-sdk language_model::server_tools::mcp_toolset::tests::tools_from_list_applies_prefix_and_defaults
+        PASS [   0.007s] (368/735) bitrouter-sdk language_model::server_tools::nested::tests::seam_types_are_send_sync_and_carry_response_format
+        PASS [   0.008s] (369/735) bitrouter-sdk language_model::server_tools::stream::tests::accumulates_usage_from_response_completed
+        PASS [   0.012s] (370/735) bitrouter-sdk language_model::server_tools::mcp_toolset::tests::output_from_call_maps_text_and_errors
+        PASS [   0.013s] (371/735) bitrouter-sdk language_model::server_tools::mcp_toolset::tests::mcp_toolset_lists_executes_and_owns
+        PASS [   0.009s] (372/735) bitrouter-sdk language_model::server_tools::stream::tests::hands_back_a_client_tool_call
+        PASS [   0.012s] (373/735) bitrouter-sdk language_model::server_tools::stream::tests::first_upstream_failure_is_returned_before_stream_start
+        PASS [   0.013s] (374/735) bitrouter-sdk language_model::server_tools::stream::tests::deduplicates_cumulative_usage_within_one_upstream_turn
+        PASS [   0.010s] (375/735) bitrouter-sdk language_model::server_tools::stream::tests::later_turn_failure_remains_an_in_stream_error
+        PASS [   0.010s] (376/735) bitrouter-sdk language_model::server_tools::stream::tests::no_tool_choice_hands_back_streamed_calls_without_a_second_turn
+        PASS [   0.011s] (377/735) bitrouter-sdk language_model::server_tools::stream::tests::sums_selected_usage_across_real_tool_rounds
+        PASS [   0.009s] (378/735) bitrouter-sdk language_model::server_tools::toolset::tests::registry_lists_tools_and_resolves_owner
+        PASS [   0.009s] (379/735) bitrouter-sdk language_model::server_tools::sub_agent::tests::missing_task_description_is_an_error_result
+        PASS [   0.014s] (380/735) bitrouter-sdk language_model::server_tools::stream::tests::stitches_router_tool_call_into_one_continuous_stream
+        PASS [   0.012s] (381/735) bitrouter-sdk language_model::server_tools::sub_agent::tests::delegates_with_fixed_worker_model
+        PASS [   0.009s] (382/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::exa_max_characters_is_capped_at_engine_ceiling
+        PASS [   0.010s] (383/735) bitrouter-sdk language_model::server_tools::web_fetch::config::tests::deserializes_backends_in_order
+        PASS [   0.010s] (384/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::missing_result_falls_back_to_requested_url_and_empty_content
+        PASS [   0.008s] (385/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::parses_exa_contents
+        PASS [   0.008s] (386/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::request_bodies_use_each_engines_field_names
+        PASS [   0.014s] (387/735) bitrouter-sdk language_model::server_tools::web_fetch::config::tests::defaults_to_empty
+        PASS [   0.009s] (388/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::parses_tavily_extract
+        PASS [   0.009s] (389/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::parses_firecrawl_scrape
+        PASS [   0.015s] (390/735) bitrouter-sdk language_model::server_tools::web_fetch::backend::tests::result_serializes_skipping_none_fields
+        PASS [   0.011s] (391/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::truncate_content_leaves_short_content_untouched
+        PASS [   0.007s] (392/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::all_backends_failing_yields_error_result
+        PASS [   0.008s] (393/735) bitrouter-sdk language_model::server_tools::web_fetch::http::tests::truncate_content_trims_to_char_budget
+        PASS [   0.009s] (394/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::backend_override_pins_a_named_backend
+        PASS [   0.008s] (395/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::max_content_tokens_clamps_to_the_deployment_ceiling
+        PASS [   0.011s] (396/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::advertises_only_when_declared
+        PASS [   0.009s] (397/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::fails_over_to_next_backend_on_error
+        PASS [   0.010s] (398/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::missing_url_is_an_error_result
+        PASS [   0.011s] (399/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::same_named_backends_stay_in_the_failover_chain
+        PASS [   0.012s] (400/735) bitrouter-sdk language_model::server_tools::web_fetch::toolset::tests::dispatches_to_default_backend
+        PASS [   0.009s] (401/735) bitrouter-sdk language_model::server_tools::web_search::http::tests::missing_arrays_yield_no_results
+        PASS [   0.010s] (402/735) bitrouter-sdk language_model::server_tools::web_search::http::tests::parses_exa_results_with_score
+        PASS [   0.010s] (403/735) bitrouter-sdk language_model::server_tools::web_search::http::tests::parses_firecrawl_web_array
+        PASS [   0.009s] (404/735) bitrouter-sdk language_model::server_tools::web_search::http::tests::parses_parallel_results
+        PASS [   0.008s] (405/735) bitrouter-sdk language_model::server_tools::web_search::nested::tests::returns_answer_with_empty_results
+        PASS [   0.010s] (406/735) bitrouter-sdk language_model::server_tools::web_search::http::tests::request_bodies_use_each_engines_field_names
+        PASS [   0.011s] (407/735) bitrouter-sdk language_model::server_tools::web_search::nested::tests::forwards_native_tools
+        PASS [   0.013s] (408/735) bitrouter-sdk language_model::server_tools::web_search::http::tests::parses_tavily_results_with_score
+        PASS [   0.010s] (409/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::advertises_only_when_declared
+        PASS [   0.010s] (410/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::all_backends_failing_yields_error_result
+        PASS [   0.009s] (411/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::backend_override_pins_a_named_backend
+        PASS [   0.009s] (412/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::fails_over_to_next_backend_on_error
+        PASS [   0.009s] (413/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::dispatches_to_default_backend
+        PASS [   0.008s] (414/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::same_named_backends_stay_in_the_failover_chain
+        PASS [   0.010s] (415/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::max_results_clamps_to_the_deployment_ceiling
+        PASS [   0.009s] (416/735) bitrouter-sdk language_model::server_tools::web_search::toolset::tests::missing_query_is_an_error_result
+        PASS [   0.008s] (417/735) bitrouter-sdk language_model::settlement::tests::settlement_context_carries_server_tool_signals
+        PASS [   0.011s] (418/735) bitrouter-sdk language_model::settlement::tests::required_finalization_receipt_is_cloneable_send_sync_invocation_identity
+        PASS [   0.010s] (419/735) bitrouter-sdk language_model::stream::tests::keepalive_injects_comment_on_idle
+        PASS [   0.008s] (420/735) bitrouter-sdk language_model::stream::tests::metadata_usage_and_terminal_parts_do_not_set_first_token_timing
+        PASS [   0.011s] (421/735) bitrouter-sdk language_model::stream::tests::block_markers_do_not_affect_disconnect_billing_estimate
+        PASS [   0.011s] (422/735) bitrouter-sdk language_model::stream::tests::interest_matches_only_declared_kinds
+        PASS [   0.009s] (423/735) bitrouter-sdk language_model::stream::tests::keepalive_passes_through_when_not_idle
+        PASS [   0.008s] (424/735) bitrouter-sdk language_model::stream::tests::processor_emits_one_selected_usage_immediately_before_terminal
+        PASS [   0.009s] (425/735) bitrouter-sdk language_model::stream::tests::one_semantic_delta_has_zero_generation_duration
+        PASS [   0.009s] (426/735) bitrouter-sdk language_model::stream::tests::responses_terminal_status_maps_to_finish_reason
+        PASS [   0.008s] (427/735) bitrouter-sdk language_model::stream::tests::usage_accumulator_uses_last_snapshot_without_complete_pricing
+        PASS [   0.011s] (428/735) bitrouter-sdk language_model::stream::tests::usage_accumulator_uses_highest_nominal_cost_when_priced
+        PASS [   0.009s] (429/735) bitrouter-sdk language_model::tests::builder_rejects_multiple_required_finalizers_without_atomic_composition
+        PASS [   0.010s] (430/735) bitrouter-sdk language_model::tests::checked_ordinary_mutation_stops_nonstream
+        PASS [   0.011s] (431/735) bitrouter-sdk language_model::tests::async_policy_selector_errors_propagate_before_route_execution
+        PASS [   0.012s] (432/735) bitrouter-sdk language_model::tests::auth_recovery_rebuilds_nonstream_and_stream_request_bodies
+        PASS [   0.010s] (433/735) bitrouter-sdk language_model::tests::checked_ordinary_mutation_stops_stream
+        PASS [   0.018s] (434/735) bitrouter-sdk language_model::stream::tests::semantic_deltas_capture_ttft_and_generation_window
+        PASS [   0.013s] (435/735) bitrouter-sdk language_model::tests::checked_preparation_freezes_checks_nonstream
+        PASS [   0.012s] (436/735) bitrouter-sdk language_model::tests::checked_preparation_freezes_checks_stream
+        PASS [   0.010s] (437/735) bitrouter-sdk language_model::tests::conversion_admission_all_excluded_returns_reports_without_attempting_or_resetting_history
+        PASS [   0.009s] (438/735) bitrouter-sdk language_model::tests::count_errors_are_redacted_and_cannot_be_admitted_as_unknown
+        PASS [   0.010s] (439/735) bitrouter-sdk language_model::tests::custom_fallback_retries_upstream_bad_request_then_succeeds
+        PASS [   0.011s] (440/735) bitrouter-sdk language_model::tests::counting_pre_hook_runs_once
+        PASS [   0.012s] (441/735) bitrouter-sdk language_model::tests::custom_nonresponses_nonstream_retains_other_or_missing_finish_reason
+        PASS [   0.015s] (442/735) bitrouter-sdk language_model::tests::conversion_admission_skips_http_candidate_for_json_and_stream_without_failure_hops
+        PASS [   0.012s] (443/735) bitrouter-sdk language_model::tests::custom_nonstream_responses_requires_typed_success_terminal
+        PASS [   0.011s] (444/735) bitrouter-sdk language_model::tests::custom_stream_eof_without_terminal_yields_error_and_failed_settlement
+        PASS [   0.010s] (445/735) bitrouter-sdk language_model::tests::default_fallback_stops_on_upstream_bad_request
+        PASS [   0.009s] (446/735) bitrouter-sdk language_model::tests::disconnect_before_usage_bills_estimated_output
+        PASS [   0.011s] (447/735) bitrouter-sdk language_model::tests::drain_awaits_pending_disconnect_settlements
+        PASS [   0.012s] (448/735) bitrouter-sdk language_model::tests::detached_terminal_settlement_runs_remaining_recorders_after_body_drop
+        PASS [   0.011s] (449/735) bitrouter-sdk language_model::tests::dropped_stream_finalizes_timing_before_detached_settlement
+        PASS [   0.012s] (450/735) bitrouter-sdk language_model::tests::dropped_stream_still_fires_request_end_observers
+        PASS [   0.010s] (451/735) bitrouter-sdk language_model::tests::early_stream_drop_runs_every_settlement_recorder
+        PASS [   0.010s] (452/735) bitrouter-sdk language_model::tests::executor_rejects_response_format_on_unsupported_outbound
+        PASS [   0.009s] (453/735) bitrouter-sdk language_model::tests::exhausted_upstream_429s_use_the_earliest_retry_after
+        PASS [   0.011s] (454/735) bitrouter-sdk language_model::tests::exhausted_streaming_upstream_bad_requests_preserve_the_last_payload
+        PASS [   0.010s] (455/735) bitrouter-sdk language_model::tests::exhausted_upstream_bad_requests_preserve_the_last_payload
+        PASS [   0.011s] (456/735) bitrouter-sdk language_model::tests::failed_non_streaming_request_settles_the_attempted_target
+        PASS [   0.017s] (457/735) bitrouter-sdk language_model::tests::equivalent_conversion_observation_preserves_retry_content_and_attempt_accounting
+        PASS [   0.012s] (458/735) bitrouter-sdk language_model::tests::fallback_backoff_repeats_last_delay_when_chain_is_longer
+        PASS [   0.008s] (459/735) bitrouter-sdk language_model::tests::fallback_does_not_retry_on_4xx
+        PASS [   0.008s] (460/735) bitrouter-sdk language_model::tests::fallback_does_not_retry_on_4xx_even_with_observe_only_execution_hook
+        PASS [   0.011s] (461/735) bitrouter-sdk language_model::tests::fallback_tries_next_on_5xx_then_succeeds
+        PASS [   0.013s] (462/735) bitrouter-sdk language_model::tests::fallback_backoff_waits_before_each_retryable_next_candidate
+        PASS [   0.010s] (463/735) bitrouter-sdk language_model::tests::full_pipeline_runs_all_four_stages
+        PASS [   0.012s] (464/735) bitrouter-sdk language_model::tests::fallback_tries_next_on_payment_required_then_succeeds
+        PASS [   0.012s] (465/735) bitrouter-sdk language_model::tests::fallback_tries_next_on_upstream_429_then_succeeds
+        PASS [   0.012s] (466/735) bitrouter-sdk language_model::tests::fusion_declaration_is_advertised_and_executed_end_to_end
+        PASS [   0.011s] (467/735) bitrouter-sdk language_model::tests::http_executor_refreshes_auth_and_retries_non_streaming_401_once
+        PASS [   0.013s] (468/735) bitrouter-sdk language_model::tests::google_continuity_failure_keeps_reported_usage_in_settlement
+        PASS [   0.012s] (469/735) bitrouter-sdk language_model::tests::http_executor_refreshes_auth_and_retries_streaming_401_once
+        PASS [   0.009s] (470/735) bitrouter-sdk language_model::tests::local_rate_limit_does_not_fall_back
+        PASS [   0.012s] (471/735) bitrouter-sdk language_model::tests::http_executor_replaces_every_opaque_auth_failure_in_both_modes
+        PASS [   0.011s] (472/735) bitrouter-sdk language_model::tests::managed_admission_cannot_add_duplicate_or_reorder_frozen_routes
+        PASS [   0.013s] (473/735) bitrouter-sdk language_model::tests::managed_constraints_reject_policy_provenance_and_continuation_conflicts
+        PASS [   0.013s] (474/735) bitrouter-sdk language_model::tests::managed_fixed_continuation_requires_a_known_matching_effort
+        PASS [   0.010s] (475/735) bitrouter-sdk language_model::tests::managed_protocol::managed_control_cannot_admit_an_incompatible_http_route
+        PASS [   0.010s] (476/735) bitrouter-sdk language_model::tests::managed_fixed_model_skips_policy_and_manual_effort_survives_policy
+        PASS [   0.009s] (477/735) bitrouter-sdk language_model::tests::managed_protocol::managed_protocol_checks_preflight_controls_without_input_counting
+        PASS [   0.012s] (478/735) bitrouter-sdk language_model::tests::managed_fixed_model_rejects_hook_rewrite_before_dispatch
+        PASS [   0.010s] (479/735) bitrouter-sdk language_model::tests::managed_protocol::managed_protocol_checks_nested_tool_media_and_shared_capabilities
+        PASS [   0.011s] (480/735) bitrouter-sdk language_model::tests::managed_protocol::managed_protocol_rejects_render_errors_and_lost_tool_identities
+        PASS [   0.028s] (481/735) bitrouter-sdk language_model::tests::google_signed_parallel_and_sequential_tools_survive_sdk_gateway_cycles
+        PASS [   0.012s] (482/735) bitrouter-sdk language_model::tests::managed_protocol::managed_protocol_rejects_lost_history_but_preserves_native_custom_calls
+        PASS [   0.009s] (483/735) bitrouter-sdk language_model::tests::mixed_retryable_upstream_failures_become_service_unavailable
+        PASS [   0.010s] (484/735) bitrouter-sdk language_model::tests::managed_route_facts_share_the_resolved_targets_config_snapshot
+        PASS [   0.010s] (485/735) bitrouter-sdk language_model::tests::mixed_upstream_bad_request_and_server_error_keep_last_error_semantics
+        PASS [   0.009s] (486/735) bitrouter-sdk language_model::tests::native_output::canonical_output_without_usage_stays_unknown
+        PASS [   0.013s] (487/735) bitrouter-sdk language_model::tests::native_output::canonical_output_limit_counts_json_and_keeps_original_settlement
+        PASS [   0.013s] (488/735) bitrouter-sdk language_model::tests::native_output::canonical_output_rejection_settles_before_fallible_success_hooks
+        PASS [   0.009s] (489/735) bitrouter-sdk language_model::tests::native_output::insufficient_report_envelope_prevents_provider_dispatch
+        PASS [   0.012s] (490/735) bitrouter-sdk language_model::tests::native_stream::controlled_stream_preserves_blocks_signatures_tools_and_accounting
+        PASS [   0.012s] (491/735) bitrouter-sdk language_model::tests::native_stream::interrupted_stream_retains_observed_usage_without_fallback
+        PASS [   0.014s] (492/735) bitrouter-sdk language_model::tests::native_stream::invalid_native_terminal_retains_error_usage_in_attempt_and_settlement
+        PASS [   0.011s] (493/735) bitrouter-sdk language_model::tests::native_stream::native_reasoning_preserves_interleaved_lanes_and_rejects_changed_text
+        PASS [   0.010s] (494/735) bitrouter-sdk language_model::tests::native_stream::oversized_stream_frame_and_duplicate_tool_identity_are_rejected
+        PASS [   0.011s] (495/735) bitrouter-sdk language_model::tests::native_stream_leaves_client_tool_calls_for_the_agent
+        PASS [   0.019s] (496/735) bitrouter-sdk language_model::tests::native_stream::controlled_http_stream_retains_complete_responses_private_output
+        PASS [   0.015s] (497/735) bitrouter-sdk language_model::tests::native_stream::native_stream_uses_frozen_rates_including_unknown
+        PASS [   0.013s] (498/735) bitrouter-sdk language_model::tests::native_stream::native_terminal_cannot_restore_reasoning_removed_by_stream_policy
+        PASS [   0.012s] (499/735) bitrouter-sdk language_model::tests::native_turn_leaves_client_tool_calls_for_the_agent
+        PASS [   0.009s] (500/735) bitrouter-sdk language_model::tests::non_streaming_no_route_runs_settlement_once
+        PASS [   0.009s] (501/735) bitrouter-sdk language_model::tests::nonstream_disconnect_still_runs_to_completion_and_bills_full
+        PASS [   0.012s] (502/735) bitrouter-sdk language_model::tests::non_streaming_route_hook_failure_runs_settlement_once
+        PASS [   0.009s] (503/735) bitrouter-sdk language_model::tests::nonstream_required_finalizer_failure_replaces_success
+        PASS [   0.012s] (504/735) bitrouter-sdk language_model::tests::nonstream_execute_detached_returns_full_usage_when_connected
+        PASS [   0.014s] (505/735) bitrouter-sdk language_model::tests::nonstream_settlement_carries_finish_reason
+        PASS [   0.009s] (506/735) bitrouter-sdk language_model::tests::opaque_auth_failures_preserve_safe_domain_facts_and_discard_private_fields
+        PASS [   0.016s] (507/735) bitrouter-sdk language_model::tests::observe_hook_panic_is_swallowed
+        PASS [   0.011s] (508/735) bitrouter-sdk language_model::tests::opaque_nonretryable_auth_failure_stays_fail_fast_in_both_modes
+        PASS [   0.043s] (509/735) bitrouter-sdk language_model::tests::native_output::complete_report_rejection_preserves_original_settlement_and_numeric_cost
+        PASS [   0.009s] (510/735) bitrouter-sdk language_model::tests::pre_request_deny_stops_pipeline
+        PASS [   0.013s] (511/735) bitrouter-sdk language_model::tests::pipeline_settlement_never_receives_opaque_auth_failure_text
+        PASS [   0.013s] (512/735) bitrouter-sdk language_model::tests::policy_selection_is_preset_scoped_and_preserves_routing_preferences
+        PASS [   0.021s] (513/735) bitrouter-sdk language_model::tests::opaque_auth_failures_preserve_retryable_fallback_semantics_in_both_modes
+        PASS [   0.012s] (514/735) bitrouter-sdk language_model::tests::projection_admission_routes_file_results_without_asset_loss_or_failure_hops
+        PASS [   0.035s] (515/735) bitrouter-sdk language_model::tests::non_stream_request_duration_includes_pre_request_pipeline_time
+        PASS [   0.014s] (516/735) bitrouter-sdk language_model::tests::projection_admission_preserves_tool_constraints_during_http_fallback
+        PASS [   0.014s] (517/735) bitrouter-sdk language_model::tests::provider_body::oversized_rate_limit_preserves_retry_after
+        PASS [   0.011s] (518/735) bitrouter-sdk language_model::tests::provider_body::oversized_successful_sse_body_is_not_accepted_as_partial_output
+        PASS [   0.010s] (519/735) bitrouter-sdk language_model::tests::reconstruction::app_transform_validation_cannot_be_bypassed_by_an_embedding_control
+        PASS [   0.014s] (520/735) bitrouter-sdk language_model::tests::provider_body::oversized_unauthorized_body_still_allows_one_authentication_refresh
+        PASS [   0.010s] (521/735) bitrouter-sdk language_model::tests::reconstruction::managed_rebuild_cannot_rewrite_or_reorder_prepared_messages
+        PASS [   0.018s] (522/735) bitrouter-sdk language_model::tests::provider_body::oversized_rejections_do_not_start_the_fallback_provider
+        PASS [   0.015s] (523/735) bitrouter-sdk language_model::tests::reconstruction::managed_rebuild_cannot_repeat_or_bypass_mutable_hooks_and_continuation
+        PASS [   0.009s] (524/735) bitrouter-sdk language_model::tests::required_drain_propagates_while_legacy_drain_remains_best_effort
+        PASS [   0.011s] (525/735) bitrouter-sdk language_model::tests::reconstruction::managed_rebuild_rechecks_frozen_binding_before_any_new_egress
+        PASS [   0.011s] (526/735) bitrouter-sdk language_model::tests::reconstruction::read_only_guards_recheck_frozen_selection_with_a_live_gate_before_each_guard
+        PASS [   0.009s] (527/735) bitrouter-sdk language_model::tests::route_hook_event_is_visible_downstream
+        PASS [   0.009s] (528/735) bitrouter-sdk language_model::tests::server_tool_stream_handshake_failure_still_settles_and_observes_end
+        PASS [   0.015s] (529/735) bitrouter-sdk language_model::tests::router_identity_uses_inbound_selector_and_reaches_settlement
+        PASS [   0.010s] (530/735) bitrouter-sdk language_model::tests::server_tool_loop_streams_router_tool_activity
+        PASS [   0.010s] (531/735) bitrouter-sdk language_model::tests::server_tool_streaming_fallback_settles_the_winning_target
+        PASS [   0.010s] (532/735) bitrouter-sdk language_model::tests::server_tool_streaming_fallback_preserves_request_context
+        PASS [   0.009s] (533/735) bitrouter-sdk language_model::tests::server_tool_streaming_preflight_aggregates_rate_limits
+        PASS [   0.009s] (534/735) bitrouter-sdk language_model::tests::server_tool_streaming_preflight_respects_fail_decision
+        PASS [   0.011s] (535/735) bitrouter-sdk language_model::tests::server_tool_streaming_preflight_aggregates_mixed_availability_failures
+        PASS [   0.013s] (536/735) bitrouter-sdk language_model::tests::server_tool_streaming_settles_the_final_turn_winner
+        PASS [   0.023s] (537/735) bitrouter-sdk language_model::tests::server_tool_loop_resolves_a_router_tool_call
+        PASS [   0.009s] (538/735) bitrouter-sdk language_model::tests::settlement_recorder_runs_even_on_failure
+        PASS [   0.010s] (539/735) bitrouter-sdk language_model::tests::settlement_recorder_can_emit_event_for_later_recorders
+        PASS [   0.009s] (540/735) bitrouter-sdk language_model::tests::stream_hooks_chain_rewrites
+        PASS [   0.011s] (541/735) bitrouter-sdk language_model::tests::settlement_recorders_run_in_registration_order
+        PASS [   0.009s] (542/735) bitrouter-sdk language_model::tests::stream_on_stream_end_fires_on_completion
+        PASS [   0.010s] (543/735) bitrouter-sdk language_model::tests::stream_interest_filter_skips_uninterested_hook
+        PASS [   0.010s] (544/735) bitrouter-sdk language_model::tests::stream_abort_fires_on_stream_end_with_aborted
+        PASS [   0.009s] (545/735) bitrouter-sdk language_model::tests::stream_on_stream_end_fires_on_upstream_error
+        PASS [   0.010s] (546/735) bitrouter-sdk language_model::tests::streamed_settlement_carries_finish_reason
+        PASS [   0.012s] (547/735) bitrouter-sdk language_model::tests::stream_required_finalizer_failure_precedes_success_terminal
+        PASS [   0.010s] (548/735) bitrouter-sdk language_model::tests::streamed_settlement_has_positive_canonical_timing
+        PASS [   0.012s] (549/735) bitrouter-sdk language_model::tests::streamed_hook_abort_finalizes_timing_before_settlement
+        PASS [   0.009s] (550/735) bitrouter-sdk language_model::tests::streaming_no_route_runs_settlement_once
+        PASS [   0.009s] (551/735) bitrouter-sdk language_model::tests::streaming_pre_request_deny_does_not_settle
+        PASS [   0.014s] (552/735) bitrouter-sdk language_model::tests::streamed_fallback_attributes_timing_to_successful_target
+        PASS [   0.011s] (553/735) bitrouter-sdk language_model::tests::streamed_upstream_error_finalizes_timing_before_settlement
+        PASS [   0.012s] (554/735) bitrouter-sdk language_model::tests::streaming_preflight_error_runs_settlement_and_observe_end
+        PASS [   0.012s] (555/735) bitrouter-sdk language_model::tests::streaming_route_hook_failure_runs_settlement_once
+        PASS [   0.010s] (556/735) bitrouter-sdk language_model::tests::unguarded_bare_and_legacy_rewrites_converge_nonstream
+        PASS [   0.009s] (557/735) bitrouter-sdk language_model::tests::unified_routing::rejected_entry_never_calls_the_semantic_backend
+        PASS [   0.011s] (558/735) bitrouter-sdk language_model::tests::typed_failed_response_terminal_stays_truthful_and_settles_failed
+        PASS [   0.010s] (559/735) bitrouter-sdk language_model::tests::unified_routing::app_preserves_budget_quotes_for_plan_and_attempt_admission
+        PASS [   0.011s] (560/735) bitrouter-sdk language_model::tests::unified_routing::cancelled_or_refused_attempt_admission_reports_no_dispatch_without_polling_executor
+        PASS [   0.013s] (561/735) bitrouter-sdk language_model::tests::successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_observations
+        PASS [   0.013s] (562/735) bitrouter-sdk language_model::tests::unguarded_bare_and_legacy_rewrites_converge_stream
+        PASS [   0.013s] (563/735) bitrouter-sdk language_model::tests::unified_routing::rich_request_and_managed_input_share_classification_policy_and_settlement
+        PASS [   0.014s] (564/735) bitrouter-sdk language_model::tests::unified_routing::route_hooks_cannot_change_the_committed_prompt
+        PASS [   0.007s] (565/735) bitrouter-sdk language_model::timing::tests::empty_deltas_are_not_semantic_tokens
+        PASS [   0.008s] (566/735) bitrouter-sdk language_model::tests::upstream_stream_error_is_not_reclassified_as_client_disconnect_when_dropped
+        PASS [   0.015s] (567/735) bitrouter-sdk language_model::tests::unified_routing::typed_routing::app_routing_decision_requires_its_own_admission_and_ack_before_generation
+        PASS [   0.008s] (568/735) bitrouter-sdk language_model::timing::tests::whole_milliseconds_are_preserved
+        PASS [   0.011s] (569/735) bitrouter-sdk language_model::tests::without_loop_a_tool_call_turn_is_returned_unchanged
+        PASS [   0.008s] (570/735) bitrouter-sdk language_model::timing::tests::zero_duration_stays_zero
+        PASS [   0.010s] (571/735) bitrouter-sdk language_model::timing::tests::positive_sub_millisecond_duration_rounds_to_one
+        PASS [   0.008s] (572/735) bitrouter-sdk mcp::aggregating_executor::tests::empty_aggregate_answers_skills_list_with_an_empty_list
+        PASS [   0.017s] (573/735) bitrouter-sdk language_model::tests::upstream_errors_redact_admitted_continuity
+        PASS [   0.010s] (574/735) bitrouter-sdk mcp::aggregating_executor::tests::direct_target_passes_through_to_inner
+        PASS [   0.010s] (575/735) bitrouter-sdk mcp::aggregating_executor::tests::empty_aggregate_returns_empty_list_for_list_methods
+        PASS [   0.008s] (576/735) bitrouter-sdk mcp::aggregating_executor::tests::index_routed_read_leaves_the_returned_uri_alone
+        PASS [   0.010s] (577/735) bitrouter-sdk mcp::aggregating_executor::tests::index_routed_read_forwards_the_uri_verbatim
+        PASS [   0.009s] (578/735) bitrouter-sdk mcp::aggregating_executor::tests::label_routed_read_renamespaces_the_returned_uri
+        PASS [   0.009s] (579/735) bitrouter-sdk mcp::aggregating_executor::tests::label_routed_read_strips_the_label_before_dispatching
+        PASS [   0.011s] (580/735) bitrouter-sdk mcp::aggregating_executor::tests::resource_templates_list_namespaces_skill_uri_templates
+        PASS [   0.009s] (581/735) bitrouter-sdk mcp::aggregating_executor::tests::resources_read_dispatches_to_the_one_member_that_lists_it
+        PASS [   0.010s] (582/735) bitrouter-sdk mcp::aggregating_executor::tests::resources_list_namespaces_skill_uris_before_label_routing
+        PASS [   0.008s] (583/735) bitrouter-sdk mcp::aggregating_executor::tests::resources_read_refuses_to_choose_between_two_owners
+        PASS [   0.008s] (584/735) bitrouter-sdk mcp::aggregating_executor::tests::resources_read_unlisted_uri_is_invalid_params
+        PASS [   0.008s] (585/735) bitrouter-sdk mcp::aggregating_executor::tests::resources_read_falls_back_to_templates
+        PASS [   0.010s] (586/735) bitrouter-sdk mcp::aggregating_executor::tests::resources_read_does_not_guess_when_enumeration_fails
+        PASS [   0.009s] (587/735) bitrouter-sdk mcp::aggregating_executor::tests::resources_read_without_uri_is_400
+        PASS [   0.009s] (588/735) bitrouter-sdk mcp::aggregating_executor::tests::skill_uri_routes_by_label_without_enumerating
+        PASS [   0.012s] (589/735) bitrouter-sdk mcp::aggregating_executor::tests::skills_get_rejects_a_different_skill_than_the_one_requested
+        PASS [   0.035s] (590/735) bitrouter-sdk language_model::tests::unified_routing::typed_routing::routing_cancellation_settles_decision_usage_before_returning
+        PASS [   0.008s] (591/735) bitrouter-sdk mcp::aggregating_executor::tests::skills_list_partial_failure_does_not_fail_the_aggregate
+        PASS [   0.009s] (592/735) bitrouter-sdk mcp::aggregating_executor::tests::skills_list_namespaces_colliding_uris_per_member
+        PASS [   0.010s] (593/735) bitrouter-sdk mcp::aggregating_executor::tests::skills_get_strips_the_label_and_renamespaces_the_reply
+        PASS [   0.010s] (594/735) bitrouter-sdk mcp::aggregating_executor::tests::skills_get_with_an_unknown_label_is_invalid_params
+        PASS [   0.008s] (595/735) bitrouter-sdk mcp::aggregating_executor::tests::template_prefix_matching_is_literal_only
+        PASS [   0.008s] (596/735) bitrouter-sdk mcp::aggregating_executor::tests::tools_call_strips_prefix_and_dispatches_to_member
+        PASS [   0.012s] (597/735) bitrouter-sdk mcp::aggregating_executor::tests::skills_list_merges_member_cache_hints_conservatively
+        PASS [   0.012s] (598/735) bitrouter-sdk mcp::aggregating_executor::tests::skills_list_skips_unaggregatable_schemes_with_a_note
+        PASS [   0.009s] (599/735) bitrouter-sdk mcp::aggregating_executor::tests::tools_call_uses_longest_matching_prefix
+        PASS [   0.008s] (600/735) bitrouter-sdk mcp::aggregating_executor::tests::tools_list_fanout_prefixes_names_and_concats
+        PASS [   0.009s] (601/735) bitrouter-sdk mcp::aggregating_executor::tests::tools_call_unknown_prefix_is_404
+        PASS [   0.007s] (602/735) bitrouter-sdk mcp::caching_executor::tests::aggregate_target_passes_through
+        PASS [   0.010s] (603/735) bitrouter-sdk mcp::aggregating_executor::tests::tools_list_partial_failure_surfaces_under_errors
+        PASS [   0.008s] (604/735) bitrouter-sdk mcp::caching_executor::tests::cache_hint_declines_private_scope_and_non_positive_ttl
+        PASS [   0.011s] (605/735) bitrouter-sdk mcp::aggregating_executor::tests::unlabelled_skill_uri_still_resolves_through_the_index
+        PASS [   0.011s] (606/735) bitrouter-sdk mcp::caching_executor::tests::buffered_and_streaming_hits_do_not_restart_freshness
+        PASS [   0.010s] (607/735) bitrouter-sdk mcp::caching_executor::tests::cache_hint_reads_top_level_ttl_ms_and_falls_back_to_meta
+        PASS [   0.008s] (608/735) bitrouter-sdk mcp::caching_executor::tests::mcp_cache_config_defaults_match_cache_ttls
+        PASS [   0.010s] (609/735) bitrouter-sdk mcp::caching_executor::tests::non_cacheable_method_passes_through
+        PASS [   0.010s] (610/735) bitrouter-sdk mcp::caching_executor::tests::params_hash_is_canonical_across_key_order
+        PASS [   0.012s] (611/735) bitrouter-sdk mcp::caching_executor::tests::private_scoped_result_is_not_cached
+        PASS [   0.009s] (612/735) bitrouter-sdk mcp::caching_executor::tests::second_tools_list_within_ttl_is_a_cache_hit
+        PASS [   0.010s] (613/735) bitrouter-sdk mcp::caching_executor::tests::public_skills_list_is_cached
+        PASS [   0.011s] (614/735) bitrouter-sdk mcp::caching_executor::tests::private_scoped_skills_list_is_not_cached
+        PASS [   0.008s] (615/735) bitrouter-sdk mcp::caching_executor::tests::skills_get_is_never_cached
+        PASS [   0.009s] (616/735) bitrouter-sdk mcp::caching_executor::tests::server_cache_returns_remaining_not_original_ttl
+        PASS [   0.008s] (617/735) bitrouter-sdk mcp::caching_executor::tests::ttl_zero_disables_caching
+        PASS [   0.008s] (618/735) bitrouter-sdk mcp::config_routing::tests::aggregate_member_key_must_be_one_safe_uri_segment
+        PASS [   0.010s] (619/735) bitrouter-sdk mcp::config_routing::tests::aggregate_excludes_opted_out_servers
+        PASS [   0.008s] (620/735) bitrouter-sdk mcp::config_routing::tests::duplicate_prefix_is_rejected
+        PASS [   0.008s] (621/735) bitrouter-sdk mcp::config_routing::tests::invalid_entry_fails_construction
+        PASS [   0.008s] (622/735) bitrouter-sdk mcp::config_routing::tests::resolves_configured_server
+        PASS [   0.010s] (623/735) bitrouter-sdk mcp::config_routing::tests::aggregate_selector_returns_all_opted_in_members
+        PASS [   0.009s] (624/735) bitrouter-sdk mcp::config_routing::tests::unknown_server_returns_not_found
+        PASS [   0.009s] (625/735) bitrouter-sdk mcp::config_routing::tests::uppercase_nonaggregate_key_remains_directly_routable
+        PASS [   0.008s] (626/735) bitrouter-sdk mcp::default_config_prefers_modern_upstream_discovery
+        PASS [   0.033s] (627/735) bitrouter-sdk mcp::caching_executor::tests::invalidation_evicts_affected_method
+        PASS [   0.007s] (628/735) bitrouter-sdk mcp::rmcp_executor::tests::evict_on_empty_pool_returns_false_and_is_idempotent
+        PASS [   0.007s] (629/735) bitrouter-sdk mcp::rmcp_executor::tests::executor_constructs_with_empty_pool
+        PASS [   0.010s] (630/735) bitrouter-sdk mcp::rmcp_executor::tests::classifies_insufficient_scope_transport_error
+        PASS [   0.010s] (631/735) bitrouter-sdk mcp::rmcp_executor::tests::classifies_auth_required_transport_error
+        PASS [   0.011s] (632/735) bitrouter-sdk mcp::rmcp_executor::tests::configured_protocol_version_is_carried_into_client_info
+        PASS [   0.009s] (633/735) bitrouter-sdk mcp::rmcp_executor::tests::executor_rejects_aggregate_targets
+        PASS [   0.009s] (634/735) bitrouter-sdk mcp::rmcp_executor::tests::initialize_transport_auth_maps_to_upstream_auth
+        PASS [   0.009s] (635/735) bitrouter-sdk mcp::rmcp_executor::tests::modern_protocol_uses_rmcp_auto_lifecycle
+        PASS [   0.009s] (636/735) bitrouter-sdk mcp::rmcp_executor::tests::non_auth_transport_error_is_not_classified
+        PASS [   0.009s] (637/735) bitrouter-sdk mcp::rmcp_executor::tests::relay_allowlist_covers_only_the_skills_extension
+        PASS [   0.009s] (638/735) bitrouter-sdk mcp::rmcp_executor::tests::service_transport_send_auth_maps_to_upstream_auth
+        PASS [   0.009s] (639/735) bitrouter-sdk mcp::rmcp_executor::tests::skills_list_result_decodes_as_custom_result
+        PASS [   0.009s] (640/735) bitrouter-sdk mcp::rmcp_executor::tests::skills_pages_merge_entries_and_cache_hints_conservatively
+        PASS [   0.010s] (641/735) bitrouter-sdk mcp::rmcp_executor::tests::skills_get_result_decodes_as_custom_result
+        PASS [   0.011s] (642/735) bitrouter-sdk mcp::rmcp_executor::tests::stdio_connect_failure_surfaces_as_502_upstream
+        PASS [   0.011s] (643/735) bitrouter-sdk mcp::rmcp_executor::tests::stdio_spawn_failure_surfaces_as_502_upstream
+        PASS [   0.008s] (644/735) bitrouter-sdk mcp::rmcp_executor::tests::tools_call_maps_a_task_result_to_an_error_naming_the_task
+        PASS [   0.009s] (645/735) bitrouter-sdk mcp::rmcp_executor::tests::tools_call_maps_mrtr_input_required_to_an_explained_error
+        PASS [   0.010s] (646/735) bitrouter-sdk mcp::rmcp_executor::tests::streaming_tools_call_validates_params_before_connecting
+        PASS [   0.008s] (647/735) bitrouter-sdk mcp::rmcp_executor::tests::typed_pages_with_missing_hints_fail_closed_in_either_order
+        PASS [   0.011s] (648/735) bitrouter-sdk mcp::rmcp_executor::tests::tools_call_maps_a_complete_result_to_its_json
+        PASS [   0.009s] (649/735) bitrouter-sdk mcp::rmcp_executor::tests::upstream_startup_uses_latest_by_default
+        PASS [   0.010s] (650/735) bitrouter-sdk mcp::rmcp_executor::tests::upstream_invalid_params_remains_a_bad_request
+        PASS [   0.010s] (651/735) bitrouter-sdk mcp::skills::tests::entry_rewrites_every_uri_and_touches_nothing_else
+        PASS [   0.012s] (652/735) bitrouter-sdk mcp::skills::tests::an_entry_without_a_valid_resources_form_does_not_parse
+        PASS [   0.008s] (653/735) bitrouter-sdk mcp::skills::tests::entry_without_a_uri_is_skipped
+        PASS [   0.008s] (654/735) bitrouter-sdk mcp::skills::tests::get_params_and_result_use_the_sep_field_names
+        PASS [   0.010s] (655/735) bitrouter-sdk mcp::skills::tests::entry_under_another_scheme_is_skipped
+        PASS [   0.009s] (656/735) bitrouter-sdk mcp::skills::tests::method_names_match_the_sep
+        PASS [   0.009s] (657/735) bitrouter-sdk mcp::skills::tests::malformed_skill_entries_are_not_namespaced
+        PASS [   0.008s] (658/735) bitrouter-sdk mcp::skills::tests::namespacing_preserves_the_name_invariant
+        PASS [   0.009s] (659/735) bitrouter-sdk mcp::skills::tests::namespacing_round_trips
+        PASS [   0.009s] (660/735) bitrouter-sdk mcp::skills::tests::other_schemes_are_not_namespaced
+        PASS [   0.007s] (661/735) bitrouter-sdk mcp::skills::tests::the_dynamic_marker_survives_and_an_omitted_key_does_not
+        PASS [   0.007s] (662/735) bitrouter-sdk mcp::skills::tests::strip_label_ignores_other_labels_and_schemes
+        PASS [   0.009s] (663/735) bitrouter-sdk mcp::skills::tests::per_skill_limits_match_the_sep
+        PASS [   0.009s] (664/735) bitrouter-sdk mcp::skills::tests::resources_is_an_array_or_the_dynamic_marker
+        PASS [   0.008s] (665/735) bitrouter-sdk mcp::skills::tests::sep_example_round_trips
+        PASS [   0.010s] (666/735) bitrouter-sdk mcp::skills::tests::resource_manifest_must_be_complete_unique_and_digest_bound
+        PASS [   0.009s] (667/735) bitrouter-sdk mcp::skills::tests::unknown_top_level_entry_fields_survive
+        PASS [   0.012s] (668/735) bitrouter-sdk mcp::skills::tests::unknown_frontmatter_fields_survive
+        PASS [   0.008s] (669/735) bitrouter-sdk mcp::tests::mcp_streaming_default_wraps_execute_into_single_final
+        PASS [   0.008s] (670/735) bitrouter-sdk mcp::tests::mcp_pre_request_hook_reads_headers_and_upgrades_caller
+        PASS [   0.009s] (671/735) bitrouter-sdk mcp::tests::mcp_pipeline_routes_and_executes
+        PASS [   0.009s] (672/735) bitrouter-sdk mcp::tests::mcp_pre_request_deny_stops_pipeline
+        PASS [   0.009s] (673/735) bitrouter-sdk mcp::tests::mcp_unknown_server_is_404
+        PASS [   0.010s] (674/735) bitrouter-sdk mcp::tests::mcp_pre_request_hook_denies_when_header_missing
+        PASS [   0.012s] (675/735) bitrouter-sdk mcp::skills::tests::unsafe_gateway_labels_are_rejected
+        PASS [   0.008s] (676/735) bitrouter-sdk mcp::transport::tests::aggregate_and_tool_prefix_defaults_when_omitted
+        PASS [   0.008s] (677/735) bitrouter-sdk mcp::transport::tests::aggregate_opt_out_round_trips
+        PASS [   0.007s] (678/735) bitrouter-sdk mcp::transport::tests::http_transport_round_trips_through_serde
+        PASS [   0.009s] (679/735) bitrouter-sdk mcp::transport::tests::validate_accepts_https_and_loopback_mcp_url
+        PASS [   0.007s] (680/735) bitrouter-sdk mcp::transport::tests::validate_rejects_empty_name
+        PASS [   0.006s] (681/735) bitrouter-sdk mcp::transport::tests::validate_rejects_empty_stdio_command
+        PASS [   0.009s] (682/735) bitrouter-sdk mcp::transport::tests::validate_rejects_empty_http_url
+        PASS [   0.011s] (683/735) bitrouter-sdk mcp::transport::tests::validate_accepts_well_formed_http_and_stdio
+        PASS [   0.013s] (684/735) bitrouter-sdk mcp::transport::tests::stdio_transport_round_trips_through_serde
+        PASS [   0.009s] (685/735) bitrouter-sdk mcp::transport::tests::validate_rejects_reserved_sse_name
+        PASS [   0.010s] (686/735) bitrouter-sdk mcp::transport::tests::validate_rejects_slash_in_name
+        PASS [   0.009s] (687/735) bitrouter-sdk mcp::transport::tests::validate_rejects_ssrf_http_url
+        PASS [   0.007s] (688/735) bitrouter-sdk observe::schema::tests::no_span_declares_the_same_key_twice
+        PASS [   0.008s] (689/735) bitrouter-sdk observe::schema::tests::auxiliary_spans_declare_no_genai_attribute
+        PASS [   0.008s] (690/735) bitrouter-sdk observe::schema::tests::reserved_region_covers_the_vocabulary_and_leaves_the_hatch_open
+        PASS [   0.010s] (691/735) bitrouter-sdk observe::schema::tests::every_declared_span_resolves_to_itself
+        PASS [   0.010s] (692/735) bitrouter-sdk observe::schema::tests::the_committed_artifact_matches_the_declaration
+        PASS [   0.009s] (693/735) bitrouter-sdk server::tests::graceful_shutdown_waits_for_required_drain_recovery_after_server_stops
+        PASS [   0.012s] (694/735) bitrouter-sdk observe::schema::tests::the_declaration_renders
+        PASS [   0.009s] (695/735) bitrouter-sdk server::tests::inbound_protocol_hint_is_added_for_prompt_transforms_and_observers
+        PASS [   0.011s] (696/735) bitrouter-sdk server::tests::http_ingress_preserves_model_before_prompt_transforms
+        PASS [   0.008s] (697/735) bitrouter-sdk server::tests::mcp_midstream_upstream_diagnostics_are_not_exposed
+        PASS [   0.012s] (698/735) bitrouter-sdk server::tests::ingress_conversion_refusals_are_http_400_before_any_executor_call
+        PASS [   0.009s] (699/735) bitrouter-sdk server::tests::mcp_parameter_header_annotations_must_be_reachable_and_unique
+        PASS [   0.092s] (700/735) bitrouter-sdk mcp::caching_executor::tests::upstream_ttl_hint_is_honoured
+        PASS [   0.009s] (701/735) bitrouter-sdk server::tests::mcp_parameter_headers_reject_missing_mismatched_and_spurious_values
+        PASS [   0.008s] (702/735) bitrouter-sdk server::tests::mcp_parameter_headers_validate_nested_primitive_arguments
+        PASS [   0.008s] (703/735) bitrouter-sdk server::tests::mcp_preflight_upstream_auth_omits_malformed_challenge
+        PASS [   0.009s] (704/735) bitrouter-sdk server::tests::mcp_preflight_rate_limit_keeps_status_headers_and_safe_message
+        PASS [   0.007s] (705/735) bitrouter-sdk server::tests::mcp_preflight_upstream_auth_preserves_valid_challenges
+        PASS [   0.008s] (706/735) bitrouter-sdk server::tests::mcp_preflight_upstream_diagnostics_are_not_exposed
+        PASS [   0.010s] (707/735) bitrouter-sdk server::tests::payment_required_emits_www_authenticate
+        PASS [   0.010s] (708/735) bitrouter-sdk server::tests::persistent_required_drain_failure_stays_serial_and_pending
+        PASS [   0.010s] (709/735) bitrouter-sdk server::tests::rate_limited_emits_retry_after_when_present
+        PASS [   0.010s] (710/735) bitrouter-sdk server::tests::rate_limited_omits_retry_after_when_unknown
+        PASS [   0.009s] (711/735) bitrouter-sdk server::tests::rejected_native_and_http_turns_do_not_call_provider
+        PASS [   0.008s] (712/735) bitrouter-sdk server::tests::request_id_hint_prefers_existing_capture_header_and_is_preserved
+        PASS [   0.013s] (713/735) bitrouter-sdk server::tests::native_and_http_turns_share_transform_policy_and_settlement
+        PASS [   0.008s] (714/735) bitrouter-sdk server::tests::request_id_hint_inserts_generated_id_when_missing
+        PASS [   0.011s] (715/735) bitrouter-sdk server::tests::responses_rejects_overlong_request_id_before_upstream_for_both_modes
+        PASS [   0.008s] (716/735) bitrouter-sdk server::tests::retired_google_endpoints_never_execute
+        PASS [   0.009s] (717/735) bitrouter-sdk server::tests::streaming_preflight_rate_limit_keeps_http_429
+        PASS [   0.008s] (718/735) bitrouter-sdk server::tests::unauthorized_emits_www_authenticate_bearer
+        PASS [   0.009s] (719/735) bitrouter-sdk server::tests::upstream_bad_request_passthroughs_object_without_invented_metadata
+        PASS [   0.011s] (720/735) bitrouter-sdk server::tests::streaming_preflight_rate_limit_with_server_tools_keeps_http_429
+        PASS [   0.010s] (721/735) bitrouter-sdk server::tests::upstream_diagnostics_are_not_exposed_in_http_errors
+        PASS [   0.011s] (722/735) bitrouter-sdk server::tests::streaming_preflight_upstream_bad_request_keeps_http_400
+        PASS [   0.010s] (723/735) bitrouter-sdk server::tests::upstream_bad_request_passthroughs_string
+        PASS [   0.009s] (724/735) bitrouter-sdk server::tests::upstream_rate_limit_has_wrapped_code_source_and_retry_after
+        PASS [   0.007s] (725/735) bitrouter-sdk url_validator::tests::http_only_allowed_for_localhost
+        PASS [   0.011s] (726/735) bitrouter-sdk server::tests::v1_models_adds_codex_models_field_for_codex_user_agent
+        PASS [   0.010s] (727/735) bitrouter-sdk server::tests::v1_models_keeps_openai_shape_for_generic_clients
+        PASS [   0.007s] (728/735) bitrouter-sdk url_validator::tests::rejects_imds_literal_ip
+        PASS [   0.010s] (729/735) bitrouter-sdk url_validator::tests::allows_https_public
+        PASS [   0.008s] (730/735) bitrouter-sdk url_validator::tests::rejects_non_http_scheme
+        PASS [   0.008s] (731/735) bitrouter-sdk url_validator::tests::rejects_metadata_hostname
+        PASS [   0.010s] (732/735) bitrouter-sdk url_validator::tests::allows_loopback_literal
+        PASS [   0.007s] (733/735) bitrouter-sdk url_validator::tests::rejects_private_ipv4
+        PASS [   0.006s] (734/735) bitrouter-sdk url_validator::tests::rejects_unique_local_ipv6
+        PASS [   0.265s] (735/735) bitrouter-sdk server::tests::external_shutdown_entrypoint_uses_required_pipeline_drain
+────────────
+     Summary [   1.051s] 735 tests run: 735 passed, 2 skipped

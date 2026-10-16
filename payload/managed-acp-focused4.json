@@ -1,0 +1,25 @@
+{
+  "source": "managed-acp-source4.json",
+  "args": [
+    "nextest",
+    "run",
+    "-p",
+    "bitrouter",
+    "-p",
+    "bitrouter-orchestrator",
+    "--all-features",
+    "--lib",
+    "--no-fail-fast",
+    "-E",
+    "test(goal_runtime::tests) | test(supervisor::tests) | test(service::tests::worker) | test(service::tests::generation) | test(thread::executor::tests)"
+  ],
+  "startedAt": "2026-10-16T09:06:05.804Z",
+  "log": "managed-acp-focused4.log",
+  "priorRun": "source3 ran 74 tests: 53 passed and 21 stack overflows. Source4 boxes measured startup and receipt-query boundaries; stack limits unchanged.",
+  "code": 100,
+  "signal": null,
+  "finishedAt": "2026-10-16T09:07:34.536Z",
+  "changed": [],
+  "summary": "     Summary [  34.061s] 74 tests run: 73 passed, 1 failed, 2034 skipped",
+  "passed": false
+}

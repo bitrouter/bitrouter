@@ -1,0 +1,136 @@
+{
+  "source": "acp-continuation-final13-source.json",
+  "scope": "Final complete validation after all focused fixes. Two real ACP capability probes additionally retain failures, reserve global slots and assert typed teardown/phase receipts instead of brittle presentation text. Startup11 passed 10 repetitions before this stricter assertion. Runtime production is unchanged from final4; no timeouts, stack limits, product bounds or actual overlap/business assertions are relaxed. All original failed/interrupted runs remain separate. Phase-marker correction: positive LifecycleBeforeSession implies no session request; its absence is unknown, not evidence that session/new occurred. Existing wire-count and typed teardown assertions remain strict. final12 stopped at that over-strong assertion and never ran the workspace jobs.",
+  "startedAt": "2026-10-16T19:57:18.550Z",
+  "runs": [
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "acp-continuation-final13-typed-startup.log",
+      "startedAt": "2026-10-16T19:57:18.550Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T19:58:28.257Z",
+      "summaries": [
+        "     Summary [   0.660s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "acp-continuation-final13-workspace.log",
+      "startedAt": "2026-10-16T19:58:28.257Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:13:45.419Z",
+      "summaries": [
+        "     Summary [ 916.123s] 4757 tests run: 4757 passed (11 slow, 4 leaky), 24 skipped"
+      ],
+      "leaks": [
+        "        LEAK [   2.277s] ( 766/4757) bitrouter goal_runtime::tests::threads::pending_native_and_acp_dispatch_refuses_changed_selected_mcp_configuration",
+        "        LEAK [   4.476s] ( 767/4757) bitrouter goal_runtime::tests::threads::saved_acp_intent_without_any_thread_admission_uses_its_original_action",
+        "        LEAK [   5.294s] ( 768/4757) bitrouter goal_runtime::tests::workflow_edits::requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a_pause",
+        "        LEAK [  17.066s] ( 775/4757) bitrouter goal_runtime::tests::workflow_edits::active_branch_edit_preserves_independent_run_and_renews_pending_permission"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "acp-continuation-final13-clippy.log",
+      "startedAt": "2026-10-16T20:13:45.420Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:14:30.736Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "acp-continuation-final13-fmt.log",
+      "startedAt": "2026-10-16T20:14:30.737Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:14:53.513Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "acp-continuation-final13-doctest.log",
+      "startedAt": "2026-10-16T20:14:53.513Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:15:03.420Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ],
+      "log": "acp-continuation-final13-registry.log",
+      "startedAt": "2026-10-16T20:15:03.420Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:15:04.697Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T20:15:04.862Z",
+  "changed": [],
+  "passed": true
+}

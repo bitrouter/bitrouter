@@ -1,0 +1,69 @@
+{
+  "head": "9c5a0ea135c1cd3730143723e8e9bd58c8f5b58d",
+  "extracts": [
+    {
+      "id": "native-cold-red1",
+      "extracted": "/tmp/native-cold-red1-source-CGDokY",
+      "checked": 2,
+      "tarSha256": "6336faf932c66458e3c3606bb0fad04b402e4586dc0fdab6794a2ebd3737c4b5",
+      "passed": false
+    },
+    {
+      "id": "native-cold-green2",
+      "extracted": "/tmp/native-cold-green2-source-k7ARqv",
+      "checked": 5,
+      "tarSha256": "2d3d46355b9381ac2037c39a9515d311a6fac3a88ac07b5b433c51fba38eb1e3",
+      "passed": false
+    },
+    {
+      "id": "native-cold-green3",
+      "extracted": "/tmp/native-cold-green3-source-KOU5BG",
+      "checked": 5,
+      "tarSha256": "03b74d34fecc155a37eb774c2b42a04aeb4e7cb199fb8542adfd70c373ad6600",
+      "passed": false
+    },
+    {
+      "id": "native-cold-green4",
+      "extracted": "/tmp/native-cold-green4-source-sU5YJM",
+      "checked": 5,
+      "tarSha256": "4f1d3a56d41fce82ea4c1fe53faa7e136543ad7c568ed365e41293366a792a55",
+      "passed": true
+    },
+    {
+      "id": "native-cold-follow5",
+      "extracted": "/tmp/native-cold-follow5-source-fLFgti",
+      "checked": 5,
+      "tarSha256": "7d1fe2bcb6c01e526d4c41c2d02feab7a239b997735ed5caf5a920707b5990d4",
+      "passed": true
+    }
+  ],
+  "sameTestSource": true,
+  "postTestDelta": [
+    ".agents/plugins/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "apps/bitrouter/src/goal_runtime.rs",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/DEVELOPMENT.md",
+    "skills/bitrouter/SKILL.md",
+    "skills/bitrouter/references/cli.md"
+  ],
+  "moduleDelta": "Exact first-line module documentation change only; all other .rs bytes match source4/5.",
+  "finalExtracted": "/tmp/native-cold-final6-3UWGjX",
+  "finalFiles": {
+    "apps/bitrouter/src/goal_runtime/tests/native_recovery.rs": "8123218cfef8687513df9aecd205426f0f150fefc882cac3f8c87014c0a68ad9",
+    ".agents/plugins/marketplace.json": "de7e6e48dd766396c316db94851a7bc445933765e98fa6fa144c5a5d13e32ae0",
+    ".claude-plugin/plugin.json": "815198c230a9b380d40ca990ae947ec852b82e065029706d11adad0f679719a8",
+    ".codex-plugin/plugin.json": "970994c910c227a4bebd9f1b7152a8a96e2b3ebb70861e9bf777fb4ce3d2fd4f",
+    "apps/bitrouter/src/goal_runtime.rs": "d73b7fdd0763e34ee9d15963df5ac857c1ac43d23c575e759c6a44a7a6a8e1a4",
+    "apps/bitrouter/src/goal_runtime/native.rs": "5501cbd2b315c1f071f8b131823445bf3b168ba8fd9f6aca1501425ad6a63804",
+    "apps/bitrouter/src/goal_runtime/tests/threads.rs": "b31b3017823bab7b4f27530e4075e31172e3099ab6c0d5f0c93a1a295b499d6f",
+    "crates/bitrouter-orchestrator/src/service/recovery.rs": "38c01c7d8a3710c4bb2d5b39d4a401494e37b71fffa584350dee3c42136d24d5",
+    "crates/bitrouter-orchestrator/src/service/worker.rs": "5076a94dce0be32110da90ebea1195363e8b596dddf9ece819e11cecf0c946ca",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "b002679a6ebfdbaf531e0eb824dc36b0fef63bcf47c521dc0e8eb7a0faf9f42c",
+    "docs/DEVELOPMENT.md": "e2bc3853701cb72c9c3ad1488258b490a6ba7dceba42003b12327718f7a84252",
+    "skills/bitrouter/SKILL.md": "f3ca6b02a5014a1dd7f354439023bd2954b69b8a1a9adaa2ba5d3c28914e5dde",
+    "skills/bitrouter/references/cli.md": "040655c865b6e175c1af5b07f976e9723824c1eaf78a708ac47e96b42fe4b90f"
+  },
+  "finalTarSha256": "50a6ab914c55c16ddb24b01352ce68b0da90ac156ff77fa2b2444a1e713cc2c3"
+}

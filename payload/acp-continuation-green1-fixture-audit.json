@@ -1,0 +1,59 @@
+{
+  "source": "/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpXNaW6B",
+  "restored": "/tmp/acp-continuation-green1-fixture-audit-GgdDmf",
+  "files": {
+    "captures/2934.ndjson": {
+      "sha256": "1ae9050c8c6a3d4fcc5a6087a138e385b2090b024f0712ed61cd6d624af3ea42",
+      "bytes": 481,
+      "mode": 420
+    },
+    "checkpoint.db": {
+      "sha256": "0a6cc849681d405ea51c91c4a800eb27f138f6883b86807946624a808be77b83",
+      "bytes": 487424,
+      "mode": 384
+    },
+    "controls/private-session.json": {
+      "sha256": "82de9e9a4ca5dfaa5529ee46a8543f273d50fa6da4a283cda8f193a68557398d",
+      "bytes": 66,
+      "mode": 420
+    },
+    "owner.yaml": {
+      "sha256": "755d8d60ff8a436db39a3f0d1e78345c36fa2a9ec8225e5ff041ef6d8cefb92b",
+      "bytes": 850,
+      "mode": 420
+    },
+    "source.db": {
+      "sha256": "86b7d191220af34dd12bfab7095356201b7ce073118b232ed2bd4201a15e1e58",
+      "bytes": 487424,
+      "mode": 420
+    },
+    "supervisor-runs-v1-963ffa61717df60abd4b20f772c83ff55501b48f8a58d3d3c52af2ef60a23577.json": {
+      "sha256": "d67b704fc6f6edf086d66c73cb0fa06952f3c4024ef6d2d8d94867b708dc8ca7",
+      "bytes": 1768,
+      "mode": 420
+    },
+    "supervisor-runs-v1-963ffa61717df60abd4b20f772c83ff55501b48f8a58d3d3c52af2ef60a23577.stopped-observations/135d9a6ff3e796f2256cd03253c3b6421d6a3212ee922a07cc3518fee33aaa1f.blob": {
+      "sha256": "135d9a6ff3e796f2256cd03253c3b6421d6a3212ee922a07cc3518fee33aaa1f",
+      "bytes": 1970,
+      "mode": 384
+    },
+    "workspaces/31650775-496c-4ae2-9bf2-74ad6e48ad85/.bro-workspace-fdf810564d134eb7fec3da398386f5b1cfa46ad1b9c3d2dc1449682d90571beb.json": {
+      "sha256": "429862881194309dabb663029d397574f5bb7ba558578050a105110254c3da41",
+      "bytes": 420,
+      "mode": 384
+    },
+    "workspaces/31650775-496c-4ae2-9bf2-74ad6e48ad85/.bro-workspace-fdf810564d134eb7fec3da398386f5b1cfa46ad1b9c3d2dc1449682d90571beb.lock": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "mode": 420
+    },
+    "workspaces/31650775-496c-4ae2-9bf2-74ad6e48ad85/artifacts/564451d39304db08a8e3e06d48b6201404cedd3cfa8408911d29d70b6b80f3ea.blob": {
+      "sha256": "564451d39304db08a8e3e06d48b6201404cedd3cfa8408911d29d70b6b80f3ea",
+      "bytes": 50,
+      "mode": 384
+    }
+  },
+  "verifiedFiles": 10,
+  "tarSha256": "82acab796c412d6d82be08973e8679a37736204731ae93a1fe476158eb8248db",
+  "scope": "Failed-test filesystem and SQLite only. Not a process image, private ACP state or abrupt-crash recovery proof."
+}
