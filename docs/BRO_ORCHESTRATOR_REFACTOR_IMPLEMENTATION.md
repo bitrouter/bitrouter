@@ -178,7 +178,7 @@ Goal 默认交付经过验证、可 review 的结果即完成；人工验收只�
 | 当前 native 历史 checkpoint | 86 项 Goal runtime 检查、6 项证据检查、归档矩阵 3 次重复、严格全 workspace Clippy 与 fmt |
 | 前一预算 checkpoint | 735 项 SDK 检查、4 项 Goal PTY、编辑器 10 次重复、6 个 doctest（1 ignored）；源码适用性单独核对 |
 
-最终源码结果：**Summary [1172.177s] 4757 tests run: 4757 passed (5 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、栈与产品上限保持原值；native 并行交付测试将原单个 45 秒等待拆为 worker handoff 与根验收两个各 45 秒的阶段，总允许等待因此增加。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
+最终源码结果：**Summary [1176.131s] 4757 tests run: 4757 passed (5 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、栈与产品上限保持原值；native 并行交付测试将原单个 45 秒等待拆为 worker handoff 与根验收两个各 45 秒的阶段，总允许等待因此增加。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
 
 必要的 Rust fixtures、输入评测案例与测试驱动保留在仓库。执行与测试夹具不要求 Python。常用本地入口：
 
@@ -198,9 +198,9 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
 
 Linux 还证明三个 worker 已完成但根验收未结束时，总 45 秒的测试等待偏短；现在分别等待交接与根验收，每阶段仍为 45 秒，整条测试的允许时间增加。实际并行/隔离/依赖与验收断言均保留，产品预算不变。
 
-本地 full final31 的 help 用例报告一次输出 LEAK，原记录保留；随后同源码以两个外层测试槽运行完整回归，工作流内部并行与检测器保持原值，help 另作三次复核。完整回归、严格检查与原始 CI 失败分别保存在 `CI_PORTABILITY_INDEX.md` 及 `ci-portability-final36`。
+先前源码的 full final31 在 help 用例报告一次输出 LEAK；同源码、两个外层测试槽的 final36 全量通过且未报告 LEAK。两轮均保留，未声称已证明旧管道报告的原因。当前最终源码由 `linux-pty-final62` 重新验证，工作流内部并行与严格检测器保持原值。
 
-最终覆盖核对发现上游 Linux 清单只选择 36 个集成测试目标中的 26 个。本轮增加 `native-goals` 分片运行其余 10 个，涵盖 Goals、Goal TUI 和相关 native/ACP 接口；新分片仅串行编译以限制链接内存，保留原测试并发与零自动重试。Rust、夹具、Cargo 与 nextest 配置均与 final36 相同；这项 CI 选择变化单独记在最终摘要，不能称全部仓库输入完全未变。新增选择由最终提交的 hosted CI 验证。
+Linux 清单现覆盖全部 36 个集成目标，新增 native-goals 分片运行此前遗漏的 10 个，串行编译且不自动重试。首次运行暴露 Goal PTY 夹具的 shell 后台输入问题：部分 shell 在处理显式重定向前把后台 stdin 设为 /dev/null，`<&0` 不能保住原终端。夹具现在先保存 FD3，再从它连接 BRO 的 stdin，并在父子进程关闭备用描述符；BRO 仍要求真实终端，测试断言和等待界限不变。当前源码的四个 Goal PTY 用例与全 workspace 在本机通过；扩展后的 Linux 和其他平台结果另看最终 CI。
 
 ## 8 阶段结论与后续边界
 
