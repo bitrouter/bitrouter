@@ -142,6 +142,20 @@ pub struct BuildMetadata {
 }
 
 impl BuildMetadata {
+    /// Package the same identity when a cross-compiled executable cannot run on
+    /// the build host. The application contract test checks this representation
+    /// against the compiled typed expression, including optional field presence.
+    pub fn artifact_json(&self, handoff_build_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "version": self.version,
+            "source_revision": self.source_revision,
+            "target": self.target,
+            "features": self.selection.features,
+            "profile": self.selection.profile.to_ascii_lowercase(),
+            "handoff_build_id": handoff_build_id,
+        })
+    }
+
     /// Extend the existing migration/handoff source hash, never replace it.
     pub fn extend_handoff_hash(&self, hash: &mut Sha256) -> Result<(), Box<dyn Error>> {
         // JSON supplies unambiguous field/array boundaries and distinguishes

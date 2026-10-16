@@ -99,6 +99,11 @@ npm install -g bitrouter
 cargo install bitrouter
 ```
 
+These installers select the full product. Gateway-only release archives keep
+the same `bro` executable and run as an independent model service. See
+[distribution profiles](docs/DISTRIBUTION.md) for archive verification,
+configuration and profile-preserving updates.
+
 ## Quick start
 
 `bro code` (aka. BitRouter Orchestrator) is BitRouter's CLI workspace for coding-agent conversations. On the

@@ -47,7 +47,9 @@ suite independently of implementation edits. That frozen run completed:
 to obtain this result; skips are the baseline configuration's existing skips.
 
 A baseline executable is retained outside the source worktree for later
-process/performance comparisons. The initial build is 322,416,544 bytes with
+process/performance comparisons at `/tmp/bitrouter-p0-evidence/baseline/bro`.
+The retained bytes were rehashed on 2026-10-16 and still match this record.
+The initial build is 322,416,544 bytes with
 SHA-256 `7336ae5ab9e36fd4af5e4fc78766ac0ad914f04b6d639ee3c6b9ec913cfccf6b`.
 This is a debug-symbol-free development build, not a release-size claim.
 The observation artifact hash is
@@ -74,7 +76,7 @@ on the resulting implementation.
 | Gate | State |
 | --- | --- |
 | A01 Package and module ownership | Pending |
-| A02 Lightweight AI public contract boundary | Pending |
+| A02 Lightweight AI public contract boundary | Pending; two semantic ownership gaps recorded in the residual AI source audit below |
 | A03 SDK client dependency boundary | Pending |
 | A04 Independent official gateway process | Pending |
 | A05 Feature dependency closure | Pending |
@@ -2581,3 +2583,132 @@ hosted cross-platform execution remains separate evidence. Logs use
 `/tmp/bitrouter-p0-artifact-*`. All final A01–A16 gates remain open pending the
 complete candidate, historical transitions, packaging/independent consumer,
 performance evidence and final review.
+
+## P0 6 Profiled archives and independent SDK consumer (2026-10-16)
+
+Stage base: `91e5fdd`. The build script now writes `artifact.json` alongside its
+typed identity, with contract tests comparing both representations. The
+contributor helper's `package` command builds a selected gateway/full profile
+and reads the exact executable and OUT_DIR from Cargo JSON messages. Each
+invocation owns its temporary Cargo target directory through publication;
+another Cargo build cannot replace the selected executable while it is copied.
+The helper stages a profile-specific tar.gz/ZIP, manifest, binary hash/size and
+archive checksum, and refuses to overwrite an existing output directory.
+
+Gateway archives are attached to the existing cargo-dist release through its
+supported local-artifacts hook. The generated release workflow waits for that
+job before publishing. Existing full-product installers remain cargo-dist-owned.
+The reusable gateway workflow targets the same six release platforms, verifies
+and extracts the archive, and requires the independent process scenario before
+upload. Output is outside Cargo's cached target directory, and Windows ZIP
+extraction explicitly uses PowerShell. PR runs use development archives; release
+runs select the distribution profile. Hosted execution is not yet evidence.
+
+The SDK consumer is a separate Cargo workspace with its own lockfile and no
+application dependency. It receives only inference/control endpoints and their
+separate credentials, runs in another empty directory, and performs all service
+calls through the SDK. The Rust test host starts the unpacked gateway, verifies
+its executed identity and actual hash/size against the package manifest, and
+uses a private configuration, database, credentials and mock upstream. It
+exercises generation/streaming for Chat, Messages and Responses, predicate
+Decisions, discovery, public errors, credential separation and an interrupted
+upstream stream. Exactly eight upstream calls remain after graceful shutdown;
+discovery and rejected requests make none. This is not an OS sandbox or proof
+that client disconnect cancels provider execution. Owned children are reaped on
+failure and normal shutdown; the user's resident daemon is not addressed.
+
+Independent source review found Windows GNU tar/ZIP selection, a restored cached
+output directory, and a post-Cargo race over a shared executable path. All three
+were repaired; focused repair review found no remaining actionable issue. The
+manifest-to-executable comparison additionally checks the actual packaged bytes.
+
+Validated locally on macOS arm64:
+
+- All **60 helper tests** passed (0.37s), including 11 new packaging tests for
+  archive contents/modes, known-vector hashes, profile/identity checks, Cargo
+  output selection and preservation/cleanup on failures. The initial compile
+  exposed a preexisting root-path test caller needing the new `Result` and
+  ZIP reader API changes. Both were repaired. The registry rejected ZIP 8.6 as
+  yanked; the helper now uses available ZIP 9.0.3, whose declared MSRV is 1.88.
+- The separately built SDK consumer compiled and its normal/build dependency
+  closure contained no application, server, ORM, terminal, ACP or OTel runtime.
+  An unused fixture import was removed; the final build completed in 1.20s.
+- Minimum metadata tests passed **11/11** (0.59s); all-feature metadata tests
+  passed **11/11** (0.54s), including equality with generated `artifact.json`.
+- The original packaged-process run passed in 1.58s. After the review repairs,
+  a fresh private build, checksum verification and extraction, the final actual
+  packaged-process test passed **1/1** in 1.91s with no ignored selected test.
+- Strict Rust 1.97 Clippy passed for the helper/all-targets (final 1.64s),
+  independent consumer (26.11s), and minimum application/all-targets (40.22s).
+- Workspace and nested-consumer formatting, patch whitespace, workflow YAML,
+  release-target agreement, and pinned cargo-dist 0.31 generation checks passed.
+  The generated plan confirms the reusable workflow's `app_name` selector.
+
+Commands and output are recorded in `/tmp/bitrouter-p0-package-*`. Source and
+manifests were fixed during each build/test; repairs were made only after the
+affected processes finished. The native full-product cargo-dist distribution
+build completed in 11m05s. Its archive checksum passed, and the extracted
+executable reports `full`, the eight default capabilities, the expected target
+and revision. That executable is 120,366,304 bytes with SHA-256
+`52ded2b10459874e9551a2fa70c3942ef1bb8f779668dbc0840f455229dcd1da`.
+The optimized gateway package build also completed (6m51s), its archive checksum
+passed, and the extracted candidate passed the same actual SDK process test.
+The already compiled minimum-profile test executable was invoked directly to
+avoid replacing `target/debug/bro` while the all-feature workspace suite runs.
+The complete locked all-feature workspace nextest run completed successfully:
+**4664 passed, 42 skipped**, including six slow tests, in **802.970s**. This
+stage result does not exercise the skipped scenarios or close the remaining
+final-candidate gates. Its first command was rejected before building because
+this installed version aliases `--jobs` to test threads; the successful command
+uses `--build-jobs 2` and `--test-threads 2` separately.
+
+The final retained **development** gateway candidate identifies revision
+`91e5fdd7c46ded04356ece0dff805beed9a2acdd`, target `aarch64-apple-darwin`, profile
+`gateway` and no optional features. It was built from this stage's working tree,
+not from a clean release commit. Its executable is 116,122,240 bytes with SHA-256
+`d1430146f235029e20fb6eb1f93d2f9b6591121e6ef0e3c11834001e92dfff55`;
+the archive SHA-256 is
+`57b93215e165076dccb52dbee8f86a54e45c2fc3f4df5d640b74b1aea95143de`.
+These sizes are provenance, not a controlled performance comparison.
+
+The optimized `dist` gateway executable is 45,230,896 bytes with SHA-256
+`92ee026b9d7e549ebab628c44b9ae69cfaa27d3d68cfab9704fa9570c4cb2d15`;
+the archive SHA-256 is
+`7158fa44d8a0abab910b5c972e5a5d0f2bef0d59b587ef1fb57594a7740cdc59`.
+Its independent SDK process acceptance passed **1/1** in **0.80s**. These bytes
+also identify the packaging-stage working tree above, not a later clean commit.
+
+All final A01–A16 gates remain open. Historical payload/profile transitions,
+controlled performance measurements, final inventory reconciliation, complete
+candidate suites and independent final review still remain. Nothing in this
+stage claims a published release or native gateway multi-instance support.
+
+## Residual AI source audit (2026-10-16)
+
+A read-only reconciliation covered all 12 baseline AI and 16 baseline SDK root
+modules against source at `91e5fdd7c46ded04356ece0dff805beed9a2acdd`.
+The inspected AI, SDK and gateway source trees matched that revision. All 28
+rows have identifiable destinations, including the split pipeline descendants;
+this establishes source ownership coverage for those rows, not behavioral parity
+or final acceptance. The plan's ownership namespaces need not match every
+physical directory: executor, settlement and request-check execution currently
+live under application `gateway/pipeline`.
+
+Two A02 gaps were independently reported and confirmed by direct source and
+caller inspection:
+
+| Remaining public AI behavior | Required ownership correction and follow-up evidence |
+| --- | --- |
+| `ToolResultOutput::to_provider_string` and `GenerationParams::{extras_for_protocol, extra_value_for_protocol}` in `crates/bitrouter-ai/src/types.rs` | Move provider rendering and outbound protocol/default selection to application gateway helpers. Preserve existing Chat, Messages and Responses callers and conversion fixtures. Review `from_untyped_value` during the same extraction; retain shared representations and intrinsic helpers only. No SDK or matcher caller of the three reported conversion helpers was found. |
+| `Limits::within` and the host-policy part of `Capabilities::negotiate` in `crates/bitrouter-ai/src/core/protocol.rs` | Move admission against host policy to application-owned helpers shared by core admission and checkpoint validation as needed. Preserve existing errors and offline validation behavior. Keep wire data and intrinsic field validation in AI; the helper must not require a live scheduler merely to validate a stored checkpoint. |
+
+A small dependency graph does not resolve either semantic boundary violation.
+A02 remains open until the changes, caller migration and appropriate regression
+checks are complete. The inspected SDK source showed no actionable A03 ownership
+leak; that limited source result does not close A03 or replace its independent
+consumer and behavior evidence.
+
+This follow-up records findings only. No source changes, builds, tests, commits
+or new implementation acceptance claims were made. The separate review of the
+planning document found no inventory, feature-graph or milestone-boundary defect;
+the findings above concern implementation conformance to that plan.

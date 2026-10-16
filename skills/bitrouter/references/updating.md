@@ -34,6 +34,12 @@ manual path even when they share its installation directory.
   Enabling only `core` is a custom profile. Cargo installs into its
   configured bin directory, so select that binary explicitly if the current
   installation is elsewhere.
+- A gateway release archive is also a manual update path: download the archive
+  and checksum for the same release and target, verify and extract it, then
+  inspect `bro build-info` before switching the service executable. Require
+  `profile: "gateway"` and an empty feature list. `bro update` does not download
+  these archives automatically. Keep active-work and explicit restart checks;
+  never substitute a full-product archive for a missing gateway asset.
 - For these source installs, a semver `--tag` (optionally prefixed with `v`)
   becomes an exact Cargo `--version` requirement. Other tags select the official
   Git repository with a shell-quoted `--tag`. The manual reason names the

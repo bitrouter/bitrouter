@@ -221,6 +221,19 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
         replay.profile.to_ascii_lowercase(),
         identity.profile.as_str()
     );
+    let metadata = BuildMetadata {
+        version: identity.version.clone(),
+        source_revision: identity.source_revision.clone(),
+        target: identity.target.clone(),
+        selection: replay,
+    };
+    assert_eq!(
+        metadata.artifact_json(&identity.handoff_build_id),
+        serde_json::to_value(&identity)?
+    );
+    let packaged: bitrouter_ai::artifact::ArtifactIdentity =
+        serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/artifact.json")))?;
+    assert_eq!(packaged, identity);
     Ok(())
 }
 

@@ -1,0 +1,112 @@
+name: Gateway artifacts
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+      cargo-profile:
+        description: Use dev for pull-request acceptance, dist for release archives.
+        default: dist
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    if: contains(fromJson(inputs.plan).releases.*.app_name, 'bitrouter')
+    name: gateway (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            container: ubuntu:22.04
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+      PACKAGE_TARGET: ${{ matrix.target }}
+      PACKAGE_PROFILE: ${{ inputs.cargo-profile }}
+      PACKAGE_OUTPUT: ${{ runner.temp }}/gateway-artifacts
+    steps:
+      - name: Prepare native Linux arm builder
+        if: matrix.container
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates curl git build-essential pkg-config
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+      - name: Install musl linker
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build and package minimum gateway
+        shell: bash
+        run: |
+          cargo run --locked -p dist-helper -- package --profile gateway \
+            --target "$PACKAGE_TARGET" --cargo-profile "$PACKAGE_PROFILE" \
+            --out "$PACKAGE_OUTPUT"
+      - name: Verify archive and unpack candidate
+        shell: bash
+        run: |
+          cd "$PACKAGE_OUTPUT"
+          if command -v sha256sum >/dev/null; then
+            sha256sum -c *.sha256
+          else
+            shasum -a 256 -c *.sha256
+          fi
+          mkdir unpacked
+          if [[ "$PACKAGE_TARGET" == *windows* ]]; then
+            powershell.exe -NoProfile -NonInteractive -Command \
+              'Expand-Archive -LiteralPath ("bitrouter-gateway-" + $env:PACKAGE_TARGET + ".zip") -DestinationPath unpacked'
+          else
+            tar -xzf "bitrouter-gateway-$PACKAGE_TARGET.tar.gz" -C unpacked
+          fi
+      - name: Build independent SDK consumer and run packaged acceptance
+        shell: bash
+        run: |
+          consumer_manifest=apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml
+          cargo build --locked --manifest-path "$consumer_manifest" --target-dir target/sdk-consumer
+          suffix=""
+          if [[ "$PACKAGE_TARGET" == *windows* ]]; then suffix=".exe"; fi
+          gateway_binary="$PACKAGE_OUTPUT/unpacked/bitrouter-gateway-$PACKAGE_TARGET/bro$suffix"
+          consumer_binary="$PWD/target/sdk-consumer/debug/bitrouter-packaged-sdk-consumer$suffix"
+          if [[ "$PACKAGE_TARGET" == *windows* ]]; then
+            gateway_binary="$(cygpath -m "$gateway_binary")"
+            consumer_binary="$(cygpath -m "$consumer_binary")"
+          fi
+          export BITROUTER_TEST_GATEWAY_BINARY="$gateway_binary"
+          export BITROUTER_TEST_SDK_CONSUMER_BINARY="$consumer_binary"
+          cargo test --locked -p bitrouter --no-default-features --test packaged_gateway \
+            packaged_gateway_independent_sdk_consumer -- --ignored --exact --nocapture
+      - name: Upload verified gateway archives
+        uses: actions/upload-artifact@v6
+        with:
+          name: artifacts-gateway-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/gateway-artifacts/*.tar.gz
+            ${{ runner.temp }}/gateway-artifacts/*.zip
+            ${{ runner.temp }}/gateway-artifacts/*.sha256

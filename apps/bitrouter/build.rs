@@ -93,6 +93,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         dest.join("artifact_generated.rs"),
         metadata.render(&handoff_build_id),
     )?;
+    std::fs::write(
+        dest.join("artifact.json"),
+        serde_json::to_vec_pretty(&metadata.artifact_json(&handoff_build_id))?,
+    )?;
     // The package-local snapshot is generated together with `dist/registry`.
     // Keeping the build input inside the crate is required by `cargo package`,
     // whose verification build cannot read files outside the packaged crate.
