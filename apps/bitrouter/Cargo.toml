@@ -244,6 +244,14 @@ required-features = ["core"]
 name = "checkpoint_ts_simulation"
 required-features = ["core"]
 
+[[example]]
+name = "sdk_manifest_fixture"
+required-features = ["core"]
+
+[[example]]
+name = "legacy_guardrails"
+required-features = ["guardrails"]
+
 [[test]]
 name = "harness_mcp_check"
 required-features = ["mcp"]

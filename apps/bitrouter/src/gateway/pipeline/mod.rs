@@ -83,6 +83,7 @@ pub mod native_report;
 mod native_stream;
 pub mod native_work;
 pub mod operations;
+pub(crate) mod provider_admission;
 pub mod request_checks;
 pub mod routing;
 #[cfg(feature = "server-tools")]

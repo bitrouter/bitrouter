@@ -489,12 +489,15 @@ it is idle; finish its work and run `bro restart` explicitly.
 Foreground `bro serve` remains under its external supervisor; the CLI does not
 take it over automatically.
 
-The standalone BRO runtime holds a daemon admission for its endpoint lifetime.
-Until native requests, queue runners and recovery participate in an atomic
-handoff, even an idle BRO daemon defers automatic replacement. Finish its work
-and use the explicit `bro restart` when changing binaries.
+Every `core` build holds daemon admission for its managed runtime's lifetime,
+including core-only sessions executed by an external harness. Channel work,
+pending checkpoint acknowledgements, native requests and queue runners do not
+yet participate in an atomic handoff, so even an apparently idle core resident
+defers automatic replacement. Gateway and harness-only builds retain tracked
+idle handoff. Finish managed work and use the explicit `bro restart` when
+changing binaries.
 That exception applies to the same compiled distribution. A cross-profile
-restart still requires atomic idle evidence and is refused by the native
+restart still requires atomic idle evidence and is refused by the managed
 lifetime guard; plan an explicit stop after finishing work before starting the
 other profile. No command silently removes that guard to change profiles.
 

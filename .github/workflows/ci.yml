@@ -166,7 +166,7 @@ jobs:
             targets: >-
               --test acp --test acp_checkpoints --test native_acp --test cloud_api --test daemon --test e2e
               --test full_stack --test configuration_state --test extension_host --test subscription --test feature_ingress --test database_backends --test database_capture
-              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration --test harness_sdk --test artifact_build_metadata
+              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration --test harness_sdk --test artifact_build_metadata --test host_lifecycle
           - shard: gateway
             retries: "0"
             targets: >-
@@ -307,6 +307,16 @@ jobs:
           if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
             echo '::error::default bro links the optional matcher'; exit 1
           fi
+      - name: preserve prehashed manifests in an independent SDK consumer
+        run: |
+          mkdir -p target/sdk-manifest-fidelity
+          cargo run --locked -p bitrouter --no-default-features --features core \
+            --example sdk_manifest_fixture > target/sdk-manifest-fidelity/manifest.json
+          export BITROUTER_TEST_MANIFEST_FIXTURE="$PWD/target/sdk-manifest-fidelity/manifest.json"
+          cargo test --locked \
+            --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
+            --target-dir target/sdk-consumer --test manifest_fidelity -- \
+            --ignored --exact server_prehashed_manifest_survives_isolated_bind_and_restore
 
   application-features:
     name: application-features (${{ matrix.features }})
@@ -414,6 +424,14 @@ jobs:
         run: >-
           cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --test telemetry_disabled --jobs 2 -- --test-threads=2
+
+      - name: verify host handoff and shutdown draining
+        if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'core,harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test host_lifecycle --jobs 2 -- --test-threads=2
 
       - uses: taiki-e/install-action@nextest
         if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness'
@@ -666,7 +684,7 @@ jobs:
                 'pub struct bitrouter_ai::core::responses::CreateRequest'
                 'pub struct bitrouter_ai::core::responses::FunctionOutput'
               )
-              forbidden='extension::request_check::Registration|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+              forbidden='extension::request_check::Registration|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else
               sentinels=(
                 'pub struct bitrouter_sdk::gateway::GatewayClient'

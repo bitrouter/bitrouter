@@ -26,6 +26,7 @@ use crate::gateway::pipeline::hooks::{
 };
 use crate::gateway::pipeline::native::{NativeExecutionControl, NativeModelSelection, NativePlan};
 use crate::gateway::pipeline::operations::{HookRegistration, applicable};
+use crate::gateway::pipeline::provider_admission::requires_input_count;
 use crate::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
     RequestCheckBinding, RequestCheckerRunner, content_fragments, decision_content_fragments,
@@ -959,7 +960,7 @@ impl Pipeline {
                 router: ctx.router_identity().cloned(),
             };
             for (index, target) in chain.iter().enumerate() {
-                if !routes[index].requires_input_count() {
+                if !requires_input_count(&routes[index]) {
                     continue;
                 }
                 let route_index = u32::try_from(index)

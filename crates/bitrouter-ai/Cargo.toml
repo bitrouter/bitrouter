@@ -21,6 +21,8 @@ serde.workspace = true
 # Managed pricing evidence must retain its finite f64 bits in SDK-only builds,
 # independently of the application's feature unification.
 # https://github.com/serde-rs/json/blob/v1.0.150/tests/test.rs
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+# Prehashed manifests also require nested JSON object order to survive a public
+# contract round trip without the application's preserve_order feature.
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 thiserror.workspace = true
 schemars = { workspace = true, optional = true }

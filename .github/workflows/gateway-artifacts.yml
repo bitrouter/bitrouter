@@ -88,6 +88,7 @@ jobs:
         shell: bash
         run: |
           consumer_manifest=apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml
+          cargo test --locked --manifest-path "$consumer_manifest" --target-dir target/sdk-consumer
           cargo build --locked --manifest-path "$consumer_manifest" --target-dir target/sdk-consumer
           suffix=""
           if [[ "$PACKAGE_TARGET" == *windows* ]]; then suffix=".exe"; fi

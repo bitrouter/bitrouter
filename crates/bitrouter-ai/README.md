@@ -31,8 +31,10 @@ reports. Intrinsic grammar and declared-limit checks accompany the data;
 authenticated ownership checks, checkpoint codecs and durable commit admission
 remain application responsibilities. Parsing an ACK does not prove persistence,
 and decoding an opaque checkpoint envelope does not verify its payload hash.
-JSON decoding preserves finite pricing values independently of application
-feature unification.
+JSON decoding preserves finite pricing values and object insertion order
+independently of application feature unification. Nested tool schemas can be
+part of an existing manifest digest; an SDK-only decode/encode must not reorder
+their object members while retaining the committed digest.
 
 `harness` contains the existing Thread HTTP v2 requests, response envelopes,
 runtime capability/ownership views, Thread/Turn observations and their nested

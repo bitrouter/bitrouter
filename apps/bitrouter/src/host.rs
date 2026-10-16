@@ -61,20 +61,29 @@ where
     match trigger {
         Trigger::Http(http_result) => {
             let _ = control_shutdown.send(());
-            control.await?;
-            http_result
+            combine_shutdown_results(http_result, control.await)
         }
         Trigger::Control(control_result) => {
             let _ = shutdown.send(());
-            http.await?;
-            control_result
+            combine_shutdown_results(control_result, http.await)
         }
         Trigger::Term => {
             let _ = control_shutdown.send(());
-            control.await?;
+            let control_result = control.await;
             let _ = shutdown.send(());
-            http.await
+            combine_shutdown_results(control_result, http.await)
         }
+    }
+}
+
+/// Combine results only after every shutdown future has been driven to completion.
+fn combine_shutdown_results(primary: Result<()>, secondary: Result<()>) -> Result<()> {
+    match (primary, secondary) {
+        (Err(primary), Err(secondary)) => {
+            Err(primary.context(format!("additional shutdown failure: {secondary:#}")))
+        }
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
     }
 }
 
@@ -352,15 +361,13 @@ async fn serve_with_options(
         let http_app = app.clone();
         let handoff_gate = crate::daemon_handoff::HandoffGate::default();
         let http_handoff_gate = handoff_gate.clone();
-        // Native requests and queue workers do not yet participate in an atomic
-        // handoff gate. Hold admission for the endpoint's whole lifetime so an
-        // idle ACP/inference projection cannot authorize stopping BRO work.
-        #[cfg(feature = "harness")]
-        let native_admission = if cfg!(feature = "core") {
-            Some(handoff_gate.admit().ok_or_else(|| anyhow::anyhow!("native runtime admission is closed"))?)
-        } else {
-            None
-        };
+        // Managed channels, pending checkpoint ACKs and native queue workers can
+        // outlive HTTP response bodies. Until their ownership participates in
+        // atomic handoff admission, retain the existing conservative lifetime
+        // guard in every core profile, including externally executed sessions.
+        #[cfg(feature = "core")]
+        let managed_admission = handoff_gate.admit()
+            .ok_or_else(|| anyhow::anyhow!("managed runtime admission is closed"))?;
         // The ingress SERVER span is created from the exporter's own tracer — the
         // SDK installs no global `TracerProvider`, so there is nothing to reach
         // for implicitly. With OTel disabled there is no ingress span at all,
@@ -373,6 +380,8 @@ async fn serve_with_options(
             .map(crate::telemetry::http_layer::router_wrapper);
         let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
         let http = async move {
+            #[cfg(feature = "core")]
+            let _managed_admission = managed_admission;
             #[cfg(feature = "core")]
             let managed_shutdown = managed_core.clone();
             let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -443,7 +452,6 @@ async fn serve_with_options(
             let task = async move {
                 #[cfg(feature = "harness")]
                 {
-                    let _native_admission = native_admission;
                     if cfg!(feature = "core") && let Err(error) = task_service.initialize_execution().await {
                         tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
                     }
@@ -496,18 +504,16 @@ async fn serve_with_options(
                     managed_shutdown.shutdown().await;
                     let _ = remote_shutdown_tx.send(());
                     task_shutdown.cancel();
-                    remote.await?;
-                    task.await?;
-                    result
+                    let (remote_result, task_result) = tokio::join!(remote, task);
+                    combine_shutdown_results(result, combine_shutdown_results(remote_result, task_result))
                 }
                 result = &mut remote => {
                     #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     task_shutdown.cancel();
-                    inference.await?;
-                    task.await?;
-                    result
+                    let (inference_result, task_result) = tokio::join!(inference, task);
+                    combine_shutdown_results(result, combine_shutdown_results(inference_result, task_result))
                 }
                 result = &mut task => {
                     #[cfg(feature = "core")]
@@ -515,9 +521,7 @@ async fn serve_with_options(
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
                     let (inference_result, remote_result) = tokio::join!(inference, remote);
-                    inference_result?;
-                    remote_result?;
-                    result
+                    combine_shutdown_results(result, combine_shutdown_results(inference_result, remote_result))
                 }
                 _ = &mut shutdown => {
                     #[cfg(feature = "core")]
@@ -526,9 +530,7 @@ async fn serve_with_options(
                     let _ = remote_shutdown_tx.send(());
                     task_shutdown.cancel();
                     let (inference_result, remote_result, task_result) = tokio::join!(inference, remote, task);
-                    inference_result?;
-                    remote_result?;
-                    task_result
+                    combine_shutdown_results(inference_result, combine_shutdown_results(remote_result, task_result))
                 }
             }
         };
@@ -1160,6 +1162,83 @@ mod tests {
             tokio::task::yield_now().await;
             assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
             supervision.await??;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn control_failure_keeps_http_drain_alive_before_returning_errors() -> anyhow::Result<()>
+    {
+        for control_trigger in [false, true] {
+            for http_failure in [false, true] {
+                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+                let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
+                let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+                let (term_tx, term_rx) = tokio::sync::oneshot::channel();
+                let (draining_tx, draining_rx) = tokio::sync::oneshot::channel();
+                let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+                let http = async move {
+                    shutdown_rx.await.context("HTTP shutdown was abandoned")?;
+                    draining_tx
+                        .send(())
+                        .map_err(|_| anyhow::anyhow!("drain observer disappeared"))?;
+                    finish_rx.await.context("HTTP finalizer was abandoned")?;
+                    if http_failure {
+                        anyhow::bail!("test HTTP finalization failure");
+                    }
+                    Ok(())
+                };
+                let control = async move {
+                    tokio::select! {
+                        result = control_rx => result.context("control trigger disappeared")?,
+                        result = control_shutdown_rx => result.context("control shutdown disappeared")?,
+                    }
+                    anyhow::bail!("test control shutdown failure")
+                };
+                let term = async move {
+                    term_rx.await.context("termination trigger disappeared")?;
+                    Ok(())
+                };
+                let supervision = tokio::spawn(supervise_http_shutdown(
+                    http,
+                    control,
+                    std::future::pending::<anyhow::Result<()>>(),
+                    term,
+                    shutdown_tx,
+                    control_shutdown_tx,
+                ));
+                if control_trigger {
+                    control_tx
+                        .send(())
+                        .map_err(|_| anyhow::anyhow!("control receiver disappeared"))?;
+                } else {
+                    term_tx
+                        .send(())
+                        .map_err(|_| anyhow::anyhow!("termination receiver disappeared"))?;
+                }
+                tokio::time::timeout(std::time::Duration::from_secs(2), draining_rx)
+                    .await
+                    .context("HTTP drain did not start after control failure")?
+                    .context("HTTP drain was dropped after control failure")?;
+                assert!(
+                    !supervision.is_finished(),
+                    "control failure returned before HTTP finalization"
+                );
+                finish_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("HTTP finalization receiver disappeared"))?;
+                let error = tokio::time::timeout(std::time::Duration::from_secs(2), supervision)
+                    .await
+                    .context("shutdown did not finish after HTTP drain")??
+                    .err()
+                    .context("control failure was lost")?;
+                let chain = format!("{error:#}");
+                assert!(chain.contains("test control shutdown failure"), "{chain}");
+                assert_eq!(
+                    chain.contains("test HTTP finalization failure"),
+                    http_failure
+                );
+            }
         }
         Ok(())
     }

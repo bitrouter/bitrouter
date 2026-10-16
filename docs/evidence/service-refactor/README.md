@@ -40,8 +40,9 @@ median of each sample's three readings after warmup, before measured load.
 
 Full-product idle RSS increased by 3.094 MiB (5.05%); minimum idle RSS decreased
 by 31.62%. Full ordinary throughput differed by -0.63%, and full streaming by
-+1.46%. Keep the memory increase visible: this run does not establish its cause,
-an agreed regression budget or absence of a full-product memory regression.
++1.46%. Keep the memory increase visible: this run does not establish its cause
+or absence of a full-product memory regression. The acceptance decision below
+records the subsequent approval of this measured overhead.
 
 Ranges matter. Baseline streaming throughput ranged from 4,806.110 to
 5,514.002 requests/s; candidate full ranged from 5,358.288 to 5,413.167.
@@ -52,5 +53,19 @@ delay and do not activate every optional runtime or telemetry exporter.
 
 The earlier 512-request samples were exploratory and are not the comparison
 reported here. This report provides comparable A16 evidence; final candidate
-validation, normal dependency counts and the performance acceptance decision
-remain separate gates.
+validation and normal dependency counts remain separate gates.
+
+## Accepted overhead and follow-up (2026-10-17)
+
+The recorded full-product idle RSS increase from **61.234 to 64.328 MiB**
+(**3.094 MiB / 5.05%**) is accepted for P0. Eliminating this measured increase is
+not a prerequisite for the implementation PR. Keep it visible in the final
+comparison and retain a follow-up to identify and reduce the additional idle
+memory while preserving the supported full-product behavior.
+
+This decision covers the development-build measurement and workload above; it
+does not establish a general percentage allowance for other metrics, profiles
+or later regressions, and it is not a production-performance result. Re-measure
+the final candidate under comparable conditions and assess any additional
+regression separately. A16 remains open until that comparison and the remaining
+size, normal-dependency and request/stream evidence are reconciled.

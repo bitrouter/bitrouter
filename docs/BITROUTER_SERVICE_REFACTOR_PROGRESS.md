@@ -90,7 +90,7 @@ on the resulting implementation.
 | A13 Extension and legacy guardrail behavior | Pending |
 | A14 Build bootstrap and packaging | Pending |
 | A15 External Rust API migration guidance | Pending |
-| A16 Comparable performance measurements | Pending |
+| A16 Comparable performance measurements | Pending final-candidate comparison; recorded 3.094 MiB / 5.05% full-product idle RSS overhead accepted on 2026-10-17, with follow-up optimization retained |
 
 Known out-of-tree hosts consume the old builder/server, telemetry exporter and
 legacy guardrails adapters. They require an explicit import and process-boundary
@@ -3228,9 +3228,10 @@ and 41.875 MiB for minimum. The full increase is **3.094 MiB / 5.05%** and is
 not hidden by the minimum profile's 31.62% reduction. Ordinary throughput was
 4,154 / 4,128 / 4,256 requests/s respectively; immediate-stream throughput was
 5,326 / 5,404 / 5,487. These are unoptimized local fixture measurements with
-variation, not production throughput or model-generation predictions. No
-numeric regression budget has been retroactively declared passed; A16 still
-needs its final candidate and acceptance decision.
+variation, not production throughput or model-generation predictions. At the
+time of capture, the performance acceptance decision remained open. The
+[2026-10-17 decision](#a16-recorded-overhead-accepted-2026-10-17) accepts this
+specific measured RSS increase; final-candidate evidence remains outstanding.
 
 Validation: three parser/body-limit tests passed; the explicit real-process
 interruption test passed for SIGINT and SIGTERM, requiring the child PID and
@@ -3307,3 +3308,115 @@ These focused results do not substitute for final whole-candidate validation,
 performance acceptance, packaged service evidence or the final independent
 A01–A16 review. The optional skill's `rust_diagnostics` MCP remains unavailable;
 the recorded results are actual Cargo checks, not a claimed MCP VERIFY pass.
+
+## Candidate review and lifecycle regressions (2026-10-16)
+
+The ownership stage committed as `7f29051`. Candidate `f5d314a` merges upstream
+registry update `54c822a` without changing product Rust source. Separate
+production builds retained these immutable macOS arm64 development artifacts:
+
+| Profile | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Full | 316993296 | `c59ef6dd4dc5179a06880fd519a83dddbe4c0cb2abe10a6158512e9034ed09dc` |
+| Gateway | 116032128 | `a5193d5dc5a0e45267c68408b92984711686623bc1d9f3bb5d513b8739c5d386` |
+| Harness | 239610128 | `0eba0a0e18f9994a329231f58735c05197581246c7dc11fbca0cece644e701b3` |
+
+Each reports the exact candidate revision and expected effective features. The
+five real-artifact transition scenarios passed together in 5.76s; minimum
+artifact metadata tests passed 11/11 in 0.42s. Package metadata confirms exactly
+five workspace members, and the six independent AI/SDK/matcher default/all
+normal/build dependency closures passed their runtime-exclusion checks.
+Artifacts are under `/tmp/bitrouter-p0-final-f5d314a`; logs are
+`/tmp/bitrouter-p0-final-profile-transitions.log` and
+`/tmp/bitrouter-p0-final-minimum-metadata.log`. Dependency evidence is under
+`/tmp/bitrouter-p0-final-public-f5d314a`.
+
+Independent whole-candidate source review reconciled all 141 baseline root rows
+and 11 telemetry children. It identified six remaining corrections:
+
+1. Preserve JSON object ordering in standalone public-contract consumers when
+   nested tool schemas already have a committed manifest digest.
+2. Retain status, headers and decoding failure for malformed named SSE errors
+   in gateway, managed Responses and harness observation clients.
+3. Move provider output-ceiling/counting admission decisions from AI into the
+   application, retaining their evidence types in AI.
+4. Supply a compilable legacy global/output guardrails host example in addition
+   to the existing input-only native request-check example.
+5. Apply conservative managed-runtime lifetime handoff admission to core-only
+   hosts, since channel work and checkpoint ACKs outlive the upgrade response.
+6. Drain HTTP and sibling runtime cleanup even when control shutdown fails,
+   retaining both errors if cleanup also fails. This control-error path also
+   existed at the original baseline.
+
+The full nextest command was intentionally interrupted with exit 130 during
+compilation when these findings arrived. It is not a successful full-suite run;
+the subsequent doctest command did not run. A new bounded unit regression on the
+unrepaired host reproduced correction 6: the HTTP drain receiver was dropped
+after the control failure. `/tmp/bitrouter-p0-host-control-red.log` records
+**one expected failure**, not a passing validation.
+
+Corrections and their isolated process/client regressions are in progress.
+The pre-repair artifacts above must not be presented as the final deliverable.
+All final A01–A16 gates, the complete repaired candidate run and PR remain open.
+
+## A16 recorded overhead accepted (2026-10-17)
+
+The user accepted the recorded small full-product idle-memory overhead for P0
+and requested that optimization remain a follow-up. The accepted observation is
+61.234 → 64.328 MiB, an increase of 3.094 MiB / 5.05%, from the
+[2026-10-16 comparison](evidence/service-refactor/README.md#accepted-overhead-and-follow-up-2026-10-17).
+The minimum gateway measured 41.875 MiB, and throughput remained close to the
+baseline within the reported local variation.
+
+The decision removes the need to eliminate this recorded increase before the
+implementation PR. It does not close A16 or authorize an unmeasured additional
+regression: final-candidate size, normal dependencies, idle RSS and bounded
+request/stream results still require reconciliation. Follow-up work will
+attribute and reduce full-product idle memory with equivalent behavior and
+comparable measurements. The raw samples and their provenance remain unchanged.
+
+Only documentation was updated for this decision. Implementation remains paused;
+no new build, runtime test, final-candidate measurement or PR is claimed.
+
+## Resumed P0 correction validation (2026-10-17)
+
+P0 implementation and final validation resumed at the user's request; P1 remains
+excluded. The six findings recorded in the candidate review above are repaired:
+AI preserves manifest object ordering independently of the application; SDK
+stream errors retain HTTP metadata even for malformed named error events;
+provider admission helpers belong to the gateway; the legacy guardrails adapter
+has a runnable custom-host example; core-only hosts retain conservative handoff
+admission; and control-listener failures no longer bypass inference draining or
+required finalization. Shutdown combines errors only after all required cleanup
+has been awaited.
+
+The independent SDK workspace lockfile now records the dependencies required by
+`preserve_order`. CI explicitly runs the otherwise ignored manifest-fidelity test
+against output from the production `HarnessManifestExt` writer and validator.
+The consumer preserves the prehashed tool bytes through bind/restore without
+linking the application or borrowing workspace feature unification.
+
+Validation on source based on `f5d314a`, with Rust/Cargo 1.99.0, incremental
+compilation disabled and development/test debug symbols disabled:
+
+- The formerly failing control-error drain unit test passes **1/1**.
+- Minimum official-host lifecycle passes **1/1**; core-only passes **2/2**,
+  including an unacknowledged checkpoint and conservative handoff rejection.
+- SDK default passes **51 tests including doctests**; all features passes
+  **65 including doctests**, with malformed-error metadata and no-replay checks.
+- The separately generated/validated manifest passes its explicitly selected
+  independent-consumer regression **1/1**.
+- Provider-count admission and uncapped output reservation pass **1/1 each**;
+  legacy guardrails installation/input/output/rule isolation passes **8/8**.
+- The `legacy_guardrails` example builds with only application `guardrails`.
+  Workspace formatting, CI YAML parsing and whitespace checks pass.
+
+The combined log is `/tmp/bitrouter-p0-resume-focused.log` (**131 passed**, including
+doctests and repeated SDK profiles). Apple linker unwind-size and the existing
+`proc-macro-error2` future-compatibility diagnostics remain visible in the log;
+neither is suppressed or represented as a new runtime failure. An independent
+read-only review of the complete correction stage found no actionable code bug.
+This is stage evidence; final full-suite, isolated feature/runtime, package and
+performance evidence still must be collected on the frozen candidate. The
+optional `rust_diagnostics` tool remains unavailable; no MCP VERIFY pass is
+claimed. Repository-required Cargo checks remain the implementation evidence.

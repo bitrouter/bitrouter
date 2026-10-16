@@ -19,16 +19,6 @@ pub struct ModelTokenLimits {
     pub context_window: Option<u64>,
 }
 
-impl ModelTokenLimits {
-    /// A provider that cannot accept a request-level output cap may still fit
-    /// a reservation covering its entire configured model output ceiling.
-    /// Missing or zero metadata never establishes that bound.
-    pub fn output_reservation_covers_model(&self, reservation: u32) -> bool {
-        self.max_output_tokens
-            .is_some_and(|ceiling| ceiling > 0 && ceiling <= u64::from(reservation))
-    }
-}
-
 /// Explicit provider support, never inferred from a compatible generation API.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,18 +85,6 @@ pub struct NativeRoute {
     /// Candidate-local continuation choice; no private handle is serialized.
     #[serde(default)]
     pub continuation: NativeContinuationInput,
-}
-
-impl NativeRoute {
-    /// A configured counter is required only for a locally viable candidate.
-    /// Rejected candidates must carry no count intent or outcome.
-    pub fn requires_input_count(&self) -> bool {
-        self.constraints.input_token_counting.is_some()
-            && !matches!(
-                self.protocol_validation,
-                NativeProtocolValidation::Rejected { .. }
-            )
-    }
 }
 
 /// Protocol feasibility is distinct from catalog capabilities and token counts.

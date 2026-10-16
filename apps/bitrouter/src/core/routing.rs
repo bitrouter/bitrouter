@@ -7,6 +7,7 @@ use crate::storage::checkpoint::snapshot::routing::{
 };
 
 use crate::gateway::pipeline::native::NativePlan;
+use crate::gateway::pipeline::provider_admission::output_reservation_covers_model;
 use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeInputCount};
 use bitrouter_ai::types::{Message, Prompt};
 use serde::Serialize;
@@ -153,7 +154,7 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
             match route.output_token_limit_supported {
                 Some(false)
                     if plan.prompt.params.max_tokens.is_some_and(|reservation| {
-                        limits.output_reservation_covers_model(reservation)
+                        output_reservation_covers_model(limits, reservation)
                     }) => {}
                 Some(false) => assessment
                     .rejection_reasons

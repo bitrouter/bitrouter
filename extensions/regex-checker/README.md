@@ -122,6 +122,53 @@ resolver. Enabling the Cargo feature alone installs no hooks and activates no
 checker. These adapters preserve global/per-request deposits and streamed
 block/redact behavior; a router-bound input check does not replace them.
 
+The [legacy custom-host example](../../apps/bitrouter/examples/legacy_guardrails.rs)
+constructs a `RuleSet` with a case-insensitive `forbidden` block rule and an SSN
+pattern redact rule. It installs them with
+`.plugin(GuardrailsPlugin::with_static(rules))`, configures a `StaticRoutingTable`
+and `HttpExecutor`, and calls `app.serve("127.0.0.1:4356")`. This applies the rules
+globally to the host's language-model pipeline, without router checker bindings.
+
+Run it against your Chat Completions-compatible provider, using its API base URL
+(including `/v1` when required) and model ID. Set `UPSTREAM_API_KEY` in the
+environment before launching; it is an example-specific upstream credential:
+
+```sh
+cargo run -p bitrouter --features guardrails --example legacy_guardrails -- "$API_BASE" "$MODEL"
+```
+
+Send requests to `http://127.0.0.1:4356/v1/chat/completions` with
+`"model": "guarded"` and `"stream": true` to use the output hooks. The block rule
+also denies matching input on non-streaming requests. Redact rules do not rewrite
+input. Output protection covers streamed text and reasoning deltas; it does not
+inspect non-streaming output or tool-call arguments. Redaction is per delta, so
+a match split across deltas is not redacted. Block detection retains 128 trailing
+characters across deltas and can abort after earlier text was already emitted.
+
+This minimal example binds loopback and skips inbound authentication. It owns
+only the inference listener and its shutdown; it does not load `bitrouter.yaml`
+or start the daemon management/control listeners. Stop it with Ctrl-C and restart
+the same executable when changing rules. The `native_regex_checker` example
+above uses the shared host lifecycle but provides input-only checks.
+
+For a standalone custom-host project alongside a checkout named `bitrouter`,
+copy the example into `src/main.rs` and use these dependencies:
+
+```toml
+[dependencies]
+bitrouter = { path = "../bitrouter/apps/bitrouter", default-features = false, features = ["guardrails"] }
+bitrouter-ai = { path = "../bitrouter/crates/bitrouter-ai" }
+bitrouter-guardrails = { path = "../bitrouter/extensions/regex-checker/matcher" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
+```
+
+The application feature exposes the legacy adapter; the matcher dependency
+provides `Action`, `GuardrailRule` and `RuleSet`. The example's `required-features`
+entry keeps it out of builds without `guardrails`. Neither that entry nor enabling
+the feature activates anything in the official `bro` host; installation remains
+the explicit `.plugin(...)` call in the custom executable.
+
 The host registration API is
 `bitrouter::gateway::extensions::registry::ExtensionApi`. Callback inputs and decisions have moved to
 `bitrouter_ai::extension::request_check`; use those contracts directly. HTTP
@@ -134,5 +181,6 @@ checker declarations remain unsupported. See the
 cargo check -p bitrouter-guardrails --no-default-features
 cargo test -p bitrouter-guardrails --all-features
 cargo test -p bitrouter --features guardrails gateway::extensions::guardrails
+cargo check -p bitrouter --no-default-features --features guardrails --example legacy_guardrails
 cargo test -p bitrouter --test request_checks
 ```

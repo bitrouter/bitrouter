@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::native_auth::{is_continuation_scope_header, request_scope_headers};
+use super::provider_admission::output_reservation_covers_model;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::client::{HttpTimeouts, ModelClient, parse_retry_after};
 use crate::gateway::model::protocol::decisions::{DecisionsCodec, DecisionsTransport};
@@ -1235,11 +1236,10 @@ impl HttpExecutor {
             // permit this alternative; an altered cap is still a shaping error.
             let model_bound = wire_limit.is_none()
                 && self.output_token_limit_support(input.target) == Some(false)
-                && input
-                    .target
-                    .model_constraints
-                    .token_limits
-                    .output_reservation_covers_model(reservation.0);
+                && output_reservation_covers_model(
+                    &input.target.model_constraints.token_limits,
+                    reservation.0,
+                );
             if wire_limit != Some(reservation.0) && !model_bound {
                 return Err(BitrouterError::bad_request(
                     "provider shaping changed the managed output reservation",
@@ -2756,7 +2756,15 @@ mod beta_forward_tests {
     async fn uncapped_managed_wire_requires_declared_support_and_model_bound()
     -> crate::gateway::error::Result<()> {
         for support in [None, Some(true), Some(false)] {
-            for ceiling in [None, Some(0), Some(128), Some(129)] {
+            for (ceiling, covered) in [
+                (None, false),
+                (Some(0), false),
+                (Some(1), true),
+                (Some(127), true),
+                (Some(128), true),
+                (Some(129), false),
+                (Some(u64::MAX), false),
+            ] {
                 let mut target = target(ApiProtocol::Responses);
                 target.model_constraints.token_limits.max_output_tokens = ceiling;
                 let executor = HttpExecutor::with_dispatch_and_auth(
@@ -2789,7 +2797,7 @@ mod beta_forward_tests {
                     .await;
                 assert_eq!(
                     result.is_ok(),
-                    support == Some(false) && ceiling == Some(128),
+                    support == Some(false) && covered,
                     "{support:?}, {ceiling:?}"
                 );
             }

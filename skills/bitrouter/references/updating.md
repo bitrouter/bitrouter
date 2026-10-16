@@ -70,6 +70,12 @@ manual path even when they share its installation directory.
   reports `daemon: "deferred"` and exits non-zero. Finish active work, then
   use `bro restart` or the owning service manager as appropriate. `--check`
   never restarts a daemon.
+- Every resident built with `core`, including a core-only service with an
+  external harness, conservatively defers automatic and cross-profile handoff
+  for its managed runtime's lifetime. HTTP idleness does not prove that channel
+  work or checkpoint acknowledgements have finished. Finish managed work and
+  use same-capability explicit restart or the owning service manager; gateway
+  and harness-only builds retain their tracked idle-handoff checks.
 
 `bro status` shows a one-line "↑ <version> available" nudge for a supported
 full-profile release channel (checked at most once per day). Cached checks

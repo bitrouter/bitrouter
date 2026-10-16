@@ -95,3 +95,44 @@ consumer cancellation, and core/harness channel/ACK acceptance remain separate
 suites. The interrupted case covers an upstream socket failure, not proof of
 remote execution cancellation. No build, test, or commit is performed by the
 integration host itself.
+
+## Isolated prehashed manifest fidelity
+
+This separate regression consumes a manifest emitted by the application's real
+`HarnessManifestExt::digest` and `HarnessManifestExt::validate` implementation in
+`apps/bitrouter/src/storage/checkpoint/validation.rs`. The
+`sdk_manifest_fixture` example constructs a typed, read-only custom tool with
+deliberately nonalphabetical JSON schema members. It calls production digest
+and validation code; it does not duplicate hashing or hardcode a matching hash.
+
+The output records the writer's fully qualified name, `writer_revision` and
+application build identity. `tools_json` preserves the exact bytes supplied to
+the digest, and `manifest_json` preserves the original validated manifest as a
+string. Keeping those fields as strings prevents the consumer from accidentally
+normalizing its own expected result. The consumer compares those original tool
+bytes and the retained digest after typed bind and restore round trips. It also
+requires nonalphabetical schema keys, so a sorted fixture cannot make the check
+vacuous. This checks serialization fidelity, not live core admission or execution.
+
+Run these commands from the repository root after the independent workspace's
+lockfile has been refreshed for dependency changes:
+
+```sh
+mkdir -p target/sdk-manifest-fidelity
+cargo run --locked -p bitrouter --no-default-features --features core \
+  --example sdk_manifest_fixture \
+  > target/sdk-manifest-fidelity/manifest.json
+export BITROUTER_TEST_MANIFEST_FIXTURE="$PWD/target/sdk-manifest-fidelity/manifest.json"
+cargo test --locked \
+  --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
+  --target-dir target/sdk-consumer --test manifest_fidelity -- \
+  --ignored --exact server_prehashed_manifest_survives_isolated_bind_and_restore
+```
+
+Only the separately built writer enables application `core`. The consumer test
+uses its own workspace and SDK/AI dependencies with defaults disabled; it needs
+neither the application, SDK `core`, nor application dev-dependency features.
+The test is ignored by ordinary `cargo test` because its input must come from
+the separately built writer. Select it explicitly as above; a missing fixture
+or missing provenance fails the selected test. Running ordinary consumer tests
+for packaged gateway acceptance does not establish this regression's result.

@@ -6,7 +6,7 @@ See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for verified
 results and open acceptance gates. The target tables below are not a claim that
 every boundary has already been implemented.
 
-Updated: 2026-10-16. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
+Updated: 2026-10-17. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
 on `main`, version `1.0.0-alpha.33`.
 
 BitRouter will ship as an independently running service assembled by the `bitrouter`
@@ -403,6 +403,7 @@ service methods into the final AI API:
 | `Source::synthesize_id` | Gateway model codecs; preserve generated citation/source identity rather than changing it during relocation. |
 | `GenerationParams::extras_for_protocol` and `extra_value_for_protocol` | Gateway model codecs; preserve source-protocol ownership, supplemental defaults and precedence. Keeping the serialized fields in AI does not make outbound selection a contract helper. |
 | `Prompt::required_capabilities` | Gateway model capability projection, shared internally with routing/core; preserve tool, reasoning, input-media and output-modality derivation. The capability vocabulary remains in AI. |
+| `ModelTokenLimits::output_reservation_covers_model` and `NativeRoute::requires_input_count` | Application provider-admission helpers shared by gateway execution and core; preserve the configured model-ceiling exception and candidate counting policy. Their evidence structures remain in AI. |
 | Core `Limits::validate` | Intrinsic validation may remain with the public limits contract; it checks the representation's own bounds. |
 | Core `Limits::within` and `Capabilities::negotiate` | Application host-policy validation, shared with core admission and offline checkpoint validation where required. Requested-versus-host limits, supported operations and negotiation decisions stay outside AI. |
 
@@ -1497,6 +1498,17 @@ retains existing active-work, ownership, rollback and `--no-start` restrictions.
 Treat legacy daemons without capability evidence conservatively; preserve the
 existing explicit-restart diagnostic when safe handoff cannot be established.
 
+Managed core work can outlive the HTTP response that admitted it, including a
+WebSocket upgrade and an unacknowledged checkpoint. Core-only hosts must retain
+the full product's conservative runtime-lifetime handoff restriction until all
+managed work participates in atomic handoff admission. An empty HTTP request
+count is not sufficient evidence that external-harness work is idle. Minimum
+gateway and harness-only hosts retain their existing tracked idle-handoff path.
+
+A local control-channel failure during shutdown must not abandon inference or
+harness cleanup. Drive all required finalization futures before returning the
+control error, and retain diagnostics if more than one service fails to stop.
+
 P0 update policy preserves the installed distribution profile. Full installations
 keep their existing update path; gateway installations select a matching gateway
 artifact for the target release/platform. Update receipts, installer delegation
@@ -1906,6 +1918,13 @@ refactor has already been implemented or tested.
 | A14 Build and packaging | Registry bootstrap and schema generation work from a clean checkout; no helper/application bootstrap cycle; package contents and required-feature test/example metadata are correct; full-product and minimum-gateway candidate artifacts identify their features/revision, and the packaged gateway passes the independent SDK consumer scenario; updates preserve the installed profile or leave it unchanged with a profile-specific manual path |
 | A15 External migration | Every consumer migration path above has an explicit replacement example or documented local-only boundary; old SDK builder, AI ModelClient, telemetry imports and guardrails SDK adapter are covered; no claim that HTTP transparently replaces arbitrary custom hooks |
 | A16 Performance | Compare size, normal dependency graph, idle memory and bounded throughput/stream behavior against P0 0; explain and resolve regressions outside the agreed budget |
+
+Performance decision, 2026-10-17: the recorded full-product idle RSS increase
+from 61.234 to 64.328 MiB (3.094 MiB / 5.05%) is accepted for P0, with memory
+optimization retained as follow-up work. This covers the specific local
+development-build comparison, not a general regression allowance. Re-measure
+the final candidate and reconcile the other A16 metrics before closing the gate;
+see the [acceptance record](evidence/service-refactor/README.md#accepted-overhead-and-follow-up-2026-10-17).
 
 ### Isolated build and behavior matrix
 

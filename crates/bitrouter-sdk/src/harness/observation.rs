@@ -53,10 +53,12 @@ pub(super) fn decode(
             for byte in chunk.map_err(Error::transport)? {
                 let Some(event) = decoder.accept(byte)? else { continue; };
                 if event.event == "error" {
-                    let body: ObservationError = serde_json::from_str(&event.data)
-                        .map_err(|_| Error::Response("invalid harness observation error"))?;
+                    let (body, body_error) = match serde_json::from_str::<ObservationError>(&event.data) {
+                        Ok(body) => (Some(body), None),
+                        Err(_) => (None, Some(Error::Response("invalid harness observation error"))),
+                    };
                     Err(Error::HarnessObservation(Box::new(ServiceFailure {
-                        status, headers: headers.clone(), body: Some(body), body_error: None,
+                        status, headers: headers.clone(), body, body_error,
                     })))?;
                 }
                 if event.event != "message" {

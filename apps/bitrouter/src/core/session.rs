@@ -30,6 +30,7 @@ use crate::gateway::pipeline::native::{
     NativeContextValidationReport, NativeExecutionControl, NativeInputCountReport,
     NativeModelSelection, NativePlan, NativePlanAdmission,
 };
+use crate::gateway::pipeline::provider_admission::requires_input_count;
 use async_trait::async_trait;
 use bitrouter_ai::core::evidence::NativeAttemptReport;
 use bitrouter_ai::types::{
@@ -3694,7 +3695,7 @@ impl NativeExecutionControl for StepControl {
                         || plan
                             .routes
                             .get(route_index as usize)
-                            .is_none_or(|route| !route.requires_input_count())
+                            .is_none_or(|route| !requires_input_count(route))
                         || step.input_counts.last().is_some_and(|prior| {
                             prior.route_index >= route_index || prior.report.is_none()
                         })
@@ -4472,7 +4473,7 @@ fn validate_input_counts(step: &ModelStep, plan: &NativePlan) -> Result<(), Core
     if plan
         .routes
         .iter()
-        .any(|route| !route.requires_input_count() && route.input_count.is_some())
+        .any(|route| !requires_input_count(route) && route.input_count.is_some())
     {
         return Err(reject(
             ErrorCode::OperationConflict,
@@ -4483,7 +4484,7 @@ fn validate_input_counts(step: &ModelStep, plan: &NativePlan) -> Result<(), Core
         .routes
         .iter()
         .enumerate()
-        .filter(|(_, route)| route.requires_input_count())
+        .filter(|(_, route)| requires_input_count(route))
         .collect::<Vec<_>>();
     if expected.len() != step.input_counts.len() {
         return Err(reject(

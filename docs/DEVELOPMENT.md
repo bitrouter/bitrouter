@@ -486,6 +486,14 @@ automatic replacement requires the same distribution selection. Explicit profile
 transitions use the existing ownership, idle and SQLite preflight checks. Package
 artifacts and cross-profile execution evidence remain separate delivery gates.
 
+Every build with `core` conservatively holds handoff admission for the managed
+runtime's lifetime, including core-only service sessions executed by an external
+harness. An upgraded WebSocket or pending checkpoint is not represented by the
+ordinary HTTP body count. Automatic and cross-profile replacement therefore
+defer even when that core resident appears idle; same-capability explicit restart
+retains its existing behavior. Gateway and harness-only profiles continue to use
+tracked idle admission. Control shutdown errors do not bypass HTTP/harness drain.
+
 ### Application telemetry feature flags
 
 | Feature | Purpose |

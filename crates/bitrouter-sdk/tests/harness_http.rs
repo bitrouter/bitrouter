@@ -585,6 +585,7 @@ async fn observation_errors_and_incomplete_frames_end_without_reconnection() -> 
         b"data: {}\n".to_vec(),
         b"data: \xff\n\n".to_vec(),
         b"data: not-json\n\n".to_vec(),
+        b"data: {\"unexpected\":\"private-wrong-event\"}\n\n".to_vec(),
         b"event: unexpected\ndata: {}\n\n".to_vec(),
     ] {
         let server = serve(vec![Reply::json(capabilities()), Reply::sse(bytes)]).await?;
@@ -624,6 +625,44 @@ async fn observation_errors_and_incomplete_frames_end_without_reconnection() -> 
     assert_eq!(failure.status, 200);
     assert!(!format!("{failure:?}").contains("read history"));
     assert!(stream.next().await.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn named_malformed_observation_errors_retain_metadata_without_reconnection() -> TestResult {
+    for data in [
+        "private-non-json",
+        r#"{"unexpected":"private-wrong-envelope"}"#,
+        r#"{"code":"future_code","message":"private-detail"}"#,
+    ] {
+        let mut reply = Reply::sse(format!("event: error\ndata: {data}\n\n"));
+        reply.headers.extend([
+            ("x-request-id", "observation-request-id".into()),
+            ("retry-after", "7".into()),
+        ]);
+        let server = serve(vec![Reply::json(capabilities()), reply]).await?;
+        let client = HarnessClient::connect(&server.endpoint, TOKEN).await?;
+        let mut stream = client
+            .observe(THREAD, &api::ObserveQuery { after: None })
+            .await?;
+        let error = stream
+            .next()
+            .await
+            .ok_or("missing observation failure")?
+            .err()
+            .ok_or("expected observation failure")?;
+        assert!(!format!("{error:?}").contains("private-"));
+        let Error::HarnessObservation(failure) = error else {
+            return Err("malformed error lost its observation failure type".into());
+        };
+        assert_eq!(failure.status, 200);
+        assert_eq!(failure.headers["x-request-id"], "observation-request-id");
+        assert_eq!(failure.headers["retry-after"], "7");
+        assert!(failure.body.is_none());
+        assert!(matches!(failure.body_error, Some(Error::Response(_))));
+        assert!(stream.next().await.is_none());
+        assert_eq!(server.records.lock().await.len(), 2, "must not reconnect");
+    }
     Ok(())
 }
 

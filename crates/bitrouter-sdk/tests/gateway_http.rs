@@ -260,6 +260,122 @@ async fn managed_stream_error_metadata_survives_an_unknown_envelope() -> TestRes
     Ok(())
 }
 
+async fn first_stream_error<T>(
+    mut stream: bitrouter_sdk::stream::EventStream<T>,
+) -> TestResult<Error> {
+    let error = stream
+        .next()
+        .await
+        .ok_or("missing stream failure")?
+        .err()
+        .ok_or("expected stream failure")?;
+    assert!(stream.next().await.is_none(), "failure must end the stream");
+    Ok(error)
+}
+
+#[tokio::test]
+async fn named_malformed_stream_errors_retain_metadata_without_replay() -> TestResult {
+    for data in [
+        "private-non-json",
+        "[DONE]",
+        r#"{"unexpected":"private-wrong-envelope"}"#,
+        r#"["private-wrong-envelope"]"#,
+    ] {
+        for protocol in ["chat", "messages", "responses", "managed"] {
+            let mut reply = Reply::sse(&format!("event: error\ndata: {data}\n\n"));
+            reply.headers.extend([
+                ("x-request-id", "stream-request-id".into()),
+                ("retry-after", "7".into()),
+            ]);
+            let server = serve(vec![reply]).await?;
+            let client = GatewayClient::new(&server.url, None)?;
+            let error = match protocol {
+                "chat" => {
+                    first_stream_error(client.stream_chat_completions(&chat_request(true)?).await?)
+                        .await?
+                }
+                "messages" => {
+                    first_stream_error(client.stream_messages(&messages_request(true)?).await?)
+                        .await?
+                }
+                "responses" => {
+                    first_stream_error(client.stream_responses(&responses_request(true)?).await?)
+                        .await?
+                }
+                "managed" => {
+                    first_stream_error(
+                        client
+                            .stream_managed_responses(&managed_request(true)?)
+                            .await?,
+                    )
+                    .await?
+                }
+                _ => return Err("unknown test protocol".into()),
+            };
+            assert!(!format!("{error:?}").contains("private-"));
+            let (status, headers, body_error) = match error {
+                Error::CoreStream(failure) if protocol == "managed" => {
+                    assert!(failure.body.is_none());
+                    (failure.status, failure.headers, failure.body_error)
+                }
+                Error::Stream(failure) if protocol != "managed" => {
+                    assert!(failure.body.is_none());
+                    (failure.status, failure.headers, failure.body_error)
+                }
+                _ => return Err("malformed error lost its service failure type".into()),
+            };
+            assert_eq!(status, 200);
+            assert_eq!(headers["x-request-id"], "stream-request-id");
+            assert_eq!(headers["retry-after"], "7");
+            assert!(matches!(body_error, Some(Error::Response(_))));
+            assert_eq!(server.records.lock().await.len(), 1, "must not replay");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_non_error_events_remain_protocol_errors() -> TestResult {
+    for data in [
+        "private-non-json",
+        r#"{"unexpected":"private-wrong-event"}"#,
+    ] {
+        let server = serve(vec![Reply::sse(&format!("data: {data}\n\n"))]).await?;
+        let client = GatewayClient::new(&server.url, None)?;
+        let error = first_stream_error(
+            client
+                .stream_managed_responses(&managed_request(true)?)
+                .await?,
+        )
+        .await?;
+        assert!(matches!(error, Error::Response(_)));
+        assert!(!format!("{error:?}").contains("private-"));
+        assert_eq!(server.records.lock().await.len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_errors_keep_bare_details_and_explicit_raw_envelopes() -> TestResult {
+    for data in [
+        r#"{"type":"error","message":"private-detail","code":"provider_failed"}"#,
+        r#"{"error":["private-raw-upstream-error"]}"#,
+    ] {
+        let server = serve(vec![Reply::sse(&format!("event: error\ndata: {data}\n\n"))]).await?;
+        let client = GatewayClient::new(&server.url, None)?;
+        let error =
+            first_stream_error(client.stream_responses(&responses_request(true)?).await?).await?;
+        assert!(!format!("{error:?}").contains("private-"));
+        let Error::Stream(failure) = error else {
+            return Err("expected a gateway stream failure".into());
+        };
+        assert!(failure.body.is_some());
+        assert!(failure.body_error.is_none());
+        assert_eq!(server.records.lock().await.len(), 1);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn managed_streams_preserve_retained_extension_events() -> TestResult {
     let extension = json!({"type":"bitrouter.agent.created", "sequence_number":0,
