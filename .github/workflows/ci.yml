@@ -510,6 +510,16 @@ jobs:
           # Core seeds published state and dispatches the original judge attempt.
           # Serving/replay requests use the preserved full/minimum binaries.
           cargo test --locked -p bitrouter --jobs 2 --test artifact_profiles gateway_state:: -- --ignored --test-threads=1
+      - name: validate local measurement fixture and interruption cleanup
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/measurement-target
+          BITROUTER_MEASUREMENT_TEST_BINARY: ${{ runner.temp }}/profile-gateway/bro
+        run: |
+          cargo fmt --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml -- --check
+          cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2
+          cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2 --test cancellation -- --ignored --test-threads=1
+          cargo clippy --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --all-targets --jobs 2 -- -D warnings
 
   database-backends:
     name: database (${{ matrix.backend }})

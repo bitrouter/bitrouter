@@ -3206,3 +3206,52 @@ existing operational evaluation contract; they do not establish new distributed
 or external delivery semantics. The remaining P0 work is final-candidate
 reconciliation and broad validation, comparable idle-memory/load measurements,
 packaged delivery validation, final independent acceptance review and PR.
+
+## Comparable local gateway measurements (2026-10-16)
+
+Stage base: `2bb583a`. Added an independent Cargo fixture under
+`apps/bitrouter/tests/fixtures/gateway_measurements`, without changing product
+sources or manifests. It compares immutable baseline/full/minimum executables
+through private real processes and a fixed loopback provider. The
+[retained raw samples and comparison](evidence/service-refactor/README.md)
+record hashes, sizes, build provenance, workload, hardware and interpretation.
+
+Three rotating rounds completed with 4,096 ordinary and 4,096 streaming
+requests per sample, concurrency eight, and exactly 8,208 provider calls per
+host including warmup. The stream validator checks framing, exact content,
+finish, usage and terminal DONE. Health and inference bodies have incremental
+byte limits. SIGINT/SIGTERM cancel the measurement and clean up only its owned
+gateway. No application daemon discovery or shared home/config is used.
+
+Median warmed idle RSS was 61.234 MiB for the baseline, 64.328 MiB for full
+and 41.875 MiB for minimum. The full increase is **3.094 MiB / 5.05%** and is
+not hidden by the minimum profile's 31.62% reduction. Ordinary throughput was
+4,154 / 4,128 / 4,256 requests/s respectively; immediate-stream throughput was
+5,326 / 5,404 / 5,487. These are unoptimized local fixture measurements with
+variation, not production throughput or model-generation predictions. No
+numeric regression budget has been retroactively declared passed; A16 still
+needs its final candidate and acceptance decision.
+
+Validation: three parser/body-limit tests passed; the explicit real-process
+interruption test passed for SIGINT and SIGTERM, requiring the child PID and
+private files to disappear and no completed report to be written. CI now runs
+those checks against its immutable minimum artifact on Linux/macOS. Strict
+Rust 1.97.0 all-target fixture Clippy passed after moving test modules below
+implementation items. Normal runtime builds/tests used Rust 1.99.0. The
+rust_diagnostics MCP remains unavailable; these results are Cargo evidence,
+not a claim that the optional skill's separate MCP VERIFY passed.
+
+Independent review first identified missing signal cleanup, unbounded response
+bodies and weak substring-only stream validation; all were repaired. Follow-up
+review found a partial ownership-log read in the cancellation test. The reader
+now requires a complete newline, and failure cleanup attempts SIGTERM with a
+bounded wait before a SIGKILL fallback. This is fixture cleanup, not a change
+to gateway cancellation semantics. The repaired interruption test passed again
+in 2.62s, strict Clippy passed again, and independent review confirmed no
+remaining scoped finding. CI YAML parsing, formatting and diff checks passed.
+
+Logs are `/tmp/bitrouter-p0-measurement-tests-4096.log`,
+`/tmp/bitrouter-p0-measurement-cancellation-4096.log` and
+`/tmp/bitrouter-p0-local-measurements-4096-2bb583a.log`. Final whole-candidate
+tests, feature/runtime/package reconciliation, independent acceptance review
+and PR remain outstanding. P1 remains out of scope.
