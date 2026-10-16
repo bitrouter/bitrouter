@@ -173,7 +173,7 @@ fn inspect_harness(fixture: &Fixture, native: bool) -> Result<()> {
     })
 }
 
-fn identity(fixture: &mut Fixture, binary: &Path) -> Result<ArtifactIdentity> {
+pub(super) fn identity(fixture: &mut Fixture, binary: &Path) -> Result<ArtifactIdentity> {
     let mut command = fixture.command(binary);
     command.args(["--json", "build-info"]);
     fixture.run(command)?.json()

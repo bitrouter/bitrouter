@@ -5,11 +5,26 @@
 //! no application features. This test never builds or substitutes an artifact.
 //! The historical-data transition test additionally requires
 //! BITROUTER_TEST_HARNESS_BINARY built with --no-default-features --features harness.
+//! Gateway transitions use a core-enabled test harness for publication fixtures
+//! and the original judge dispatch. Serving and replay HTTP requests use only
+//! the two supplied executables.
 
 #![cfg(unix)]
 
 #[path = "artifact_profiles/persistence.rs"]
 mod persistence;
+
+#[cfg(feature = "core")]
+#[path = "artifact_profiles/gateway_state.rs"]
+mod gateway_state;
+
+// Reuse the storage-only capture fixture without enabling a recorder or
+// widening a production API just to prepare persisted compatibility data.
+#[cfg(feature = "core")]
+use bitrouter::storage;
+#[cfg(feature = "core")]
+#[path = "../src/acp_trajectory/fixtures.rs"]
+mod capture_fixture;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};

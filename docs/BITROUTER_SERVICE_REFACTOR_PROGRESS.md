@@ -3060,3 +3060,94 @@ identities or trajectory outbox payloads. Their cross-profile behavior still
 needs process-level evidence. Comparable idle-memory/load measurements, the
 final feature/runtime/package candidate, final independent acceptance review and
 PR remain outstanding. P0 stays active and P1 is not implemented.
+
+## Gateway policy and judge accounting across profiles (2026-10-16)
+
+Stage base: `5f2e88e`. The real-process policy transition fixture exposed a
+production-only compatibility regression: the full product enabled
+`serde_json/preserve_order` through ACP, while the standalone minimum gateway
+used sorted object keys. The existing persisted route fingerprint hashes JSON
+bytes, so an unchanged adopted route was incorrectly treated as having changed
+dependencies after switching profiles. Normal/build-only dependency inspection
+confirmed the difference; development dependencies enabled the feature even in
+minimum test builds and concealed it there.
+
+The application now explicitly enables `preserve_order` alongside its existing
+`float_roundtrip`. This preserves the original full-product representation and
+stored fingerprints; it does not introduce a new digest algorithm or rewrite
+policy state. AI remains a contract library, and the minimum gateway does not
+need ACP to select serialization behavior.
+
+Two independently built, immutable Rust/Cargo 1.99.0 development executables
+were retained in `/tmp/bitrouter-p0-policy-profiles.jmg4el` before compiling the
+test harness. Production sources, manifests and HEAD stayed fixed across both
+builds and test execution. The stage-base commit plus the explicit manifest
+change describes these artifacts; they are not final committed release candidates.
+Incremental compilation and development/test debug symbols were disabled.
+
+| Profile | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Full default | 316,998,896 | `d42bbed85e34bc2b813c3b8b8c6b8df3c3c49c95b1a8c49c34de63cd2cd9cbe6` |
+| Minimum gateway | 116,029,456 | `d26fe41661cfe33c55da664b23df8b28eaf4c97462201e7064bf5c058988b2f7` |
+
+Full and minimum builds passed in 57.40s and 31.69s. The corrected policy-only
+scenario passed in 6.17s; after adding judge coverage, the selected
+`artifact_profiles gateway_state::` suite passed **2/2 in 2.86s**, after a
+58.76s build. Each fixture uses its private home, database, config and socket,
+checks artifact identity/PID/readiness, and shuts down only its own processes.
+The new coverage is:
+
+- Controlled publication through the production registration API followed by
+  full → minimum → full HTTP requests, for both virtual routes and named
+  policies. New sessions select the adopted route; preexisting sessions keep
+  the baseline. Changing the provider pricing dependency retains the existing
+  fallback. Learning mode/control state and baseline enrollment stay unchanged.
+- Canonically bound and unresolved request replay preserves all original
+  metering/inventory/execution/intent rows and produces no second upstream call.
+  Bound execution identity and attempt must match inventory, and both contain
+  the same completed settlement with the expected model, tokens and cost.
+  The fixture waits for the persisted terminal observer before taking snapshots;
+  delivery of an HTTP body alone is not proof its transaction has committed.
+- A full-feature test assembly uses public `JudgeJobs` to reserve and dispatch
+  an actual provider request. Its deliberately malformed rubric fails after a
+  completed, charged inference; no private reservation rows are fabricated.
+  Full/minimum/auth-required-minimum/full HTTP replays preserve the complete
+  job, lookup, attempt and metering rows, including after shutdown. A separate
+  unreserved request proves the auth-required profile rejects missing credentials.
+  The original provider call count remains one throughout.
+
+The publication fixtures prove retained serving semantics, not empirical policy
+promotion or historical-version policy production. The judge producer is the
+full-feature test assembly; replay consumers are the independent official
+executables. The earlier baseline-written database fixtures remain separate
+historical-format evidence. CI explicitly runs these process scenarios on Linux
+and macOS; local execution here is macOS arm64.
+
+Logs: `/tmp/bitrouter-p0-policy-build-{full,gateway}.log`,
+`/tmp/bitrouter-p0-policy-preserve-order.log`, and
+`/tmp/bitrouter-p0-policy-and-judge.log`. The full development link reports the
+previously observed compact-unwind size warning; these sizes and timings do not
+establish optimized-release performance.
+
+Strict Rust 1.97.0 workspace/all-target/all-feature Clippy passed in 65s
+(`cargo +1.97.0 clippy --locked --offline --workspace --all-features --all-targets
+--jobs 2 -- -D warnings`; log `/tmp/bitrouter-p0-policy-clippy.log`). Formatting
+and diff checks passed. Independent read-only review found no remaining scoped
+issue after the execution/settlement assertions were strengthened. That review
+does not claim successful judge rubric submission, judge recovery or outbox
+coverage from the deliberately failed-rubric fixture.
+
+The matching harness artifact was then rebuilt in 42.30s and retained beside
+the other two (239,633,328 bytes; SHA-256
+`d643bcec8c51b992df724295e5bed89a9adce4ced2731f2ea5af16eabb9bcb49`).
+Both preexisting minimum-feature `artifact_profiles` scenarios passed against
+these three executables: **2/2 in 5.06s**, after a 26.66s build. This rechecks
+daemon replacement and the exact baseline database/ownership rows after the
+serialization fix. Logs are `/tmp/bitrouter-p0-policy-build-harness.log` and
+`/tmp/bitrouter-p0-policy-existing-profiles.log`.
+
+The remaining A09 process evidence includes trajectory terminal facts, cost-based
+progress guards and pending outbox delivery across feature transitions. A16
+comparable idle-memory/load measurements, the final feature/runtime/package
+candidate, final independent acceptance review and PR remain outstanding.
+P0 stays active; no P1 shared-state machinery is introduced.

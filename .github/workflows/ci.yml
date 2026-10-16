@@ -507,6 +507,9 @@ jobs:
         run: |
           cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_build_metadata
           cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_profiles -- --ignored --test-threads=1
+          # Core seeds published state and dispatches the original judge attempt.
+          # Serving/replay requests use the preserved full/minimum binaries.
+          cargo test --locked -p bitrouter --jobs 2 --test artifact_profiles gateway_state:: -- --ignored --test-threads=1
 
   database-backends:
     name: database (${{ matrix.backend }})

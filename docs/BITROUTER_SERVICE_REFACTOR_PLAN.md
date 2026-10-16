@@ -16,6 +16,13 @@ harness and the TUI are internal application modules selected by Cargo features.
 `bitrouter-sdk` becomes the service client for HTTP and the existing core
 WebSocket surface. Telemetry implementation moves into the application.
 
+The final package boundary is `bitrouter` for the running product,
+`bitrouter-ai` for shared contracts, `bitrouter-sdk` for service access,
+`bitrouter-guardrails` for the existing compiled capability, and `dist-helper`
+for contributor tooling. The orchestrator, TUI and telemetry packages retire
+after their implementations and consumers move. Protocol conversion remains
+inside the gateway, including conversion code that has no I/O dependencies.
+
 This document records target ownership and implementation requirements. The
 source inventory is pinned to the revision above; a target path or acceptance
 criterion is not a claim that its migration has landed or passed validation.
@@ -298,6 +305,14 @@ Serialization, deserialization, bounded field validation and small contract
 helpers are allowed. Cross-provider mapping, conversion admission, provider
 history repair, retry/fallback decisions and stream execution are not.
 
+Contract-only does not mean that every public item must be a wire DTO. The
+existing request-check callback signature is also a reusable contract: it takes
+bounded input and returns a decision. Its thread scheduling, deadline handling,
+registration and invocation belong to the gateway. Retaining that signature
+does not promise a stable ABI or independently loadable plugin. Likewise,
+request stage and outcome types describe lifecycle events without implementing
+the lifecycle state machine.
+
 The admission test for a public AI API is an actual client or extension consumer,
 not reuse between two application modules. Gateway/core/harness code may share
 internal helpers without publishing them. In particular, internal checkpoint
@@ -535,6 +550,12 @@ configuration, bearer refresh, batching, sampling, cardinality limiting,
 span/metric rendering, HTTP ingress span and tracing bridge together.
 The observer interface used by the application can remain internal; only
 genuinely shared observation views and schema move to AI.
+
+Built-in describes implementation ownership, not mandatory export. Keep the
+exporter and its OTel-facing signatures inside the application boundary; neither
+AI nor the repurposed SDK inherits the old exporter's public dependency surface.
+Existing custom hosts use the application's intentional host entry points,
+while ordinary service clients configure export on the gateway process.
 
 Always-on request facts, metering and scheduler observation must work with no
 OTLP feature. `otel-http` and `otel-grpc` control egress, not correctness.
@@ -1368,16 +1389,21 @@ this distinction for reduced builds.
 
 ### Supported build profiles
 
-| Profile | Feature selection | Purpose |
-| --- | --- | --- |
-| Full product | Default | Preserve current local product behavior |
-| Minimum gateway | `--no-default-features` | Small single-instance model service with SQLite |
-| Gateway with existing optional integrations | `--no-default-features --features mcp,server-tools,otel-http,db-postgres,db-mysql` | Supported gateway build without agent runtime or TUI |
-| Scheduling service | `--no-default-features --features core` | Gateway plus core, without workspace execution |
-| Headless harness | `--no-default-features --features harness` | Supported harness/ACP paths, no terminal drawing |
-| Local managed headless | `--no-default-features --features core,harness` | Existing native managed execution without TUI |
-| TUI without local core | `--no-default-features --features tui` | TUI plus supported harness/CLI paths |
-| Full local scheduling and TUI | `--no-default-features --features core,tui` | Local core/harness/TUI with only explicitly selected integrations |
+Every row includes gateway and the base management CLI. Except for the default
+row, pass `--no-default-features` and add the listed selection with `--features`.
+The native-execution column describes compiled support; runtime configuration
+and authorization still apply.
+
+| Profile | Explicit feature selection | Effective optional capabilities | Local native execution |
+| --- | --- | --- | --- |
+| Full product | Default features | Full default set above | Yes |
+| Minimum gateway | None | None; SQLite remains built in | No |
+| Gateway with existing optional integrations | `mcp,server-tools,otel-http,db-postgres,db-mysql` | The selected gateway integrations | No |
+| Scheduling service | `core` | Core scheduling and existing core APIs | No; caller/harness supplies execution |
+| Headless harness | `harness` | Harness and MCP; external ACP and stored-session paths | No; native start/resume requires core |
+| Local managed headless | `core,harness` | Core, harness and MCP | Yes |
+| TUI without local core | `tui` | TUI, harness and MCP; corresponding CLI paths included | No; native start/resume requires core |
+| Full local scheduling and TUI | `core,tui` | Core, TUI, harness and MCP | Yes |
 
 Every optional dependency must follow the same ownership as its code. The
 application declares terminal drawing/input dependencies under `tui`, ACP
@@ -1503,6 +1529,12 @@ profiles, including the intentionally unused migration slot. Do not conditionall
 remove old migrations based on `core` or `harness`. Disabled subsystems omit
 runtime repositories/workers; lightweight migration definitions may still create
 their historical tables. Feature changes must not reinterpret schema history.
+
+Serialization features that affect persisted fingerprints are also part of this
+compatibility boundary. Preserve the full product's JSON object ordering and
+floating-point round trips explicitly, without relying on optional runtime or
+test dependencies to enable them. Exercise separately built artifacts: Cargo's
+development-feature unification can conceal incompatible production digests.
 
 ## P0 implementation sequence
 
@@ -2063,10 +2095,12 @@ as permanent product requirements:
   directory into shared crates because directory taxonomy obstructed real
   dependencies.
 - [PR 810](https://github.com/bitrouter/bitrouter/pull/810) moved the
-  exporter into the SDK because its spans encode BitRouter semantics.
-  [PR 851](https://github.com/bitrouter/bitrouter/pull/851) separated it again
-  after the schema became an independent contract, avoiding OTel-related public
-  dependency commitments in the foundation library. That rationale requires
+  exporter into the SDK on PR 809's integration branch because its spans encode
+  BitRouter semantics. [PR 851](https://github.com/bitrouter/bitrouter/pull/851)
+  superseded that branch before the SDK placement reached a release. It put the
+  renderer in a separate package after the schema became an independent
+  contract, avoiding OTel-related public dependency commitments in the
+  foundation library. That rationale requires
   separating the contract from implementation; it does not require a permanent
   exporter package. This plan keeps the contract in AI and the implementation
   with the service that emits it. PR 851 explicitly rejected dependency-count
