@@ -213,8 +213,8 @@ impl RouterToolset for McpRouterToolset {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::mcp::McpTransport;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::mcp::transport::McpTransport;
     use crate::gateway::mcp::{McpResponse, McpStreamPart, McpTarget, ServerSelector};
     use futures::stream::BoxStream;
 

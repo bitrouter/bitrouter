@@ -55,11 +55,11 @@ use rmcp::service::{
 };
 use tokio::sync::{Mutex, broadcast};
 
-use super::transport::McpTransport;
 use super::{
     Executor, InvalidationEvent, InvalidationKind, McpRequest, McpResponse, McpStreamPart,
     McpTarget,
 };
+use crate::config::mcp::McpTransport;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 

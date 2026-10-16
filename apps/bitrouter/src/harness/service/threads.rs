@@ -170,7 +170,7 @@ impl ThreadService {
         &self,
         server_instance_id: &str,
         request: ThreadRequest,
-        servers: Option<Vec<crate::gateway::mcp::transport::McpServerConfig>>,
+        servers: Option<Vec<crate::config::mcp::McpServerConfig>>,
     ) -> Result<ThreadSnapshot, ServiceError> {
         if let Some(servers) = &servers {
             if servers.len() > 32
@@ -384,7 +384,7 @@ impl ThreadService {
         &self,
         target: &ThreadTarget,
         caller: &CallerContext,
-        servers: &[crate::gateway::mcp::transport::McpServerConfig],
+        servers: &[crate::config::mcp::McpServerConfig],
     ) -> Result<(), ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
         let state = self.lock_state();

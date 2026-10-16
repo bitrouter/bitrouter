@@ -3,12 +3,13 @@
 use crate::config::Config;
 use crate::config::checker::CheckerConfig;
 use crate::config::router::MAX_CHECKER_TIMEOUT_MS;
+use crate::gateway::extensions::registry::registration::Registration;
 use crate::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
 use async_trait::async_trait;
 use bitrouter_ai::extension::request_check::{
-    Decision, Input, Registration, RequestCheckCoverageStatus, validate_revision,
+    Decision, Input, RequestCheckCoverageStatus, validate_revision,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

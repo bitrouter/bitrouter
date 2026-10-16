@@ -16,13 +16,13 @@
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
+use crate::config::mcp::McpTransport;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::mcp::Executor;
 use crate::gateway::mcp::McpRequest;
 use crate::gateway::mcp::McpTarget;
 use crate::gateway::mcp::client::BoundedMcpClient;
 use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
-use crate::gateway::mcp::transport::McpTransport;
 
 /// One row in `bro tools list`.
 #[derive(Debug, Clone)]
@@ -292,7 +292,7 @@ fn render_discovery(server: &str, transport: &McpTransport, tools: &[ToolSummary
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::mcp::transport::McpServerConfig;
+    use crate::config::mcp::McpServerConfig;
     use std::collections::HashMap;
 
     fn cfg_with(server_id: &str, server_cfg: McpServerConfig) -> Config {

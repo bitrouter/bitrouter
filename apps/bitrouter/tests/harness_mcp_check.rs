@@ -1,6 +1,6 @@
 use bitrouter::config::Config;
 use bitrouter::config::McpUpstreamProtocol;
-use bitrouter::gateway::mcp::transport::{McpServerConfig, McpTransport};
+use bitrouter::config::mcp::{McpServerConfig, McpTransport};
 
 #[path = "harness_resources/mcp_fixture.rs"]
 mod mcp_fixture;

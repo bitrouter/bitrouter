@@ -421,7 +421,7 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
-    use bitrouter::gateway::mcp::transport::{McpServerConfig, McpTransport};
+    use bitrouter::config::mcp::{McpServerConfig, McpTransport};
     use http::Request;
     use std::collections::HashMap;
     use tower::ServiceExt;
@@ -1142,8 +1142,8 @@ plugins:
 #[tokio::test]
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
+    use bitrouter::config::mcp::McpTransport;
     use bitrouter::gateway::assembly::App;
-    use bitrouter::gateway::mcp::transport::McpTransport;
     use bitrouter::gateway::mcp::{
         Executor, McpContext, McpRequest, McpResponse, McpTarget, PreRequestHook, RoutingTable,
         ServerSelector,
@@ -1850,9 +1850,9 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
 #[tokio::test]
 async fn e2e_mcp_aggregate_and_sse_endpoints() {
     use async_trait::async_trait;
+    use bitrouter::config::mcp::McpTransport;
     use bitrouter::gateway::assembly::App;
     use bitrouter::gateway::http::{RouterOptions, build_router_with_options};
-    use bitrouter::gateway::mcp::transport::McpTransport;
     use bitrouter::gateway::mcp::{
         AggregateMember, Executor, McpRequest, McpResponse, McpTarget, RoutingTable, ServerSelector,
     };

@@ -48,7 +48,6 @@ use crate::gateway::error::Result;
 use crate::gateway::pipeline::hooks::HookDecision;
 
 pub mod skills;
-pub mod transport;
 
 #[cfg(feature = "mcp")]
 pub mod client;
@@ -85,7 +84,7 @@ pub fn upstream_protocol_version(
 
 // Per CLAUDE.md guideline #2 we do not `pub use` from these submodules.
 // Downstream code reaches the types directly:
-// - `mcp::transport::{McpServerConfig, McpTransport}`
+// - `crate::config::mcp::{McpServerConfig, McpTransport}`
 // - `mcp::config_routing::ConfigMcpRoutingTable`
 // - `mcp::rmcp_executor::RmcpExecutor`
 // - `mcp::aggregating_executor::AggregatingExecutor`
@@ -94,7 +93,7 @@ pub fn upstream_protocol_version(
 // `McpTransport` is named in this file's own type definitions
 // (`AggregateMember`, `McpTarget`), so a private `use` brings it into local
 // scope without re-exporting it.
-use transport::McpTransport;
+use crate::config::mcp::McpTransport;
 
 /// Reduce a cacheable result's advertised freshness by time already spent in
 /// a gateway cache or multi-page/member merge.

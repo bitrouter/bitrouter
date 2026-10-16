@@ -1396,16 +1396,14 @@ mod tests {
         assert!(stub.yaml.contains("remote-filesystem:"));
         assert!(stub.yaml.contains("command: npx"));
         assert!(stub.yaml.contains("remote-filesystem-mcp-server@0.1.5"));
-        let body: std::collections::HashMap<
-            String,
-            crate::gateway::mcp::transport::McpServerConfig,
-        > = serde_saphyr::from_str(&stub.yaml)
-            .expect("stub must deserialise into the config schema");
+        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
+            serde_saphyr::from_str(&stub.yaml)
+                .expect("stub must deserialise into the config schema");
         let entry = body.get("remote-filesystem").expect("key present");
         assert_eq!(entry.name, "remote-filesystem");
         entry.validate().expect("stub must pass config validation");
         match &entry.transport {
-            crate::gateway::mcp::transport::McpTransport::Stdio { command, args, env } => {
+            crate::config::mcp::McpTransport::Stdio { command, args, env } => {
                 assert_eq!(command, "npx");
                 assert_eq!(args[0], "-y");
                 assert!(env.contains_key("GCS_BUCKET"));
@@ -1430,15 +1428,13 @@ mod tests {
             .expect("entry");
         let stub = add_stub(remote).expect("stub");
         assert_eq!(stub.id, "context7fork");
-        let body: std::collections::HashMap<
-            String,
-            crate::gateway::mcp::transport::McpServerConfig,
-        > = serde_saphyr::from_str(&stub.yaml)
-            .expect("stub must deserialise into the config schema");
+        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
+            serde_saphyr::from_str(&stub.yaml)
+                .expect("stub must deserialise into the config schema");
         let entry = body.get("context7fork").expect("key present");
         entry.validate().expect("stub must pass config validation");
         match &entry.transport {
-            crate::gateway::mcp::transport::McpTransport::Http { url, headers } => {
+            crate::config::mcp::McpTransport::Http { url, headers } => {
                 assert_eq!(url, "https://server.smithery.ai/@x/context7fork/mcp");
                 assert_eq!(
                     headers.get("Authorization").map(String::as_str),
@@ -1457,10 +1453,8 @@ mod tests {
         assert!(stub.yaml.contains("command: uvx"));
         assert!(stub.yaml.contains("# required, secret — API key."));
         assert!(stub.yaml.contains("SUBSTACK_API_KEY: \"\""));
-        let body: std::collections::HashMap<
-            String,
-            crate::gateway::mcp::transport::McpServerConfig,
-        > = serde_saphyr::from_str(&stub.yaml).expect("schema round-trip");
+        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
+            serde_saphyr::from_str(&stub.yaml).expect("schema round-trip");
         body.get("substack-ops")
             .expect("key")
             .validate()

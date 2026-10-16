@@ -515,8 +515,8 @@ impl<E: Executor + 'static> Executor for CachingExecutor<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::mcp::McpTransport;
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::mcp::transport::McpTransport;
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};

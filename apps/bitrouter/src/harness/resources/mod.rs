@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::gateway::mcp::transport::McpServerConfig;
+use crate::config::mcp::McpServerConfig;
 #[cfg(feature = "core")]
 use bitrouter_ai::types::Tool;
 use bitrouter_ai::types::ToolResultOutput;

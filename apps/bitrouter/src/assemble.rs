@@ -484,7 +484,10 @@ pub async fn build_app_with_extensions(
 async fn assemble_app(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    native: std::collections::HashMap<String, bitrouter_ai::extension::request_check::Registration>,
+    native: std::collections::HashMap<
+        String,
+        crate::gateway::extensions::registry::registration::Registration,
+    >,
 ) -> Result<Assembled> {
     let mut effective_config = config.clone();
     crate::policy_lock::apply_defaults(&mut effective_config, config_path);

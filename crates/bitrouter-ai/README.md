@@ -66,6 +66,12 @@ service consumers use the gateway HTTP API and the service-client SDK. Trusted
 custom hosts may use the application-owned runtime explicitly; there are no
 forwarding exports in AI.
 
+Request-check authors retain `Input`, `Decision` and `Callback` here. The
+concrete `Registration` record and its collection belong to application
+`bitrouter::gateway::extensions::registry`; hosts import the record from its
+`registration` submodule. Capability libraries can return a callback without
+depending on application assembly.
+
 Control consumers import scopes and capability/state reports from `control`,
 and configuration-state, reload and operation DTOs from `control::reload`.
 These replace the corresponding application `config`, `remote_control`,

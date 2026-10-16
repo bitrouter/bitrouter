@@ -338,7 +338,9 @@ jobs:
         env:
           PROFILE_FEATURES: ${{ matrix.features }}
         run: |
-          cargo check -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
+          # Check production before dev-dependencies can unify extra features.
+          cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
+          cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
           cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
           case ",$PROFILE_FEATURES," in
             *,tui,*) ;;
@@ -664,7 +666,7 @@ jobs:
                 'pub struct bitrouter_ai::core::responses::CreateRequest'
                 'pub struct bitrouter_ai::core::responses::FunctionOutput'
               )
-              forbidden='NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+              forbidden='extension::request_check::Registration|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else
               sentinels=(
                 'pub struct bitrouter_sdk::gateway::GatewayClient'

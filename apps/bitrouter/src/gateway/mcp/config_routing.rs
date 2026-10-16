@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use super::skills::is_valid_gateway_label;
-use super::transport::{McpServerConfig, McpTransport};
 use super::{AggregateMember, McpTarget, RoutingTable, ServerSelector};
+use crate::config::mcp::{McpServerConfig, McpTransport};
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;

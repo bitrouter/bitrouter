@@ -8,9 +8,12 @@ use std::sync::Arc;
 
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
-use request_check::{Callback, Registration};
+use registration::Registration;
+use request_check::Callback;
 
 use bitrouter_ai::extension::request_check;
+
+pub mod registration;
 
 /// Collects trusted, statically linked capability implementations for a host.
 ///

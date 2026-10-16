@@ -1,7 +1,7 @@
 //! Resource loading uses the actual native Turn, commit, approval and recovery path.
 use super::support::*;
+use crate::config::mcp::{McpServerConfig, McpTransport};
 use crate::gateway::caller::CallerContext;
-use crate::gateway::mcp::transport::{McpServerConfig, McpTransport};
 use crate::harness::agent::AgentConfigExt;
 use crate::harness::resources::HarnessConfig;
 use crate::harness::service::ThreadService;
@@ -312,8 +312,8 @@ async fn cancellation_after_observed_mcp_dispatch_blocks_replay()
 
 #[cfg(unix)]
 fn stdio_config() -> Result<HarnessConfig, String> {
-    use crate::gateway::mcp::transport::McpServerConfig;
-    use crate::gateway::mcp::transport::McpTransport;
+    use crate::config::mcp::McpServerConfig;
+    use crate::config::mcp::McpTransport;
     static BINARY: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
         std::sync::OnceLock::new();
     let binary = BINARY
@@ -341,9 +341,7 @@ async fn stdio_turn_binds_workspace_and_joins_process_before_settlement()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let mut config = stdio_config()?;
-    if let crate::gateway::mcp::transport::McpTransport::Stdio { args, .. } =
-        &mut config.servers[0].transport
-    {
+    if let crate::config::mcp::McpTransport::Stdio { args, .. } = &mut config.servers[0].transport {
         args.push("descendant".into());
     }
     let store = Arc::new(MemoryExecutionStore::default());
@@ -415,9 +413,7 @@ async fn cancelled_handshake_joins_process_before_stopped_owner()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let mut config = stdio_config()?;
-    if let crate::gateway::mcp::transport::McpTransport::Stdio { args, .. } =
-        &mut config.servers[0].transport
-    {
+    if let crate::config::mcp::McpTransport::Stdio { args, .. } = &mut config.servers[0].transport {
         args.push("hang".into());
     }
     let store = Arc::new(MemoryExecutionStore::default());
@@ -629,7 +625,7 @@ async fn changed_mcp_catalog_rejects_old_dispatch_without_retry()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let mut configuration = stdio_config()?;
-    if let crate::gateway::mcp::transport::McpTransport::Stdio { args, .. } =
+    if let crate::config::mcp::McpTransport::Stdio { args, .. } =
         &mut configuration.servers[0].transport
     {
         args.push("notify".into());

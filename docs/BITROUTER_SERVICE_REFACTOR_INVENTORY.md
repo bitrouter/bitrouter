@@ -40,6 +40,17 @@ claiming these corrections had already landed at the audit revision.
 
 ## AI and SDK audit before the residual extraction
 
+Subsequent ownership refinement after `edb4a07`: the concrete request-check
+`Registration` record moves from AI into
+`apps/bitrouter/src/gateway/extensions/registry/registration.rs`; its only
+consumers are host assembly, the collection and request-check runner. AI keeps
+the bounded callback contract used by the matcher. MCP configuration
+descriptors/validation and their tests move from `gateway/mcp/transport.rs` to
+`config/mcp.rs`, available in every profile. Runtime construction remains
+feature-gated. Server-tool and nested Fusion/search/fetch settings already live
+under unconditional `config/server_tools`. Historical audit rows below retain
+their original observed paths; stage results belong in the progress ledger.
+
 Result: all 28 baseline root rows have identifiable current destinations, but A02 is not source-complete: two public-AI boundary gaps remain. No actionable A03 boundary leak was found in the inspected SDK source. This is inventory and source/API evidence only, not final A01–A16 acceptance.
 
 Baseline: `9956a427bd5d4316b3bf2359f88e293b158781d5`, read with `git show`/`git ls-tree`. Current branch: `codex/service-p0`; HEAD: `91e5fdd7c46ded04356ece0dff805beed9a2acdd`. Current files were inspected, including existing uncommitted helper/packaging changes. The AI, SDK and gateway source trees have no changes relative to HEAD. No old checkout was used. No builds, tests, Cargo commands, commits or source edits were performed.

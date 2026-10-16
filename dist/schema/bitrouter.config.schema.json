@@ -763,7 +763,7 @@
       "type": "object"
     },
     "McpServerConfig": {
-      "description": "One configured upstream MCP server, as written in `bitrouter.yaml`.\n\nThe same `name` becomes the URL segment in `POST /mcp/{name}` and the\nidentifier the [`super::RoutingTable`] resolves against. Restrictions\nchosen to match the v0 config schema for paste-compatibility:\n\n- non-empty\n- no `/` (collides with the URL path segment)\n- not literally `sse` (reserved by the spec's deprecated transport name)",
+      "description": "One configured upstream MCP server, as written in `bitrouter.yaml`.\n\nThe same `name` becomes the URL segment in `POST /mcp/{name}` and the\nidentifier the [`crate::gateway::mcp::RoutingTable`] resolves against. Restrictions\nchosen to match the v0 config schema for paste-compatibility:\n\n- non-empty\n- no `/` (collides with the URL path segment)\n- not literally `sse` (reserved by the spec's deprecated transport name)",
       "properties": {
         "aggregate": {
           "default": true,

@@ -338,6 +338,8 @@ Because the schema is the contract, it is written down rather than inferred from
 
 The application gateway owns `assembly`, `http`, `pipeline`, `mcp`, `routing`,
 `observability` and `extensions`. Configuration lives in application `config`.
+MCP transport/server descriptors live in `config::mcp`; server-tool settings
+live in `config::server_tools`. Both remain readable without their executors.
 The generation pipeline retains its hooks, request checks, execution, stream
 processing and settlement; MCP has its own routing contract. ACP belongs to
 harness execution, not a gateway protocol pipeline.
@@ -420,13 +422,16 @@ a Cargo feature alone does not register a checker or opt into export.
 
 ### Extension authors and host assembly
 
-New request-check authors use an ordinary function accepting
+Capability implementation libraries use AI's `Input`, `Decision` and `Callback`
+contracts. Custom hosts install those callbacks through a function accepting
 `bitrouter::gateway::extensions::registry::ExtensionApi` and call
 `request_check(id, revision, callback)`. Business inputs and decisions live in
 `bitrouter_ai::extension::request_check`, without a wire envelope. The custom host passes the
 registration function to `host::serve_with_extensions` for the shared foreground
 daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
 Fragment and coverage types also live in `bitrouter_ai::extension::request_check`.
+Concrete callback registrations live in application
+`gateway::extensions::registry::registration`, alongside the host collection.
 Router bindings
 control execution scope and order; registration is not global activation.
 Beta supports compiled extensions only: no HTTP checker service, wire crate,

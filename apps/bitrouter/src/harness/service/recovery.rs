@@ -94,7 +94,7 @@ struct Rebuild {
     checkpoint_pages: super::checkpoint_pages::Reader,
     native: Option<crate::harness::agent::native::Saved>,
     unfinished_close: Option<String>,
-    servers: Option<Vec<crate::gateway::mcp::transport::McpServerConfig>>,
+    servers: Option<Vec<crate::config::mcp::McpServerConfig>>,
     caller: CallerContext,
     view: ThreadView,
     messages: Vec<Message>,

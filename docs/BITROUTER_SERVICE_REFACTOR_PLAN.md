@@ -365,6 +365,19 @@ transaction still violates this
 boundary. Keep intrinsic validation beside the contract; validation requiring
 credentials, policy evaluation or live ownership belongs to the service.
 
+Extract a type and its implementation separately. Once AI owns a type, the
+application cannot add an inherent `impl` for it; the
+[Rust implementation rules](https://doc.rust-lang.org/reference/items/implementations.html#inherent-implementations)
+require that implementation to remain in the type's defining crate. Move
+service methods to functions in the owning application module, or use a narrow
+application-local trait where existing call sites benefit from method syntax.
+Do not keep conversion in AI to preserve an old method name, duplicate the
+public type, or introduce a public extension-trait framework solely for this
+move. Conversions between two AI-owned types also cannot be implemented as
+application-owned `From`/`TryFrom` implementations; use the same explicit
+service functions. Serde implementations and intrinsic contract methods stay
+with their types.
+
 Use these existing symbols as concrete split points during extraction:
 
 | Baseline symbol or API | P0 treatment |
@@ -373,6 +386,7 @@ Use these existing symbols as concrete split points during extraction:
 | `InboundAdapter`, `OutboundAdapter`, `Transport`, `StreamEncoder`, `StreamDecoder`, `OutboundDispatch` | Move to the gateway with their implementations. These are conversion/execution interfaces, not lightweight public protocol data; `Transport` also exposes a concrete HTTP request and credential-bearing target. Trusted custom-provider hosts migrate to the application-owned interfaces. |
 | `ConversionReport`, `ConversionIssue` and reason/location/effect definitions | Keep the public report representation in AI; request inspection, `request_admission`, cross-protocol decisions and enforcement move to gateway conversion. Review methods and default bodies as well as type definitions. |
 | Request-check `Input`, `Decision`, `Callback` | Keep the bounded capability contract in AI. Input projection, registration storage, binding checks, concurrency permits and callback invocation remain gateway implementation. |
+| Request-check `Registration` and `ExtensionApi` | Keep the concrete host registration record, collection and activation in the application. The matcher constructs a callback using AI's input/decision types; a custom host installs it through application assembly. Public contract validation returns an AI-owned error, without retaining the old SDK error dependency. |
 | `observe::schema`, `SpanAttributes` and the committed span schema | Move the shared observation contract and pure conformance helpers to AI; the telemetry renderer, subscriber, exporter authentication and processing runtime stay in the application. |
 | Telemetry endpoint/opt-in configuration | Keep in application configuration, available without exporter dependencies; SDK or extension reuse is not established merely because this data can be serialized. |
 
@@ -945,7 +959,7 @@ to reintroduce retired Gemini protocol support or finish unrelated fidelity work
 | `extension` | Capability input/decision/callback types to AI; registry collection/activation to `gateway::extensions` |
 | `invocation` | `cli` product invocation/name helpers; no reason for a client library to own the executable hint |
 | `language_model` | Gateway pipeline implementation, detailed below; shared semantic data to AI only |
-| `mcp` | `gateway::mcp`, including `aggregating_executor/caching_executor/config_routing/rmcp_executor/skills/transport`; harness owns its separate workspace connections |
+| `mcp` | Executors, routing, aggregation, caching and skills relay to `gateway::mcp` behind `mcp`; `transport::{McpTransport, McpServerConfig, McpConfigError}`, their defaults and configuration validation to unconditional application `config::mcp`; harness owns its separate workspace connections |
 | `metrics` | Internal rendering seam and service metrics to gateway; externally meaningful schema to AI |
 | `observe` | `schema/span_attributes` public contract to AI; preserve generated schema and conformance helpers |
 | `plugin` | Application trusted-host migration/hook assembly; capability metadata to AI only if actually shared |
@@ -963,7 +977,18 @@ Within `language_model`:
 | `request_checks` | `gateway::extensions` bounded input projection and host runner |
 | `settlement/stream` | `gateway::metering` and `gateway::pipeline` finalization/stream lifecycle |
 | `native/native_accounting/native_auth/native_auxiliary/native_context/native_continuation/native_output/native_preparation/native_projection/native_report/native_stream/native_work` | Gateway's core-native model boundary; existing public envelopes in AI, core-specific adapters gated where necessary |
-| `server_tools` | `gateway::server_tools` behind `server-tools`; preserve existing request-local tools and nested model calls |
+| `server_tools` | Tool loops, executors, Fusion/search/fetch implementations and nested model calls to `gateway::server_tools` behind `server-tools`; configuration representations and nested settings to unconditional application `config::server_tools`, as detailed below |
+
+The root configuration contains `McpServerConfig` and `ServerToolsConfig` even
+when their runtimes are unavailable. Move `server_tools::config::ServerToolsConfig`
+and the settings it references from `fusion/config`, `web_search/config` and
+`web_fetch/config` into application configuration, together with their serialized
+forms, defaults, schema support and nonexecuting validation. Split any methods
+that construct a backend or execute a tool into the feature-gated implementation.
+Runtime-only bounds such as `ServerToolLoopConfig` may remain with the tool loop.
+These are deployment settings, not public AI contracts. Minimum builds must
+parse and report dormant settings and reject effective activation by the rules
+below, without constructing an MCP connection, tool backend or optional runtime.
 
 The gateway's server-tool loop is not the durable harness or the agent
 scheduler. Its existing `sub_agent` nested inference call does not justify
@@ -1254,7 +1279,7 @@ old directory as a unit. Shared data definitions do not activate their producers
 | TUI input, layout, rendering and terminal lifecycle | `tui`, which includes `harness`; shared command and presentation data remain independent of terminal libraries |
 | CLI, commands, presentation and local/remote client adapters | Base gateway operations always compiled; owner-specific operations and adapters follow `core`, `harness` or `tui` without starting those services for a remote read |
 | Host and integrations | Base lifecycle and provider/account integrations always compiled; cross-owner wiring uses the intersection of the participating features |
-| Configuration and historical migration ledger | Always readable/available; effective activation checks require the appropriate compiled capability |
+| Configuration and historical migration ledger | Always readable/available, including MCP transport/server descriptors and nested server-tool settings; effective activation checks require the appropriate compiled capability |
 | Shared request/capture/identity records in storage | Available to gateway without core or harness; repositories and mutation authority remain with their owning service |
 | Internal native checkpoint codecs | Available with either `core` or `harness`; no execution, scheduler restoration or conversation commits in the codec |
 | Telemetry configuration | Always readable without exporter types; effective export opt-in requires an OTLP transport |
@@ -1317,6 +1342,18 @@ Features are additive. Reduced artifacts must use `--no-default-features`
 before selecting their capabilities: `--features harness` alone retains the
 full default product. Every application profile keeps its normal dependency on
 `bitrouter-ai`; gateway support and its public contracts are always present.
+
+Serialization-related dependency features are part of data compatibility.
+The baseline `evolution::rubric::digest`, `optimization::identity::canonical_digest`
+and `policy_lock::semantic_digest` hash serialized data. Audit the actual inputs
+and feature closure for `serde_json` options such as `float_roundtrip` and
+`preserve_order`; optional ACP, TUI or test dependencies must not be responsible
+for enabling behavior that persistent identities require. Declare required
+serialization behavior at its owning normal/build dependency rather than
+relying on incidental feature unification. Do not replace a digest algorithm or
+rewrite stored identities to make a reduced build pass. Compare independently
+built full and reduced executables against the same persisted fixtures, because
+a test target can activate dependency features absent from the shipped binary.
 
 The nontrivial feature implications are:
 
@@ -1594,6 +1631,9 @@ reported outcomes.
   surfaces, schema artifacts, database migration ledger, session formats and
   representative serialized fixtures. Include daemon build/compatibility
   identity and installer/update selection paths in the delivery baseline.
+- Record serialization feature selections and digest inputs used by persistent
+  policy, execution and checkpoint identities. Preserve baseline output bytes
+  where they define identity, separately from ordinary wire-shape fixtures.
 - Record full-product behavior and minimum relevant request/stream/daemon paths,
   including Decisions, native continuations, auth refresh and optional tools.
 - Retain baseline-written database/checkpoint bytes as compatibility fixtures;
@@ -1610,6 +1650,11 @@ reported outcomes.
 - Record binary size, isolated normal dependency counts, idle memory and a
   bounded request/stream benchmark for later comparison. Agree a regression
   budget from those measurements rather than inventing a numeric target here.
+  Retain the measured executables and record revision, checksum, target,
+  toolchain, optimization profile, configuration and workload. Compare equivalent
+  builds and repeat samples; development-build observations do not establish
+  production performance, and measurements do not by themselves accept a
+  regression outside the agreed budget.
 
 Exit: every current capability has a retained full-product owner, a feature
 requirement and a regression fixture or existing test family.
@@ -1660,6 +1705,9 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
 
 - Move old SDK server, application builder, pipeline, configuration, routing,
   MCP, server tools, finalization and host extension machinery into the application.
+- Extract MCP descriptors and server-tool/Fusion/search/fetch settings from
+  their runtime modules into unconditional application configuration. Preserve
+  parsing, defaults and schema support before gating executors or tool loops.
 - Move AI codecs, conversion algorithms, upstream execution, auth/provider and
   catalog runtime into the application.
 - Split service methods from retained model and core protocol types using the
@@ -1763,6 +1811,9 @@ over harness persistence or execution.
   endpoints and their feature-aware inspection/execution capabilities.
 - Remove unconditional all-backend database, ACP and terminal feature activation
   from shared dependency declarations; activate each at its actual owner.
+- Make identity-sensitive serialization features explicit and compare digests
+  across independently built profiles, without borrowing feature activation
+  from test targets or the full workspace build.
 - Ensure minimum gateway startup initializes only gateway services and required
   storage/logging. Keep the full migration ledger.
 - Exercise export opt-in checks without an OTLP transport in both gateway and
@@ -1847,7 +1898,7 @@ refactor has already been implemented or tested.
 | A06 Runtime isolation | Minimum gateway serves requests without loading harness resources or starting core/TUI/ACP workers; no terminal required; remote CLI reads do not bootstrap local service state; default/dormant configuration is accepted, while unavailable activation is rejected consistently at startup, reload and profile preflight |
 | A07 Protocol parity | Existing generation and Decisions endpoints, stream/nonstream conversion, native reasoning/history/continuation, errors, usage and fallback behavior remain equivalent on supported builds; typed client serialization preserves admission and replay semantics, and response/event contracts preserve gateway output including presence/null semantics; capability reports match available actions and explicit managed requests cannot fall through to ordinary inference |
 | A08 Lifecycle parity | Readiness, bind failures, reload diagnostics, disconnect, cancellation, SIGTERM, body draining, required finalization and endpoint cleanup retain existing guarantees; daemon compatibility distinguishes same-revision feature profiles, with no silent capability removal and safe preflight for explicit transitions |
-| A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records and the migration ledger; reserved request-ID rejection preserves earlier accounting; trajectory terminal facts/outbox survive feature changes without duplicate settlement/publication; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
+| A09 Data compatibility | Baseline-written database/session/checkpoint fixtures reopen correctly; full → minimum → full and full → harness-only → full preserve records, serialized identities/digests and the migration ledger using independently built executables; reserved request-ID rejection preserves earlier accounting; trajectory terminal facts/outbox survive feature changes without duplicate settlement/publication; offline recovery still rejects corrupt native checkpoints without core; SQLite/PostgreSQL/MySQL execution evidence is distinct from driver compilation |
 | A10 Core and harness authority | Scheduler still decides agent creation/wait/wake; harness owns session commits/tools/approval; core-only and harness-only behavior tests run; local bridge cannot bypass checkpoint ACK or recovery checks |
 | A11 CLI and TUI parity | Existing full-product commands and supported TUI actions use shared operations; headless text/JSON output and permission behavior remain correct without Ratatui; retained baseline transcript/failure-tail fixtures verify exact bytes at explicit settled-turn checkpoints, and separate sink/process tests preserve closed-pipe and teardown behavior; every non-TUI normal/build closure excludes terminal libraries, and TUI style/layout/PTY evidence remains separate |
 | A12 Telemetry | Exporter is application-owned; contract/schema in AI; no-OTLP preserves configuration readability, essential facts, basic logs and harness-local capture, and rejects unavailable export before related side effects; HTTP-only and gRPC-only collector tests verify delivery/metadata/flush; ingress lifetime, names, attribution and opt-in behavior remain correct |
@@ -1863,14 +1914,25 @@ workspace-wide feature unification and dev-dependencies must not conceal leaks.
 Check both default and all public features for AI and SDK. Do not use absence of
 a package name from an unchecked `cargo tree` invocation as proof that it built.
 
-For the application, check `--no-default-features` with each of:
+For reduced application builds, first check the production binary with a separate
+`cargo check --locked -p bitrouter --no-default-features --bin bro` invocation for
+each selection below, adding `--features` only for a nonempty selection. Then
+check its supported tests and examples with `--all-targets` in a separate
+invocation; their dev-dependencies cannot stand in for the production check:
 
 - No feature; `core`; `harness`; `tui`.
 - `core,harness` and `core,tui`.
 - `mcp`; `server-tools`; `guardrails`.
 - `otel-http`; `otel-grpc`; both transports; `harness,otel-http`.
 - `db-postgres` and `db-mysql`; the standard optional-gateway profile.
-- Default and `--all-features`.
+
+Check the full default product separately with
+`cargo check --locked -p bitrouter --bin bro`, and all optional capabilities with
+`cargo check --locked -p bitrouter --all-features --bin bro`; check their supported
+tests and examples separately with `--all-targets`. Do not put
+`--no-default-features` on the default-product check. These compilation commands
+are one part of the evidence; the profile-specific runtime tests below remain
+required.
 
 Gateway-only normal/build closures exclude Ratatui/Crossterm, ACP conductor and
 agent runtimes; minimum additionally excludes optional MCP, OTel and non-SQLite
@@ -1906,7 +1968,7 @@ coverage that justifies a profile.
 | HTTP-only telemetry | Trace/metric delivery to a test collector, configured headers, current bearer-refresh behavior and shutdown flushing |
 | gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |
 | No OTLP transport | Minimum and harness-only profiles retain essential request/usage facts, finalization, basic logs and enabled harness-local records; dormant export configuration is readable, while effective export opt-in is rejected at startup/reload/profile preflight before installation-ID creation, bearer resolution or exporter tasks. Also exercise the TUI-without-OTLP profile to verify interactive entry points reject unavailable export before setup or agent side effects. |
-| Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full and full → harness-only → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
+| Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full and full → harness-only → full transitions preserve the complete ledger, harness data and identity-sensitive serialization/digests. Build each executable independently of test-only dependency features; backend execution results recorded separately. |
 | Reserved request identities | Create judge reservations and accounting in a full build; submit the reserved IDs through the minimum gateway, including an early authentication rejection; assert zero upstream calls and unchanged original attempt/charge records. Separately exercise canonical inventory under its existing authenticated controller/capture scope: preserve duplicate rejection, unresolved-binding tracking, terminal/settlement facts and original accounting with core disabled, without starting a recorder or learning runtime. |
 | Trajectory settlement and outbox | Minimum gateway records terminal facts only from authoritative metering and applies equivalent cost-based progress guards; preexisting and new outbox rows remain pending without core, with no disabled-consumer retry loop; restoring core validates and drains them idempotently without repeated settlement or duplicate admitted evidence |
 

@@ -110,7 +110,7 @@ pub enum ExecutionRecord {
     },
     /// Host-authorized private bindings, never projected into public history.
     ThreadResources {
-        servers: Vec<crate::gateway::mcp::transport::McpServerConfig>,
+        servers: Vec<crate::config::mcp::McpServerConfig>,
     },
     ThreadRecovered {
         source_server_instance_id: String,

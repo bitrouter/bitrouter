@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::config::mcp::McpServerConfig;
 use crate::gateway::mcp::client::{BoundedMcpClient, CatalogTool, ConnectError};
-use crate::gateway::mcp::transport::McpServerConfig;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientRequest, ProtocolVersion, ServerResult,
 };

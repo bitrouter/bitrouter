@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
+use crate::config::mcp::McpServerConfig;
+use crate::config::mcp::McpTransport;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::mcp::transport::McpServerConfig;
-use crate::gateway::mcp::transport::McpTransport;
 use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectTo, ConnectionTo, Dispatch, Error, HandleDispatchFrom,
     Handled,

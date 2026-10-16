@@ -10,7 +10,7 @@
 //!   <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio>.
 //!
 //! These types are always available (no `mcp` feature required) so a consumer
-//! can implement a custom [`super::Executor`] against them without pulling in
+//! can implement a custom [`crate::gateway::mcp::Executor`] against them without pulling in
 //! the bundled rmcp-backed executor.
 
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ pub enum McpTransport {
 /// One configured upstream MCP server, as written in `bitrouter.yaml`.
 ///
 /// The same `name` becomes the URL segment in `POST /mcp/{name}` and the
-/// identifier the [`super::RoutingTable`] resolves against. Restrictions
+/// identifier the [`crate::gateway::mcp::RoutingTable`] resolves against. Restrictions
 /// chosen to match the v0 config schema for paste-compatibility:
 ///
 /// - non-empty
@@ -126,7 +126,7 @@ pub enum McpConfigError {
 
 impl McpServerConfig {
     /// Verify the config is internally consistent. Called by
-    /// `super::config_routing::ConfigMcpRoutingTable` at construction time so
+    /// `crate::gateway::mcp::config_routing::ConfigMcpRoutingTable` at construction time so
     /// a malformed `bitrouter.yaml` is rejected at startup, not on first use.
     pub fn validate(&self) -> Result<(), McpConfigError> {
         if self.name.is_empty() {

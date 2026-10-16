@@ -97,7 +97,7 @@ pub(super) struct QueuedTurn {
 
 pub(super) struct ThreadRecord {
     pub(super) native: Option<crate::harness::agent::native::Saved>,
-    pub(super) servers: Option<Vec<crate::gateway::mcp::transport::McpServerConfig>>,
+    pub(super) servers: Option<Vec<crate::config::mcp::McpServerConfig>>,
     pub(super) presentation: super::observation::Presentation,
     pub(super) snapshot: ThreadSnapshot,
     pub(super) caller: CallerContext,

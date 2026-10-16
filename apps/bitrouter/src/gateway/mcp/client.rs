@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::process;
-use super::transport::{McpServerConfig, McpTransport};
+use crate::config::mcp::{McpServerConfig, McpTransport};
 use rmcp::model::{
     ClientInfo, ClientRequest, Implementation, ListToolsRequest, PaginatedRequestParams,
     ProtocolVersion, ServerResult,

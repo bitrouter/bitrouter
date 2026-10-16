@@ -1,7 +1,7 @@
 //! Production SQLite persistence with real MCP HTTP, using scripted model output.
+use bitrouter::config::mcp::{McpServerConfig, McpTransport};
 use bitrouter::gateway::assembly::App;
 use bitrouter::gateway::caller::CallerContext;
-use bitrouter::gateway::mcp::transport::{McpServerConfig, McpTransport};
 use bitrouter::gateway::model::target::AuthScheme;
 use bitrouter::gateway::pipeline::executor::{MockExecutor, MockResponse};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;

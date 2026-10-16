@@ -40,6 +40,7 @@ use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 pub mod agent;
 pub mod checker;
 pub mod decision;
+pub mod mcp;
 pub mod pattern;
 pub mod presets;
 pub mod router;
@@ -136,7 +137,7 @@ pub struct Config {
     /// Upstream MCP servers, keyed by server id. The id is what appears in
     /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
     /// Empty by default — when empty, the binary does not mount the MCP route.
-    pub mcp_servers: HashMap<String, crate::gateway::mcp::transport::McpServerConfig>,
+    pub mcp_servers: HashMap<String, crate::config::mcp::McpServerConfig>,
     /// Server-side tool loop: MCP server ids whose tools BitRouter injects into
     /// LLM requests and executes itself. Empty by default — the pipeline stays
     /// single-shot.

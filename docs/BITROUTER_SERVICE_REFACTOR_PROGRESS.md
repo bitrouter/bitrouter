@@ -3255,3 +3255,55 @@ Logs are `/tmp/bitrouter-p0-measurement-tests-4096.log`,
 `/tmp/bitrouter-p0-local-measurements-4096-2bb583a.log`. Final whole-candidate
 tests, feature/runtime/package reconciliation, independent acceptance review
 and PR remain outstanding. P1 remains out of scope.
+
+## Host registration and unconditional MCP configuration (2026-10-16)
+
+Stage base: `edb4a07`. Moved the concrete request-check `Registration` record
+and its unchanged implementation from AI into application
+`gateway::extensions::registry::registration`. AI keeps the bounded callback,
+input/decision and intrinsic revision-validation contract. Application assembly,
+binding and runner consumers now import the host-owned registration; matcher
+authors continue to depend only on AI. The public-API guard rejects accidental
+reintroduction of `Registration` or `ExtensionApi` into AI.
+
+Moved the existing MCP server/transport configuration module to unconditional
+`config::mcp`, with its defaults, validation and 12 tests intact. Gateway runtime
+and harness callers import that owner directly. A line comparison confirmed the
+391-line module changed only three rustdoc ownership references; regenerated
+configuration schema differs only in the corresponding description. This keeps
+deployment configuration readable without the MCP runtime. Existing nested
+server-tool configuration was already application-owned and unconditional.
+
+The plan and migration inventory now state these exact boundaries, including
+service methods on AI-owned types and identity-sensitive serialization across
+profiles. CI checks each reduced production binary before its test/example
+targets, so development dependencies cannot conceal a production feature leak.
+
+Validation on macOS arm64, with incremental compilation and development/test
+debug information disabled, jobs two and test threads two:
+
+- Rust/Cargo 1.99.0 workspace/all-feature/all-target check passed in 64s.
+- Focused request-check, guardrails and MCP tests: **145/145 passed in 1.070s**.
+- Registry and request-check installation tests: **18/18 passed in 0.338s**.
+- Minimum all-target check passed in 34.76s; separate minimum production binary
+  check passed in 19.60s. Minimum MCP configuration tests: **12/12 passed**.
+- Rust 1.97.0 strict workspace/all-feature/all-target Clippy passed in 64s;
+  workspace/all-feature rustdoc with warnings denied passed in 40.72s.
+- AI public API generated with the pinned nightly/tool passed all 18 CI
+  sentinels, forbidden-ownership checks and foreign-root comparison. Its only
+  foreign public roots remain `schemars`, `serde_core` and `serde_json`.
+- Schema generation, YAML parsing, formatting and diff checks passed.
+
+Commands and outputs use `/tmp/bitrouter-p0-contract-owners-*`, including
+`check`, `tests`, `registration`, `minimum`, `minimum-bin`, `minimum-config`,
+`clippy`, `rustdoc`, `ai-public-api` and `schema`. The first public-API command
+could not find the installed tool on PATH; rerunning with the existing pinned
+tool succeeded. A mechanical comparison initially named the wrong three rustdoc
+substitutions; inspecting the exact changed lines and correcting that comparison
+confirmed unchanged implementation. Neither diagnostic required a source fix.
+
+Independent source review found no remaining ownership or behavior issue.
+These focused results do not substitute for final whole-candidate validation,
+performance acceptance, packaged service evidence or the final independent
+A01–A16 review. The optional skill's `rust_diagnostics` MCP remains unavailable;
+the recorded results are actual Cargo checks, not a claimed MCP VERIFY pass.
