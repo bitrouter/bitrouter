@@ -860,6 +860,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.0,
+              "no_cache": 0.23
+            },
+            "output_tokens": {
+              "text": 0.96
+            }
+          },
+          "provider_model_id": "minimax/minimax-m3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "ambient",
