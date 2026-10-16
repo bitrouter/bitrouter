@@ -41,6 +41,8 @@ pub enum Error {
     Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
     #[error("core service returned HTTP status {}", .0.status)]
     Core(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
+    #[error("core reported a managed response stream failure; execution may still be running")]
+    CoreStream(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
     #[error("harness returned HTTP status {}", .0.status)]
     Harness(Box<ServiceFailure<bitrouter_ai::harness::api::ErrorResponse>>),
     #[error("harness observation failed; execution may still be running")]

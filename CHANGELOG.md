@@ -20,12 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade ACP schema to 1.10.2 with the matching SDK and Conductor 3.0.0,
   retaining stable v1 and draft v2 support.
 
-- **Breaking (SDK):** Move the ACP controller, client, capture, telemetry,
-  translation and process transport to `bitrouter_orchestrator::acp` behind
-  its `acp` feature.
-  Remove the SDK's `acp` module and feature. Agent configuration types now live
-  in `bitrouter_sdk::config::agent`; existing `agents:` YAML, ACP wire behavior
-  and CLI commands are unchanged.
+- **Breaking (Rust APIs):** Consolidate gateway, core, harness, TUI and telemetry
+  implementations in `bitrouter`; retire the `bitrouter-orchestrator`,
+  `bitrouter-tui` and `bitrouter-telemetry` packages. `bitrouter-ai` now contains
+  lightweight public contracts, and `bitrouter-sdk` is the HTTP/streaming service
+  client. ACP host consumers use `bitrouter::harness::acp` under `harness`;
+  agent configuration lives in `bitrouter::config::agent`. Existing YAML, wire
+  behavior and full-product CLI commands are preserved. See
+  [the AI migration notes](crates/bitrouter-ai/README.md#alpha-api-migration)
+  and [SDK guide](crates/bitrouter-sdk/README.md) for replacement imports and
+  the independent gateway profile.
 
 - **Breaking:** remove native Gemini Generate Content HTTP endpoints, upstream codec, and Rust protocol variant. Metered `google` now uses the official Chat Completions endpoint with bearer `GEMINI_API_KEY`.
 - Retire `google-ai` subscription inference, Vertex Express, and bundled Gemini CLI routing. Active native configs fail with migration guidance; older catalogs quarantine retired entries. Saved credentials and historical records remain intact, with unsupported replay rejected. No automatic subscription-to-metered billing migration occurs.

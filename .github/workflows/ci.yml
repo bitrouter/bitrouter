@@ -439,7 +439,7 @@ jobs:
         run: >-
           cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --lib --test acp --test database_capture --build-jobs 2 --test-threads 2
-          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(agent_api::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | test(harness::service::core_disabled_tests::) | test(harness::service::recovery::tests::baseline_) | test(harness::agent::native::replay_tests::) | test(harness::acp::native::core_disabled_tests::) | test(harness::permission::) | test(harness::local::) | test(harness::result_contract::) | binary(acp) | binary(database_capture)'
+          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(agent_api::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | test(harness::service::core_disabled_tests::) | test(harness::service::recovery::tests::baseline_) | test(harness::service::recovery::tests::historical::) | test(harness::agent::native::replay_tests::) | test(harness::acp::native::core_disabled_tests::) | test(harness::permission::) | test(harness::local::) | test(harness::result_contract::) | binary(acp) | binary(database_capture)'
 
       - name: verify scheduler acknowledgements and recovery without harness
         if: matrix.features == 'core'
@@ -645,6 +645,8 @@ jobs:
                 'pub enum bitrouter_ai::core::protocol::ServerMessage'
                 'pub struct bitrouter_ai::core::protocol::ErrorEnvelope'
                 'pub struct bitrouter_ai::core::checkpoint::CheckpointBatch'
+                'pub struct bitrouter_ai::core::responses::CreateRequest'
+                'pub struct bitrouter_ai::core::responses::FunctionOutput'
               )
               forbidden='NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else
@@ -658,6 +660,8 @@ jobs:
                 'bitrouter_sdk::gateway::GatewayClient::submit_eval_result'
                 'bitrouter_sdk::gateway::GatewayClient::eval_snapshot'
                 'bitrouter_sdk::gateway::GatewayClient::core_capabilities'
+                'bitrouter_sdk::gateway::GatewayClient::managed_responses'
+                'bitrouter_sdk::gateway::GatewayClient::stream_managed_responses'
                 'bitrouter_sdk::gateway::GatewayClient::core_channel'
                 'pub struct bitrouter_sdk::core::CoreChannel'
                 'pub struct bitrouter_sdk::core::CoreSender'

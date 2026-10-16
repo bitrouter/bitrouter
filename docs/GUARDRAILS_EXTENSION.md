@@ -8,7 +8,7 @@ Do not launch the former `bitrouter-regex-checker` service as a migration path.
 `regex-checker` is an extension implementing the request-check capability. Its
 Cargo library remains `bitrouter-guardrails`. It matches supplied regex rules;
 it is not a comprehensive PII detector. The common entry is
-`bitrouter_sdk::extension::ExtensionApi::request_check(id, revision, callback)`.
+`bitrouter::gateway::extensions::registry::ExtensionApi::request_check(id, revision, callback)`.
 The foreground host calls `bitrouter::host::serve_with_extensions`; see the runnable
 `apps/bitrouter/examples/native_regex_checker.rs` example in the source repository.
 No separate extension API or checker-protocol crate is required.
@@ -85,7 +85,9 @@ but BitRouter does not supply a remote extension protocol.
 
 ## Breaking migration
 
-- Replace app-local `bitrouter::extension::ExtensionApi` imports with the SDK entry.
+- Replace former `bitrouter_sdk::extension::ExtensionApi` or
+  `bitrouter::extension::ExtensionApi` imports with
+  `bitrouter::gateway::extensions::registry::ExtensionApi`.
 - Replace Native map assembly with `assemble::build_app_with_extensions`.
 - Replace hand-built foreground HTTP serving with `host::serve_with_extensions`
   when the full BitRouter daemon lifecycle is wanted.

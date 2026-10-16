@@ -16,13 +16,9 @@ use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use bitrouter_ai::core::protocol::{
-    ArtifactRef, BETA, CoreError, DiscardableHistory, ErrorCode, Limits, RoutingSettings,
-    TaskInput, ToolOutcome, ToolResult, VERSION, Verification,
-};
+use bitrouter_ai::core::protocol::{BETA, CoreError, ErrorCode, TaskInput, ToolResult, VERSION};
+use bitrouter_ai::core::responses::{CreateRequest as Create, FunctionOutput};
 use http::Method;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::sync::watch;
 
 use super::{ApiError, ManagedCoreApi, auth::Principal};
@@ -37,72 +33,6 @@ pub(super) struct Job {
     operation_id: String,
     fingerprint: String,
     progress: watch::Receiver<Progress>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct MultiAgent {
-    enabled: bool,
-    max_concurrent_subagents: Option<u32>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Reasoning {
-    effort: String,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Extension {
-    version: u32,
-    execution: String,
-    session_id: String,
-    execution_epoch: u64,
-    operation_id: String,
-    expected_state_revision: Option<u64>,
-    routing: Option<RoutingSettings>,
-    limits: Option<Limits>,
-    #[serde(default)]
-    acceptance_criteria: Vec<String>,
-    #[serde(default)]
-    required_materials: Vec<String>,
-    verification: Option<Verification>,
-    discardable_history: Option<DiscardableHistory>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Create {
-    model: String,
-    input: Value,
-    previous_response_id: Option<String>,
-    #[serde(default)]
-    stream: bool,
-    multi_agent: MultiAgent,
-    bitrouter: Extension,
-    reasoning: Option<Reasoning>,
-    max_output_tokens: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResultMetadata {
-    operation_id: String,
-    status: ToolOutcome,
-    #[serde(default)]
-    evidence: Vec<ArtifactRef>,
-    workspace_revision: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FunctionOutput {
-    #[serde(rename = "type")]
-    kind: String,
-    call_id: String,
-    output: String,
-    bitrouter: ResultMetadata,
 }
 
 pub(super) async fn intercept(

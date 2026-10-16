@@ -25,6 +25,7 @@ pub(crate) enum Protocol {
     Chat,
     Messages,
     Responses,
+    ManagedResponses,
 }
 
 pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
@@ -51,9 +52,17 @@ pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
                 let kind = data.get("type").and_then(serde_json::Value::as_str);
                 if data.get("error").is_some() || event.event == "error" || kind == Some("error") {
                     let envelope = if data.get("error").is_some() { data.clone() } else { serde_json::json!({"error": data}) };
-                    let body = serde_json::from_value::<GatewayErrorEnvelope>(envelope)
-                        .map_err(|_| Error::Response("invalid stream error envelope"))?;
-                    Err(Error::Stream(Box::new(ServiceFailure { status, headers: headers.clone(), body: Some(body), body_error: None })))?;
+                    if matches!(protocol, Protocol::ManagedResponses) {
+                        let (body, body_error) = match serde_json::from_value::<bitrouter_ai::core::protocol::ErrorEnvelope>(envelope) {
+                            Ok(body) => (Some(body), None),
+                            Err(_) => (None, Some(Error::Response("invalid core stream error envelope"))),
+                        };
+                        Err(Error::CoreStream(Box::new(ServiceFailure { status, headers: headers.clone(), body, body_error })))?;
+                    } else {
+                        let body = serde_json::from_value::<GatewayErrorEnvelope>(envelope)
+                            .map_err(|_| Error::Response("invalid stream error envelope"))?;
+                        Err(Error::Stream(Box::new(ServiceFailure { status, headers: headers.clone(), body: Some(body), body_error: None })))?;
+                    }
                 }
                 if !matches!(protocol, Protocol::Chat) && event.event != "message" && Some(event.event.as_str()) != kind {
                     Err(Error::Response("SSE event name disagrees with its data type"))?;
@@ -61,9 +70,9 @@ pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
                 terminal = match protocol {
                     Protocol::Chat => false,
                     Protocol::Messages => kind == Some("message_stop"),
-                    Protocol::Responses => matches!(kind, Some("response.completed" | "response.incomplete" | "response.failed")),
+                    Protocol::Responses | Protocol::ManagedResponses => matches!(kind, Some("response.completed" | "response.incomplete" | "response.failed")),
                 };
-                if terminal && matches!(protocol, Protocol::Responses) {
+                if terminal && matches!(protocol, Protocol::Responses | Protocol::ManagedResponses) {
                     let response = data.get("response").and_then(serde_json::Value::as_object);
                     let expected = kind.and_then(|kind| kind.strip_prefix("response."));
                     if response.and_then(|value| value.get("status")).and_then(serde_json::Value::as_str) != expected {

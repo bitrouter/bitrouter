@@ -2932,3 +2932,66 @@ not part of the workspace test compilation.
 This stage establishes actual format-7 decoding and offline reconstruction, not
 live scheduler restoration, full/minimum/full or full/harness/full process
 transitions, other historical payload formats, or complete A09/P0 acceptance.
+
+## Managed Responses SDK and historical readers (2026-10-16)
+
+Stage base: `76d1ded`. Independent A01/A02/A03/A15 source review identified
+that ordinary Responses methods did not implement the managed profile: they
+omitted beta negotiation and used an incompatible request shape. AI now owns
+the existing strict managed request/continuation DTOs; the application imports
+those types while retaining admission, fingerprinting and execution. The SDK's
+explicit JSON/SSE methods send the beta header over its base HTTP transport,
+preserve core commit-status errors and HTTP metadata, and do not acknowledge,
+execute, retry or reconnect on the caller's behalf. Core-channel transport
+remains optional. Stale guardrails imports and the alpha migration note were
+also corrected.
+
+The actual service test covers raw-request to SDK replay, fingerprint conflicts,
+invalid and valid tool-result continuation, explicit session authority, terminal
+response parity and provider-call counts. A separate fragmented SSE fixture
+covers retained extension events. Review found malformed core SSE envelopes
+initially lost metadata; the repair preserves status, headers and decoding error
+with redacted diagnostics. Independent repair review found no remaining scoped
+issue. A first compile exposed a missing test import, and an initial event-count
+assertion incorrectly required hosted events from a fixture with none; both were
+corrected before the successful runs.
+
+Validation of this source stage:
+
+- SDK all-feature tests: **56/56** in 0.412s; base-transport gateway tests:
+  **23/23** in 0.218s; all five SDK README doctests compile.
+- Actual-service managed/authority/stream tests plus historical reconstruction:
+  **14/14** in 3.373s. Core-only actual SDK tests: **2/2** in 1.411s.
+- Strict workspace/all-target/all-feature Clippy with Rust 1.97.0 passed in
+  1m47s. Strict AI/SDK all-feature rustdoc passed in 17.35s.
+- The pinned public-API guard (`cargo-public-api 0.52.0`,
+  `nightly-2026-05-05`) passed for AI and SDK, including the new method/type
+  sentinels and unchanged forbidden runtime dependencies.
+
+Logs: `/tmp/bitrouter-p0-sdk-managed-{all,default-final,doctest,service-final,core-only,clippy,rustdoc,public-api}.log`.
+These results do not replace the final candidate's complete workspace run.
+
+Historical formats 2, 3, 4 and 6 are now retained under
+`tests/fixtures/runtime-history`. Each fixture was emitted by the original
+production ThreadService/MemoryExecutionStore at its pinned revision; only an
+ignored capture test was appended. Original manifests, lockfiles and writer
+code were unchanged. Provenance retains source/test/binary hashes and the exact
+compressed/raw journal identities. Offline candidate reconstruction preserves
+original cursors, completed tool exchanges, terminal answers and paused status
+without acquiring execution authority. Harness-only baseline readers, including
+format 7 and the real database, passed **8/8** in 0.776s.
+
+Independent review verified the retained payload/source/patch hashes and found
+two issues: Unix instruction paths were not portable to Windows, and the
+format-6 README incorrectly claimed stored artifacts. The v4/v6 and inherited
+v7 full-reconstruction tests are now Unix-gated; v2/v3, database decoding and
+native-checkpoint replay remain cross-platform. Production path checks and
+fixture bytes are unchanged. The README now states 32 v6 checkpoint batches and
+zero stored artifacts, and records empty instruction/inventory coverage.
+Targeted independent repair review found no remaining issue or Windows unused
+import by source tracing; no Windows execution is claimed here.
+
+No authentic format-5 writer has been established: the inspected source changes
+its writer directly from 4 to 6 while accepting 5. This stage makes no fabricated
+format-5, stored-artifact, Windows-native instruction, live restoration or
+cross-artifact data-transition claim. A09 and overall P0 remain open.

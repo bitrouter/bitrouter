@@ -33,6 +33,9 @@ checks ledger timestamps, raw record bytes, decoded records, bounded record and
 public-history pages, acceptance keys and stopped-owner evidence. Offline native
 replay and complete Thread reconstruction consume the original journal with and
 without core; no test opens its recorded workspace or executes its tools.
+Complete Thread reconstruction is Unix-only because its instruction snapshot
+retains a macOS absolute working-directory path. Database decoding and native
+checkpoint replay remain cross-platform; they do not grant workspace authority.
 Corrupt checkpoint digests remain rejected. These checks do not establish live
 scheduler restoration, full/minimum/full artifact transitions or formats 2–6.
 The current-writer fixture in `../native-replay` remains separate.

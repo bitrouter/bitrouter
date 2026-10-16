@@ -6,7 +6,10 @@ use bitrouter_ai::harness::agent::AgentConfig;
 use bitrouter_ai::harness::thread::PermissionProfile;
 use bitrouter_ai::harness::thread::ThreadStatus;
 
+mod historical;
+
 #[test]
+#[cfg(unix)] // The retained instruction snapshot was written with a Unix cwd.
 fn baseline_v7_thread_reconstruction_preserves_completed_turn()
 -> Result<(), Box<dyn std::error::Error>> {
     let compressed = include_bytes!(concat!(

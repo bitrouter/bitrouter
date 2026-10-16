@@ -115,6 +115,31 @@ endpoint. Core requires an active virtual service key even when ordinary
 inference uses `skip_auth`. `Error::Core` retains its typed error envelope,
 HTTP status and headers, including failed WebSocket handshakes.
 
+Use `GatewayClient::managed_responses` and `stream_managed_responses` with
+`bitrouter_ai::core::responses::CreateRequest` for the managed Responses
+profile. These methods send the required beta negotiation and use the strict
+managed request contract; ordinary `responses` methods retain the inference
+profile. The response/event types retain `bitrouter` metadata, agent attribution
+and retained `bitrouter.*` events. `Error::CoreStream` preserves SSE core errors,
+including their commit status. HTTP and SSE methods are available without the
+SDK's `core` feature. They require an already bound session and a separate
+harness driving checkpoint persistence/ACKs; HTTP observation never sends an ACK.
+
+`FunctionOutput` and `ResultMetadata` in the same AI module describe explicit
+harness results for continuations. Supply the prior response ID and the original
+call/operation identities. The SDK does not execute those calls or infer a
+successful result from a dropped connection.
+
+```rust,no_run
+async fn observe_managed(
+    client: &bitrouter_sdk::gateway::GatewayClient,
+    request: &bitrouter_ai::core::responses::CreateRequest,
+) -> bitrouter_sdk::error::Result<bitrouter_ai::protocol::responses::ResponsesResponse> {
+    // The harness has already bound the session and is durably ACKing checkpoints.
+    client.managed_responses(request).await
+}
+```
+
 Enable the SDK's `core` feature for `core_channel(ChannelOptions)`. This adds
 client WebSocket framing only. It does not compile or start the server scheduler.
 The channel uses a dedicated HTTP/1 connection pool with the same service
