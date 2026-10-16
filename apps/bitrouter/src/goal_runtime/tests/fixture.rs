@@ -20,6 +20,8 @@ pub(super) struct Fixture {
     pub source: crate::paths::ConfigSource,
     pub routing: Arc<ConfigRoutingTable>,
     pub threads: bitrouter_orchestrator::service::ThreadService,
+    pub goals: Arc<GoalService>,
+    pub db: sea_orm::DatabaseConnection,
     runtime: GoalRuntime,
     ipc: JoinHandle<Result<()>>,
 }
@@ -96,7 +98,7 @@ impl Setup {
             backend.uri()
         );
         let socket = Some(home.join("goal.sock"));
-        Ok(Self {
+        let setup = Self {
             temporary,
             workspace,
             controls,
@@ -104,13 +106,45 @@ impl Setup {
             backend,
             config_text,
             socket,
-        })
+        };
+        Ok(setup)
     }
 
     pub fn agent_env(&mut self, name: &str) {
         self.config_text = self.config_text.replacen(
             "      env:\n",
             &format!("      env:\n        {name}: '1'\n"),
+            1,
+        );
+    }
+
+    pub fn persistent_database(&mut self) -> Result<()> {
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            self.temporary.path().join("runtime.sqlite").display()
+        );
+        let configured = format!("database: {{url: {}}}", serde_json::to_string(&url)?);
+        let memory = "database: {url: 'sqlite::memory:'}";
+        if self.config_text.contains(memory) {
+            self.config_text = self.config_text.replacen(memory, &configured, 1);
+        } else {
+            anyhow::ensure!(
+                self.config_text.contains(&configured),
+                "fixture has another database configuration"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn native_fallback(&mut self) {
+        self.config_text = self.config_text.replacen(
+            "\nmodels:\n",
+            &format!("\n  fixture-backup:\n    api_base: {}/v2\n    api_key: backup-fixture-key\n    api_protocol: [{{'*': chat_completions}}]\n    models: [{{id: test-model}}]\nmodels:\n", self.backend.uri()),
+            1,
+        );
+        self.config_text = self.config_text.replacen(
+            "endpoints: [{provider: fixture, service_id: test-model}]",
+            "endpoints: [{provider: fixture, service_id: test-model}, {provider: fixture-backup, service_id: test-model}]",
             1,
         );
     }
@@ -187,6 +221,7 @@ impl Setup {
             crate::goal_store::DatabaseGoalStore::new(assembled.db.clone()),
         )));
         let source = crate::paths::ConfigSource::File(config_path);
+        let fixture_db = assembled.db.clone();
         let socket = match &self.socket {
             Some(socket) => socket.clone(),
             None => crate::daemon::socket_path_for(&source, &config),
@@ -227,7 +262,7 @@ impl Setup {
             LocalControlOptions {
                 administration: None,
                 threads: None,
-                goals: Some(goals),
+                goals: Some(goals.clone()),
                 gate,
                 cli_owned: false,
             },
@@ -239,6 +274,8 @@ impl Setup {
             source,
             routing,
             threads,
+            goals,
+            db: fixture_db,
             runtime,
             ipc,
         })
@@ -415,12 +452,121 @@ impl Fixture {
         Ok(history.clone())
     }
 
+    async fn failure_runtime(&self) -> Result<serde_json::Value> {
+        let GoalReply::Directory { page } = self
+            .goals
+            .execute(
+                "local",
+                GoalCommand::List {
+                    after: 0,
+                    cutoff: None,
+                    limit: bitrouter_orchestrator::goal::MAX_PAGE_ITEMS,
+                },
+                now()?,
+            )
+            .await?
+        else {
+            anyhow::bail!("fixture Goal directory unavailable")
+        };
+        let mut executions = Vec::new();
+        for goal in &page.goals {
+            for task in &goal.workflow.tasks {
+                for execution in task.executions.iter().rev().take(2) {
+                    let view = if let Some(binding) = &execution.thread {
+                        let target = bitrouter_orchestrator::thread::ThreadTarget {
+                            thread_id: binding.thread_id.clone(),
+                            server_instance_id: self.threads.capabilities().server_instance_id,
+                        };
+                        match self
+                            .threads
+                            .read_stored_thread_view(&target, &CallerContext::local())
+                            .await
+                        {
+                            Ok(view) => serde_json::json!({"view":view}),
+                            Err(error) => serde_json::json!({"error":error.to_string()}),
+                        }
+                    } else {
+                        serde_json::json!({"detail":"No linked Thread/Turn"})
+                    };
+                    executions.push(serde_json::json!({"goal_id":goal.id,"task_id":task.spec.id,
+                        "execution_id":execution.id,"binding":execution.thread,"observation":view}));
+                }
+            }
+        }
+        Ok(
+            serde_json::json!({"captured_at_ms":now()?,"goals":page,"executions":executions,
+            "scope":"Bounded public Goal/Thread snapshots before fixture shutdown; separate reads, not an atomic filesystem/process/full-history snapshot."}),
+        )
+    }
+
     pub async fn finish(self, result: Result<()>) -> Result<()> {
+        let keep = result.is_err() && std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
+        let file_database = !self
+            .setup
+            .config_text
+            .contains("database: {url: 'sqlite::memory:'}");
+        if keep {
+            let root = self.setup.temporary.path();
+            if let Some(error) = result.as_ref().err() {
+                let _ = tokio::fs::write(root.join("failure.txt"), format!("{error:#}\n")).await;
+            }
+            let observed =
+                tokio::time::timeout(Duration::from_secs(3), self.failure_runtime()).await;
+            let value = match observed {
+                Ok(Ok(value)) => value,
+                other => serde_json::json!({"unavailable":format!("{other:?}")}),
+            };
+            if let Ok(bytes) = serde_json::to_vec_pretty(&value) {
+                let _ = tokio::fs::write(root.join("failure-runtime.json"), bytes).await;
+            }
+            let capture = if file_database {
+                copy_database(&self.db, &root.join("failure-before-shutdown.sqlite")).await
+            } else {
+                Err(anyhow::anyhow!(
+                    "in-memory database: public snapshots retained; no full database copy claimed"
+                ))
+            };
+            let _ = tokio::fs::write(
+                root.join("failure-before-copy.txt"),
+                format!("{capture:?}\n"),
+            )
+            .await;
+        }
         self.runtime.shutdown().await;
         self.threads.shutdown().await;
         self.supervisor.shutdown().await;
         self.ipc.abort();
         let _ = self.ipc.await;
+        if keep {
+            let root = self.setup.temporary.path();
+            let capture = if file_database {
+                copy_database(&self.db, &root.join("failure-after-shutdown.sqlite")).await
+            } else {
+                Err(anyhow::anyhow!(
+                    "in-memory database: no full database copy claimed"
+                ))
+            };
+            let _ = tokio::fs::write(
+                root.join("failure-after-copy.txt"),
+                format!("{capture:?}\n"),
+            )
+            .await;
+            eprintln!(
+                "Retained failed Goal fixture: {}",
+                self.setup.temporary.keep().display()
+            );
+        }
         result
     }
+}
+
+/// SQLite produces a consistent independent copy; this is not an atomic
+/// snapshot of filesystem, harness process or the supervisor's separate store.
+pub(super) async fn copy_database(db: &sea_orm::DatabaseConnection, path: &Path) -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        crate::upgrade_preflight::snapshot(db, path),
+    )
+    .await??;
+    Ok(())
 }
