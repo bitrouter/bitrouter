@@ -42,6 +42,7 @@ mod m20240101_000028_create_bro_goals;
 mod m20240101_000029_index_acp_resource_head;
 mod m20240101_000030_bro_goal_execution_format;
 mod m20240101_000031_bro_worker_source_format;
+mod m20240101_000032_bro_admission_verdict;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -83,6 +84,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000029_index_acp_resource_head::Migration),
             Box::new(m20240101_000030_bro_goal_execution_format::Migration),
             Box::new(m20240101_000031_bro_worker_source_format::Migration),
+            Box::new(m20240101_000032_bro_admission_verdict::Migration),
         ]
     }
 }
