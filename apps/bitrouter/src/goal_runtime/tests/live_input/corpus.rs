@@ -178,6 +178,7 @@ pub(super) async fn bootstrap_input_state(
                         .iter()
                         .map(|task| bitrouter_orchestrator::goal::input::TaskUpdate {
                             task_id: task.spec.id.clone(),
+                            worker: None,
                             instruction: format!(
                                 "{} Also cover empty parser inputs.",
                                 task.spec.instruction

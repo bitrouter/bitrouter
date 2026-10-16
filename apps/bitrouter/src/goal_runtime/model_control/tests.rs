@@ -274,6 +274,7 @@ async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stal
                     task_updates: vec![TaskUpdate {
                         task_id: "left".into(),
                         instruction: "Implement left and add compatibility coverage".into(),
+                        worker: None,
                         resources: None,
                         additional_checks: vec![],
                     }],

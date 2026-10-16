@@ -38,7 +38,7 @@ Clients reach BitRouter through its external **interfaces** — the ways *in*. T
 | **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
 | **ACP**                   | `bitrouter-orchestrator` `acp` feature (`crates/bitrouter-orchestrator/src/acp/`): controller, transport-generic client, agent-process transport and typed updates. The transparent stdio bridge, headless runner and Goal workers share these contracts. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve <agent>`; `bro run` |
 | **Native ACP** | `bitrouter-orchestrator::acp::native`: negotiated v1/v2 handlers over the host's ThreadService. App `native_acp.rs` owns the local endpoint and stdio bridge; EOF detaches. | bare `bro acp serve` |
-| **BRO Goals** | `bitrouter-tui::goals` draws Goals/current Goal/read-only Workflow; app `goal_code` submits identified local operations. Daemon `goal_runtime` coordinates Goal input, native workers through ThreadService and the retained ACP worker path; `GoalService` and app `goal_store` commit versioned requirements, arrangements and receipts. Superseded reconciled executions without active references move atomically to immutable operation history. | Bare `bro`; `bro code [--config PATH] [--workspace PATH]`; local Goal protocol v5 |
+| **BRO Goals** | `bitrouter-tui::goals` draws Goals/current Goal/read-only Workflow; app `goal_code` submits identified local operations. Daemon `goal_runtime` coordinates Goal input and native/managed ACP workers through ThreadService; `GoalService` and app `goal_store` commit versioned requirements, arrangements and receipts. Superseded reconciled executions without active references move atomically to immutable operation history. | Bare `bro`; `bro code [--config PATH] [--workspace PATH]`; local Goal protocol v6 |
 | **Native harness interface** | App `spawn` injects per-process router settings and starts the harness's own interface. | `bro claude`; `bro codex`; `bro launch <agent>` |
 | **BRO native agent** | `bitrouter-orchestrator::service::ThreadService` owns retained Thread/Turn execution, durable context, FIFO/steering and owner/workspace fencing for standalone native work and linked Goal workers. Standalone native APIs do not automatically create Goals or bypass managed work controls. | `bro task run`; local v17 native socket; opt-in `/agent/v2` HTTP API |
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
@@ -51,11 +51,14 @@ retaining the existing Goal model-control accounting. Native Goal workers now ha
 links. Native permission replies use the shared approval transaction; stopped
 local effects use original-history/workspace reconciliation. Shared generation
 admission and native worker admission share bounded capacity waiting; active cold recovery and worker quote
-waiting still need closure. The ACP worker loop still needs
-migration. The ledger tracks these paths and
-their remaining acceptance gates. Migration 000030 records the minimum database
-writer compatibility required by the new Goal execution links; it adds no table
-and does not migrate persistence into core.
+waiting still need closure. Managed ACP uses the same acceptance/control owner;
+the supervisor supplies protocol/process facts. Historical unbound runs retain
+their reconciliation path. Worker changes version the existing work and create
+a new Thread after old stop/effects are confirmed; known local results are
+transferred before dispatch. The ledger tracks remaining acceptance gates.
+Migrations 000030/000031 fence incompatible database writers for execution links
+and immutable requested-worker sources. They add no table and do not migrate
+persistence into core.
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,

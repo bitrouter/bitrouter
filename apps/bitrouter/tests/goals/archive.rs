@@ -127,6 +127,7 @@ async fn settle_and_edit(
                 attempt_id: attempt,
                 interpretation: Interpretation {
                     task_updates: vec![TaskUpdate {
+                        worker: None,
                         task_id: "left".into(),
                         instruction: format!(
                             "Original work with the next {execution_id} requirement"
@@ -218,6 +219,88 @@ async fn pair(goals: &GoalService, workspace: &std::path::Path) -> Result<String
     settle_and_edit(goals, &id, "original", workspace).await?;
     start(goals, &id, "replacement", workspace).await?;
     Ok(id)
+}
+
+#[tokio::test]
+async fn worker_change_preserves_legacy_archive_bytes_and_declared_worker_source() -> Result<()> {
+    use bitrouter_orchestrator::goal::workflow::Worker;
+    let db = database().await?;
+    let goals = service(db.clone());
+    let workspace = tempfile::tempdir()?;
+    let id = pair(&goals, workspace.path()).await?;
+    let mut legacy = snapshot(&goals, &id).await?;
+    for execution in &mut legacy.workflow.tasks[0].executions {
+        execution.worker = None;
+    }
+    // Materialize a pre-worker-field head; query must preserve absent provenance.
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "UPDATE bro_goals SET payload = ? WHERE owner = ? AND id = ?",
+        vec![
+            serde_json::to_vec(&legacy)?.into(),
+            "local".into(),
+            id.clone().into(),
+        ],
+    ))
+    .await?;
+    assert_eq!(snapshot(&goals, &id).await?, legacy);
+    let archived = archive_change(&goals, &id, "original", workspace.path()).await?;
+    let Change::ArchiveExecution {
+        execution, record, ..
+    } = &archived
+    else {
+        anyhow::bail!("archive missing");
+    };
+    assert!(execution.worker.is_none());
+    let retired = execution.clone();
+    let reference = record.clone();
+    let bytes = std::fs::read(&reference.path)?;
+    let receipt = change(
+        &goals,
+        &id,
+        &archive_operation_id(&id, "original"),
+        archived,
+    )
+    .await?;
+    let before = snapshot(&goals, &id).await?;
+    let left = &before.workflow.tasks[0];
+    assert!(left.legacy_worker.is_none());
+    super::input_tests::commit_task_update(
+        &goals,
+        &id,
+        "switch-after-archive",
+        TaskUpdate {
+            task_id: "left".into(),
+            instruction: left.spec.instruction.clone(),
+            worker: Some(Worker::BuiltIn),
+            resources: None,
+            additional_checks: Vec::new(),
+        },
+    )
+    .await?;
+    let changed = snapshot(&goals, &id).await?;
+    let task = &changed.workflow.tasks[0];
+    assert!(task.spec.harness.is_none());
+    assert_eq!(task.execution_harness(&retired), Some("configured-acp"));
+    assert_eq!(
+        task.execution_harness(&task.executions[0]),
+        Some("configured-acp")
+    );
+    assert_eq!(std::fs::read(&reference.path)?, bytes);
+    let GoalReply::Accepted { operation } = goals
+        .execute(
+            "local",
+            GoalCommand::Operation {
+                operation_id: receipt.id.clone(),
+            },
+            201,
+        )
+        .await?
+    else {
+        anyhow::bail!("archive receipt missing");
+    };
+    assert_eq!(operation, receipt);
+    Ok(())
 }
 
 #[tokio::test]

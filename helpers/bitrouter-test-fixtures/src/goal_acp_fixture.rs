@@ -226,6 +226,12 @@ impl Peer {
             }
             Some("session/new") => {
                 lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing cwd")?);
+                if std::env::var_os("BRO_GOAL_FIXTURE_REQUIRE_HANDOFF_LEFT").is_some() {
+                    let cwd = lock(&self.state)?.cwd.clone();
+                    if std::fs::read_to_string(cwd.join("left.txt"))? != "LEFT\n" {
+                        return Err("replacement did not receive original LEFT output before session startup".into());
+                    }
+                }
                 self.respond(id, json!({"sessionId":self.session}))?;
             }
             Some("session/prompt") => {

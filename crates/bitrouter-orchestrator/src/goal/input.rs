@@ -188,6 +188,10 @@ pub struct PendingInput {
 pub struct TaskUpdate {
     pub task_id: String,
     pub instruction: String,
+    /// Omitted preserves the worker. A supplied choice applies to replacement
+    /// work after the existing stop/effect/version gates, never a live session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<super::workflow::Worker>,
     /// None preserves the current selection; Some replaces the complete set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<super::resources::Selection>,
@@ -618,6 +622,9 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
             let mut updated_checks = BTreeMap::new();
             for update in &proposal.task_updates {
                 message(&update.instruction)?;
+                if let Some(worker) = &update.worker {
+                    worker.validate()?;
+                }
                 if let Some(resources) = &update.resources {
                     resources.validate()?;
                 }
@@ -724,6 +731,19 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                         .find(|task| task.spec.id == update.task_id)
                         .ok_or(GoalError::NotFound)?;
                     task.spec.instruction = update.instruction.clone();
+                    if let Some(worker) = &update.worker {
+                        let previous =
+                            super::workflow::Worker::from_harness(task.spec.harness.clone());
+                        if task.archived_executions > 0 && task.legacy_worker.is_none() {
+                            task.legacy_worker = Some(previous.clone());
+                        }
+                        for execution in &mut task.executions {
+                            if execution.worker.is_none() {
+                                execution.worker = Some(previous.clone());
+                            }
+                        }
+                        task.spec.harness = worker.harness().map(str::to_owned);
+                    }
                     if let Some(resources) = &update.resources {
                         task.spec.resources = resources.clone();
                     }
