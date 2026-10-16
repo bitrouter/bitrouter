@@ -26,6 +26,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use bitrouter::client::sessions::{self, wire};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 const PTY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -153,24 +154,16 @@ impl MockAcp {
         Ok(bitrouter::daemon::socket_path_for(&source, &config))
     }
 
-    async fn supervised_runs(&self) -> Result<Vec<bitrouter::supervisor::RunSnapshot>> {
+    async fn supervised_runs(&self) -> Result<Vec<wire::RunSnapshot>> {
         let socket = self.supervisor_socket().await?;
-        let grant = bitrouter::supervisor::authorize(
+        let grant = sessions::authorize(
             &socket,
             "pty-observer",
-            [bitrouter::supervisor::SessionScope::Peek]
-                .into_iter()
-                .collect(),
+            [wire::SessionScope::Peek].into_iter().collect(),
         )
         .await?;
-        match bitrouter::supervisor::request(
-            &socket,
-            &grant,
-            bitrouter::supervisor::SessionCommand::PeekAll,
-        )
-        .await?
-        {
-            bitrouter::supervisor::SessionResponse::Runs { runs } => Ok(runs),
+        match sessions::request(&socket, &grant, wire::SessionCommand::PeekAll).await? {
+            wire::SessionResponse::Runs { runs } => Ok(runs),
             _ => bail!("supervisor omitted its run inventory"),
         }
     }
@@ -2067,7 +2060,7 @@ fn code_sigterm_detaches_without_answering_pending_permissions() -> Result<()> {
         .first()
         .context("foreground run disappeared after terminal loss")?;
     assert_eq!(run.pending_permissions.len(), 2);
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
+    assert_eq!(run.process, wire::ProcessState::Running);
     assert!(run.lease.is_none());
     assert!(code.mock.captured_permission_outcomes()?.is_empty());
     Ok(())
@@ -2087,19 +2080,17 @@ async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Re
     let runs = code.mock.supervised_runs().await?;
     let starting = runs
         .iter()
-        .find(|run| run.process == bitrouter::supervisor::ProcessState::Starting)
+        .find(|run| run.process == wire::ProcessState::Starting)
         .context("accepted startup was not retained by its daemon owner after client loss")?;
-    use bitrouter::supervisor::{ControlFence, LeaseMode, SessionCommand, SessionResponse};
+    use wire::{ControlFence, LeaseMode, SessionCommand, SessionResponse};
     let socket = code.mock.supervisor_socket().await?;
-    let grant = bitrouter::supervisor::authorize(
+    let grant = sessions::authorize(
         &socket,
         "recovery-fixture",
-        [bitrouter::supervisor::SessionScope::Stop]
-            .into_iter()
-            .collect(),
+        [wire::SessionScope::Stop].into_iter().collect(),
     )
     .await?;
-    let lease = match bitrouter::supervisor::request(
+    let lease = match sessions::request(
         &socket,
         &grant,
         SessionCommand::AcquireLease {
@@ -2117,7 +2108,7 @@ async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Re
     };
     let _ = tokio::time::timeout(
         PTY_TIMEOUT,
-        bitrouter::supervisor::request(
+        sessions::request(
             &socket,
             &grant,
             SessionCommand::Stop {
@@ -2134,8 +2125,9 @@ async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Re
     .await??;
     let stopped_runs = code.mock.supervised_runs().await?;
     ensure!(
-        stopped_runs.iter().any(|run| run.run_id == starting.run_id
-            && run.process == bitrouter::supervisor::ProcessState::Stopped),
+        stopped_runs
+            .iter()
+            .any(|run| run.run_id == starting.run_id && run.process == wire::ProcessState::Stopped),
         "initializing run was not conclusively stopped"
     );
     ensure!(
@@ -2160,8 +2152,8 @@ async fn code_explicit_detach_keeps_accepted_foreground_turn_running() -> Result
     let run = runs
         .first()
         .context("detached foreground run disappeared")?;
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
-    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert_eq!(run.process, wire::ProcessState::Running);
+    assert_eq!(run.turn, wire::TurnState::Working);
     assert!(run.lease.is_none());
     code.mock.release()?;
     tokio::time::timeout(PTY_TIMEOUT, async {
@@ -2169,8 +2161,8 @@ async fn code_explicit_detach_keeps_accepted_foreground_turn_running() -> Result
             let runs = code.mock.supervised_runs().await?;
             if runs.iter().any(|candidate| {
                 candidate.run_id == run.run_id
-                    && candidate.review == bitrouter::supervisor::ReviewState::Unread
-                    && candidate.turn == bitrouter::supervisor::TurnState::Idle
+                    && candidate.review == wire::ReviewState::Unread
+                    && candidate.turn == wire::TurnState::Idle
             }) {
                 return Ok::<_, anyhow::Error>(());
             }
@@ -2213,8 +2205,8 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
         .iter()
         .find(|run| run.run_id == run_id)
         .context("accepted run missing after CLI exited")?;
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
-    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert_eq!(run.process, wire::ProcessState::Running);
+    assert_eq!(run.turn, wire::TurnState::Working);
     assert!(run.lease.is_none());
     mock.wait_for_request("session/prompt")?;
     mock.release()?;
@@ -2223,8 +2215,8 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
             let runs = mock.supervised_runs().await?;
             if runs.iter().any(|run| {
                 run.run_id == run_id
-                    && run.review == bitrouter::supervisor::ReviewState::Unread
-                    && run.turn == bitrouter::supervisor::TurnState::Idle
+                    && run.review == wire::ReviewState::Unread
+                    && run.turn == wire::TurnState::Idle
             }) {
                 break;
             }
@@ -2348,13 +2340,13 @@ async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<(
     code.assert_terminal_restored()?;
     let runs = code.mock.supervised_runs().await?;
     ensure!(
-        runs.iter().any(|run| run.run_id == foreground_id
-            && run.process == bitrouter::supervisor::ProcessState::Stopped),
+        runs.iter()
+            .any(|run| run.run_id == foreground_id && run.process == wire::ProcessState::Stopped),
         "clean Code exit did not stop its foreground controller"
     );
     ensure!(
         runs.iter().any(|run| run.run_id == background_id
-            && run.process == bitrouter::supervisor::ProcessState::Running
+            && run.process == wire::ProcessState::Running
             && run.lease.is_none()),
         "clean foreground exit affected the detached background controller"
     );
@@ -2444,7 +2436,7 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
         let runs = manager.mock.supervised_runs().await?;
         ensure!(
             runs.iter().any(|run| run.run_id == run_id
-                && run.process == bitrouter::supervisor::ProcessState::Running
+                && run.process == wire::ProcessState::Running
                 && run.lease.is_none()),
             "manager exit stopped or retained control of the background run"
         );

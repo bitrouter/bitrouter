@@ -43,8 +43,8 @@ async fn launch_background(
 async fn wait_for_run(
     mock: &MockAcp,
     run_id: &str,
-    ready: impl Fn(&bitrouter::supervisor::RunSnapshot) -> bool,
-) -> Result<bitrouter::supervisor::RunSnapshot> {
+    ready: impl Fn(&wire::RunSnapshot) -> bool,
+) -> Result<wire::RunSnapshot> {
     let mut last_run = None;
     tokio::time::timeout(PTY_TIMEOUT, async {
         loop {
@@ -80,20 +80,16 @@ async fn background_permissions_default_to_ask_and_explicit_modes_win() -> Resul
     let ask = MockAcp::new(MockScenario::OverlappingPermissions)?;
     let (run_id, _) = launch_background(&ask, &[]).await?;
     let run = wait_for_run(&ask, &run_id, |run| {
-        run.attention == bitrouter::supervisor::AttentionState::Permission
-            && run.pending_permissions.len() == 2
+        run.attention == wire::AttentionState::Permission && run.pending_permissions.len() == 2
     })
     .await?;
-    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert_eq!(run.turn, wire::TurnState::Working);
     assert!(ask.captured_permission_outcomes()?.is_empty());
 
     let denied = MockAcp::new(MockScenario::OverlappingPermissions)?;
     let (run_id, _) = launch_background(&denied, &["--deny-all"]).await?;
-    let run = wait_for_run(&denied, &run_id, |run| {
-        run.turn == bitrouter::supervisor::TurnState::Idle
-    })
-    .await?;
-    assert_eq!(run.attention, bitrouter::supervisor::AttentionState::Result);
+    let run = wait_for_run(&denied, &run_id, |run| run.turn == wire::TurnState::Idle).await?;
+    assert_eq!(run.attention, wire::AttentionState::Result);
     let outcomes = denied.wait_for_permission_outcomes(2)?;
     ensure!(
         outcomes
@@ -104,10 +100,7 @@ async fn background_permissions_default_to_ask_and_explicit_modes_win() -> Resul
 
     let reads = MockAcp::new(MockScenario::OverlappingPermissions)?;
     let (run_id, _) = launch_background(&reads, &["--approve-reads"]).await?;
-    let _ = wait_for_run(&reads, &run_id, |run| {
-        run.turn == bitrouter::supervisor::TurnState::Idle
-    })
-    .await?;
+    let _ = wait_for_run(&reads, &run_id, |run| run.turn == wire::TurnState::Idle).await?;
     let outcomes = reads.wait_for_permission_outcomes(2)?;
     ensure!(
         outcomes
@@ -120,8 +113,7 @@ async fn background_permissions_default_to_ask_and_explicit_modes_win() -> Resul
     let policy = r#"{"autoApprove":["fixture permission 1"]}"#;
     let (run_id, _) = launch_background(&mixed, &["--permission-policy", policy]).await?;
     let run = wait_for_run(&mixed, &run_id, |run| {
-        run.attention == bitrouter::supervisor::AttentionState::Permission
-            && run.pending_permissions.len() == 1
+        run.attention == wire::AttentionState::Permission && run.pending_permissions.len() == 1
     })
     .await?;
     let pending = &run.pending_permissions[0];
@@ -165,7 +157,7 @@ async fn permission_wait_counts_toward_background_turn_timeout() -> Result<()> {
             .is_some_and(|failure| failure.contains("timed out"))
     })
     .await?;
-    assert_eq!(run.attention, bitrouter::supervisor::AttentionState::Error);
+    assert_eq!(run.attention, wire::AttentionState::Error);
     assert!(run.pending_permissions.is_empty());
     Ok(())
 }
@@ -175,11 +167,8 @@ async fn schema_failure_never_becomes_ready_for_review() -> Result<()> {
     let mock = MockAcp::new(MockScenario::Minimal)?;
     let schema = r#"{"type":"object","required":["ok"]}"#;
     let (run_id, _) = launch_background(&mock, &["--result-schema", schema]).await?;
-    let run = wait_for_run(&mock, &run_id, |run| {
-        run.turn == bitrouter::supervisor::TurnState::Idle
-    })
-    .await?;
-    assert_eq!(run.attention, bitrouter::supervisor::AttentionState::Error);
+    let run = wait_for_run(&mock, &run_id, |run| run.turn == wire::TurnState::Idle).await?;
+    assert_eq!(run.attention, wire::AttentionState::Error);
     assert_eq!(
         run.failure.as_deref(),
         Some("no JSON result found in the reply")
@@ -193,7 +182,7 @@ async fn background_load_and_resume_use_advertised_native_capabilities() -> Resu
     let (loaded_run_id, _) =
         launch_background(&loaded, &["--load", "native-background-load"]).await?;
     let loaded_run = wait_for_run(&loaded, &loaded_run_id, |run| {
-        run.turn == bitrouter::supervisor::TurnState::Idle
+        run.turn == wire::TurnState::Idle
     })
     .await?;
     assert_eq!(
@@ -215,7 +204,7 @@ async fn background_load_and_resume_use_advertised_native_capabilities() -> Resu
     let (resumed_run_id, _) =
         launch_background(&resumed, &["--resume", "native-background-resume"]).await?;
     let resumed_run = wait_for_run(&resumed, &resumed_run_id, |run| {
-        run.turn == bitrouter::supervisor::TurnState::Idle
+        run.turn == wire::TurnState::Idle
     })
     .await?;
     assert_eq!(
@@ -417,8 +406,7 @@ async fn failed_run_stop_is_idempotent_and_remove_preserves_native_session() -> 
     let mock = MockAcp::new(MockScenario::Minimal)?;
     let (run_id, _) = launch_background(&mock, &[]).await?;
     let ready = wait_for_run(&mock, &run_id, |run| {
-        run.turn == bitrouter::supervisor::TurnState::Idle
-            && run.review == bitrouter::supervisor::ReviewState::Unread
+        run.turn == wire::TurnState::Idle && run.review == wire::ReviewState::Unread
     })
     .await?;
     let native_session_id = ready
@@ -428,7 +416,7 @@ async fn failed_run_stop_is_idempotent_and_remove_preserves_native_session() -> 
 
     mock.disconnect()?;
     let failed = wait_for_run(&mock, &run_id, |run| {
-        run.process == bitrouter::supervisor::ProcessState::Failed
+        run.process == wire::ProcessState::Failed
     })
     .await?;
     let original_failure = failed
@@ -452,7 +440,7 @@ async fn failed_run_stop_is_idempotent_and_remove_preserves_native_session() -> 
         String::from_utf8_lossy(&stopped.stderr)
     );
     let cleaned = wait_for_run(&mock, &run_id, |run| {
-        run.process == bitrouter::supervisor::ProcessState::Failed
+        run.process == wire::ProcessState::Failed
     })
     .await?;
     assert_eq!(cleaned.failure.as_deref(), Some(original_failure.as_str()));

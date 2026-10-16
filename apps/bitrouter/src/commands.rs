@@ -712,6 +712,7 @@ async fn run_claude_code_session()
     use std::io::IsTerminal;
 
     use crate::gateway::providers::auth::credentials::Credential;
+    use crate::providers::cli_install::{SpawnAgent, ensure_agent_installed};
     use crate::providers::import::claude_code::ClaudeCodeStore;
 
     // Adopt a legacy #590 marker stored under `anthropic` before checking the
@@ -746,7 +747,7 @@ async fn run_claude_code_session()
         );
     }
 
-    let claude = crate::spawn::ensure_agent_installed(crate::spawn::SpawnAgent::Claude, false)
+    let claude = ensure_agent_installed(SpawnAgent::Claude, false)
         .await
         .context("locating the claude CLI to sign you in")?;
 
@@ -1131,7 +1132,7 @@ mod skills_init_tests {
 
         assert!(output.is_file());
         assert_eq!(report.path, output.display().to_string());
-        let parsed = crate::harness::resources::skills::format::parse_frontmatter(
+        let parsed = crate::skills::format::parse_frontmatter(
             &std::fs::read_to_string(output).expect("read scaffold"),
         )
         .expect("valid frontmatter");

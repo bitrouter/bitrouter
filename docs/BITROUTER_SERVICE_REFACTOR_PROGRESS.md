@@ -2176,3 +2176,80 @@ process survival. This directly exercises TUI/harness without core rather than
 inferring that profile from full-product tests. The log is
 `/tmp/bitrouter-p0-tui-tests-tui-only.log`. Formatting, whitespace and CI YAML
 checks also pass on the final stage tree.
+
+## P0 2/P0 5 Base helpers and local session ownership (2026-10-16)
+
+Provider executable discovery and installation now live in
+`providers::cli_install`, shared by provider login and harness launch without
+resolving an agent catalog for provider authentication. CLI parser, onboarding
+and spawn consumers use the new owner. Installer commands and prompt behavior
+are preserved; implementation-only installer types remain private.
+
+Offline skill frontmatter, validation and bounded filesystem discovery moved to
+`skills::format`. The harness retains catalog materialization, provenance and
+resource limits. The real CLI regression initializes a skill, lists valid and
+invalid entries, checks the existing diagnostic and verifies unchanged bytes.
+
+Local supervisor DTOs moved to `client::sessions::wire`, and local authorization
+and send helpers to `client::sessions`. Supervisor execution and its runtime tests
+moved under `harness::supervisor`, gated by harness. Local IPC data stays outside
+AI. The build fingerprint tracks the replacement files. ACP-shaped nested
+contracts still need separation before ACP dependencies can become optional;
+this stage does not claim that the minimum dependency closure is finished.
+
+Without harness, daemon session envelopes preserve their wire shape through a
+transparent opaque wrapper that redacts debug output. All requests on that
+reduced local control transport are bounded to 4 MiB, including the newline,
+before deserialization or dispatch. An overflow probe returns an explicit error
+without waiting for EOF. HTTP limits and the existing harness-enabled large
+prompt/history transport are unchanged. The real-process regression exercises
+exact-limit status, one-byte-over status and an oversized unterminated session
+request while retaining the open client connection. Enclosing command/reply
+serde and debug tests cover both directions. The CLI skill documents this limit.
+
+Validation for this stage:
+
+- Minimum targeted runtime passed **163/163** in 2.977s; 2,502 unrelated tests
+  skipped. Selection covers provider installation, spawn, offline skills, local
+  session contracts, opaque-envelope redaction, the binary unit tests and the
+  feature-ingress/onboarding/source-boundary integration targets.
+- All-feature targeted runtime passed **264/264** in 126.772s, with 3,356
+  unrelated tests skipped, covering supervisor/session/permission behavior,
+  provider/skills operations, ACP, Code PTYs, native resources and the same
+  ingress/onboarding/source boundaries. This run preceded the no-harness-only
+  opaque-payload and size-limit fixes; those are covered by the minimum run.
+  Harness-enabled production behavior was unchanged by those fixes.
+- Strict Rust 1.97 Clippy passed for minimum/all-targets (**41.30s**),
+  core-only/all-targets (**59.85s**) and full-workspace/all-features/all-targets
+  (**57.46s**). Strict full-workspace Rustdoc passed in **34.20s**, and minimum
+  application Rustdoc in **24.64s**.
+- The final portability refinement narrows test-only fields/helpers to their
+  Unix test consumers, with the agent ID additionally requiring core. It does
+  not change expanded code in the macOS profiles above. Windows behavior has
+  source-review evidence only; no Windows target is installed locally.
+- Runtime commands use stable Rust, `cargo nextest run`, two build jobs and two
+  test threads, with incremental compilation and debug symbols disabled.
+  Strict checks use the separate `/tmp/bitrouter-p0-clippy-target`. Logs are
+  `/tmp/bitrouter-p0-boundaries-tests-full.log` and the
+  `/tmp/bitrouter-p0-boundaries-*-verified-*.log` family. Existing linker and
+  dependency future-compatibility warnings remain.
+
+Independent review found and resolved the missing core-only test field,
+opaque-envelope debug exposure and unbounded reduced control ingress. Strict
+minimum checks then exposed an overly broad test gate; it was narrowed to the
+actual consumers. Follow-up review additionally identified the Unix-only
+consumer boundary for Windows, now reflected in the conditional compilation.
+Final source review of that last refinement found no remaining issues. It
+confirmed matching fields, initializers and helpers for all 13 narrowed gates;
+this is source evidence, not an additional Windows execution result.
+
+CI adds the minimum-profile unit selectors for the relocated helpers and wire
+contracts; existing ingress integration selection exercises the transport bound.
+The accepted plan's stage prerequisites and historical-decoder fidelity wording
+are integrated, and misplaced behavior rows now sit in the behavior matrix.
+Plan links/table widths, CI YAML, formatting and whitespace checks pass.
+
+This stage advances A02/A05/A06/A09/A11. A01–A16 remain open for final candidate
+acceptance. The remaining ACP/MCP execution dependency split, complete SDK
+surfaces, packaged gateway/profile identity, compatibility/performance evidence
+and final independent P0 review still precede the requested PR.

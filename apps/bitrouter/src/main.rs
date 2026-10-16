@@ -403,7 +403,7 @@ enum Command {
         use_detected: bool,
         /// (Step 2) Built-in ACP harness: `claude` or `codex` (first is the default).
         #[arg(long = "harness", value_enum)]
-        harnesses: Vec<bitrouter::spawn::SpawnAgent>,
+        harnesses: Vec<bitrouter::providers::cli_install::SpawnAgent>,
         /// (Step 3) What to do at the end: `launch` | `serve` | `exit`.
         #[arg(long, value_enum)]
         after: Option<bitrouter::onboarding::AfterAction>,
@@ -658,7 +658,7 @@ enum Command {
         /// Deprecated: the interactive form `spawn --agent <claude|codex>`
         /// (also `-a`) moved to `bro launch`. Kept as a migration alias.
         #[arg(long = "agent", short = 'a', hide = true, value_enum)]
-        legacy_agent: Option<bitrouter::spawn::SpawnAgent>,
+        legacy_agent: Option<bitrouter::providers::cli_install::SpawnAgent>,
         /// Deprecated (`--agent` path only): forwarded to `launch`.
         #[arg(long, hide = true)]
         no_install: bool,
@@ -2440,7 +2440,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     &source,
                     &cfg,
                     no_start,
-                    bitrouter::supervisor::StartRunRequest {
+                    bitrouter::client::sessions::wire::StartRunRequest {
                         action_request_id: uuid::Uuid::new_v4().to_string(),
                         client_id: None,
                         label: None,
@@ -2450,7 +2450,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                         routing,
                         launch: bitrouter::acp_cli::launch_options(turn_timeout),
                         session,
-                        presentation: bitrouter::supervisor::Presentation::Background,
+                        presentation: bitrouter::client::sessions::wire::Presentation::Background,
                         parent_run_id: None,
                         allow_shared_directory,
                         permission_policy,
@@ -8168,8 +8168,8 @@ mod tests {
                 assert_eq!(
                     harnesses,
                     vec![
-                        bitrouter::spawn::SpawnAgent::Claude,
-                        bitrouter::spawn::SpawnAgent::Codex
+                        bitrouter::providers::cli_install::SpawnAgent::Claude,
+                        bitrouter::providers::cli_install::SpawnAgent::Codex
                     ]
                 );
                 assert_eq!(after, Some(bitrouter::onboarding::AfterAction::Exit));

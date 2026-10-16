@@ -36,7 +36,7 @@ pub(crate) async fn apply(transport: &mut AcpTransport) {
     if env.contains_key(variable) || std::env::var_os(variable).is_some() {
         return;
     }
-    let Some(path) = crate::spawn::resolve_binary(binary) else {
+    let Some(path) = crate::providers::cli_install::resolve_binary(binary) else {
         return;
     };
     let Ok(path) = std::path::absolute(path) else {

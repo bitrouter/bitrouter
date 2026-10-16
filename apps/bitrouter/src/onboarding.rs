@@ -21,7 +21,7 @@ use crate::cloud::auth::{LoginInputs, login as cloud_login};
 use crate::commands::{ProviderLoginOptions, login_provider_with_options};
 use crate::output::human::Human;
 use crate::output::{CliReport, Output};
-use crate::spawn::SpawnAgent;
+use crate::providers::cli_install::SpawnAgent;
 
 // =====================================================================
 // §5 — network-free credential probe

@@ -78,7 +78,7 @@ mod report_tests {
 
 use std::collections::BTreeSet;
 
-use crate::harness::resources::skills::format::{DiscoveredSkill, discover_all_skills};
+use crate::skills::format::{DiscoveredSkill, discover_all_skills};
 use crate::skills::root::SkillsRoot;
 
 /// Lists the skills installed under a set of roots.

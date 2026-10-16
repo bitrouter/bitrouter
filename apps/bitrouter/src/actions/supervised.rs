@@ -10,16 +10,18 @@ use anyhow::{Result, bail, ensure};
 
 #[cfg(feature = "tui")]
 use crate::acp_cli::{CapabilitySnapshot, LaunchOptions, RoutingOptions, SessionSelection};
+#[cfg(feature = "tui")]
+use crate::client::sessions;
+#[cfg(feature = "tui")]
+use crate::client::sessions::wire::{
+    ActionAcknowledgement, ActionValue, ControlFence, PermissionPolicy, Presentation, ReplayBatch,
+    RouteState, RunSnapshot, SessionAction, SessionCommand, SessionGrant, SessionMutation,
+    SessionResponse, SessionScope, StartRunRequest,
+};
 use crate::daemon::{self, DaemonStartOutcome};
 #[cfg(feature = "tui")]
 use crate::harness::acp::client::SessionInitialSettings;
 use crate::paths::ConfigSource;
-#[cfg(feature = "tui")]
-use crate::supervisor::{
-    ActionAcknowledgement, ActionValue, ControlFence, PermissionPolicy, Presentation, ReplayBatch,
-    RunSnapshot, SessionAction, SessionCommand, SessionGrant, SessionMutation, SessionResponse,
-    SessionScope, StartRunRequest,
-};
 #[cfg(feature = "tui")]
 use agent_client_protocol::schema::v1::{
     ListSessionsResponse, SessionConfigOptionValue, SetSessionConfigOptionResponse,
@@ -90,14 +92,14 @@ impl SupervisedClient {
             fence: self.fence(),
             action,
         });
-        match crate::supervisor::request(&self.socket, &self.grant, command).await? {
+        match sessions::request(&self.socket, &self.grant, command).await? {
             SessionResponse::Action { acknowledgement } => Ok(*acknowledgement),
             _ => bail!("Unexpected supervised action response"),
         }
     }
 
     pub async fn events(&self, after_seq: u64) -> Result<ReplayBatch> {
-        match crate::supervisor::request(
+        match sessions::request(
             &self.socket,
             &self.grant,
             SessionCommand::Events {
@@ -113,7 +115,7 @@ impl SupervisedClient {
     }
 
     pub async fn snapshot(&self) -> Result<RunSnapshot> {
-        match crate::supervisor::request(
+        match sessions::request(
             &self.socket,
             &self.grant,
             SessionCommand::Snapshot {
@@ -128,7 +130,7 @@ impl SupervisedClient {
     }
 
     pub async fn heartbeat(&self) -> Result<()> {
-        crate::supervisor::request(
+        sessions::request(
             &self.socket,
             &self.grant,
             SessionCommand::Heartbeat {
@@ -142,7 +144,7 @@ impl SupervisedClient {
     }
 
     pub async fn detach(&self) -> Result<()> {
-        crate::supervisor::request(
+        sessions::request(
             &self.socket,
             &self.grant,
             SessionCommand::ReleaseLease {
@@ -154,7 +156,7 @@ impl SupervisedClient {
     }
 
     pub async fn stop(&self) -> Result<()> {
-        crate::supervisor::request(
+        sessions::request(
             &self.socket,
             &self.grant,
             SessionCommand::Stop {
@@ -171,7 +173,7 @@ impl SupervisedClient {
         cwd: Option<PathBuf>,
         cursor: Option<String>,
     ) -> Result<ListSessionsResponse> {
-        match crate::supervisor::request(
+        match sessions::request(
             &self.socket,
             &self.grant,
             SessionCommand::NativeList {
@@ -209,8 +211,8 @@ impl SupervisedClient {
         }
     }
 
-    pub async fn route_list(&self, _session: &str) -> Result<crate::supervisor::RouteState> {
-        match crate::supervisor::request(
+    pub async fn route_list(&self, _session: &str) -> Result<RouteState> {
+        match sessions::request(
             &self.socket,
             &self.grant,
             SessionCommand::RouteList {
@@ -269,7 +271,7 @@ pub(crate) struct ForegroundLaunch {
 impl SupervisedHandle {
     pub async fn start(socket: PathBuf, launch: ForegroundLaunch) -> Result<(Self, Vec<String>)> {
         let client_id = uuid::Uuid::new_v4().to_string();
-        let grant = crate::supervisor::authorize(
+        let grant = sessions::authorize(
             &socket,
             &client_id,
             [
@@ -303,19 +305,16 @@ impl SupervisedHandle {
             permission_policy: PermissionPolicy::default(),
             result_schema: None,
         };
-        let (snapshot, diagnostics) = match crate::supervisor::request(
-            &socket,
-            &grant,
-            SessionCommand::Start(Box::new(request)),
-        )
-        .await?
-        {
-            SessionResponse::Started {
-                snapshot,
-                diagnostics,
-            } => (*snapshot, diagnostics),
-            _ => bail!("Supervisor did not acknowledge foreground ownership"),
-        };
+        let (snapshot, diagnostics) =
+            match sessions::request(&socket, &grant, SessionCommand::Start(Box::new(request)))
+                .await?
+            {
+                SessionResponse::Started {
+                    snapshot,
+                    diagnostics,
+                } => (*snapshot, diagnostics),
+                _ => bail!("Supervisor did not acknowledge foreground ownership"),
+            };
         let lease = snapshot
             .lease
             .as_ref()

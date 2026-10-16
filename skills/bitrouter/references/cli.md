@@ -17,6 +17,10 @@ Local native headless execution requires both `core` and `harness`.
 Supervised sessions and ACP route-lease control also require `harness`; a
 gateway-only daemon leaves the supervisor ledger untouched. Request identity
 and existing session-attributed spend remain available.
+Without `harness`, each local control request is limited to 4 MiB including its
+newline; oversized input is rejected before decoding or dispatch. This applies
+to all commands on that local transport. HTTP request limits are separate, and
+harness builds retain their existing prompt/history transport behavior.
 SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
 `db-mysql`; both are included in the default distribution. Reduced builds report
 an unavailable selected backend before connecting.

@@ -388,7 +388,14 @@ jobs:
           --test onboarding --test source_boundaries
 
       - uses: taiki-e/install-action@nextest
-        if: matrix.features == 'harness' || matrix.features == 'core,harness'
+        if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'core,harness'
+
+      - name: verify base contracts without harness
+        if: matrix.features == ''
+        run: >-
+          cargo nextest run -p bitrouter --no-default-features
+          --lib --build-jobs 2 --test-threads 2
+          -E 'test(providers::cli_install::) | test(skills::) | test(skills_init_tests) | test(client::sessions::) | test(daemon::tests::opaque_session)'
 
       - name: verify headless ACP and shared transcript behavior
         if: matrix.features == 'harness' || matrix.features == 'core,harness'

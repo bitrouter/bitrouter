@@ -20,6 +20,61 @@ fn command(directory: &Path) -> tokio::process::Command {
 }
 
 #[tokio::test]
+async fn offline_skills_commands_preserve_valid_and_invalid_entries() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let created = tokio::time::timeout(
+        Duration::from_secs(20),
+        command(directory.path())
+            .args([
+                "skills",
+                "init",
+                "retained",
+                "--output",
+                "skills/retained/SKILL.md",
+            ])
+            .output(),
+    )
+    .await??;
+    ensure!(
+        created.status.success(),
+        "skill initialization failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&created.stdout)?;
+    ensure!(report["created"] == true);
+    let skill = directory.path().join("skills/retained/SKILL.md");
+    let original = std::fs::read(&skill)?;
+
+    let broken = directory.path().join("skills/broken");
+    std::fs::create_dir_all(&broken)?;
+    std::fs::write(broken.join("SKILL.md"), "no frontmatter\n")?;
+    let listed = tokio::time::timeout(
+        Duration::from_secs(20),
+        command(directory.path()).args(["skills", "list"]).output(),
+    )
+    .await??;
+    ensure!(
+        listed.status.success(),
+        "skill inspection failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&listed.stdout)?;
+    let rows = report["skills"]
+        .as_array()
+        .context("missing skills report")?;
+    ensure!(rows.len() == 2);
+    ensure!(rows[0]["name"] == "broken" && rows[0]["valid"] == false);
+    ensure!(
+        rows[0]["problem"] == "SKILL.md has no YAML frontmatter block",
+        "invalid skill disappeared or changed its diagnostic"
+    );
+    ensure!(rows[1]["name"] == "retained" && rows[1]["valid"] == true);
+    ensure!(rows[1].get("problem").is_none());
+    ensure!(std::fs::read(&skill)? == original);
+    Ok(())
+}
+
+#[tokio::test]
 async fn unavailable_database_backend_rejects_before_service_activation() -> Result<()> {
     let mut cases = Vec::new();
     if !cfg!(feature = "db-postgres") {
@@ -380,6 +435,41 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
                 anyhow::bail!("unavailable harness command was accepted");
             };
             ensure!(message.contains("harness feature"), "{message}");
+        }
+
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        // The no-harness control limit includes the newline. Test the real
+        // listener at the boundary and without EOF/newline on an oversized
+        // session payload; the latter must not wait for the peer to close.
+        const LIMIT: usize = 4 * 1024 * 1024;
+        let mut exact = br#"{"cmd":"status"}"#.to_vec();
+        exact.resize(LIMIT - 1, b' ');
+        exact.push(b'\n');
+        let mut over = br#"{"cmd":"status"}"#.to_vec();
+        over.resize(LIMIT, b' ');
+        over.push(b'\n');
+        let mut unterminated =
+            br#"{"cmd":"sessions","request":{"authorization":"private-proof","padding":""#.to_vec();
+        unterminated.resize(LIMIT + 1, b'x');
+        for (payload, accepted) in [(exact, true), (over, false), (unterminated, false)] {
+            let response: DaemonResponse = tokio::time::timeout(Duration::from_secs(20), async {
+                let mut stream = daemon::connect_control(&socket).await?;
+                stream.write_all(&payload).await?;
+                let mut reader = BufReader::new(stream).take(64 * 1024);
+                let mut line = String::new();
+                reader.read_line(&mut line).await?;
+                Ok::<_, anyhow::Error>(serde_json::from_str(&line)?)
+            })
+            .await??;
+            if accepted {
+                ensure!(matches!(response, DaemonResponse::Status { .. }));
+            } else {
+                let DaemonResponse::Error { message } = response else {
+                    anyhow::bail!("oversized local control request was accepted");
+                };
+                ensure!(message == "local control command exceeds 4 MiB");
+            }
         }
     }
     let client = reqwest::Client::new();

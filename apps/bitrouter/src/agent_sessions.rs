@@ -43,14 +43,15 @@ use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 
 use crate::acp_cli::{RoutingOptions, SessionSelection};
-use crate::harness::acp::translate::SessionUpdateKind;
-use crate::paths::ConfigSource;
-use crate::supervisor::{
+use crate::client::sessions;
+use crate::client::sessions::wire::{
     ActionAcknowledgement, AttentionState, ControlFence, LeaseMode, ProcessState, ReviewState,
     RunAttachment, RunSnapshot, RunSummary, SessionAction, SessionCommand, SessionEvent,
     SessionEventKind, SessionGrant, SessionMutation, SessionResponse, SessionScope,
     StartRunRequest, TurnState,
 };
+use crate::harness::acp::translate::SessionUpdateKind;
+use crate::paths::ConfigSource;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -613,10 +614,11 @@ impl BackgroundClient {
                         },
                         launch: crate::acp_cli::launch_options(None),
                         session: SessionSelection::New,
-                        presentation: crate::supervisor::Presentation::Background,
+                        presentation: crate::client::sessions::wire::Presentation::Background,
                         parent_run_id: None,
                         allow_shared_directory: false,
-                        permission_policy: crate::supervisor::PermissionPolicy::default(),
+                        permission_policy: crate::client::sessions::wire::PermissionPolicy::default(
+                        ),
                         result_schema: None,
                     })
                     .await?;
@@ -880,16 +882,14 @@ impl BackgroundClient {
 
     async fn request(&self, command: SessionCommand) -> Result<SessionResponse> {
         let grant = self.grant().await?;
-        crate::supervisor::request(&self.socket, &grant, command).await
+        sessions::request(&self.socket, &grant, command).await
     }
 
     async fn grant(&self) -> Result<SessionGrant> {
         if let Some(grant) = self.grant.lock().await.clone() {
             return Ok(grant);
         }
-        let grant =
-            crate::supervisor::authorize(&self.socket, &self.client_id, self.scopes.clone())
-                .await?;
+        let grant = sessions::authorize(&self.socket, &self.client_id, self.scopes.clone()).await?;
         anyhow::ensure!(
             grant.client_id == self.client_id && grant.scopes == self.scopes,
             "daemon returned a session grant with a different identity or scope"
@@ -1715,7 +1715,7 @@ mod tests {
     #[cfg(feature = "tui")]
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-    use crate::supervisor::SessionScope;
+    use crate::client::sessions::wire::SessionScope;
 
     use super::{
         AgentResult, BackgroundClient, effect_action_request_id, map_update,

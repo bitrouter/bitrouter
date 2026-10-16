@@ -57,6 +57,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::client::sessions::wire::{PermissionDefault, PermissionPolicy};
 use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::agent::{AcpAgentConfig, AcpTransport};
@@ -688,17 +689,17 @@ impl HeadlessOptions {
     /// Permission policy for a daemon-supervised run. Unlike ordinary
     /// headless execution, an unmatched request can remain pending for an
     /// interactive manager, so no explicit flags means `Ask`.
-    pub fn supervised_permission_policy(&self) -> Result<crate::supervisor::PermissionPolicy> {
+    pub fn supervised_permission_policy(&self) -> Result<PermissionPolicy> {
         let file = self.policy_file()?;
         let unmatched = match file.default_action {
-            Some(PolicyAction::Approve) => crate::supervisor::PermissionDefault::ApproveAll,
-            Some(PolicyAction::Deny) => crate::supervisor::PermissionDefault::DenyAll,
-            None if self.approve_all => crate::supervisor::PermissionDefault::ApproveAll,
-            None if self.approve_reads => crate::supervisor::PermissionDefault::ApproveReads,
-            None if self.deny_all => crate::supervisor::PermissionDefault::DenyAll,
-            None => crate::supervisor::PermissionDefault::Ask,
+            Some(PolicyAction::Approve) => PermissionDefault::ApproveAll,
+            Some(PolicyAction::Deny) => PermissionDefault::DenyAll,
+            None if self.approve_all => PermissionDefault::ApproveAll,
+            None if self.approve_reads => PermissionDefault::ApproveReads,
+            None if self.deny_all => PermissionDefault::DenyAll,
+            None => PermissionDefault::Ask,
         };
-        Ok(crate::supervisor::PermissionPolicy {
+        Ok(PermissionPolicy {
             auto_approve: file.auto_approve,
             auto_deny: file.auto_deny,
             unmatched,
@@ -709,7 +710,7 @@ impl HeadlessOptions {
 #[cfg(test)]
 mod supervised_permission_policy_tests {
     use super::{HeadlessOptions, PromptFormat};
-    use crate::supervisor::PermissionDefault;
+    use crate::client::sessions::wire::PermissionDefault;
 
     fn options() -> HeadlessOptions {
         HeadlessOptions {
@@ -823,6 +824,7 @@ pub struct CapabilitySnapshot {
 }
 
 impl CapabilitySnapshot {
+    #[cfg(any(feature = "harness", all(test, unix)))]
     fn from_client(client: &AcpClient, terminal_auth: bool) -> Self {
         let agent = client.agent_capabilities();
         let sessions = &agent.session_capabilities;
@@ -1893,12 +1895,17 @@ pub(crate) struct SessionHandle {
     pub(crate) client: AcpClient,
     pub(crate) session_id: String,
     pub(crate) agent_session_id: Option<String>,
+    #[cfg(any(feature = "harness", all(test, unix, feature = "core")))]
     pub(crate) agent_id: String,
     pub(crate) via: Option<String>,
     pub(crate) launch_id: Option<String>,
+    #[cfg(any(feature = "harness", all(test, unix)))]
     pub(crate) capabilities: CapabilitySnapshot,
+    #[cfg(any(feature = "harness", all(test, unix)))]
     pub(crate) initial_settings: crate::harness::acp::client::SessionInitialSettings,
+    #[cfg(any(feature = "harness", all(test, unix)))]
     cwd: PathBuf,
+    #[cfg(any(feature = "harness", all(test, unix)))]
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     pub(crate) updates: std::pin::Pin<
         Box<dyn futures::Stream<Item = crate::harness::acp::client::SequencedSessionUpdate> + Send>,
@@ -1916,6 +1923,7 @@ impl SessionHandle {
     /// This lets an interactive driver restore the active session after a
     /// picker is dismissed while still shutting it down deterministically on
     /// process exit.
+    #[cfg(any(feature = "harness", all(test, unix)))]
     pub(crate) async fn select_with_cancel(
         &mut self,
         selection: &SessionSelection,
@@ -1973,6 +1981,7 @@ impl SessionHandle {
     /// normal teardown or an abrupt harness death. This is independent of the
     /// controller duplex, which can otherwise remain open after the child has
     /// gone away.
+    #[cfg(feature = "harness")]
     pub(crate) fn closed(&self) -> futures::future::BoxFuture<'static, ()> {
         self.session.closed()
     }
@@ -2058,6 +2067,7 @@ impl SessionHost {
             return Err(lifecycle_cancelled());
         }
         let mcp_servers = self.options.mcp_servers.clone();
+        #[cfg(any(feature = "harness", all(test, unix)))]
         let terminal_auth = self.options.terminal_auth;
         let mut session = launch_controlled_with_cancel(
             &self.config,
@@ -2096,18 +2106,24 @@ impl SessionHost {
             }
         };
         let client = session.client.clone();
+        #[cfg(any(feature = "harness", all(test, unix)))]
         let capabilities = CapabilitySnapshot::from_client(&client, terminal_auth);
         let updates = updates.session_updates_sequenced(&ids);
         Ok(SessionHandle {
             client,
             session_id: ids.acp_session_id,
             agent_session_id: ids.agent_session_id,
+            #[cfg(any(feature = "harness", all(test, unix, feature = "core")))]
             agent_id: self.agent_id,
             via: self.routed.via,
             launch_id: self.routed.launch_id,
+            #[cfg(any(feature = "harness", all(test, unix)))]
             capabilities,
+            #[cfg(any(feature = "harness", all(test, unix)))]
             initial_settings: ids.initial_settings,
+            #[cfg(any(feature = "harness", all(test, unix)))]
             cwd,
+            #[cfg(any(feature = "harness", all(test, unix)))]
             mcp_servers,
             updates,
             permissions,
@@ -2150,10 +2166,12 @@ pub(crate) fn lifecycle_cancelled() -> anyhow::Error {
 /// Whether a lifecycle job ended by the driver's explicit cancellation token.
 /// Context layers preserve this cause, so a caller can distinguish a clean
 /// user exit from an adapter failure without matching presentation text.
+#[cfg(any(feature = "harness", all(test, unix)))]
 pub(crate) fn is_lifecycle_cancelled(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| cause.is::<LifecycleCancelled>())
 }
 
+#[cfg(feature = "harness")]
 pub(crate) fn is_lifecycle_teardown_unconfirmed(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -2786,6 +2804,7 @@ impl ControlledSession {
 
     /// Return an owned watcher so an interactive client can observe an
     /// adapter death without relying on the controller's connection close.
+    #[cfg(feature = "harness")]
     fn closed(&self) -> futures::future::BoxFuture<'static, ()> {
         let reaped = self.cleanup.reaped.clone();
         Box::pin(async move {

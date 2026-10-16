@@ -1,68 +1,17 @@
 //! Local skills are harness resources. Discovery publishes metadata; activation
 //! and instruction placement are decisions of the managed core.
 
-use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
 use super::MaterialRef;
 use super::sha256;
 
-pub mod format;
+use crate::skills::format::{self, Error, Result, read_skill};
 
-const MAX_SKILL_BYTES: u64 = 256 * 1024;
 const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SKILLS: usize = 256;
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("SKILL.md has no YAML frontmatter block")]
-    MissingFrontmatter,
-    #[error("frontmatter parse error: {0}")]
-    Frontmatter(String),
-    #[error("invalid skill name {0:?}")]
-    InvalidSkillName(String),
-    #[error("io error: {0}")]
-    Io(String),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-
-fn is_valid_skill_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && name
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("--")
-}
-
-fn is_valid_skill_description(description: &str) -> bool {
-    !description.trim().is_empty() && description.chars().count() <= 1024
-}
-
-pub fn validate_skill_name(name: &str) -> Result<()> {
-    if !is_valid_skill_name(name) {
-        return Err(Error::InvalidSkillName(name.into()));
-    }
-    Ok(())
-}
-
-fn read_skill(path: &Path) -> std::io::Result<String> {
-    let mut bytes = Vec::new();
-    let file = File::open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("SKILL.md must be a regular file"));
-    }
-    file.take(MAX_SKILL_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_SKILL_BYTES {
-        return Err(std::io::Error::other("SKILL.md exceeds 256 KiB"));
-    }
-    String::from_utf8(bytes).map_err(|error| std::io::Error::other(error.to_string()))
-}
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SkillMetadata {
@@ -97,7 +46,7 @@ impl SkillCatalog {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(Error::Io(error.to_string())),
             }
-            for found in format::discover_bounded(root)? {
+            for found in format::discover_bounded(root, MAX_SKILLS)? {
                 let path = found
                     .skill_md
                     .canonicalize()

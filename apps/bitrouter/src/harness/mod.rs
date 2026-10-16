@@ -13,6 +13,8 @@ pub mod item;
 pub mod resources;
 pub mod service;
 pub mod storage;
+#[cfg(feature = "harness")]
+pub(crate) mod supervisor;
 pub mod thread;
 pub(crate) mod tools;
 pub mod turn;

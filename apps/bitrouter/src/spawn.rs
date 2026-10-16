@@ -46,65 +46,18 @@
 //!   the BitRouter provider uses `wire_api = "responses"` and a `/v1` base URL.
 //!   See <https://developers.openai.com/codex/config-advanced#custom-model-providers>.
 
-use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::commands::invocation;
 use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
-use clap::ValueEnum;
 use serde::Serialize;
 
 use crate::output::CliReport;
 use crate::output::human::Human;
+use crate::providers::cli_install::{ensure_binary_installed, resolve_binary};
 use crate::style::Palette;
-
-/// The two harnesses BitRouter ships a native installer for. `bitrouter
-/// launch --agent` accepts the *whole* catalog (see [`resolve_launch_agent`]);
-/// this enum survives only where a bundled installer is implied — the
-/// onboarding wizard's `--harness`, `providers login claude-code`, and the
-/// deprecated `spawn --agent` alias.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum SpawnAgent {
-    /// Anthropic's Claude Code CLI (`claude`).
-    Claude,
-    /// OpenAI's Codex CLI (`codex`).
-    Codex,
-}
-
-impl SpawnAgent {
-    /// Static metadata describing how to find this agent.
-    pub fn spec(self) -> AgentSpec {
-        match self {
-            // The gateway env/args this agent needs (ANTHROPIC_BASE_URL /
-            // ANTHROPIC_AUTH_TOKEN for Claude, `-c` provider overrides for
-            // Codex) live once in the shared `harness` catalog, keyed by the
-            // interactive binary — see `run`.
-            SpawnAgent::Claude => AgentSpec {
-                // The display id matches the `--agent` value.
-                id: "claude",
-                // The executable name looked up on `PATH`.
-                binary: "claude",
-            },
-            SpawnAgent::Codex => AgentSpec {
-                id: "codex",
-                binary: "codex",
-            },
-        }
-    }
-}
-
-/// Resolved, per-agent static facts used by the spawn machinery.
-#[derive(Debug, Clone, Copy)]
-pub struct AgentSpec {
-    /// Catalog id / `--agent` value.
-    pub id: &'static str,
-    /// Executable name searched for on `PATH`. Also the key into the shared
-    /// [`crate::harness`] catalog for this agent's routing knowledge.
-    pub binary: &'static str,
-}
 
 /// Resolve a `bro launch --agent` value to its catalog harness. Accepts
 /// the interactive binary name (`claude`, `codex`, `opencode`, `pi`) and the
@@ -1100,105 +1053,6 @@ pub(crate) async fn ensure_local_daemon(
     }
 }
 
-/// Locate an executable on `PATH`. Pure-`std` (no `which` crate) so the
-/// `#![forbid(unsafe_code)]` lib stays dependency-light: split `$PATH` and
-/// probe each entry. Returns the first match.
-pub(crate) fn resolve_binary(name: &str) -> Option<PathBuf> {
-    find_on_path(name, std::env::var_os("PATH"), &extra_search_dirs())
-}
-
-/// Core of [`resolve_binary`], factored out for testing. Searches `path` (an
-/// `OsString` of `PATH`-separated dirs) followed by `extra` directories —
-/// the latter covers the native installer's target (`~/.local/bin`), which is
-/// often not yet on `PATH` in the shell that just ran the install.
-fn find_on_path(name: &str, path: Option<OsString>, extra: &[PathBuf]) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(path) = path {
-        dirs.extend(std::env::split_paths(&path));
-    }
-    dirs.extend(extra.iter().cloned());
-    for dir in dirs {
-        let candidate = dir.join(name);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
-        // On Windows, executables carry an extension. We probe the common
-        // launcher extensions rather than parsing the full `%PATHEXT%` set —
-        // agent CLIs ship as `.exe` or an npm `.cmd`/`.bat` shim, which these
-        // cover; an exotic `%PATHEXT%` entry (`.com`, `.ps1`) would be missed.
-        #[cfg(windows)]
-        {
-            for ext in ["exe", "cmd", "bat"] {
-                let with_ext = dir.join(format!("{name}.{ext}"));
-                if is_executable_file(&with_ext) {
-                    return Some(with_ext);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Directories to probe in addition to `PATH`. The Claude Code native
-/// installer drops the binary in `~/.local/bin`, which a freshly-installed
-/// shell session may not have on `PATH` yet.
-fn extra_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(home) = home_dir() {
-        dirs.push(home.join(".local").join("bin"));
-    }
-    dirs
-}
-
-/// True when `path` is a regular file we can plausibly execute. On Unix this
-/// checks the executable permission bit; on other platforms, file existence.
-fn is_executable_file(path: &std::path::Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-/// Resolve the user's home directory without pulling in a crate: `$HOME` on
-/// Unix, `%USERPROFILE%` on Windows.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-}
-
-/// Ensure `agent`'s binary is installed — locating it on `PATH` (+
-/// `~/.local/bin`) and offering the official native installer when permitted —
-/// and return its path. Shared by `bro spawn` and
-/// `bro providers login claude-code` (which needs the `claude` CLI to
-/// sign the user in) so both go through one detect-and-install path.
-pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
-    let spec = agent.spec();
-    let harness = crate::harness::catalog::by_interactive_binary(spec.binary).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no catalog harness for interactive binary '{}'",
-            spec.binary
-        )
-    })?;
-    ensure_harness_installed(harness, no_install).await
-}
-
 /// Locate a catalog harness's interactive binary, offering the official native
 /// installer when BitRouter bundles one for it (claude, codex) and the caller
 /// permits prompting. Harnesses with no bundled installer get an actionable
@@ -1210,81 +1064,7 @@ pub(crate) async fn ensure_harness_installed(
     let binary = harness
         .interactive_binary
         .ok_or_else(|| anyhow::anyhow!("harness '{}' has no interactive binary", harness.id))?;
-    match resolve_binary(binary) {
-        Some(path) => Ok(path),
-        None => ensure_installed(harness, binary, no_install).await,
-    }
-}
-
-/// The agent binary is missing. Offer to install it via the official native
-/// installer when stdin is interactive and `--no-install` was not set;
-/// otherwise return an actionable error listing the install command.
-async fn ensure_installed(
-    harness: &'static crate::harness::catalog::Harness,
-    binary: &'static str,
-    no_install: bool,
-) -> Result<PathBuf> {
-    let Some(install) = InstallCommand::for_binary(binary) else {
-        anyhow::bail!(
-            "agent '{binary}' is not installed (no `{binary}` on PATH).\n  \
-             BitRouter bundles no installer for it — install it from {}",
-            harness.project_url,
-        );
-    };
-
-    let may_prompt = !no_install && std::io::stdin().is_terminal();
-    if !may_prompt {
-        anyhow::bail!(
-            "agent '{binary}' is not installed (no `{binary}` on PATH).\n  Install it with:\n    {}",
-            install.display(),
-        );
-    }
-
-    if !confirm_install(binary, &install)? {
-        anyhow::bail!("aborted — '{binary}' was not installed");
-    }
-
-    install.run().await?;
-
-    // Re-resolve after install. The installer may have landed the binary in
-    // `~/.local/bin` (covered by `extra_search_dirs`) even when that dir is
-    // not on the current shell's `PATH`.
-    resolve_binary(binary).ok_or_else(|| {
-        anyhow::anyhow!(
-            "installed '{binary}' but still cannot find `{binary}` on PATH or in ~/.local/bin — \
-             open a new shell (or add the install dir to PATH) and re-run",
-        )
-    })
-}
-
-/// Print the install prompt and read a Y/n answer. Defaults to yes on a bare
-/// <enter>. A closed stdin (EOF) is treated as "no" so we never hang.
-fn confirm_install(binary: &str, install: &InstallCommand) -> Result<bool> {
-    use std::io::{BufRead, Write};
-    let p = Palette::for_stderr();
-    eprintln!(
-        "{cyan}{bold}info:{reset} agent `{binary}` is not installed on this machine.",
-        cyan = p.cyan,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    eprintln!("  Installer: {}", install.display());
-    eprint!("Proceed to install? [Y/n]: ");
-    std::io::stderr().flush().ok();
-
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    let n = stdin
-        .lock()
-        .read_line(&mut line)
-        .context("reading install confirmation from stdin")?;
-    if n == 0 {
-        // EOF — non-interactive; decline rather than block.
-        eprintln!();
-        return Ok(false);
-    }
-    let answer = line.trim().to_ascii_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+    ensure_binary_installed(binary, Some(harness.project_url), no_install).await
 }
 
 /// Best-effort TCP reachability probe against the daemon's listen address.
@@ -1317,130 +1097,10 @@ fn warn_if_daemon_unreachable(listen: &str) {
     }
 }
 
-/// A platform-specific install command for an agent. Conditional compilation
-/// makes exactly one variant visible per platform, so the help text and the
-/// executed command never disagree with the host.
-#[derive(Debug, Clone)]
-pub struct InstallCommand {
-    /// Program to run (`bash` / `powershell`).
-    program: &'static str,
-    /// Arguments to that program.
-    args: Vec<String>,
-    /// Human-readable one-liner, e.g. `curl -fsSL … | bash`.
-    human: String,
-}
-
-impl InstallCommand {
-    /// The official native installer for `binary` on the *current* platform,
-    /// or `None` when BitRouter bundles no installer for that harness (the
-    /// catalog's other interactive binaries — opencode, pi, hermes, openclaw,
-    /// grok, agy — which the user installs from upstream).
-    ///
-    /// Sources:
-    /// - Claude Code quickstart, "Native Install":
-    ///   <https://code.claude.com/docs/en/quickstart>
-    /// - macOS / Linux: `curl -fsSL https://claude.ai/install.sh | bash`
-    /// - Windows:       `irm https://claude.ai/install.ps1 | iex`
-    /// - Codex quickstart:
-    ///   <https://developers.openai.com/codex/quickstart>
-    /// - macOS / Linux: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
-    /// - Windows:       `irm https://chatgpt.com/codex/install.ps1 | iex`
-    pub fn for_binary(binary: &str) -> Option<Self> {
-        match binary {
-            "claude" => Some(Self::claude()),
-            "codex" => Some(Self::codex()),
-            _ => None,
-        }
-    }
-
-    #[cfg(not(windows))]
-    fn claude() -> Self {
-        let human = "curl -fsSL https://claude.ai/install.sh | bash".to_string();
-        Self {
-            program: "bash",
-            args: vec![
-                "-c".to_string(),
-                "curl -fsSL https://claude.ai/install.sh | bash".to_string(),
-            ],
-            human,
-        }
-    }
-
-    #[cfg(windows)]
-    fn claude() -> Self {
-        let human = "irm https://claude.ai/install.ps1 | iex".to_string();
-        Self {
-            program: "powershell",
-            args: vec![
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "irm https://claude.ai/install.ps1 | iex".to_string(),
-            ],
-            human,
-        }
-    }
-
-    #[cfg(not(windows))]
-    fn codex() -> Self {
-        let human = "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string();
-        Self {
-            program: "sh",
-            args: vec![
-                "-c".to_string(),
-                "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string(),
-            ],
-            human,
-        }
-    }
-
-    #[cfg(windows)]
-    fn codex() -> Self {
-        let human =
-            r#"powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex""#
-                .to_string();
-        Self {
-            program: "powershell",
-            args: vec![
-                "-ExecutionPolicy".to_string(),
-                "ByPass".to_string(),
-                "-c".to_string(),
-                "irm https://chatgpt.com/codex/install.ps1 | iex".to_string(),
-            ],
-            human,
-        }
-    }
-
-    /// The human-readable one-liner shown in prompts and error messages.
-    pub fn display(&self) -> &str {
-        &self.human
-    }
-
-    /// Execute the installer, inheriting stdio so the user sees its progress.
-    /// Errors when the installer exits non-zero.
-    async fn run(&self) -> Result<()> {
-        let p = Palette::for_stderr();
-        eprintln!(
-            "{cyan}{bold}info:{reset} installing — {}",
-            self.human,
-            cyan = p.cyan,
-            bold = p.bold,
-            reset = p.reset,
-        );
-        let status = tokio::process::Command::new(self.program)
-            .args(&self.args)
-            .status()
-            .await
-            .with_context(|| format!("running installer: {}", self.human))?;
-        if !status.success() {
-            anyhow::bail!("installer exited with {status}: {}", self.human);
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::cli_install::SpawnAgent;
 
     #[test]
     fn dot_dir_is_created_self_ignoring() {
@@ -1744,12 +1404,12 @@ mod tests {
     }
 
     #[test]
-    fn launch_agents_map_to_catalog_harnesses() {
+    fn launch_agents_map_to_catalog_harnesses() -> Result<()> {
         // The interactive binary is the key into the shared routing catalog;
         // the overlay content itself is covered by `harness` tests.
         let claude =
             crate::harness::catalog::by_interactive_binary(SpawnAgent::Claude.spec().binary)
-                .expect("claude maps to a catalog harness");
+                .context("claude maps to a catalog harness")?;
         assert_eq!(claude.id, "claude-acp");
         assert!(matches!(
             claude.routing,
@@ -1761,12 +1421,13 @@ mod tests {
         ));
 
         let codex = crate::harness::catalog::by_interactive_binary(SpawnAgent::Codex.spec().binary)
-            .expect("codex maps to a catalog harness");
+            .context("codex maps to a catalog harness")?;
         assert_eq!(codex.id, "codex-acp");
         assert!(matches!(
             codex.routing,
             crate::harness::catalog::Routing::CodexArgs
         ));
+        Ok(())
     }
 
     #[test]
@@ -1829,13 +1490,6 @@ mod tests {
             let h = crate::harness::catalog::by_id(id).expect("catalog harness");
             assert!(!needs_model_catalog(h), "{id} needs no /v1/models probe");
         }
-    }
-
-    #[test]
-    fn codex_spec_uses_codex_binary() {
-        let spec = SpawnAgent::Codex.spec();
-        assert_eq!(spec.binary, "codex");
-        assert_eq!(spec.id, "codex");
     }
 
     #[test]
@@ -1951,78 +1605,5 @@ providers:
         let check = codex_route_check("claude-sonnet", Ok(route));
         assert_eq!(check.status, SpawnCheckStatus::Fail);
         assert!(check.message.contains("responses"));
-    }
-
-    #[test]
-    fn install_command_is_the_official_native_installer() {
-        let cmd = InstallCommand::for_binary("claude").expect("claude has a bundled installer");
-        // Same canonical URL on every platform; the transport differs.
-        assert!(cmd.display().contains("claude.ai/install"));
-        #[cfg(not(windows))]
-        {
-            assert!(cmd.display().contains("install.sh"));
-            assert!(cmd.display().contains("| bash"));
-        }
-        #[cfg(windows)]
-        {
-            assert!(cmd.display().contains("install.ps1"));
-        }
-
-        let codex = InstallCommand::for_binary("codex").expect("codex has a bundled installer");
-        assert!(codex.display().contains("chatgpt.com/codex/install"));
-        // The rest of the catalog is installed from upstream, not by us.
-        assert!(InstallCommand::for_binary("opencode").is_none());
-        #[cfg(not(windows))]
-        {
-            assert!(codex.display().contains("install.sh"));
-            assert!(codex.display().contains("| sh"));
-        }
-        #[cfg(windows)]
-        {
-            assert!(codex.display().contains("install.ps1"));
-        }
-    }
-
-    #[test]
-    fn find_on_path_locates_executable_in_listed_dir() {
-        let dir = std::env::temp_dir().join(format!("bitrouter-spawn-path-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("fake-agent");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let path = std::env::join_paths([dir.as_os_str()]).unwrap();
-        let found = find_on_path("fake-agent", Some(path), &[]);
-        assert_eq!(found.as_deref(), Some(bin.as_path()));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn find_on_path_returns_none_when_absent() {
-        let path = std::env::join_paths([std::env::temp_dir().as_os_str()]).unwrap();
-        assert!(find_on_path("definitely-not-a-real-binary-xyz", Some(path), &[]).is_none());
-    }
-
-    #[test]
-    fn find_on_path_falls_back_to_extra_dirs() {
-        // The post-install re-resolution relies on `extra` (e.g. ~/.local/bin)
-        // even when PATH is empty — exercise that path explicitly.
-        let dir =
-            std::env::temp_dir().join(format!("bitrouter-spawn-extra-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("fake-agent");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        // PATH is None entirely; the binary is only reachable via `extra`.
-        let found = find_on_path("fake-agent", None, std::slice::from_ref(&dir));
-        assert_eq!(found.as_deref(), Some(bin.as_path()));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -129,9 +129,6 @@ anticipation of P1.
 | Tenancy and authorization | Preserve existing principal/scope enforcement and isolation; operator services use supported service credentials | Shared gateway authorization/configuration revisions and resource authority |
 | Admission and accounting | Preserve current single-instance limits and finalization | Atomic admission, idempotent finalization and uncertain-attempt reconciliation across instances |
 | Extensions | Preserve compiled capabilities and advanced host adapters with new ownership | No new ABI, loader or remote extension protocol in either milestone |
-| Base management and local protocol | Provider login through a stub vendor executable and offline skill inspection work without harness; local session requests remain decodable and return explicit unavailable-capability errors before service/state changes; IPC envelopes do not become public AI APIs |
-| MCP only | Existing `mcp check` performs bounded discovery and confirms cleanup after success, failure and cancellation without enabling harness, ACP, core or TUI |
-| Historical ACP records | Gateway policy serving and core offline checkpoint/projection reads work without a live recorder; administrative-update classification matches baseline valid/malformed/unknown payload behavior, with no changes to enrollment or integrity checks |
 | Core and harness | Move existing behavior; preserve scheduling versus execution/session authority | Distributed core and complete core HTTP coverage require separate future scope |
 
 An operator's business identity is not automatically a service principal. The
@@ -795,7 +792,7 @@ execution; a top-level `cfg` on the old module is insufficient.
 | `acp_cli::{RoutingOptions, HeadlessOptions, PromptFormat, SessionSelection}` | Keep CLI options and static capability data separate from controllers, session hosts and execution adapters. Gate conversions into harness permission/runtime types with execution, not argument parsing. |
 | `agent_local` snapshots, receipts, capabilities and errors | Extract HTTP-shared DTOs from service/storage implementations before adapting local replies. Keep local wrappers, socket discovery and dispatch in the application; do not publish the IPC protocol simply to break an import cycle. |
 | `acp_trajectory::CanonicalStore` versus `Recorder` | Retain historical projections/checkpoint access needed by core independently of live ACP capture. Gate `Recorder`, `RecorderState`, recorder construction and `CapturePort` integration with harness; preserve storage validation and each caller's existing write authority. |
-| `evolution::service::is_administrative_update` | Published-policy serving currently deserializes ACP notifications to classify administrative updates. Preserve that validation/classification in an application-owned historical-record decoder, including malformed/unknown inputs remaining nonadministrative. A discriminator-only whitelist must not change enrollment behavior. |
+| `evolution::service::is_administrative_update` | Published-policy serving currently deserializes ACP notifications to classify administrative updates. Preserve that validation/classification in an application-owned historical-record decoder, including inputs rejected by the baseline remaining nonadministrative and the baseline's tolerance of optional/nested fields. A discriminator-only whitelist or a stricter replacement decoder must not change enrollment behavior. |
 | Harness MCP resources used by `tools::check` | Move reusable bounded discovery, transport and confirmed process cleanup under the application MCP owner. Keep workspace-effect recording and approval adaptation in harness; retain timeout/cancellation semantics in MCP-only builds. |
 | Harness skill format/name helpers used by base CLI | Extract offline validation/discovery from runtime resource materialization, preserving existing commands without enabling agent execution. |
 
@@ -810,6 +807,12 @@ consumers of one source of installer facts. Build-script generation of harness
 invocations must not make gateway provider login depend on an ACP catalog.
 Preserve model/provider bundling and daemon/migration fingerprints in every
 profile; gate only agent execution catalogs and their synthesis code.
+
+Without harness, bound every local control request to 4 MiB including its
+newline before deserialization or dispatch. Return an explicit size error on
+overflow without waiting for EOF, and redact opaque session requests and replies
+in debug output. This limit applies to the reduced local transport, not HTTP or
+the existing harness-enabled prompt/history transport.
 
 These splits belong to P0 feature isolation and behavior preservation (A02,
 A05, A06, A09 and A11), not a new IPC or plugin API.
@@ -1454,15 +1457,20 @@ Each stage produces a buildable, reviewable change. Temporary implementation
 ownership is allowed while moving consumers, but no permanent forwarding crates,
 duplicate model types or service runtime in the final SDK/AI graph remain.
 
-| Stage | Reviewable result | Principal final acceptance gates |
-| --- | --- | --- |
-| P0 0 | Recorded behavior, serialized-data and performance baselines | Evidence required by A07–A16 |
-| P0 1 | Shared contracts and matcher dependency direction established | A02, A13, A15; A02 completes in P0 3 |
-| P0 2 | Core/harness, TUI and telemetry merged into the application | A01, A10–A13 |
-| P0 3 | Application owns gateway execution; AI is contract-only | A02, A07, A09, A14 |
-| P0 4 | HTTP SDK and independent client/server example | A03, A04, A15 |
-| P0 5 | Feature isolation, startup and persistence transitions | A05, A06, A08–A12 |
-| P0 6 | Complete validation, packaging and migration documentation | A01–A16 together |
+| Stage | Entry prerequisite | Reviewable result | Principal final acceptance gates |
+| --- | --- | --- | --- |
+| [P0 0](#p0-0-record-compatibility-and-delivery-baselines) | Pinned source inventory | Recorded behavior, serialized-data and performance baselines | Evidence required by A07–A16 |
+| [P0 1](#p0-1-extract-shared-contracts-and-remove-package-cycles) | P0 0 compatibility evidence | Shared contracts and matcher dependency direction established | A02, A13, A15; A02 completes in P0 3 |
+| [P0 2](#p0-2-merge-application-implementations-before-retiring-the-sdk) | P0 1 shared contracts | Core/harness, TUI and telemetry merged into the application | A01, A10–A13 |
+| [P0 3](#p0-3-move-gateway-runtime-and-make-ai-lightweight) | P0 2 removes implementation-package back-edges | Application owns gateway execution; AI is contract-only | A02, A07, A09, A14 |
+| [P0 4](#p0-4-establish-the-http-sdk-and-independent-gateway-use) | P0 3 removes the old SDK server implementation | HTTP SDK and independent client/server example | A03, A04, A15 |
+| [P0 5](#p0-5-isolate-features-and-service-lifecycle) | P0 3–4 establish service/client ownership | Feature isolation, startup and persistence transitions | A05, A06, A08–A12 |
+| [P0 6](#p0-6-validate-and-prepare-the-reorganized-delivery) | P0 1–5 changes and stage reviews integrated | Complete validation, packaging and migration documentation | A01–A16 together |
+
+Apply feature-aware design while moving each owner; P0 5 is the integrated
+isolation stage, not permission to defer every dependency check until then.
+The prerequisites describe a safe merge order. Independent fixtures and client
+tests may be prepared earlier against the recorded service contracts.
 
 These mappings identify review responsibility, not early acceptance: moving
 three packages does not complete P0 while gateway/SDK separation or feature
@@ -1786,6 +1794,9 @@ coverage that justifies a profile.
 | Core SDK | SDK-only consumer negotiates capabilities and the existing channel against a separate core-enabled server; bind and checkpoint ACK unblock work only after the test caller persists it; managed Responses, operation/head lookup, release, scope/epoch/version errors, bounded frames and disconnect preserve existing semantics; no implicit ACK, tool execution or mutation replay |
 | Harness HTTP SDK | SDK-only consumer uses the explicit loopback execution endpoint and credential; verify instance changes, workspace authorization, stored-session reads/observation, native mutations with core, and capability rejection without core; inference/control credentials are not interchangeable with execution credentials |
 | Harness only | Stored-session inspection, historical native snapshot decoding and corruption rejection, and existing external ACP/headless paths without production core or terminal drawing; native start/resume rejects before resource discovery, owner acquisition or durable mutation, with no automatic queue execution |
+| Base management and local protocol | Provider login through a stub vendor executable and offline skill inspection work without harness; local session requests remain decodable and return explicit unavailable-capability errors before service/state changes; IPC envelopes do not become public AI APIs |
+| MCP only | Existing `mcp check` performs bounded discovery and confirms cleanup after success, failure and cancellation without enabling harness, ACP, core or TUI |
+| Historical ACP records | Gateway policy serving and core offline checkpoint/projection reads work without a live recorder; administrative-update classification matches baseline valid/malformed/unknown payload behavior, with no changes to enrollment or integrity checks |
 | Core and harness | Existing managed execution, ThreadService ownership/queue/approval transitions, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |
 | Headless presentation | Replay baseline-produced transcript fixtures without terminal dependencies; preserve Markdown/code/diff/reasoning text, cost provenance and failure tails, once-per-settled-turn emission and closed-pipe behavior. Noninteractive setup and piped chat work; unavailable interactive operations fail before service/setup side effects. |
 | TUI | Existing style/layout and PTY actions, source anchors and terminal restoration; shared command results agree with the corresponding headless paths |

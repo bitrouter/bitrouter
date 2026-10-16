@@ -81,7 +81,6 @@ pub mod skills;
 pub mod spawn;
 pub mod storage;
 pub mod style;
-pub mod supervisor;
 #[cfg(feature = "mcp")]
 pub mod tools;
 mod tracing_filter;

@@ -2,11 +2,11 @@
 
 use serde::Serialize;
 
-use crate::output::CliReport;
-use crate::output::human::{Human, Table};
-use crate::supervisor::{
+use crate::client::sessions::wire::{
     AttentionState, ProcessState, ReviewState, RunSnapshot, RunSummary, TurnState,
 };
+use crate::output::CliReport;
+use crate::output::human::{Human, Table};
 
 fn yesno(b: bool) -> String {
     if b { "yes".into() } else { "no".into() }

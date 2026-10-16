@@ -1,11 +1,68 @@
 //! Shared Agent Skills frontmatter, validation and local discovery.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{Error, Result};
+const MAX_SKILL_BYTES: u64 = 256 * 1024;
+
+/// Format or local discovery failure, independent of harness execution.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The required opening or closing frontmatter fence is missing.
+    #[error("SKILL.md has no YAML frontmatter block")]
+    MissingFrontmatter,
+    /// The frontmatter is not a supported YAML mapping.
+    #[error("frontmatter parse error: {0}")]
+    Frontmatter(String),
+    /// The name is outside the shared Agent Skills grammar.
+    #[error("invalid skill name {0:?}")]
+    InvalidSkillName(String),
+    /// Reading or discovering a local skill failed.
+    #[error("io error: {0}")]
+    Io(String),
+}
+
+/// Result of parsing, validating or discovering a local skill.
+pub type Result<T> = std::result::Result<T, Error>;
+
+fn is_valid_skill_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+}
+
+fn is_valid_skill_description(description: &str) -> bool {
+    !description.trim().is_empty() && description.chars().count() <= 1024
+}
+
+/// Validate the same name grammar for offline CLI and harness consumers.
+pub fn validate_skill_name(name: &str) -> Result<()> {
+    if !is_valid_skill_name(name) {
+        return Err(Error::InvalidSkillName(name.into()));
+    }
+    Ok(())
+}
+
+pub(crate) fn read_skill(path: &Path) -> std::io::Result<String> {
+    let mut bytes = Vec::new();
+    let file = File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("SKILL.md must be a regular file"));
+    }
+    file.take(MAX_SKILL_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SKILL_BYTES {
+        return Err(std::io::Error::other("SKILL.md exceeds 256 KiB"));
+    }
+    String::from_utf8(bytes).map_err(|error| std::io::Error::other(error.to_string()))
+}
 
 /// Parsed frontmatter from a `SKILL.md` file.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -109,7 +166,7 @@ fn skill_search_roots(root: &Path) -> Vec<PathBuf> {
 /// be a real directory/file: otherwise discovery could read a `SKILL.md`
 /// outside the configured workspace before the catalog has a chance to reject
 /// it.
-pub(super) fn is_safe_installed_path(root: &Path, candidate: &Path) -> bool {
+pub(crate) fn is_safe_installed_path(root: &Path, candidate: &Path) -> bool {
     let Ok(relative) = candidate.strip_prefix(root) else {
         return false;
     };
@@ -201,10 +258,10 @@ impl DiscoveredSkill {
                 fm.name
             ));
         }
-        if !super::is_valid_skill_name(&fm.name) {
-            return Some(super::Error::InvalidSkillName(fm.name.clone()).to_string());
+        if !is_valid_skill_name(&fm.name) {
+            return Some(Error::InvalidSkillName(fm.name.clone()).to_string());
         }
-        if !super::is_valid_skill_description(&fm.description) {
+        if !is_valid_skill_description(&fm.description) {
             return Some("description must be 1-1024 characters".to_string());
         }
         None
@@ -226,8 +283,8 @@ pub fn discover_all_skills(root: &Path) -> Vec<DiscoveredSkill> {
     discover(root, usize::MAX, usize::MAX).unwrap_or_default()
 }
 
-pub(super) fn discover_bounded(root: &Path) -> Result<Vec<DiscoveredSkill>> {
-    discover(root, 4096, super::MAX_SKILLS)
+pub(crate) fn discover_bounded(root: &Path, skill_limit: usize) -> Result<Vec<DiscoveredSkill>> {
+    discover(root, 4096, skill_limit)
 }
 
 fn discover(root: &Path, entry_limit: usize, skill_limit: usize) -> Result<Vec<DiscoveredSkill>> {
@@ -249,7 +306,7 @@ fn discover(root: &Path, entry_limit: usize, skill_limit: usize) -> Result<Vec<D
         if found.len() >= skill_limit {
             return Err(Error::Io("skills discovery exceeds its entry limit".into()));
         }
-        let frontmatter = match super::read_skill(&path) {
+        let frontmatter = match read_skill(&path) {
             Ok(content) => parse_frontmatter(&content),
             // Unreadable is a problem worth reporting, not an absence: the
             // directory has a SKILL.md and the user cannot use it.

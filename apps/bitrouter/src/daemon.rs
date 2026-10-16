@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "harness"))]
+use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::gateway::assembly::App;
@@ -109,6 +111,36 @@ impl DaemonReloader for NoopReloader {
         Ok(())
     }
 }
+
+/// Local session data retained only for compatibility in builds without harness.
+/// Its wire shape is unchanged, but debug output cannot expose grants or prompts.
+#[cfg(not(feature = "harness"))]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OpaqueSessionPayload(serde_json::Value);
+
+#[cfg(not(feature = "harness"))]
+impl OpaqueSessionPayload {
+    pub(crate) fn new(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn into_value(self) -> serde_json::Value {
+        self.0
+    }
+}
+
+#[cfg(not(feature = "harness"))]
+impl std::fmt::Debug for OpaqueSessionPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OpaqueSessionPayload([redacted])")
+    }
+}
+
+// Applies to every local control request without harness, including its newline.
+// Harness builds retain their existing large prompt/history transport behavior.
+#[cfg(not(feature = "harness"))]
+const MAX_GATEWAY_CONTROL_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 /// A command sent from the CLI to a running daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,7 +261,11 @@ pub enum DaemonCommand {
     /// only on the owner-scoped local transport; the remote control server has
     /// no corresponding operation.
     Sessions {
-        request: crate::supervisor::SessionRequest,
+        #[cfg(feature = "harness")]
+        request: crate::client::sessions::wire::SessionRequest,
+        // Decode only to reject the unavailable operation on reduced builds.
+        #[cfg(not(feature = "harness"))]
+        request: OpaqueSessionPayload,
     },
 }
 
@@ -404,7 +440,10 @@ pub enum DaemonResponse {
     },
     /// Versioned daemon-owned ACP session response.
     Sessions {
-        response: crate::supervisor::SessionResponse,
+        #[cfg(feature = "harness")]
+        response: crate::client::sessions::wire::SessionResponse,
+        #[cfg(not(feature = "harness"))]
+        response: OpaqueSessionPayload,
     },
     /// The command failed.
     Error {
@@ -759,7 +798,7 @@ pub(crate) async fn run_bound_control_socket(
     #[cfg(feature = "harness")]
     let supervisor = match &options.administration {
         Some(administration) => Some(
-            crate::supervisor::Supervisor::open(
+            crate::harness::supervisor::Supervisor::open(
                 administration.source.clone(),
                 administration.routing.clone(),
             )
@@ -801,7 +840,7 @@ pub(crate) async fn run_bound_control_socket(
 struct LocalControlServices {
     administration: Option<Administration>,
     #[cfg(feature = "harness")]
-    supervisor: Option<crate::supervisor::Supervisor>,
+    supervisor: Option<crate::harness::supervisor::Supervisor>,
     gate: crate::daemon_handoff::HandoffGate,
     cli_owned: bool,
     handoff_instance_id: String,
@@ -910,8 +949,30 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut reader = BufReader::new(stream);
+    #[cfg(feature = "harness")]
     let mut line = String::new();
-    if reader.read_line(&mut line).await? == 0 {
+    #[cfg(feature = "harness")]
+    let read = reader.read_line(&mut line).await?;
+    #[cfg(not(feature = "harness"))]
+    let (read, line) = {
+        let mut bytes = Vec::new();
+        let read = (&mut reader)
+            .take(MAX_GATEWAY_CONTROL_REQUEST_BYTES as u64 + 1)
+            .read_until(b'\n', &mut bytes)
+            .await?;
+        if read > MAX_GATEWAY_CONTROL_REQUEST_BYTES {
+            write_response(
+                reader.get_mut(),
+                &DaemonResponse::Error {
+                    message: "local control command exceeds 4 MiB".to_string(),
+                },
+            )
+            .await?;
+            return Ok(false);
+        }
+        (read, String::from_utf8(bytes)?)
+    };
+    if read == 0 {
         return Ok(false); // client hung up without sending anything
     }
     let command: DaemonCommand = match serde_json::from_str(line.trim()) {
@@ -2108,6 +2169,38 @@ pub async fn start_and_wait(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "harness"))]
+    #[test]
+    fn opaque_session_envelopes_preserve_wire_data_and_redact_debug() -> anyhow::Result<()> {
+        let request = serde_json::json!({
+            "cmd": "sessions",
+            "request": {
+                "version": 1,
+                "authorization": {"proof": "private-request-proof"},
+                "command": {"op": "list"}
+            }
+        });
+        let command: super::DaemonCommand = serde_json::from_value(request.clone())?;
+        assert_eq!(serde_json::to_value(&command)?, request);
+        let debug = format!("{command:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("private-request-proof"));
+
+        let response = serde_json::json!({
+            "resp": "sessions",
+            "response": {
+                "status": "authorized",
+                "grant": {"authorization": {"proof": "private-response-proof"}}
+            }
+        });
+        let reply: super::DaemonResponse = serde_json::from_value(response.clone())?;
+        assert_eq!(serde_json::to_value(&reply)?, response);
+        let debug = format!("{reply:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("private-response-proof"));
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn process_liveness_checks_one_representable_positive_pid() {
