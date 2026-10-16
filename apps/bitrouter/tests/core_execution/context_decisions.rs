@@ -5,6 +5,7 @@ use bitrouter::gateway::model::decision::policy::DecisionPricing;
 use bitrouter::gateway::model::decision::typesafe::TypeSafeExecutor;
 use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
+use bitrouter::storage::checkpoint::snapshot::context::inspection::InspectionExt;
 use bitrouter_ai::core::protocol::ContextMode;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -683,9 +684,9 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
 
 #[tokio::test]
 async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -> TestResult {
-    use bitrouter::gateway::routing::signals::NextStepRole;
-    use bitrouter::gateway::routing::signals::ProgressState;
-    use bitrouter::gateway::routing::signals::TaskFamily;
+    use bitrouter_ai::harness::inspection::NextStepRole;
+    use bitrouter_ai::harness::inspection::ProgressState;
+    use bitrouter_ai::harness::inspection::TaskFamily;
 
     let server = MockServer::start().await;
     Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &Request| {
@@ -722,12 +723,13 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     };
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Some(inspection) = bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&session.snapshot().await)
+            if let Some(inspection) =
+                bitrouter_ai::harness::inspection::Inspection::capture(&session.snapshot().await)
                 && let Some(routing) = inspection
                     .tasks
                     .first()
                     .and_then(|task| task.routing.as_ref())
-                && routing.phase == bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Classifying
+                && routing.phase == bitrouter_ai::harness::inspection::RoutingPhase::Classifying
             {
                 assert!(routing.workflow.is_none() && routing.model.is_none());
                 break;
@@ -738,9 +740,8 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     .await?;
     driving.await??;
     let mut state = session.snapshot().await;
-    let inspection =
-        bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&state)
-            .ok_or("inspection missing")?;
+    let inspection = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        .ok_or("inspection missing")?;
     let routing = inspection
         .tasks
         .first()
@@ -748,7 +749,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .ok_or("routing missing")?;
     assert_eq!(
         routing.phase,
-        bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Finished
+        bitrouter_ai::harness::inspection::RoutingPhase::Finished
     );
     let workflow = routing.workflow.as_ref().ok_or("workflow missing")?;
     assert_eq!(workflow.task_family, TaskFamily::CodeFrontendUi);
@@ -761,11 +762,10 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .get_mut(&root_id)
         .and_then(|agent| agent.turn.as_mut())
         .ok_or("root missing")?;
-    turn.status = bitrouter::storage::checkpoint::snapshot::AgentStatus::Runnable;
+    turn.status = bitrouter_ai::harness::inspection::AgentStatus::Runnable;
     turn.final_answer = None;
-    let preparing =
-        bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&state)
-            .ok_or("preparation inspection missing")?;
+    let preparing = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        .ok_or("preparation inspection missing")?;
     let routing = preparing
         .tasks
         .first()
@@ -773,7 +773,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .ok_or("preparation routing missing")?;
     assert_eq!(
         routing.phase,
-        bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Preparing
+        bitrouter_ai::harness::inspection::RoutingPhase::Preparing
     );
     assert!(routing.workflow.is_none() && routing.model.is_none());
     // The same runnable boundary waits for dependencies when a final answer
@@ -782,7 +782,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     child.agent_id = "waiting-child".into();
     child.parent_id = Some(root_id.clone());
     child.turn.as_mut().ok_or("child turn missing")?.status =
-        bitrouter::storage::checkpoint::snapshot::AgentStatus::Runnable;
+        bitrouter_ai::harness::inspection::AgentStatus::Runnable;
     state.agents.insert(child.agent_id.clone(), child);
     state
         .agents
@@ -790,9 +790,8 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .and_then(|agent| agent.turn.as_mut())
         .ok_or("root missing")?
         .final_answer = Some("waiting for child".into());
-    let waiting =
-        bitrouter::storage::checkpoint::snapshot::context::inspection::Inspection::capture(&state)
-            .ok_or("waiting inspection missing")?;
+    let waiting = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        .ok_or("waiting inspection missing")?;
     let routing = waiting
         .tasks
         .first()
@@ -800,7 +799,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .ok_or("waiting routing missing")?;
     assert_eq!(
         routing.phase,
-        bitrouter::storage::checkpoint::snapshot::context::inspection::RoutingPhase::Waiting
+        bitrouter_ai::harness::inspection::RoutingPhase::Waiting
     );
     assert!(routing.model.is_some());
     session.disconnect().await;

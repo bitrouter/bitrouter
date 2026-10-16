@@ -1,21 +1,28 @@
 //! Serialize facts, checkpoints and publication through the Thread commit gate.
 
+use crate::harness::turn::TurnSnapshotExt;
 use std::sync::Arc;
 use std::time::Instant;
 
 use bitrouter_ai::types::{Message, Role};
 
+use super::ServiceError;
+use super::ThreadService;
+use super::now_ms;
 use super::state::State;
 use super::threads::unknown_thread;
-use super::{ErrorCode, ServiceError, ThreadService, now_ms, unknown_turn};
+use super::unknown_turn;
 use crate::harness::agent::RunEvent;
 use crate::harness::item::MAX_LIVE_BYTES;
 use crate::harness::storage::ExecutionRecord;
-use crate::harness::thread::ThreadStatus;
-use crate::harness::turn::{TurnEvent, TurnEventPayload, TurnStatus};
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnEvent;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 pub(super) fn lifecycle_fact(event: &TurnEvent) -> Option<ExecutionRecord> {
-    use crate::harness::turn::TurnLifecycle as L;
+    use bitrouter_ai::harness::turn::TurnLifecycle as L;
     let lifecycle = match &event.payload {
         TurnEventPayload::Started => L::Started,
         TurnEventPayload::InputRequested {
@@ -133,7 +140,7 @@ impl ThreadService {
             }
             if let Some(task) = state.turns.get(turn_id)
                 && task.steering.iter().all(|entry| {
-                    entry.receipt.status != crate::harness::turn::SteeringStatus::Received
+                    entry.receipt.status != bitrouter_ai::harness::turn::SteeringStatus::Received
                 })
             {
                 task.fence.set(false);
@@ -230,9 +237,10 @@ impl ThreadService {
             }
             if let TurnEventPayload::Finished { detail, .. } = &payload {
                 for entry in &record.steering {
-                    if entry.receipt.status == crate::harness::turn::SteeringStatus::Received {
+                    if entry.receipt.status == bitrouter_ai::harness::turn::SteeringStatus::Received
+                    {
                         let mut receipt = entry.receipt.clone();
-                        receipt.status = crate::harness::turn::SteeringStatus::NotApplied;
+                        receipt.status = bitrouter_ai::harness::turn::SteeringStatus::NotApplied;
                         receipt.reason = Some(detail.clone());
                         payloads.push(TurnEventPayload::SteeringUpdated {
                             receipt,

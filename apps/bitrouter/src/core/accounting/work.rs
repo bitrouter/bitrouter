@@ -5,8 +5,11 @@ use crate::storage::checkpoint::snapshot::accounting::work::{
     CostWork, CostWorkKind, CostWorkState, ProviderAttemptSource, RunCostWork,
 };
 
-use crate::storage::checkpoint::snapshot::{AgentStatus, AgentTurn, ModelStep, SessionSnapshot};
+use crate::storage::checkpoint::snapshot::AgentTurn;
+use crate::storage::checkpoint::snapshot::ModelStep;
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use bitrouter_ai::harness::inspection::AgentStatus;
 
 impl RunCostWork {
     fn record(&mut self, id: String, next: CostWork) -> Result<(), CoreError> {

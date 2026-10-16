@@ -451,8 +451,7 @@ async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_los
         assert!(done.agents.values().all(|agent| {
             agent.queue.is_empty()
                 && agent.turn.as_ref().is_some_and(|turn| {
-                    turn.status
-                        == bitrouter::storage::checkpoint::snapshot::AgentStatus::Interrupted
+                    turn.status == bitrouter_ai::harness::inspection::AgentStatus::Interrupted
                         && (agent.parent_id.is_none() || turn.notified)
                         && turn.invocations.iter().all(|call| call.consumed)
                 })

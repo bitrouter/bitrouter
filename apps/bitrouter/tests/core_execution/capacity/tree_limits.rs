@@ -2,8 +2,8 @@
 
 use super::*;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter::storage::checkpoint::snapshot::AgentStatus;
 use bitrouter_ai::core::protocol::OperationDisposition;
+use bitrouter_ai::harness::inspection::AgentStatus;
 
 struct BoundedExecutor {
     inner: RecordingExecutor,

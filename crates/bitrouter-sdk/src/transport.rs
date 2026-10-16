@@ -69,3 +69,35 @@ pub(crate) fn has_content_type(response: &Response, expected: &str) -> bool {
         .and_then(|value| value.split(';').next())
         .is_some_and(|value| value.trim().eq_ignore_ascii_case(expected))
 }
+
+pub(crate) fn build_http(
+    headers: header::HeaderMap,
+    options: &crate::gateway::TransportOptions,
+    http1_only: bool,
+) -> Result<reqwest::Client> {
+    // Disable both redirect forwarding and reqwest's protocol-level retry
+    // policy: a disconnected mutation/inference call has an unknown outcome.
+    // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.retry
+    let mut builder = reqwest::Client::builder()
+        .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(options.connect_timeout)
+        .user_agent(concat!("bitrouter-sdk/", env!("CARGO_PKG_VERSION")));
+    if !options.system_proxy {
+        builder = builder.no_proxy();
+    }
+    if let Some(timeout) = options.read_timeout {
+        builder = builder.read_timeout(timeout);
+    }
+    if let Some(timeout) = options.request_timeout {
+        builder = builder.timeout(timeout);
+    }
+    if http1_only {
+        // HTTP/1.1 upgrade needs a dedicated pool and ALPN selection even when
+        // another consumer enables reqwest's HTTP/2 feature.
+        // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.http1_only
+        builder = builder.http1_only();
+    }
+    builder.build().map_err(Error::transport)
+}

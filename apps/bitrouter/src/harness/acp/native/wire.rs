@@ -117,7 +117,7 @@ impl Wire {
         self,
         cx: &ConnectionTo<Client>,
         session: &str,
-        input: &crate::harness::turn::InputRequest,
+        input: &bitrouter_ai::harness::turn::InputRequest,
     ) -> Result<Value, Error> {
         let tool = json!({"toolCallId":input.tool_id,"title":input.tool_name,"status":"pending","rawInput":serde_json::from_str::<Value>(&input.arguments).unwrap_or(Value::String(input.arguments.clone()))});
         let options = json!([

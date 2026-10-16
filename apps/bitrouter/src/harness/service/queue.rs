@@ -1,20 +1,29 @@
 //! Advance accepted FIFO work without bypassing the active Turn or safe checkpoints.
 
+use crate::harness::agent::AgentConfigExt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::gateway::caller::CallerContext;
 
+use super::ServiceError;
+use super::ThreadService;
 use super::admission::{fingerprint, key_scope};
 use super::commit::lifecycle_fact;
+use super::now_ms;
 use super::threads::unknown_thread;
-use super::{ErrorCode, ServiceError, ThreadService, now_ms, unknown_turn};
+use super::unknown_turn;
 use crate::harness::agent::Agent;
 use crate::harness::storage::{AcceptedKey, ExecutionRecord};
-use crate::harness::thread::{ThreadSnapshot, ThreadStatus, ThreadTarget};
-use crate::harness::turn::{
-    TurnEvent, TurnEventPayload, TurnReceipt, TurnStatus, VerificationStatus,
-};
+use crate::harness::thread::ThreadTarget;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnEvent;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnReceipt;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 impl ThreadService {
     pub async fn cancel_queued_turn(

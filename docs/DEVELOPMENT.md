@@ -6,8 +6,9 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 The table below describes the current implementation during P0. Core, harness,
 TUI, telemetry, model/provider runtime and the old SDK server have moved into
-the application. The SDK provides gateway HTTP/SSE, control, evaluation and
-managed core transport clients; application feature isolation remains in progress. The final
+the application. The SDK provides gateway HTTP/SSE, control, evaluation, harness
+HTTP/SSE and managed core transport clients. Final feature/profile and delivery
+acceptance remains open. The final
 architecture and migration gates are in the
 [service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 
@@ -15,8 +16,8 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation, catalog and managed-attempt evidence contracts; optional schema derives; no service runtime or transport |
-| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control and evaluation clients using AI wire contracts; optional managed core WebSocket transport with caller-owned checkpoint ACKs |
+| `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation, catalog, managed-attempt and harness API contracts; optional schema derives; no service runtime or transport |
+| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control, evaluation and harness HTTP/SSE clients using AI wire contracts; optional managed core WebSocket transport with caller-owned checkpoint ACKs |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, terminal UI, optional OTLP and management commands |
 | `helpers/dist-helper` | helper | Unpublished registry/chart tooling; configuration schema delegates to the application-owned generator |
@@ -48,9 +49,11 @@ policy belongs to the harness, and command resolution belongs to `commands`.
 Cost attribution remains explicit, missing cost is unreported, and cancelling a
 permission prompt never grants consent.
 
-Terminal-free log tails and shared values live in `presentation`. Plain ACP
-transcript formatting still uses the old renderer while its neutral formatting
-is extracted. Complete headless dependency isolation remains a P0 gate.
+Terminal-free log tails, transcript formatting and shared values live in
+`presentation`. Plain and terminal output consume that logical representation;
+physical wrapping, painting and input stay under `tui`. Non-TUI production
+dependency closures exclude the terminal stack. The progress ledger records
+profile checks separately from the remaining final P0 matrix.
 
 BRO native tools are `read`, `glob`, `grep`, `write`, `edit`, and `shell`.
 `read` dispatches known workspace paths to file lines or direct directory
@@ -65,8 +68,10 @@ endpoint paths, supervisor records and workspace resources untouched. Request
 identity normalization, accounting and existing session-spend reads remain
 available without that runtime. Configured MCP upstreams require `mcp`; enabled agent HTTP
 ingress requires `harness`. Startup, reload and profile preflight reject missing
-capabilities before activating the service. This runtime separation does not yet
-complete the remaining harness/TUI dependency isolation.
+capabilities before activating the service. ACP/controller dependencies and agent
+catalog generation require harness; shared MCP transport requires `mcp`. The
+minimum profile retains provider-login helpers and historical record decoding
+without either execution stack.
 
 SQLite is available in every application build. PostgreSQL and MySQL drivers
 require `db-postgres` and `db-mysql`, both enabled by the default distribution.
@@ -123,9 +128,20 @@ native session inspection and observation validate stored records, but execution
 mutations fail before workspace discovery or execution-owner acquisition. HTTP,
 local IPC and native ACP report this distinction. The host skips native execution
 initialization in that profile, and offline shutdown leaves queued work intact.
-Complete harness-only dependency isolation and the minimum feature matrix remain
-in progress; the core-disabled checks currently retain the other default runtime
-dependencies.
+Harness-only checks use `--no-default-features --features harness`; the live
+scheduler and terminal dependencies remain absent. The complete final feature
+matrix, packaged artifacts and profile transitions remain separate P0 gates.
+
+Public Thread HTTP v2 data lives in `bitrouter_ai::harness`: `api` defines wire
+requests/envelopes, `thread` and `turn` define observations, and `runtime`,
+`agent`, `item`, `resources` and `inspection` own their nested data. The app
+retains agent defaults, limit policy, mutable projection helpers and all
+execution/storage authority. Local IPC envelopes remain app-owned.
+`bitrouter_sdk::harness::HarnessClient` uses a separate execution credential and
+pins one negotiated server instance. Its observation stream does not end when
+a Turn settles, acknowledge checkpoints, or approve tools; callers handle
+detachment and resynchronization explicitly. Historical events retain their
+original instance IDs even when the current page/view uses a new instance.
 
 The SDK provides the existing core capability HTTP method and, with its client
 `core` feature, the managed WebSocket channel. Clients explicitly persist and
@@ -364,10 +380,10 @@ membership, request intents and live dispatch fences belong to
 including adopted policies while evolution mode is Off. Core supplies posterior
 learning and operator/publication mutations through separate implementations.
 Without core, no evolution worker starts; unavailable CLI and local control
-operations reject execution, and the TUI omits its evolution panel. Ordinary checkpoint storage operations retain
-their existing harness owner. This does not establish minimum-gateway closure:
-harness, TUI, MCP and the remaining feature dependencies still require isolation.
-The progress ledger records the outstanding validation.
+operations reject execution, and the TUI omits its evolution panel. Shared
+checkpoint codecs and historical records live in application storage; live
+capture and conversation commits remain harness-owned. The progress ledger
+records the isolated dependency/runtime checks and outstanding final validation.
 
 Reserved judge request admission and attempt bookkeeping now belong to
 `gateway::metering::judge::JudgeCosts`. They retain their pre-authentication
@@ -700,8 +716,10 @@ input-only scope, explicit migration blockers, and process-level verification.
 
 ### Native harness resources
 
-`bitrouter-orchestrator::harness` owns direct MCP connections and local skills
-discovery. The app supplies daemon-owned transport configuration and global roots;
+`bitrouter::harness::resources` owns workspace MCP adaptation and local skill
+materialization. Bounded MCP discovery/transport/process cleanup is shared under
+`gateway::mcp`; offline skill parsing remains available to base management.
+The app supplies daemon-owned transport configuration and global roots;
 active ThreadService Turns freeze inventories and execute MCP through existing
 durable approval/tool barriers. Gateway interop and routed provider generation
 retain their existing responsibilities. See [BRO harness resources](BRO_HARNESS_RESOURCES.md).

@@ -1,6 +1,8 @@
 //! Complete foreground daemon lifecycle for compiled extension hosts.
 
 use crate::daemon;
+#[cfg(feature = "harness")]
+use crate::harness::agent::AgentConfigExt;
 use crate::tracing_filter::resolve_env_filter;
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -319,8 +321,8 @@ async fn serve_with_options(
         let native_acp = crate::harness::acp::native::NativeAcpServer::new(
             task_service.clone(), crate::gateway::caller::CallerContext::local(),
             crate::harness::acp::native::NativeSessionConfig {
-                agent: crate::harness::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
-                permission_profile: crate::harness::thread::PermissionProfile::Ask,
+                agent: bitrouter_ai::harness::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
+                permission_profile: bitrouter_ai::harness::thread::PermissionProfile::Ask,
                 servers: native_harness_config(&cfg, home).servers,
                 register_local_workspaces: true,
             },

@@ -3,6 +3,7 @@
 
 #![cfg(unix)]
 
+use bitrouter::harness::agent::AgentConfigExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -567,7 +568,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         denied
             .downcast_ref::<bitrouter::harness::service::ServiceError>()
             .is_some_and(
-                |error| error.code == bitrouter::harness::service::ErrorCode::Unauthorized
+                |error| error.code == bitrouter_ai::harness::runtime::ErrorCode::Unauthorized
             )
     );
     loop {
@@ -730,7 +731,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
     let (local_thread, _) = local_client
         .create_and_start(
             unlisted.clone(),
-            bitrouter::harness::agent::AgentConfig::fixed("test-model", None).read_only(),
+            bitrouter_ai::harness::agent::AgentConfig::fixed("test-model", None).read_only(),
             None,
             "Local inspection".into(),
         )

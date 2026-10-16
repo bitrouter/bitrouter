@@ -83,10 +83,10 @@ pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
     })
 }
 
-struct SseEvent {
-    event: String,
-    id: String,
-    data: String,
+pub(crate) struct SseEvent {
+    pub(crate) event: String,
+    pub(crate) id: String,
+    pub(crate) data: String,
 }
 
 /// SSE framing only: comments, one initial BOM, CR/LF, data concatenation and ID
@@ -94,7 +94,7 @@ struct SseEvent {
 /// line and accumulated event share one input-byte budget, including invalid
 /// UTF-8; a malformed suffix cannot hide in a second unbounded parser buffer.
 /// https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream
-struct SseDecoder {
+pub(crate) struct SseDecoder {
     limit: usize,
     size: usize,
     line: Vec<u8>,
@@ -106,7 +106,7 @@ struct SseDecoder {
 }
 
 impl SseDecoder {
-    fn new(limit: usize) -> Self {
+    pub(crate) fn new(limit: usize) -> Self {
         Self {
             limit,
             size: 0,
@@ -119,7 +119,7 @@ impl SseDecoder {
         }
     }
 
-    fn accept(&mut self, byte: u8) -> Result<Option<SseEvent>> {
+    pub(crate) fn accept(&mut self, byte: u8) -> Result<Option<SseEvent>> {
         if self.after_cr && byte == b'\n' {
             self.after_cr = false;
             // A CRLF is one line ending, including across HTTP chunks.
@@ -194,6 +194,16 @@ impl SseDecoder {
         // The spec does not dispatch unfinished data at EOF. Validate the last
         // bytes, then let the caller report the missing protocol terminator.
         std::str::from_utf8(&self.line).map_err(|_| Error::Response("invalid SSE UTF-8"))?;
+        Ok(())
+    }
+
+    /// An attachment has no terminal sentinel, but EOF must not hide a partial
+    /// event. A completed comment or retry hint carries no observation data.
+    pub(crate) fn finish_attachment(&self) -> Result<()> {
+        self.finish()?;
+        if !self.line.is_empty() || !self.data.is_empty() || !self.event.is_empty() {
+            return Err(Error::Response("incomplete harness observation frame"));
+        }
         Ok(())
     }
 }

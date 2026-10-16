@@ -1,6 +1,7 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
+use bitrouter_ai::harness::inspection::AgentStatus;
 pub mod accounting;
 pub mod allocation;
 pub mod collaboration;
@@ -210,22 +211,6 @@ pub enum ResourceConstraint {
     CheckpointCapacity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentStatus {
-    Runnable,
-    ModelRunning,
-    WaitingTool,
-    WaitingMessage,
-    WaitingMaterial,
-    Cancelling,
-    Interrupted,
-    RecoveryRequired,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTurn {
     pub run_id: String,
@@ -314,15 +299,6 @@ impl SessionSnapshot {
         self.agents
             .get(&self.agent_id)
             .and_then(|agent| agent.turn.as_ref())
-    }
-}
-
-impl AgentStatus {
-    pub(crate) fn terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Interrupted | Self::Completed | Self::Failed | Self::Cancelled
-        )
     }
 }
 

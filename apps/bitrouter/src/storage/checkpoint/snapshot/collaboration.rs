@@ -1,9 +1,10 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
+use super::SessionSnapshot;
 use super::allocation::ContextSource;
-use super::{AgentStatus, SessionSnapshot};
 use bitrouter_ai::core::protocol::TaskInput;
+use bitrouter_ai::harness::inspection::AgentStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

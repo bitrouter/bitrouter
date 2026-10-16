@@ -11,13 +11,13 @@ use anyhow::Context;
 #[cfg(all(feature = "core", feature = "harness"))]
 use crate::gateway::caller::CallerContext;
 #[cfg(all(feature = "core", feature = "harness"))]
-use crate::harness::agent::ToolMode;
-#[cfg(all(feature = "core", feature = "harness"))]
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession};
 #[cfg(all(feature = "core", feature = "harness"))]
 use crate::storage::checkpoint::snapshot::RunStatus;
 #[cfg(all(feature = "core", feature = "harness"))]
 use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
+#[cfg(all(feature = "core", feature = "harness"))]
+use bitrouter_ai::harness::agent::ToolMode;
 #[cfg(all(feature = "core", feature = "harness"))]
 use tokio_util::sync::CancellationToken;
 

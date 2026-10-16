@@ -41,6 +41,10 @@ pub enum Error {
     Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
     #[error("core service returned HTTP status {}", .0.status)]
     Core(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
+    #[error("harness returned HTTP status {}", .0.status)]
+    Harness(Box<ServiceFailure<bitrouter_ai::harness::api::ErrorResponse>>),
+    #[error("harness observation failed; execution may still be running")]
+    HarnessObservation(Box<ServiceFailure<bitrouter_ai::harness::api::ObservationError>>),
     #[cfg(feature = "core")]
     #[error("core channel failed: {0}; execution may still be running")]
     CoreChannel(&'static str),

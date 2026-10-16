@@ -2,11 +2,11 @@
 
 use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
 use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::routing::signals::TaskFamily;
 use crate::gateway::routing::workflow::predictive::is_task_family_reason_code;
 use crate::storage::evaluation::canonical_digest;
 use bitrouter_ai::eval::{EvalExperimentRef, EvidenceItem, RouteDecisionMeasurement};
 use bitrouter_ai::event::PipelineEvent;
+use bitrouter_ai::harness::inspection::TaskFamily;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};

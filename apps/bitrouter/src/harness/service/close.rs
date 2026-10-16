@@ -2,15 +2,22 @@
 
 use crate::gateway::caller::CallerContext;
 
+use super::ServiceError;
+use super::ThreadService;
 use super::admission::{fingerprint, key_scope};
 use super::commit::lifecycle_fact;
+use super::now_ms;
 use super::threads::unknown_thread;
-use super::{ErrorCode, ServiceError, ThreadService, now_ms};
 use crate::harness::storage::{AcceptedKey, ExecutionRecord};
-use crate::harness::thread::{ThreadCloseReceipt, ThreadStatus, ThreadTarget};
-use crate::harness::turn::{
-    TurnEvent, TurnEventPayload, TurnSnapshot, TurnStatus, VerificationStatus,
-};
+use crate::harness::thread::ThreadCloseReceipt;
+use crate::harness::thread::ThreadTarget;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnEvent;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 impl ThreadService {
     /// Cancel active work and every accepted unstarted input, retaining history.
@@ -145,7 +152,7 @@ impl ThreadService {
                     turn_id: turn_id.clone(),
                     fact: Box::new(ExecutionRecord::TurnLifecycle {
                         turn_id: turn_id.clone(),
-                        lifecycle: crate::harness::turn::TurnLifecycle::CancelRequested,
+                        lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::CancelRequested,
                     }),
                 });
             }
@@ -241,7 +248,7 @@ impl ThreadService {
         &self,
         thread_id: &str,
         key: &str,
-    ) -> Result<Option<crate::harness::thread::ThreadSnapshot>, ServiceError> {
+    ) -> Result<Option<bitrouter_ai::harness::thread::ThreadSnapshot>, ServiceError> {
         let mut completed = None;
         self.scan_receipt(thread_id, |record| {
             if let ExecutionRecord::ThreadCloseCompleted {

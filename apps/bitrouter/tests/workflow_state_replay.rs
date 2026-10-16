@@ -28,7 +28,6 @@ use bitrouter::core::workflow_state::real_trace::{
 use bitrouter::core::workflow_state::replay::ReplayEvaluator;
 use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::core::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
-use bitrouter::gateway::routing::signals::NextStepRole;
 use bitrouter::gateway::routing::workflow::decision::{
     PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
 };
@@ -38,6 +37,7 @@ use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
 use bitrouter_ai::eval::AdmissionStatus;
+use bitrouter_ai::harness::inspection::NextStepRole;
 use bitrouter_ai::types::{NormalizedUsage, ReasoningEffort, UsageOrigin};
 use http::HeaderValue;
 use serde_json::json;

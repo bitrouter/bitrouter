@@ -4,7 +4,7 @@
 mod start_fences;
 
 use super::*;
-use bitrouter::storage::checkpoint::snapshot::AgentStatus;
+use bitrouter_ai::harness::inspection::AgentStatus;
 use std::collections::BTreeMap;
 
 struct HeldCall {

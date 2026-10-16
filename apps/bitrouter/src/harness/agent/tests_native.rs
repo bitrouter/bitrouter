@@ -5,6 +5,7 @@ use crate::gateway::model::decision::typesafe::TypeSafeExecutor;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::{Executor, StreamPartStream};
 use crate::gateway::pipeline::types::ExecutionResult;
+use crate::harness::agent::AgentConfigExt;
 use crate::storage::checkpoint::CheckpointBatchExt;
 use bitrouter_ai::types::Prompt;
 use tokio::sync::Mutex;

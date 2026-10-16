@@ -1,6 +1,7 @@
 //! Transactional facts used by execution and, later, checkpoint recovery.
 //! A successful commit must be durable for the backend's documented fault scope.
 
+use bitrouter_ai::harness::runtime::{EffectStatus, ExecutionOwner, OwnerClaim, SettlementOutcome};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -8,10 +9,12 @@ use bitrouter_ai::types::{Message, Prompt, Usage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::harness::agent::AgentConfig;
-use crate::harness::item::CallRecord;
-use crate::harness::thread::{ThreadEvent, ThreadSnapshot};
-use crate::harness::turn::{SteeringReceipt, VerificationEvidence};
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::item::CallRecord;
+use bitrouter_ai::harness::thread::ThreadEvent;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::turn::SteeringReceipt;
+use bitrouter_ai::harness::turn::VerificationEvidence;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AcceptedKey {
@@ -22,36 +25,11 @@ pub struct AcceptedKey {
     pub turn_id: Option<String>,
 }
 
-/// A stopped owner is durable proof that its service sealed admission, joined
-/// owned execution and confirmed cleanup before releasing write authority.
-/// Abrupt process loss leaves this record active; a new epoch cannot retire it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExecutionOwner {
-    pub server_instance_id: String,
-    pub generation: u64,
-    pub stopped_at_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum OwnerClaim {
-    Acquired { owner: ExecutionOwner },
-    Blocked { owner: ExecutionOwner },
-    Unfenced,
-}
-
 pub fn validate_owner_id(server_instance_id: &str) -> Result<(), String> {
     if server_instance_id.is_empty() || server_instance_id.len() > 128 {
         return Err("invalid execution owner identity".into());
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SettlementOutcome {
-    pub status: crate::harness::agent::RunStatus,
-    pub final_answer: Option<String>,
-    pub detail: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -87,7 +65,7 @@ pub enum ExecutionRecord {
     },
     HarnessInventory {
         context_version: u64,
-        inventory: Box<crate::harness::resources::HarnessInventory>,
+        inventory: Box<bitrouter_ai::harness::resources::HarnessInventory>,
     },
     /// Joined work and known effects/context are prepared for workspace release;
     /// the final outcome is committed before the held OS lock is dropped.
@@ -157,7 +135,7 @@ pub enum ExecutionRecord {
     },
     TurnLifecycle {
         turn_id: String,
-        lifecycle: crate::harness::turn::TurnLifecycle,
+        lifecycle: bitrouter_ai::harness::turn::TurnLifecycle,
     },
     ModelRequest {
         step_id: String,
@@ -197,7 +175,7 @@ pub enum ExecutionRecord {
     },
     VerificationResult {
         #[serde(default)]
-        status: Option<crate::harness::turn::VerificationStatus>,
+        status: Option<bitrouter_ai::harness::turn::VerificationStatus>,
         call: CallRecord,
         evidence: VerificationEvidence,
         effect: EffectStatus,
@@ -225,14 +203,6 @@ pub enum ExecutionRecord {
         estimated_spend_microusd: u64,
         active_duration_ms: u64,
     },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EffectStatus {
-    Completed,
-    NotExecuted,
-    Unknown,
 }
 
 pub const RUNTIME_FORMAT_VERSION: u32 = 7;

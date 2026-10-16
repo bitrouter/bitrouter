@@ -13,14 +13,14 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use super::{HarnessConfig, HarnessResources, ResourceError, instructions};
-use crate::harness::agent::ToolMode;
-use crate::harness::storage::EffectStatus;
 use crate::harness::tools::WorkspaceTools;
 use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::protocol::{
     CoreError, ErrorCode, HarnessManifest, HarnessTool, Limits, MaterialRef, OwnershipGrant,
     SignalUpdate, ToolEffect, ToolExecute, ToolOutcome, ToolResult,
 };
+use bitrouter_ai::harness::agent::ToolMode;
+use bitrouter_ai::harness::runtime::EffectStatus;
 
 #[cfg(feature = "core")]
 pub mod session;

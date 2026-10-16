@@ -271,3 +271,7 @@ required-features = ["core", "harness"]
 [[test]]
 name = "native_harness_resources"
 required-features = ["core", "harness"]
+
+[[test]]
+name = "harness_sdk"
+required-features = ["core", "harness"]

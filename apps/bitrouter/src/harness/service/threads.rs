@@ -1,6 +1,8 @@
 //! Thread state is owned by ThreadService, alongside its Turn projections. This
 //! module does not introduce a second runner or a second commit authority.
 
+use crate::harness::agent::AgentConfigExt;
+use crate::harness::turn::{TurnLifecycleExt, TurnSnapshotExt};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,17 +10,27 @@ use std::time::{Duration, Instant};
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
 
+use super::ServiceError;
+use super::ThreadService;
 use super::admission::{fingerprint, key_scope};
 use super::state::{State, ThreadRecord};
-use super::{ErrorCode, ServiceError, ThreadService, unknown_turn};
-use crate::harness::agent::{Agent, ToolMode};
+use super::unknown_turn;
+use crate::harness::agent::Agent;
 use crate::harness::storage::{AcceptedKey, ExecutionRecord, ExecutionStore};
-use crate::harness::thread::{
-    PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget, WorkspaceGrant,
-};
-use crate::harness::turn::{
-    ApprovalAnswer, CancelTurnRequest, TurnEventPayload, TurnReceipt, TurnSnapshot, TurnStatus,
-};
+use crate::harness::thread::ThreadRequest;
+use crate::harness::thread::ThreadTarget;
+use crate::harness::thread::WorkspaceGrant;
+use crate::harness::turn::ApprovalAnswer;
+use crate::harness::turn::CancelTurnRequest;
+use bitrouter_ai::harness::agent::ToolMode;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnReceipt;
+use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 pub(super) fn unknown_thread() -> ServiceError {
     ServiceError::new(
@@ -317,7 +329,7 @@ impl ThreadService {
         };
         snapshot.cursor = version;
         let mut presentation = super::observation::Presentation::new(
-            crate::harness::thread::ThreadView {
+            bitrouter_ai::harness::thread::ThreadView {
                 recovery: None,
                 thread: snapshot.clone(),
                 config: config.clone(),
@@ -462,29 +474,30 @@ impl ThreadService {
                 }
                 for change in &event.changes {
                     match change {
-                        crate::harness::thread::ThreadChange::TurnQueued { receipt, .. }
-                            if receipt.turn_id == turn_id =>
-                        {
+                        bitrouter_ai::harness::thread::ThreadChange::TurnQueued {
+                            receipt, ..
+                        } if receipt.turn_id == turn_id => {
                             let mut snapshot =
                                 super::observation::empty_turn(&view.thread, &view.config, turn_id);
                             snapshot.status = TurnStatus::Queued;
                             found = Some(snapshot);
                         }
-                        crate::harness::thread::ThreadChange::TurnActivated {
-                            turn_id: id, ..
+                        bitrouter_ai::harness::thread::ThreadChange::TurnActivated {
+                            turn_id: id,
+                            ..
                         } if id == turn_id => {
                             if let Some(turn) = &mut found {
                                 turn.status = TurnStatus::Accepted;
                             }
                         }
-                        crate::harness::thread::ThreadChange::QueuedTurnCancelled {
+                        bitrouter_ai::harness::thread::ThreadChange::QueuedTurnCancelled {
                             turn_id: id,
                         } if id == turn_id => {
                             if let Some(turn) = &mut found {
                                 turn.status = TurnStatus::Cancelled;
                             }
                         }
-                        crate::harness::thread::ThreadChange::TurnLifecycle {
+                        bitrouter_ai::harness::thread::ThreadChange::TurnLifecycle {
                             turn_id: id,
                             lifecycle,
                         } if id == turn_id => {

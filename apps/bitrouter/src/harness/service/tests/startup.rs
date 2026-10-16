@@ -1,3 +1,4 @@
+use crate::harness::agent::AgentConfigExt;
 use std::sync::Arc;
 
 use crate::gateway::caller::CallerContext;
@@ -6,11 +7,12 @@ use tempfile::TempDir;
 use super::support::{
     TurnFixture, app, final_turn, input, target, thread_request, tool_call, turn, wait_for,
 };
-use crate::harness::agent::AgentConfig;
-use crate::harness::service::{ErrorCode, RuntimeLimits, ThreadService};
+use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
-use crate::harness::thread::ThreadStatus;
-use crate::harness::turn::TurnStatus;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 #[tokio::test]
 async fn startup_discovers_cold_threads_without_replaying_or_loading_hot_context()
@@ -150,7 +152,7 @@ async fn startup_discovers_cold_threads_without_replaying_or_loading_hot_context
             &paused.thread_id,
             old.version,
             &[ExecutionRecord::ThreadEvent {
-                event: crate::harness::thread::ThreadEvent {
+                event: bitrouter_ai::harness::thread::ThreadEvent {
                     server_instance_id: reader.inner.instance_id.clone(),
                     thread_id: paused.thread_id.clone(),
                     seq: old.version + 1,
@@ -198,24 +200,27 @@ impl ExecutionStore for DiscoveryFault {
         }
         self.memory.read_index(after, cutoff, limit, bytes).await
     }
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -520,7 +525,7 @@ async fn startup_record_and_metadata_limits_fail_closed_before_admission()
             .create_thread(&source.inner.instance_id, thread_request(&workspace, "two"))
             .await?;
         source.shutdown().await;
-        let mut limits = RuntimeLimits::default();
+        let mut limits = crate::harness::service::default_runtime_limits();
         match bound {
             "roots" => limits.startup_roots = 1,
             "records" => limits.startup_records = 1,
@@ -617,7 +622,7 @@ async fn terminal_native_plan_without_attempt_does_not_block_fresh_workspace_wor
     )?;
     let mut request = thread_request(&workspace, "source");
     request.config = request.config.read_only();
-    request.permission_profile = crate::harness::thread::PermissionProfile::ReadOnly;
+    request.permission_profile = bitrouter_ai::harness::thread::PermissionProfile::ReadOnly;
     let thread = source
         .create_thread(&source.inner.instance_id, request)
         .await?;
@@ -665,7 +670,7 @@ async fn terminal_native_plan_without_attempt_does_not_block_fresh_workspace_wor
     assert!(!budget.active_duration_unknown && !budget.tool_calls_unknown);
     assert!(report.blockers.iter().all(|blocker| matches!(
         blocker,
-        crate::harness::thread::RecoveryBlocker::OwnershipUnconfirmed
+        bitrouter_ai::harness::thread::RecoveryBlocker::OwnershipUnconfirmed
     )));
     reader
         .recover_thread(

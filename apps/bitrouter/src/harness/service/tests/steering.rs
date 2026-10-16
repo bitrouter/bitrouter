@@ -7,10 +7,15 @@ use tempfile::TempDir;
 use super::support::{
     HeldModel, app_with_executor, input, prompts, target, thread_request, wait_for,
 };
-use crate::harness::service::{ErrorCode, RuntimeLimits, ThreadService};
+use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
-use crate::harness::thread::ThreadStatus;
-use crate::harness::turn::{CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus};
+use crate::harness::turn::CancelTurnRequest;
+use crate::harness::turn::SteeringRequest;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::SteeringStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     SteeringRequest {
@@ -38,7 +43,7 @@ async fn steering_during_model(native: bool) -> Result<(), Box<dyn std::error::E
     let model = Arc::new(HeldModel::new());
     let limits = RuntimeLimits {
         steering_inputs_per_turn: 1,
-        ..RuntimeLimits::default()
+        ..crate::harness::service::default_runtime_limits()
     };
     let service = ThreadService::with_limits_and_store(
         super::support::app_with_execution_mode(model.clone(), native)?,
@@ -223,19 +228,22 @@ impl ExecutionStore for RejectApplication {
             .await
     }
 
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -276,7 +284,7 @@ impl ExecutionStore for RejectApplication {
 
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         facts: &[ExecutionRecord],

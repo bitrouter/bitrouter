@@ -9,22 +9,28 @@ use tempfile::TempDir;
 use super::support::{
     app, app_with_executor, final_turn, input, target, thread_request, tool_call, turn, wait_for,
 };
-use crate::harness::service::{ErrorCode, RuntimeLimits, ThreadService};
+use crate::harness::service::ThreadService;
 use crate::harness::storage::{
     AcceptedKey, ExecutionPage, ExecutionRecord, ExecutionStore, MemoryExecutionStore,
     StoredExecution, ThreadHistoryChunk,
 };
-use crate::harness::thread::{
-    PermissionProfile, RecoveryBlocker, ThreadHistoryRequest, ThreadObservation, ThreadStatus,
-};
+use crate::harness::thread::ThreadHistoryRequest;
+use crate::harness::turn::ApprovalAnswer;
+use crate::harness::turn::CancelTurnRequest;
+use crate::harness::turn::SteeringRequest;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::RecoveryBlocker;
+use bitrouter_ai::harness::thread::ThreadObservation;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::SteeringStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 #[cfg(unix)]
-use crate::harness::turn::VerificationStatus;
-use crate::harness::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus,
-};
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 fn recovery_request(
-    view: &crate::harness::thread::ThreadView,
+    view: &bitrouter_ai::harness::thread::ThreadView,
     key: &str,
 ) -> Result<crate::harness::thread::ThreadRecoveryRequest, String> {
     let report = view.recovery.as_ref().ok_or("recovery report missing")?;
@@ -400,24 +406,27 @@ impl ExecutionStore for RecoveryCommitFault {
             .read_index(after, cutoff, limit, max_bytes)
             .await
     }
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -707,7 +716,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
         // This is an acknowledged journal-prefix fixture, not process-crash proof.
         // The genuine source service was joined and its effects are already known.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let crate::harness::storage::OwnerClaim::Acquired { owner } =
+        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&source.inner.instance_id).await?
         else {
             return Err("prefix source claim failed".into());
@@ -725,7 +734,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
                     turn_id: first.turn_id.clone(),
                     fact: Box::new(ExecutionRecord::TurnLifecycle {
                         turn_id: first.turn_id.clone(),
-                        lifecycle: crate::harness::turn::TurnLifecycle::CancelRequested,
+                        lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::CancelRequested,
                     }),
                 }],
                 None,
@@ -860,7 +869,7 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
         // The source really joined; this prefix tests checkpoint continuation,
         // not abrupt-owner retirement or real process-crash recovery.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let crate::harness::storage::OwnerClaim::Acquired { owner } =
+        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&source.inner.instance_id).await?
         else {
             return Err("prefix source claim failed".into());
@@ -984,7 +993,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
         ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::RunCheckpoint { model_steps: 1, tool_calls: 0, .. })
     )).ok_or("pending-steering checkpoint missing")? + 1;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let crate::harness::storage::OwnerClaim::Acquired { owner } =
+    let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
         memory.claim_owner(&source.inner.instance_id).await?
     else {
         return Err("prefix source claim failed".into());
@@ -1166,25 +1175,28 @@ impl ExecutionStore for PrefixStore {
             .await
     }
 
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
     async fn commit_owned(
         &self,
-        _owner: &crate::harness::storage::ExecutionOwner,
+        _owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         _id: &str,
         _version: u64,
         _records: &[ExecutionRecord],
@@ -1255,19 +1267,22 @@ impl ExecutionStore for ReaderGateStore {
             .await
     }
 
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -1282,7 +1297,7 @@ impl ExecutionStore for ReaderGateStore {
 
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -1370,7 +1385,7 @@ async fn recovery_reader_limit_does_not_hold_admission_and_releases_after_loadin
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
             recovery_readers: 1,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         store.clone(),
     )?;
@@ -1464,7 +1479,7 @@ fn reader(
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
             recovery_page_records: 2,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         store,
     )?)
@@ -1488,7 +1503,7 @@ async fn later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_
         .await?;
     source.shutdown().await;
     let second_epoch = "second-checkpoint-writer";
-    let crate::harness::storage::OwnerClaim::Acquired { owner } =
+    let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
         memory.claim_owner(second_epoch).await?
     else {
         return Err("clean source did not release writer ownership".into());
@@ -1513,12 +1528,12 @@ async fn later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_
                     messages: Vec::new(),
                 },
                 ExecutionRecord::ThreadEvent {
-                    event: crate::harness::thread::ThreadEvent {
+                    event: bitrouter_ai::harness::thread::ThreadEvent {
                         server_instance_id: second_epoch.into(),
                         thread_id: original.thread_id.clone(),
                         seq: checkpoint.cursor,
                         timestamp_ms: 1,
-                        changes: vec![crate::harness::thread::ThreadChange::Checkpoint {
+                        changes: vec![bitrouter_ai::harness::thread::ThreadChange::Checkpoint {
                             snapshot: checkpoint.clone(),
                         }],
                     },
@@ -2075,7 +2090,7 @@ async fn cold_load_rechecks_owner_grants_epoch_and_record_capacity_without_parti
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
             recovery_records_per_thread: 1,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         memory,
     )?;
@@ -2378,7 +2393,7 @@ async fn native_checkpoint_spans_small_pages_and_incomplete_prefix_cannot_recove
         &[workspace.path().into()],
         RuntimeLimits {
             recovery_page_bytes: 64 * 1024,
-            ..Default::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         memory.clone(),
     )?;
@@ -2425,7 +2440,7 @@ async fn native_checkpoint_spans_small_pages_and_incomplete_prefix_cannot_recove
             RuntimeLimits {
                 recovery_page_records: 2,
                 recovery_page_bytes: 64 * 1024,
-                ..Default::default()
+                ..crate::harness::service::default_runtime_limits()
             },
             store,
         )?;
@@ -2475,7 +2490,7 @@ async fn uncached_acceptance_retry_pages_share_reader_limits_without_holding_adm
             recovery_readers: 1,
             recovery_page_records: 2,
             recovery_page_bytes: 64 * 1024,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         store.clone(),
     )?;
@@ -2549,7 +2564,7 @@ async fn uncached_acceptance_retry_pages_share_reader_limits_without_holding_adm
         RuntimeLimits {
             recovery_page_records: 2,
             recovery_page_bytes: 64 * 1024,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         store.clone(),
     )?;
@@ -2566,7 +2581,7 @@ async fn uncached_acceptance_retry_pages_share_reader_limits_without_holding_adm
         &[workspace.path().into()],
         RuntimeLimits {
             recovery_records_per_thread: 1,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         memory,
     )?;
@@ -2612,7 +2627,7 @@ async fn steering_retries_use_bounded_receipt_pages() -> Result<(), Box<dyn std:
         RuntimeLimits {
             recovery_page_records: 2,
             recovery_page_bytes: 64 * 1024,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         store,
     )?;
@@ -2656,7 +2671,7 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
     async fn settled(
         service: &ThreadService,
         turn_id: &str,
-    ) -> Result<crate::harness::turn::TurnSnapshot, Box<dyn std::error::Error>> {
+    ) -> Result<bitrouter_ai::harness::turn::TurnSnapshot, Box<dyn std::error::Error>> {
         // Full checkpoint replay deliberately exercises multi-megabyte state;
         // leave room for debug serialization under parallel CI load.
         Ok(tokio::time::timeout(Duration::from_secs(180), async {

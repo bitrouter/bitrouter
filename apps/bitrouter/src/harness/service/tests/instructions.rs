@@ -1,5 +1,6 @@
 //! Startup instructions cross native context, permission and durability boundaries.
 
+use crate::harness::agent::AgentConfigExt;
 use std::sync::Arc;
 
 use crate::gateway::caller::CallerContext;
@@ -11,8 +12,9 @@ use super::support::*;
 use crate::harness::resources::{HarnessConfig, instructions::InstructionConfig};
 use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
-use crate::harness::thread::{PermissionProfile, WorkspaceGrant};
-use crate::harness::turn::TurnStatus;
+use crate::harness::thread::WorkspaceGrant;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 fn startup(prompt: &Prompt) -> Option<&str> {
     prompt
@@ -85,7 +87,7 @@ async fn agents_md_is_durable_user_context_in_both_tool_modes()
                 .filter_map(|tool| match tool {
                     bitrouter_ai::types::Tool::Function { name, .. }
                         if crate::harness::tools::WorkspaceTools::allowed(
-                            crate::harness::agent::ToolMode::Coding,
+                            bitrouter_ai::harness::agent::ToolMode::Coding,
                             name,
                         ) =>
                     {
@@ -647,7 +649,7 @@ async fn corrupt_or_unsettled_instruction_context_blocks_recovery()
         let recovery = view.recovery.as_ref().ok_or("recovery report")?;
         assert!(!recovery.context_valid);
         assert!(recovery.blockers.iter().any(|blocker| matches!(blocker,
-            crate::harness::thread::RecoveryBlocker::InvalidRecord { detail }
+            bitrouter_ai::harness::thread::RecoveryBlocker::InvalidRecord { detail }
                 if detail.contains("startup instruction")
         )));
         assert!(

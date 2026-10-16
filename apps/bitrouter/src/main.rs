@@ -14,6 +14,10 @@
 //! workspace); a commented-out `Wallet` variant in `Command` reserves the
 //! name for a future integration without shipping a non-functional command.
 
+#[cfg(all(feature = "core", feature = "harness"))]
+use bitrouter::harness::agent::AgentConfigExt;
+#[cfg(all(feature = "core", feature = "harness"))]
+use bitrouter::harness::service::observation::ThreadViewExt;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
@@ -2847,7 +2851,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 #[cfg(all(feature = "core", feature = "harness"))]
 async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     use bitrouter::agent_local::{Operation, ReplyResult};
-    use bitrouter::harness::turn::TurnStatus;
+    use bitrouter_ai::harness::turn::TurnStatus;
 
     anyhow::ensure!(
         !remote,
@@ -2867,7 +2871,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
         .or_else(|| bitrouter::policy_lock::native_default_model(&cfg).map(str::to_owned))
         .context("no native model configured; pass --model or enable defaults")?;
     let model_mode = bitrouter::policy_lock::native_model_mode(&cfg, &model)?;
-    let config = bitrouter::harness::agent::AgentConfig::fixed(model, args.effort)
+    let config = bitrouter_ai::harness::agent::AgentConfig::fixed(model, args.effort)
         .with_model_mode(model_mode)
         .with_output_reservation(args.max_output_tokens);
     let config = if args.read_only {
@@ -2906,7 +2910,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             next = stream.next() => next?.ok_or_else(|| anyhow::anyhow!("task observation disconnected; task {} may still be running; no task was resubmitted", accepted.turn_id))?,
         };
         match observation {
-            bitrouter::harness::thread::ThreadObservation::Snapshot {
+            bitrouter_ai::harness::thread::ThreadObservation::Snapshot {
                 view: fresh,
                 resynchronized,
                 catchup,
@@ -2919,11 +2923,11 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                     serde_json::json!({"type":"snapshot", "view":view, "resynchronized":resynchronized}),
                 )?;
             }
-            bitrouter::harness::thread::ThreadObservation::Event { event } => {
+            bitrouter_ai::harness::thread::ThreadObservation::Event { event } => {
                 view.apply(&event);
                 emit_task_event(&event)?;
             }
-            bitrouter::harness::thread::ThreadObservation::Live {
+            bitrouter_ai::harness::thread::ThreadObservation::Live {
                 event,
                 after_cursor,
             } => {
@@ -2974,7 +2978,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                 && !error
                     .downcast_ref::<bitrouter::harness::service::ServiceError>()
                     .is_some_and(|error| {
-                        error.code == bitrouter::harness::service::ErrorCode::Conflict
+                        error.code == bitrouter_ai::harness::runtime::ErrorCode::Conflict
                     })
             {
                 return Err(error);
@@ -3010,7 +3014,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
 }
 
 #[cfg(all(feature = "core", feature = "harness"))]
-fn emit_task_event(event: &bitrouter::harness::thread::ThreadEvent) -> Result<()> {
+fn emit_task_event(event: &bitrouter_ai::harness::thread::ThreadEvent) -> Result<()> {
     // Private execution fences still advance the durable cursor. The client
     // applies them locally, but NDJSON consumers only need public changes.
     if !event.changes.is_empty() {

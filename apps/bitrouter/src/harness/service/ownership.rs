@@ -3,8 +3,14 @@
 
 use std::sync::atomic::Ordering;
 
-use super::{ErrorCode, ServiceError, ThreadService, unknown_turn};
-use crate::harness::storage::{EffectStatus, ExecutionOwner, ExecutionRecord, OwnerClaim};
+use super::ServiceError;
+use super::ThreadService;
+use super::unknown_turn;
+use crate::harness::storage::ExecutionRecord;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::ExecutionOwner;
+use bitrouter_ai::harness::runtime::OwnerClaim;
 
 impl ThreadService {
     /// Initialize native execution authority. Read-only recovery and observation
@@ -154,7 +160,7 @@ fn uncertain_cleanup(record: &ExecutionRecord) -> bool {
         | ExecutionRecord::VerificationResult { effect, .. } => *effect == EffectStatus::Unknown,
         ExecutionRecord::TurnLifecycle { lifecycle, .. } => matches!(
             lifecycle,
-            crate::harness::turn::TurnLifecycle::Finished {
+            bitrouter_ai::harness::turn::TurnLifecycle::Finished {
                 unknown_effect: true,
                 ..
             }

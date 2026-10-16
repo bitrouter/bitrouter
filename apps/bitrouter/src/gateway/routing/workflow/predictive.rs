@@ -1,4 +1,6 @@
-use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::harness::inspection::ProgressState;
+use bitrouter_ai::harness::inspection::TaskFamily;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 

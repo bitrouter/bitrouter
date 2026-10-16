@@ -1,3 +1,4 @@
+use crate::harness::service::observation::ThreadViewExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,14 +9,21 @@ use super::support::{
     app, final_turn, input, target, thread_request, tool_call, turn, turn_fact, wait_for,
 };
 use crate::harness::item::MAX_LIVE_BYTES;
-use crate::harness::service::{ErrorCode, RuntimeLimits, ThreadService};
-use crate::harness::storage::{
-    EffectStatus, ExecutionRecord, ExecutionStore, MemoryExecutionStore,
-};
-use crate::harness::thread::{
-    ThreadChange, ThreadHistoryRequest, ThreadObservation, ThreadStatus, ThreadView,
-};
-use crate::harness::turn::{ApprovalAnswer, TurnEventPayload, TurnStatus};
+use crate::harness::service::ThreadService;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::storage::ExecutionStore;
+use crate::harness::storage::MemoryExecutionStore;
+use crate::harness::thread::ThreadHistoryRequest;
+use crate::harness::turn::ApprovalAnswer;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::thread::ThreadChange;
+use bitrouter_ai::harness::thread::ThreadObservation;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::thread::ThreadView;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 fn snapshot(observation: ThreadObservation) -> Result<ThreadView, String> {
     match observation {
@@ -173,7 +181,7 @@ async fn slow_observers_resynchronize_pending_approval_and_detach_does_not_resol
             events_per_thread: 1,
             subscriber_queue: 1,
             subscribers_per_thread: 1,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
     )?;
     let thread = service
@@ -377,19 +385,22 @@ impl ExecutionStore for GatedCommit {
             .await
     }
 
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -417,7 +428,7 @@ impl ExecutionStore for GatedCommit {
 
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -488,7 +499,7 @@ async fn registration_during_commit_gets_old_snapshot_then_new_committed_event()
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
             subscriber_bytes_per_thread: 64 * 1024 * 1024,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         store.clone(),
     )?;

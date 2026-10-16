@@ -6,7 +6,6 @@ pub(crate) mod experiment_identity;
 pub mod exploration;
 pub mod input;
 pub mod plan;
-pub mod signals;
 pub mod workflow;
 
 use bitrouter_ai::routing::ContextStrategy;

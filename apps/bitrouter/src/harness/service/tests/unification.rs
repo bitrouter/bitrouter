@@ -5,12 +5,15 @@ use crate::gateway::caller::CallerContext;
 use tempfile::TempDir;
 
 use super::support::{app, final_turn, input, target, thread_request, tool_call, turn, wait_for};
-use crate::harness::service::{ErrorCode, RuntimeLimits, ThreadService};
+use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionStore, MemoryExecutionStore};
-use crate::harness::thread::{
-    PermissionProfile, ThreadHistoryRequest, ThreadStatus, WorkspaceGrant,
-};
-use crate::harness::turn::TurnStatus;
+use crate::harness::thread::ThreadHistoryRequest;
+use crate::harness::thread::WorkspaceGrant;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 async fn joined(service: &ThreadService, id: &str) -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -96,7 +99,7 @@ async fn sixty_four_settled_threads_reclaim_slots_preserve_keys_and_reload_witho
             .iter()
             .any(|event| event.changes.iter().any(|change| matches!(
                 change,
-                crate::harness::thread::ThreadChange::AssistantResponse { .. }
+                bitrouter_ai::harness::thread::ThreadChange::AssistantResponse { .. }
             )))
     );
     let loaded = service.load_thread(&target(&thread), &caller).await?;
@@ -138,7 +141,7 @@ async fn unload_refuses_worker_gate_observer_queue_approval_and_recovery()
         &[workspace.path().into()],
         RuntimeLimits {
             hot_threads: 1,
-            ..Default::default()
+            ..crate::harness::service::default_runtime_limits()
         },
     )?;
     let caller = CallerContext::local();

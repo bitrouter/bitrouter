@@ -1,5 +1,6 @@
 //! Test both negotiated ACP versions without acquiring native execution rights.
 
+use crate::harness::agent::AgentConfigExt;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

@@ -8,7 +8,6 @@ use bitrouter::gateway::model::target::AuthScheme;
 use bitrouter::gateway::pipeline::executor::{MockExecutor, MockResponse};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
 use bitrouter::gateway::pipeline::types::RoutingTarget;
-use bitrouter::harness::agent::ToolMode;
 use bitrouter::harness::resources::{
     HarnessConfig,
     managed::{
@@ -19,6 +18,7 @@ use bitrouter::harness::resources::{
 use bitrouter::managed_store::DatabaseNativeStore;
 use bitrouter::storage::checkpoint::snapshot::RunStatus;
 use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, ToolOutcome};
+use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::types::{ApiProtocol, Content, FinishReason, GenerateResult, Usage};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;

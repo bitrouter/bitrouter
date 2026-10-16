@@ -16,13 +16,13 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::session::HarnessPort;
-use crate::harness::agent::ToolMode;
 use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
 use bitrouter_ai::core::protocol::{
     ArtifactRef, CoreError, ErrorCode, HarnessManifest, Limits, OwnershipGrant, ServerMessage,
     ToolExecute, ToolResult,
 };
+use bitrouter_ai::harness::agent::ToolMode;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(in crate::harness::resources::managed) struct StoredArtifact {

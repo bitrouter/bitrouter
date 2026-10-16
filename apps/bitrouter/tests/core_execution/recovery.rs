@@ -1,10 +1,10 @@
 use super::*;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter::storage::checkpoint::snapshot::AgentStatus;
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::core::protocol::{
     Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
 };
+use bitrouter_ai::harness::inspection::AgentStatus;
 
 #[path = "recovery/definite_confirmation.rs"]
 mod definite_confirmation;

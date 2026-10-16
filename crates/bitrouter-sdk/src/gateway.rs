@@ -103,8 +103,8 @@ impl GatewayClient {
             headers.insert(header::AUTHORIZATION, bearer);
         }
         #[cfg(feature = "core")]
-        let channel_http = build_http(headers.clone(), &options, true)?;
-        let http = build_http(headers, &options, false)?;
+        let channel_http = transport::build_http(headers.clone(), &options, true)?;
+        let http = transport::build_http(headers, &options, false)?;
         Ok(Self {
             endpoint,
             http,
@@ -269,36 +269,4 @@ fn endpoint_url(endpoint: &str) -> Result<Url> {
     let path = path.strip_suffix("/v1").unwrap_or(path);
     url.set_path(&format!("{path}/"));
     Ok(url)
-}
-
-fn build_http(
-    headers: header::HeaderMap,
-    options: &TransportOptions,
-    http1_only: bool,
-) -> Result<reqwest::Client> {
-    // Disable both redirect forwarding and reqwest's protocol-level retry
-    // policy: a disconnected mutation/inference call has an unknown outcome.
-    // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.retry
-    let mut builder = reqwest::Client::builder()
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .connect_timeout(options.connect_timeout)
-        .user_agent(concat!("bitrouter-sdk/", env!("CARGO_PKG_VERSION")));
-    if !options.system_proxy {
-        builder = builder.no_proxy();
-    }
-    if let Some(timeout) = options.read_timeout {
-        builder = builder.read_timeout(timeout);
-    }
-    if let Some(timeout) = options.request_timeout {
-        builder = builder.timeout(timeout);
-    }
-    if http1_only {
-        // HTTP/1.1 upgrade needs a dedicated pool and ALPN selection even when
-        // another consumer enables reqwest's HTTP/2 feature.
-        // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.http1_only
-        builder = builder.http1_only();
-    }
-    builder.build().map_err(Error::transport)
 }

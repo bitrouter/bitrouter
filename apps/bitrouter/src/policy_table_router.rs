@@ -18,7 +18,6 @@ use crate::gateway::observability::decision::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
 use crate::gateway::routing::exploration::RouteExploration;
-use crate::gateway::routing::signals::NextStepRole;
 use crate::gateway::routing::workflow::decision::{
     PolicyDecisionJsonlRecorder, PolicyDecisionRecord,
 };
@@ -29,6 +28,7 @@ use crate::gateway::routing::workflow::predictive::{
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
+use bitrouter_ai::harness::inspection::NextStepRole;
 use {
     bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
     bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
@@ -1253,7 +1253,9 @@ mod tests {
     };
 
     use crate::gateway::routing::assessment::{Assessment, Judgment};
-    use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+    use bitrouter_ai::harness::inspection::NextStepRole;
+    use bitrouter_ai::harness::inspection::ProgressState;
+    use bitrouter_ai::harness::inspection::TaskFamily;
 
     fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStepRole) -> Assessment {
         let labels = [

@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use bitrouter_ai::types::{Message, Role};
 use serde::{Deserialize, Serialize};
 
-use super::{MaterialRef, sha256};
+use super::sha256;
+use bitrouter_ai::harness::resources::MaterialRef;
 
 const MAX_BYTES: usize = 64 * 1024;
 

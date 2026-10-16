@@ -10,6 +10,7 @@ use bitrouter_ai::conversion::ConversionReport;
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::control::{CapabilitiesReport, StateReport};
 use bitrouter_ai::core::protocol::{ClientMessage, ServerMessage};
+use bitrouter_ai::harness::{api::CreateThreadRequest, thread::ThreadObservation};
 ```
 
 The crate contains model content and decision semantics, public wire requests, responses and stream events, gateway discovery/errors,
@@ -32,6 +33,15 @@ remain application responsibilities. Parsing an ACK does not prove persistence,
 and decoding an opaque checkpoint envelope does not verify its payload hash.
 JSON decoding preserves finite pricing values independently of application
 feature unification.
+
+`harness` contains the existing Thread HTTP v2 requests, response envelopes,
+runtime capability/ownership views, Thread/Turn observations and their nested
+resource, recovery and context-inspection data. HTTP errors and observation
+errors retain distinct envelopes. Historical event instance IDs and volatile
+cursor anchors preserve their existing meanings. These contracts contain no
+workspace executor, session store, private `SessionSnapshot`, agent instruction
+defaults or runtime-limit policy. The service retains projection/recovery,
+approval and commit authority; the SDK supplies HTTP/SSE transport.
 
 Protocol conversion, history admission, provider calls, authentication, catalog
 refresh and persistence belong to the application gateway. Telemetry batching,
@@ -61,6 +71,13 @@ and configuration-state, reload and operation DTOs from `control::reload`.
 These replace the corresponding application `config`, `remote_control`,
 `remote_control::operations` and `reload` type paths. Application coordinators,
 credential resolution and HTTP handlers remain with their service owners.
+
+Harness clients import public views from `harness::{thread,turn,runtime}` and
+HTTP envelopes from `harness::api`. Application hosts use their explicit runtime
+helpers such as `bitrouter::harness::agent::AgentConfigExt`; moving `AgentConfig`
+does not move instruction selection or execution into this crate. Local IPC,
+directory/close/recovery commands without HTTP counterparts remain application
+contracts and are not newly supported remote APIs.
 
 See the [service plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md) and
 [implementation progress](../../docs/BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for

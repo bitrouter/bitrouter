@@ -12,12 +12,14 @@ use bitrouter_ai::types::Prompt;
 use http::HeaderMap;
 use http::{HeaderName, HeaderValue};
 
-use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
 use crate::gateway::routing::workflow::ir::{
     HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind,
 };
 use crate::gateway::routing::workflow::predictive::NextActionClass;
 use crate::policy_table_router::PolicyTable;
+use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::harness::inspection::ProgressState;
+use bitrouter_ai::harness::inspection::TaskFamily;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowTraceFixture {

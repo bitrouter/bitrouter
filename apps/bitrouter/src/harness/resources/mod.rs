@@ -1,6 +1,9 @@
 //! Workspace-scoped project instructions, MCP and skills for the native runtime.
 //! AGENTS.md augments model instructions; resource discovery never grants permission.
 
+use bitrouter_ai::harness::resources::HarnessInventory;
+#[cfg(feature = "core")]
+use bitrouter_ai::harness::resources::McpTool;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -10,14 +13,13 @@ use crate::gateway::mcp::transport::McpServerConfig;
 use bitrouter_ai::types::Tool;
 use bitrouter_ai::types::ToolResultOutput;
 use rmcp::model::ProtocolVersion;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::harness::agent::ToolMode;
-use crate::harness::storage::EffectStatus;
+use bitrouter_ai::harness::agent::ToolMode;
+use bitrouter_ai::harness::runtime::EffectStatus;
 
 pub mod instructions;
 pub mod managed;
@@ -60,27 +62,15 @@ impl Default for HarnessConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaterialRef {
-    pub material_id: String,
-    pub version: String,
-    pub sha256: String,
-    pub media_type: String,
-    pub provenance: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct McpTool {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-    pub effect: EffectStatus,
-    pub approval_required: bool,
+#[cfg(feature = "core")]
+/// Application-owned helpers for the public McpTool contract.
+pub(crate) trait McpToolExt: Sized {
+    fn declaration(&self) -> Tool;
 }
 
 #[cfg(feature = "core")]
-impl McpTool {
-    pub(crate) fn declaration(&self) -> Tool {
+impl McpToolExt for McpTool {
+    fn declaration(&self) -> Tool {
         Tool::Function {
             name: self.name.clone(),
             description: Some(self.description.clone()),
@@ -91,19 +81,13 @@ impl McpTool {
     }
 }
 
-/// Frozen at execution preparation and committed before the first model call.
-/// No credentials or skill bodies are part of this public inventory.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HarnessInventory {
-    pub binding_digest: String,
-    pub tools: Vec<McpTool>,
-    pub instructions: Vec<MaterialRef>,
-    pub skills: Vec<skills::SkillMetadata>,
-    pub skill_problems: Vec<String>,
+/// Application-owned helpers for the public HarnessInventory contract.
+pub(crate) trait HarnessInventoryExt: Sized {
+    fn validate(&self) -> Result<(), String>;
 }
 
-impl HarnessInventory {
-    pub(crate) fn validate(&self) -> Result<(), String> {
+impl HarnessInventoryExt for HarnessInventory {
+    fn validate(&self) -> Result<(), String> {
         if self.binding_digest.len() != 64
             || !self.binding_digest.bytes().all(|c| c.is_ascii_hexdigit())
         {

@@ -1,17 +1,19 @@
+use crate::harness::agent::AgentConfigExt;
 use std::path::PathBuf;
 
 use super::*;
-use crate::harness::agent::AgentConfig;
-use crate::harness::thread::{PermissionProfile, ThreadStatus};
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadStatus;
 
 #[test]
 fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_epoch()
 -> Result<(), Box<dyn std::error::Error>> {
     let limits = RuntimeLimits {
         context_bytes_per_thread: 4096,
-        ..RuntimeLimits::default()
+        ..crate::harness::service::default_runtime_limits()
     };
-    let snapshot = crate::harness::thread::ThreadSnapshot {
+    let snapshot = bitrouter_ai::harness::thread::ThreadSnapshot {
         server_instance_id: "first-writer".into(),
         thread_id: "thread".into(),
         status: ThreadStatus::Idle,
@@ -68,7 +70,7 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
         });
     }
     records.push(ExecutionRecord::ThreadEvent {
-        event: crate::harness::thread::ThreadEvent {
+        event: bitrouter_ai::harness::thread::ThreadEvent {
             server_instance_id: "later-writer".into(),
             thread_id: "thread".into(),
             seq: 1004,
@@ -86,7 +88,7 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
     assert!(serde_json::to_vec(active)?.len() < limits.context_bytes_per_thread * 3);
     assert_eq!(audit.epoch(), "later-writer");
     assert!(
-        !audit.known_clean(Some(&crate::harness::storage::ExecutionOwner {
+        !audit.known_clean(Some(&bitrouter_ai::harness::runtime::ExecutionOwner {
             server_instance_id: "later-writer".into(),
             generation: 2,
             stopped_at_ms: Some(1),

@@ -6,11 +6,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::core::session::CoreSession;
 use crate::harness::agent::{Agent, ApprovalRequest, RunEvent};
-use crate::harness::storage::EffectStatus;
 use bitrouter_ai::core::checkpoint::ToolStartFence;
 use bitrouter_ai::core::protocol::{
     ToolExecute, ToolObservation, ToolOutcome, ToolResult, ToolStatus,
 };
+use bitrouter_ai::harness::runtime::EffectStatus;
 
 use super::port::Port;
 

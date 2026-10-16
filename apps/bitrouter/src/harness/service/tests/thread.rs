@@ -11,16 +11,21 @@ use tempfile::TempDir;
 use super::support::{
     app, final_turn, input, prompts, target, thread_request, tool_call, turn, wait_for,
 };
-use crate::harness::service::{ErrorCode, ThreadService};
-use crate::harness::storage::{
-    EffectStatus, ExecutionRecord, ExecutionStore, MemoryExecutionStore,
-};
-use crate::harness::thread::{PermissionProfile, ThreadStatus};
+use crate::harness::service::ThreadService;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::storage::ExecutionStore;
+use crate::harness::storage::MemoryExecutionStore;
+use crate::harness::turn::ApprovalAnswer;
+use crate::harness::turn::CancelTurnRequest;
+use crate::harness::turn::SteeringRequest;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::SteeringStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 #[cfg(unix)]
-use crate::harness::turn::VerificationStatus;
-use crate::harness::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus,
-};
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     SteeringRequest {
@@ -106,7 +111,7 @@ async fn native_turns_restore_the_same_core_and_keep_evidence_and_views()
         }
         if let ExecutionRecord::ThreadEvent { event } = record {
             for change in &event.changes {
-                if let crate::harness::thread::ThreadChange::ContextRouting {
+                if let bitrouter_ai::harness::thread::ThreadChange::ContextRouting {
                     turn_id,
                     inspection,
                 } = change
@@ -1200,7 +1205,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         .await?
         .ok_or("Thread missing")?;
     assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::AcceptedKey { entry } if entry.key == "answer")).count(), 1);
-    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::harness::turn::TurnLifecycle::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
+    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, bitrouter_ai::harness::turn::TurnLifecycle::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("approved.txt"))?,
         "approved once"
@@ -1226,19 +1231,22 @@ impl ExecutionStore for RejectTurnStore {
             .await
     }
 
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -1279,7 +1287,7 @@ impl ExecutionStore for RejectTurnStore {
 
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         facts: &[ExecutionRecord],
@@ -1441,7 +1449,8 @@ async fn shutdown_preserves_unstarted_queue_and_records_a_durable_pause()
 #[tokio::test]
 async fn no_effect_edit_error_can_be_corrected_and_owner_transferred()
 -> Result<(), Box<dyn std::error::Error>> {
-    use crate::harness::thread::{PermissionProfile, WorkspaceGrant};
+    use crate::harness::thread::WorkspaceGrant;
+    use bitrouter_ai::harness::thread::PermissionProfile;
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("note.txt"), "original")?;
     let memory = Arc::new(MemoryExecutionStore::default());

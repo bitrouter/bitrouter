@@ -14,9 +14,11 @@ use rmcp::service::PeerRequestOptions;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use super::ResourceError;
 use super::sha256;
-use super::{MaterialRef, McpTool, ResourceError};
-use crate::harness::storage::EffectStatus;
+use bitrouter_ai::harness::resources::MaterialRef;
+use bitrouter_ai::harness::resources::McpTool;
+use bitrouter_ai::harness::runtime::EffectStatus;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 

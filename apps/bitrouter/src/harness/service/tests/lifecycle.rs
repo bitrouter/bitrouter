@@ -1,15 +1,20 @@
+use crate::harness::agent::AgentConfigExt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tempfile::TempDir;
 
 use super::support::*;
-use crate::harness::item::CallOrigin;
-use crate::harness::service::{ErrorCode, RuntimeLimits, ThreadService};
-use crate::harness::storage::{
-    EffectStatus, ExecutionRecord, ExecutionStore, MemoryExecutionStore,
-};
-use crate::harness::turn::{TurnStatus, VerificationStatus};
+use crate::harness::service::ThreadService;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::storage::ExecutionStore;
+use crate::harness::storage::MemoryExecutionStore;
+use bitrouter_ai::harness::item::CallOrigin;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 #[tokio::test]
 async fn approval_is_task_bound_and_one_use() -> Result<(), Box<dyn std::error::Error>> {
@@ -114,7 +119,7 @@ async fn shutdown_seals_admission_and_joins_waiting_execution()
     let other = TempDir::new()?;
     let limits = RuntimeLimits {
         active_turns: 1,
-        ..RuntimeLimits::default()
+        ..crate::harness::service::default_runtime_limits()
     };
     let service = ThreadService::with_limits(
         app(vec![turn(vec![tool_call(
@@ -164,7 +169,7 @@ async fn terminal_cache_eviction_preserves_durable_acceptance_keys()
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
             retained_turns: 1,
-            ..RuntimeLimits::default()
+            ..crate::harness::service::default_runtime_limits()
         },
     )?;
     let mut first = request(&workspace);
@@ -405,19 +410,22 @@ impl ExecutionStore for FailingStore {
             .await
     }
 
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -458,7 +466,7 @@ impl ExecutionStore for FailingStore {
 
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -658,7 +666,7 @@ async fn release_preparation_failure_retains_exclusion_without_publishing_comple
     assert!(!saved.records.iter().any(|r| matches!(
         turn_fact(r),
         ExecutionRecord::TurnLifecycle {
-            lifecycle: crate::harness::turn::TurnLifecycle::Finished { .. },
+            lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::Finished { .. },
             ..
         }
     )));

@@ -73,7 +73,7 @@ impl Saved {
         use base64::Engine;
         if let Some(saved) = saved {
             if let ExecutionRecord::ToolIntent { call, .. } = record
-                && call.origin == crate::harness::item::CallOrigin::Verification
+                && call.origin == bitrouter_ai::harness::item::CallOrigin::Verification
             {
                 saved.verification_calls.insert(call.item_id.clone());
             } else if matches!(

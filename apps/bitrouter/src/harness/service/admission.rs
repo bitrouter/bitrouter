@@ -1,5 +1,6 @@
 //! Accept keyed inputs and commit identities before starting execution.
 
+use crate::harness::agent::AgentConfigExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -8,15 +9,22 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
+use super::ServiceError;
+use super::ThreadService;
 use super::state::{QueuedTurn, State, ThreadRecord, TurnRecord};
 use super::threads::unknown_thread;
-use super::{ErrorCode, ServiceError, ThreadService};
 use crate::harness::agent::Agent;
 use crate::harness::storage::{AcceptedKey, ExecutionRecord};
-use crate::harness::thread::{ThreadSnapshot, ThreadStatus, ThreadTarget};
-use crate::harness::turn::{
-    TurnEventPayload, TurnReceipt, TurnRequest, TurnSnapshot, TurnStatus, VerificationStatus,
-};
+use crate::harness::thread::ThreadTarget;
+use crate::harness::turn::TurnRequest;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnReceipt;
+use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 pub(super) fn fingerprint<T: Serialize>(value: &T) -> Result<String, ServiceError> {
     let encoded = serde_json::to_vec(value).map_err(|error| error.to_string())?;
@@ -219,7 +227,8 @@ impl ThreadService {
             }
             ExecutionRecord::TurnRecord { turn_id: id, fact } if &id == turn_id => {
                 if let ExecutionRecord::TurnLifecycle { lifecycle, .. } = *fact
-                    && let crate::harness::turn::TurnLifecycle::Finished { status, .. } = lifecycle
+                    && let bitrouter_ai::harness::turn::TurnLifecycle::Finished { status, .. } =
+                        lifecycle
                     && let Some(receipt) = &mut receipt
                 {
                     receipt.status = status;

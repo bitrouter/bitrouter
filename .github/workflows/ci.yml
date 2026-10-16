@@ -160,7 +160,7 @@ jobs:
             targets: >-
               --test acp --test acp_checkpoints --test native_acp --test cloud_api --test daemon --test e2e
               --test full_stack --test configuration_state --test extension_host --test subscription --test feature_ingress --test database_backends --test database_capture
-              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
+              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration --test harness_sdk
           - shard: gateway
             retries: "0"
             targets: >-
@@ -419,7 +419,13 @@ jobs:
         run: >-
           cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --lib --test acp --test database_capture --build-jobs 2 --test-threads 2
-          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | binary(acp) | binary(database_capture)'
+          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(agent_api::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | binary(acp) | binary(database_capture)'
+
+      - name: verify execution SDK against the headless service
+        if: matrix.features == 'core,harness'
+        run: >-
+          cargo test -p bitrouter --no-default-features --features core,harness
+          --test harness_sdk --jobs 2
 
       - name: verify database feature availability
         if: matrix.features == 'db-postgres' || matrix.features == 'db-mysql'

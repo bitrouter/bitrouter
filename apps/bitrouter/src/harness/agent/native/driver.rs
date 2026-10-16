@@ -2,7 +2,9 @@
 
 use super::{Saved, artifact, budget, journal, port, scheduling, tools};
 use crate::core::session::CoreSession;
-use crate::harness::agent::{Agent, RunChannels, RunReport, RunStatus};
+use crate::harness::agent::Agent;
+use crate::harness::agent::RunChannels;
+use crate::harness::agent::RunReport;
 use crate::storage::checkpoint::CheckpointBatchExt;
 use crate::storage::checkpoint::snapshot::context::FEATURE;
 use crate::storage::checkpoint::snapshot::{RunStatus as CoreStatus, SessionSnapshot};
@@ -12,6 +14,7 @@ use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
     RoutingSettings, ServerMessage, TaskInput, ToolEffect,
 };
+use bitrouter_ai::harness::agent::RunStatus;
 use bitrouter_ai::types::{Message, Role, Tool};
 use futures::{StreamExt, stream::FuturesUnordered};
 use std::sync::Arc;

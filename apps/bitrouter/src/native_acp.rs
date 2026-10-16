@@ -1,10 +1,11 @@
 //! OS-local transport and stdio bridge for orchestrator-owned native ACP.
 
+use crate::harness::agent::AgentConfigExt;
 use std::path::{Path, PathBuf};
 
 use crate::harness::acp::native::NativeAcpServer;
-use crate::harness::agent::AgentConfig;
 use anyhow::{Context, Result};
+use bitrouter_ai::harness::agent::AgentConfig;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;

@@ -7,12 +7,14 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::input::Input;
-use super::signals::{NextStepRole, ProgressState, TaskFamily};
 use crate::gateway::model::decision::types::Answer;
 use crate::gateway::model::decision::types::DecisionError;
 use crate::gateway::model::decision::types::DecisionRequest;
 use crate::gateway::model::decision::types::DecisionResponse;
 use crate::gateway::model::decision::types::Question;
+use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::harness::inspection::ProgressState;
+use bitrouter_ai::harness::inspection::TaskFamily;
 
 /// Task-family classification question identifier.
 pub const TASK: &str = "routing_task_family";

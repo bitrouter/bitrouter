@@ -7,7 +7,8 @@ gateway pipeline; the SDK contains service clients.
 
 Paths below are relative to `src/harness/` unless stated otherwise. The P0
 [service plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md) defines the final
-feature matrix; dependency isolation is still in progress during consolidation.
+feature matrix. The progress ledger distinguishes isolated runtime/dependency
+evidence from the remaining final candidate and delivery acceptance.
 
 ## External agents over ACP
 
@@ -53,18 +54,31 @@ no observer holds them; this does not resolve their stored recovery blockers.
 
 | Module | Responsibility |
 | --- | --- |
-| `thread.rs` | Durable conversation settings, status, directory, recovery inspection and Thread history contracts |
-| `turn.rs` | One accepted input: status, receipt, snapshot, lifecycle, approval, steering and verification evidence |
-| `item.rs` | Stable BRO call identity, provider call correlation and bounded live Item presentation |
+| AI `harness::{api,thread,turn}` | Public HTTP requests/envelopes, Thread/Turn status, receipts, snapshots, history, lifecycle, approval and recovery views |
+| AI `harness::{agent,item,runtime,resources,inspection}` | Nested public configuration, call identity, limits/ownership, material and context-inspection data |
+| `thread.rs` | App-local targets, authenticated requests, directory/close and explicit recovery commands |
+| `turn.rs` and `service/observation.rs` | App-owned event projection and lifecycle helpers on public data; local runtime requests |
+| `item.rs` | Internal bounds for volatile output and status detail |
 | `storage.rs` | Authoritative execution facts, versioned commits, ownership and bounded durable queries |
 
 `item` does not introduce a second message model. AI `Message` remains the
 model-content contract. A tool call has a stable BRO Item ID as well as the
 provider's call ID; these identities serve different purposes.
 
-Public types are imported from their owning module, for example
-`turn::TurnSnapshot` and `item::CallRecord`. There are no compatibility re-exports
-from `service`, `thread` or `storage`.
+Public types are imported from their AI owner, for example
+`bitrouter_ai::harness::turn::TurnSnapshot` and
+`bitrouter_ai::harness::item::CallRecord`. The app owns `AgentConfigExt`,
+`TurnSnapshotExt`, `ThreadViewExt` and private runtime-limit defaults. Shared
+checkpoint inspection keeps its projection in application storage and its public
+view in AI; the complete `SessionSnapshot` remains private application data.
+There are no compatibility re-exports from `service`, `thread` or `storage`.
+
+The HTTP client is `bitrouter_sdk::harness::HarnessClient`. It pins the discovered
+server instance, takes an explicit execution bearer and caller-owned acceptance
+keys, and consumes the existing continuing SSE surface. It does not discover
+sockets, perform workspace effects, acknowledge checkpoints or automatically
+replay an interrupted mutation. Local directory/close/recovery commands remain
+outside that HTTP surface.
 
 ## Follow one execution
 
@@ -119,6 +133,10 @@ an external integration test.
 - Focused workspace/reconstruction tests remain beside those implementations in
   `service/workspace/tests.rs` and `service/recovery/tests.rs`.
 - Store suites live under `storage/`.
+- AI contract fixtures and SDK HTTP peers exercise public wire representations
+  independently of this application. `tests/harness_sdk.rs` runs the SDK against
+  a separate core+harness executable; `agent_api/core_disabled_tests.rs` checks
+  actual HTTP inspection and side-effect-free mutation rejection without core.
 
 Application `tests/` exercises public APIs, transport, database assembly and PTY behavior. Do not expand public
 visibility just to move a private-state test into an integration-test crate.

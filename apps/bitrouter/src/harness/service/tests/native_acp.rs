@@ -1,3 +1,4 @@
+use crate::harness::agent::AgentConfigExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,11 +9,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHal
 
 use super::support::{HeldModel, app, app_with_executor, final_turn, input, wait_for};
 use crate::harness::acp::native::{NativeAcpServer, NativeSessionConfig};
-use crate::harness::agent::AgentConfig;
 use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
-use crate::harness::thread::{PermissionProfile, ThreadStatus};
-use crate::harness::turn::TurnStatus;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 struct Peer {
     write: WriteHalf<DuplexStream>,
@@ -305,7 +307,7 @@ async fn disconnect_during_model_work_preserves_execution_and_same_approval_on_c
     );
     assert!(workspace.path().join("stale.txt").exists());
     let saved = store.load(&session).await?.ok_or("history missing")?;
-    assert!(!saved.records.iter().any(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle: crate::harness::turn::TurnLifecycle::CancelRequested, .. }))));
+    assert!(!saved.records.iter().any(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::CancelRequested, .. }))));
     peer.disconnect().await?;
     service.shutdown().await;
     server.shutdown().await;
@@ -448,7 +450,9 @@ async fn replacement_approval_owner_rejects_old_wire_answer_in_both_versions()
                 if let ExecutionRecord::TurnRecord { fact, .. } = record {
                     if let ExecutionRecord::TurnLifecycle {
                         lifecycle:
-                            crate::harness::turn::TurnLifecycle::InputResolved { approved, .. },
+                            bitrouter_ai::harness::turn::TurnLifecycle::InputResolved {
+                                approved, ..
+                            },
                         ..
                     } = fact.as_ref()
                     {
@@ -766,9 +770,9 @@ async fn unicode_stream_reconciles_once_and_replays_beyond_hot_history()
         let service = ThreadService::with_limits(
             app(vec![response.clone(); 4])?,
             &[workspace.path().to_path_buf()],
-            crate::harness::service::RuntimeLimits {
+            bitrouter_ai::harness::runtime::RuntimeLimits {
                 events_per_thread: 2,
-                ..Default::default()
+                ..crate::harness::service::default_runtime_limits()
             },
         )?;
         let mut config = AgentConfig::fixed("fixture-model", None).read_only();
@@ -893,9 +897,9 @@ async fn stalled_replay_disconnects_observer_without_cancelling_native_history()
     let service = ThreadService::with_limits_and_store(
         app(vec![response; 4])?,
         &[workspace.path().to_path_buf()],
-        crate::harness::service::RuntimeLimits {
+        bitrouter_ai::harness::runtime::RuntimeLimits {
             subscriber_bytes_per_thread: 2 * 1024 * 1024,
-            ..Default::default()
+            ..crate::harness::service::default_runtime_limits()
         },
         store.clone(),
     )?;
@@ -938,7 +942,7 @@ async fn stalled_replay_disconnects_observer_without_cancelling_native_history()
         .load(&thread.thread_id)
         .await?
         .ok_or("history missing")?;
-    assert!(!saved.records.iter().any(|record|matches!(record,ExecutionRecord::TurnRecord{fact,..} if matches!(fact.as_ref(),ExecutionRecord::TurnLifecycle{lifecycle:crate::harness::turn::TurnLifecycle::CancelRequested,..}))));
+    assert!(!saved.records.iter().any(|record|matches!(record,ExecutionRecord::TurnRecord{fact,..} if matches!(fact.as_ref(),ExecutionRecord::TurnLifecycle{lifecycle:bitrouter_ai::harness::turn::TurnLifecycle::CancelRequested,..}))));
     drop(peer);
     service.shutdown().await;
     server.shutdown().await;

@@ -1,6 +1,7 @@
 //! Server-owned agent runtime with transactional execution facts. State, execution and observation share one
 //! authority; disconnecting an observer never cancels its task.
 
+use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities, RuntimeLimits};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::harness::service::state::{Inner, State};
 use crate::harness::storage::{ExecutionStore, MemoryExecutionStore};
-use crate::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::PermissionProfile;
 
 mod admission;
 mod approval;
@@ -33,100 +34,35 @@ pub(crate) mod workspace;
 
 const MAX_EVENT_PAGE: usize = 1000;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeCapabilities {
-    #[serde(default = "legacy_native_execution")]
-    pub native_execution: bool,
-    #[serde(default)]
-    pub startup_discovery: Option<startup::StartupDiscovery>,
-    pub server_instance_id: String,
-    pub limits: RuntimeLimits,
-    #[serde(default)]
-    pub execution_ownership: Option<crate::harness::storage::OwnerClaim>,
-}
-
-fn legacy_native_execution() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeLimits {
-    pub startup_roots: usize,
-    pub startup_records: u64,
-    pub startup_metadata_bytes: usize,
-    pub recovery_readers: usize,
-    pub recovery_page_records: usize,
-    pub recovery_page_bytes: usize,
-    pub recovery_records_per_thread: u64,
-    pub history_page_bytes: usize,
-    pub events_per_thread: usize,
-    pub event_bytes_per_thread: usize,
-    pub subscribers_per_thread: usize,
-    pub subscriber_bytes_per_thread: usize,
-    pub steering_inputs_per_turn: usize,
-    pub steering_bytes_per_turn: usize,
-    pub hot_threads: usize,
-    pub queued_turns_per_thread: usize,
-    pub context_bytes_per_thread: usize,
-    pub hot_context_bytes: usize,
-    pub tools_per_turn: usize,
-    pub global_tools: usize,
-    pub active_turns: usize,
-    pub retained_turns: usize,
-    pub retained_bytes: usize,
-    pub retention_seconds: u64,
-    pub subscriber_queue: usize,
-    pub request_bytes: usize,
-}
-
-impl Default for RuntimeLimits {
-    fn default() -> Self {
-        Self {
-            startup_roots: 1024,
-            startup_records: 1_000_000,
-            startup_metadata_bytes: 4 * 1024 * 1024,
-            recovery_readers: 2,
-            recovery_page_records: 64,
-            recovery_page_bytes: 4 * 1024 * 1024,
-            recovery_records_per_thread: 1_000_000,
-            history_page_bytes: 2 * 1024 * 1024,
-            events_per_thread: 256,
-            event_bytes_per_thread: 2 * 1024 * 1024,
-            subscribers_per_thread: 8,
-            subscriber_bytes_per_thread: 8 * 1024 * 1024,
-            steering_inputs_per_turn: 32,
-            steering_bytes_per_turn: 64 * 1024,
-            hot_threads: 32,
-            queued_turns_per_thread: 32,
-            context_bytes_per_thread: 2 * 1024 * 1024,
-            hot_context_bytes: 256 * 1024 * 1024,
-            tools_per_turn: 4,
-            global_tools: 16,
-            active_turns: 8,
-            retained_turns: 32,
-            retained_bytes: 64 * 1024 * 1024,
-            retention_seconds: 1800,
-            subscriber_queue: 32,
-            request_bytes: 64 * 1024,
-        }
+pub(crate) fn default_runtime_limits() -> RuntimeLimits {
+    RuntimeLimits {
+        startup_roots: 1024,
+        startup_records: 1_000_000,
+        startup_metadata_bytes: 4 * 1024 * 1024,
+        recovery_readers: 2,
+        recovery_page_records: 64,
+        recovery_page_bytes: 4 * 1024 * 1024,
+        recovery_records_per_thread: 1_000_000,
+        history_page_bytes: 2 * 1024 * 1024,
+        events_per_thread: 256,
+        event_bytes_per_thread: 2 * 1024 * 1024,
+        subscribers_per_thread: 8,
+        subscriber_bytes_per_thread: 8 * 1024 * 1024,
+        steering_inputs_per_turn: 32,
+        steering_bytes_per_turn: 64 * 1024,
+        hot_threads: 32,
+        queued_turns_per_thread: 32,
+        context_bytes_per_thread: 2 * 1024 * 1024,
+        hot_context_bytes: 256 * 1024 * 1024,
+        tools_per_turn: 4,
+        global_tools: 16,
+        active_turns: 8,
+        retained_turns: 32,
+        retained_bytes: 64 * 1024 * 1024,
+        retention_seconds: 1800,
+        subscriber_queue: 32,
+        request_bytes: 64 * 1024,
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorCode {
-    UnknownThread,
-    Unauthorized,
-    RecoveryRequired,
-    InvalidRequest,
-    UnknownTurn,
-    Conflict,
-    Overloaded,
-    ShuttingDown,
-    InstanceChanged,
-    ResyncRequired,
-    StorageUnavailable,
-    UnsupportedCapability,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,7 +151,12 @@ impl ThreadService {
         allowed_workspaces: &[PathBuf],
         store: Arc<dyn ExecutionStore>,
     ) -> Result<Self, ServiceError> {
-        Self::with_limits_and_store(app, allowed_workspaces, RuntimeLimits::default(), store)
+        Self::with_limits_and_store(
+            app,
+            allowed_workspaces,
+            crate::harness::service::default_runtime_limits(),
+            store,
+        )
     }
 
     #[cfg(all(test, feature = "core"))]

@@ -16,10 +16,12 @@ use super::allocation;
 use crate::storage::checkpoint::snapshot::allocation::ContextKind;
 
 use super::allocation::Intent;
-use crate::storage::checkpoint::snapshot::{
-    AgentState, AgentStatus, AgentTurn, RunStatus, SessionSnapshot,
-};
+use crate::storage::checkpoint::snapshot::AgentState;
+use crate::storage::checkpoint::snapshot::AgentTurn;
+use crate::storage::checkpoint::snapshot::RunStatus;
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use bitrouter_ai::harness::inspection::AgentStatus;
 
 impl Action {
     pub fn parse(name: &str, arguments: Value) -> Result<Self, CoreError> {

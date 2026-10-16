@@ -12,11 +12,17 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::{ErrorCode, RuntimeLimits, ServiceError, startup, steering, workspace};
-use crate::harness::agent::AgentConfig;
+use super::ServiceError;
+use super::startup;
+use super::steering;
+use super::workspace;
 use crate::harness::storage::ExecutionStore;
-use crate::harness::thread::{PermissionProfile, ThreadSnapshot};
-use crate::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::turn::TurnSnapshot;
 
 pub(super) struct PendingInput {
     pub(super) response: oneshot::Sender<bool>,
@@ -49,10 +55,10 @@ pub(super) struct TurnRecord {
 }
 
 pub(super) struct State {
-    pub(super) startup_discovery: Option<startup::StartupDiscovery>,
+    pub(super) startup_discovery: Option<bitrouter_ai::harness::runtime::StartupDiscovery>,
     pub(super) cold_executions: HashMap<String, startup::ColdExecution>,
     pub(super) workspace_fences: HashMap<PathBuf, Arc<workspace::WorkspaceFence>>,
-    pub(super) execution_ownership: Option<crate::harness::storage::OwnerClaim>,
+    pub(super) execution_ownership: Option<bitrouter_ai::harness::runtime::OwnerClaim>,
     pub(super) threads: HashMap<String, ThreadRecord>,
     pub(super) ready_threads: VecDeque<String>,
     pub(super) running_turns: HashMap<String, String>,

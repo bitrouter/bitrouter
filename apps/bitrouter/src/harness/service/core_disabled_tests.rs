@@ -2,10 +2,15 @@
 
 use super::*;
 use crate::gateway::caller::CallerContext;
-use crate::harness::agent::{Agent, AgentConfig};
+use crate::harness::agent::Agent;
+use crate::harness::agent::AgentConfigExt;
 use crate::harness::storage::ExecutionRecord;
-use crate::harness::thread::{ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget};
+use crate::harness::thread::ThreadRequest;
+use crate::harness::thread::ThreadTarget;
 use crate::harness::turn::TurnRequest;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::thread::ThreadStatus;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -195,7 +200,7 @@ async fn offline_load_retains_queued_records_without_claiming_workspace_or_resum
     let mut observer = service.observe_thread(&target, &CallerContext::local(), None)?;
     let observation = tokio::time::timeout(Duration::from_secs(2), observer.next()).await??;
     assert!(
-        matches!(observation, Some(crate::harness::thread::ThreadObservation::Snapshot { view, .. })
+        matches!(observation, Some(bitrouter_ai::harness::thread::ThreadObservation::Snapshot { view, .. })
         if view.thread.thread_id == target.thread_id && view.thread.queued.len() == 1)
     );
     assert!(

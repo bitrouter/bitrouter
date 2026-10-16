@@ -105,10 +105,12 @@ impl OnlineWorkflowState {
         prompt: &Prompt,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
-        use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
         use crate::gateway::routing::workflow::predictive::{
             NextActionClass, PredictiveHistoryCompleteness, TaskComplexity,
         };
+        use bitrouter_ai::harness::inspection::NextStepRole;
+        use bitrouter_ai::harness::inspection::ProgressState;
+        use bitrouter_ai::harness::inspection::TaskFamily;
         let (harness_hint, protocol_hint) = infer_online_context(headers, prompt);
         let raw_body = serde_json::Value::Object(
             prompt
@@ -165,7 +167,9 @@ impl OnlineWorkflowState {
         mut self,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
-        use crate::gateway::routing::signals::{NextStepRole, ProgressState, TaskFamily};
+        use bitrouter_ai::harness::inspection::NextStepRole;
+        use bitrouter_ai::harness::inspection::ProgressState;
+        use bitrouter_ai::harness::inspection::TaskFamily;
         self.predictive.task_family =
             assessment.map_or(TaskFamily::Unknown, |value| value.task_family);
         self.predictive.next_step_role =

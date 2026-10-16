@@ -2664,7 +2664,7 @@ async fn reused_reservation_is_revalidated_after_signals_change() -> TestResult 
         .ok_or("missing child turn")?;
     assert_eq!(
         child.status,
-        bitrouter::storage::checkpoint::snapshot::AgentStatus::Failed
+        bitrouter_ai::harness::inspection::AgentStatus::Failed
     );
     assert!(child.steps.is_empty());
     assert!(child.notified);
@@ -2755,7 +2755,7 @@ async fn reuse_activation_checks_requirements_pinned_after_the_original_decision
     assert!(child.steps.is_empty());
     assert_eq!(
         child.status,
-        bitrouter::storage::checkpoint::snapshot::AgentStatus::Failed
+        bitrouter_ai::harness::inspection::AgentStatus::Failed
     );
     assert_eq!(
         executor
@@ -3858,7 +3858,7 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
             .get(&child)
             .and_then(|agent| agent.turn.as_ref())
             .map(|turn| turn.status),
-        Some(bitrouter::storage::checkpoint::snapshot::AgentStatus::Cancelling)
+        Some(bitrouter_ai::harness::inspection::AgentStatus::Cancelling)
     );
     let done = tokio::time::timeout(Duration::from_secs(5), running).await???;
     assert_eq!(
@@ -3872,7 +3872,7 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
         .ok_or("child disappeared")?;
     assert_eq!(
         child.status,
-        bitrouter::storage::checkpoint::snapshot::AgentStatus::Interrupted
+        bitrouter_ai::harness::inspection::AgentStatus::Interrupted
     );
     assert!(child.final_answer.is_none());
     assert!(
@@ -4071,7 +4071,7 @@ async fn children_overlap_with_bounded_slots_and_root_joins_their_results() -> T
     );
     assert!(done.agents.values().all(|agent| {
         agent.turn.as_ref().is_some_and(|turn| {
-            turn.status == bitrouter::storage::checkpoint::snapshot::AgentStatus::Completed
+            turn.status == bitrouter_ai::harness::inspection::AgentStatus::Completed
         })
     }));
     assert!(harness.sent.lock().await.is_empty());

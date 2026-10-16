@@ -62,7 +62,7 @@ the contract move must preserve its bytes.
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; terminal-free transcript formatting and TUI feature isolation verified; base helpers, local supervisor, live capture and shared MCP transport ownership separated; harness/MCP dependency isolation and representative behavior are verified; the complete final matrix remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
-| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
+| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; harness HTTP/SSE contracts and client verified against the separate executable and the core-disabled HTTP service; independent packaged-service consumer remains |
 | P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; harness/MCP module and dependency isolation is verified; final feature matrix and artifact/profile transitions remain |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
@@ -2427,3 +2427,75 @@ incoming files exactly match upstream, both artifact copies agree, and none of
 the retired implementation packages or paths is restored. Existing catalog
 coverage/conformance warnings remain warnings, not new test failures. Logs use
 `/tmp/bitrouter-p0-upstream-982-*`.
+
+## P0 1/P0 4 Harness public contracts and HTTP SDK (2026-10-16)
+
+Stage base: `f569357`. The public closure of the existing `/agent/v2` interface
+now lives in AI `harness::{api,thread,turn,runtime,agent,item,resources,inspection}`.
+The application serializes these actual HTTP/SSE envelopes and imports their
+owners directly, without duplicate definitions or public forwarding exports.
+Private `SessionSnapshot`, local IPC/directory/close/recovery commands, agent
+instruction defaults, runtime-limit policy and projection/recovery/execution
+methods remain application-owned. Routing label enums are shared public data
+because context-inspection responses already expose them. No new service route,
+credential domain or remote workspace capability is introduced.
+
+The base SDK now supplies `harness::HarnessClient` with explicit endpoint and
+execution credential, one negotiated instance identity, bounded mutation bodies,
+caller-owned acceptance keys, all existing HTTP operations and continuing
+observation. Shared SSE framing has separate attachment EOF behavior: clean EOF
+detaches, incomplete frames fail, and a completed Turn does not end observation.
+Current views/pages must match the bound instance; historical committed events
+retain their original epoch. No automatic reconnect, mutation replay, approval,
+checkpoint ACK or session persistence is added.
+
+Stage validation and review:
+
+- AI all-feature tests: **52 passed**. Constructed nested wire fixtures cover
+  serde fidelity, legacy defaults/omission rules and redaction; they are not
+  historical persisted payload evidence.
+- SDK all-feature tests after review repair: **52 passed**, plus **4 compiled
+  documentation examples**. Ten new HTTP peer tests cover routes, bodies,
+  credentials, identity, bounded errors/streams, continuing observations and
+  cancellation of a pending poll. The production AI/SDK dependency closures
+  retain their contract/client boundaries.
+- Full, minimum, core-only and harness-only all-target compilation passed. The
+  first run exposed seven implicit runtime-limit defaults and one missing
+  extension-trait import; these were migrated to the app-owned implementations.
+  Two harness-only unused imports were then gated with their actual core+harness
+  consumer.
+- Strict Rust 1.97 Clippy passed for the full workspace/all-targets (1m18s),
+  minimum (32.20s), core-only (50.83s) and harness-only (47.56s).
+- Independent SDK review identified HTTP whitespace normalization of acceptance
+  keys. Leading/trailing SP/HTAB now fail before dispatch, with a no-request
+  regression test. The repair review found no remaining issue. Independent
+  DTO/application review found no remaining ownership, wire or authority defect
+  after the compiler repairs. Reviews were source-only, not execution evidence.
+
+Strict full-workspace Rustdoc passed in 55.20s. The runtime selection initially
+passed 344 tests, failed the new SDK process fixture and left seven tests unrun.
+The fixture incorrectly expected an answer to a steering-retired approval to
+succeed; baseline service authority correctly returned a conflict. The corrected
+fixture asserts that conflict and separately denies a fresh approval. Its actual
+process run passed in 10.98s, without changing production approval behavior.
+The remaining seven native ACP/process/resource cases passed in 12.392s. Together
+these runs cover all 352 selected cases; they are not a full-workspace test run.
+
+The harness-only HTTP and native-admission selection passed **5/5** in 0.096s,
+including the SDK read/observe path and side-effect-free rejection of every
+native HTTP mutation. Full-product native TUI regression passed **3/3** in
+44.715s. SDK default-feature tests passed **38** cases and **4** documentation
+examples. An independent final integration review verified the repaired approval
+scenario, service/client authority, offline rejection evidence and CI selection,
+with no remaining findings. Sources stayed frozen during these builds and tests.
+Formatting and patch whitespace checks pass; strict Rust 1.97 Clippy for the
+final repaired process test passed in 29.24s. CI YAML parsing was validated with
+the stage wiring changes. These are local macOS results, not hosted CI or
+cross-platform execution evidence.
+
+CI includes the new separate-process core+harness SDK test and actual HTTP
+inspection/rejection tests without core. Application/AI/SDK guides describe the
+new owners and separate transport semantics. Logs use
+`/tmp/bitrouter-p0-harness-sdk-*`. All final A01–A16 gates remain open; packaging,
+profile identity/updates/transitions, historical compatibility, performance and
+the complete candidate matrix/review remain required.

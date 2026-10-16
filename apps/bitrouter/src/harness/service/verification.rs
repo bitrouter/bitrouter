@@ -10,11 +10,14 @@ use tokio_util::sync::CancellationToken;
 use super::state::VerificationBudget;
 use super::{ServiceError, ThreadService, unknown_turn};
 use crate::harness::agent::ApprovalRequest;
-use crate::harness::item::{CallOrigin, CallRecord};
-use crate::harness::storage::{EffectStatus, ExecutionRecord};
-use crate::harness::thread::PermissionProfile;
+use crate::harness::storage::ExecutionRecord;
 use crate::harness::tools::WorkspaceTools;
-use crate::harness::turn::{VerificationEvidence, VerificationStatus};
+use bitrouter_ai::harness::item::CallOrigin;
+use bitrouter_ai::harness::item::CallRecord;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::turn::VerificationEvidence;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 fn verification_evidence(command: String, result: &ToolResultOutput) -> VerificationEvidence {
     let mut evidence = VerificationEvidence {

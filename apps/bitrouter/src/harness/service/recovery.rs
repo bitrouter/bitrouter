@@ -1,6 +1,8 @@
 //! Durable reconstruction and explicit checkpoint recovery. Loading alone never
 //! grants execution ownership, resolves effects or permits replay.
 
+use crate::harness::resources::HarnessInventoryExt;
+use crate::harness::service::observation::ThreadViewExt;
 mod native;
 
 use std::collections::{HashMap, VecDeque};
@@ -14,21 +16,38 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use super::ServiceError;
+use super::ThreadService;
+use super::admission;
+use super::state;
 use super::state::TurnRecord;
-use super::{
-    ErrorCode, RuntimeLimits, ServiceError, ThreadService, admission, state, threads, unknown_turn,
-    workspace,
-};
-use crate::harness::agent::{Agent, RunInput, RunReport, RunStatus};
-use crate::harness::item::{CallOrigin, CallRecord};
-use crate::harness::storage::{EffectStatus, ExecutionRecord};
-use crate::harness::thread::{
-    RecoveredSteering, RecoveryBlocker, RecoveryBudget, RecoveryState, RecoveryTurn,
-    ThreadRecoveryRequest, ThreadStatus, ThreadTarget, ThreadView,
-};
-use crate::harness::turn::{
-    SteeringStatus, TurnSnapshot, TurnStatus, VerificationEvidence, VerificationStatus,
-};
+use super::threads;
+use super::unknown_turn;
+use super::workspace;
+use crate::harness::agent::Agent;
+use crate::harness::agent::RunInput;
+use crate::harness::agent::RunReport;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::thread::ThreadRecoveryRequest;
+use crate::harness::thread::ThreadTarget;
+use bitrouter_ai::harness::agent::RunStatus;
+use bitrouter_ai::harness::item::CallOrigin;
+use bitrouter_ai::harness::item::CallRecord;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::thread::RecoveredSteering;
+use bitrouter_ai::harness::thread::RecoveryBlocker;
+use bitrouter_ai::harness::thread::RecoveryBudget;
+use bitrouter_ai::harness::thread::RecoveryState;
+use bitrouter_ai::harness::thread::RecoveryTurn;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::thread::ThreadView;
+use bitrouter_ai::harness::turn::SteeringStatus;
+use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationEvidence;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 #[derive(Serialize)]
 struct RecoveredCall {
@@ -53,7 +72,7 @@ struct Active {
     native_runs: std::collections::BTreeMap<String, (u32, u64)>,
     native_unknown_usage: std::collections::BTreeSet<String>,
     native_unpriced_decisions: std::collections::BTreeSet<String>,
-    resources: Option<crate::harness::resources::HarnessInventory>,
+    resources: Option<bitrouter_ai::harness::resources::HarnessInventory>,
     turn_id: String,
     user_item_id: String,
     messages: Vec<Message>,
@@ -67,7 +86,7 @@ struct Active {
     exact_budget: bool,
     settled: bool,
     checkpointed: bool,
-    outcome: Option<crate::harness::storage::SettlementOutcome>,
+    outcome: Option<bitrouter_ai::harness::runtime::SettlementOutcome>,
     confirmed_verification: Option<(VerificationStatus, VerificationEvidence)>,
 }
 
@@ -86,7 +105,7 @@ struct Rebuild {
     active: Option<Active>,
     blockers: Vec<RecoveryBlocker>,
     source_epoch: String,
-    source_owner: Option<crate::harness::storage::ExecutionOwner>,
+    source_owner: Option<bitrouter_ai::harness::runtime::ExecutionOwner>,
     sequence: u64,
     limits: RuntimeLimits,
 }
@@ -662,7 +681,7 @@ impl ThreadService {
             .await
             .map_err(storage)?;
         let current_owner = source_epoch == self.inner.instance_id
-            && matches!(&self.lock_state().execution_ownership,Some(crate::harness::storage::OwnerClaim::Acquired { owner:current }) if owner.as_ref() == Some(current) && current.stopped_at_ms.is_none());
+            && matches!(&self.lock_state().execution_ownership,Some(bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner:current }) if owner.as_ref() == Some(current) && current.stopped_at_ms.is_none());
         if !current_owner {
             view.recovery = Some(RecoveryState {
                 source_server_instance_id: source_epoch,
@@ -810,7 +829,7 @@ impl ThreadService {
                         && !turn.budget.usage_unknown_steps.is_empty()
                 });
             report.source_server_instance_id == self.inner.instance_id
-                && matches!(&state.execution_ownership, Some(crate::harness::storage::OwnerClaim::Acquired { owner }) if report.source_execution_owner.as_ref() == Some(owner) && owner.stopped_at_ms.is_none())
+                && matches!(&state.execution_ownership, Some(bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner }) if report.source_execution_owner.as_ref() == Some(owner) && owner.stopped_at_ms.is_none())
                 && report.terminal_checkpoint
                 && report.context_valid
                 && matches!(
@@ -1100,13 +1119,14 @@ impl Rebuild {
                     native_snapshot.as_ref(),
                     &mut changes,
                 );
-                self.view.apply(&crate::harness::thread::ThreadEvent {
-                    server_instance_id: self.source_epoch.clone(),
-                    thread_id: self.view.thread.thread_id.clone(),
-                    seq: self.sequence,
-                    timestamp_ms: 0,
-                    changes,
-                });
+                self.view
+                    .apply(&bitrouter_ai::harness::thread::ThreadEvent {
+                        server_instance_id: self.source_epoch.clone(),
+                        thread_id: self.view.thread.thread_id.clone(),
+                        seq: self.sequence,
+                        timestamp_ms: 0,
+                        changes,
+                    });
             }
             self.view.thread.cursor = self.sequence;
         }
@@ -2005,7 +2025,7 @@ impl Active {
                 self.outcome = outcome.clone();
             }
             ExecutionRecord::TurnLifecycle {
-                lifecycle: crate::harness::turn::TurnLifecycle::CancelRequested,
+                lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::CancelRequested,
                 ..
             } => self.cancel_requested = true,
             _ => {}
@@ -2088,7 +2108,7 @@ impl StartupAudit {
     /// Fresh workspace admission only; old controls/context still need recovery.
     pub(super) fn known_clean(
         self,
-        owner: Option<&crate::harness::storage::ExecutionOwner>,
+        owner: Option<&bitrouter_ai::harness::runtime::ExecutionOwner>,
     ) -> bool {
         if !self.valid
             || owner.is_none_or(|owner| {

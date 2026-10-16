@@ -3,13 +3,15 @@
 
 #![cfg(unix)]
 
+use bitrouter::harness::agent::AgentConfigExt;
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, ensure};
 use bitrouter::agent_local::{Operation, ReplyResult};
-use bitrouter::harness::turn::{TurnStatus, VerificationStatus};
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationStatus;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 use tokio::process::Command;
@@ -560,7 +562,7 @@ async fn submit(
     let (thread, turn) = client
         .create_and_start(
             workspace.into(),
-            bitrouter::harness::agent::AgentConfig::fixed("test-model", None),
+            bitrouter_ai::harness::agent::AgentConfig::fixed("test-model", None),
             check,
             "Change note.txt".into(),
         )
@@ -575,7 +577,7 @@ async fn wait_status(
     socket: &std::path::Path,
     execution: &Execution,
     wanted: TurnStatus,
-) -> Result<bitrouter::harness::turn::TurnSnapshot> {
+) -> Result<bitrouter_ai::harness::turn::TurnSnapshot> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let snapshot = match bitrouter::agent_local::request(

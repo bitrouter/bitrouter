@@ -6,8 +6,9 @@ use tempfile::TempDir;
 use super::support::{app, final_turn, input, target, thread_request, tool_call, turn, wait_for};
 use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
-use crate::harness::thread::ThreadStatus;
-use crate::harness::turn::{CancelTurnRequest, TurnStatus};
+use crate::harness::turn::CancelTurnRequest;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 #[tokio::test]
 async fn close_cancels_active_approval_and_every_queued_input_atomically()
@@ -206,19 +207,22 @@ impl ExecutionStore for CloseStore {
             .read_index(after, cutoff, limit, max_bytes)
             .await
     }
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<crate::harness::storage::ExecutionOwner>, String> {
+    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
-    ) -> Result<crate::harness::storage::ExecutionOwner, String> {
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
     async fn commit(
@@ -268,7 +272,7 @@ impl ExecutionStore for CloseStore {
     }
     async fn commit_owned(
         &self,
-        owner: &crate::harness::storage::ExecutionOwner,
+        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -321,7 +325,7 @@ async fn close_store_failure_preserves_fence_and_is_recovery_bound_after_restart
         .ok_or("close falsely succeeded")?;
     assert_eq!(
         error.code,
-        crate::harness::service::ErrorCode::StorageUnavailable
+        bitrouter_ai::harness::runtime::ErrorCode::StorageUnavailable
     );
     assert_eq!(
         service.read_thread(&target, &caller)?.status,
@@ -359,7 +363,7 @@ async fn close_store_failure_preserves_fence_and_is_recovery_bound_after_restart
     };
     let loaded = restarted.load_thread(&fresh_target, &caller).await?;
     assert_eq!(loaded.thread.status, ThreadStatus::RecoveryRequired);
-    assert!(loaded.recovery.ok_or("recovery report missing")?.blockers.iter().any(|blocker|matches!(blocker,crate::harness::thread::RecoveryBlocker::InvalidRecord{detail} if detail.contains("close"))));
+    assert!(loaded.recovery.ok_or("recovery report missing")?.blockers.iter().any(|blocker|matches!(blocker,bitrouter_ai::harness::thread::RecoveryBlocker::InvalidRecord{detail} if detail.contains("close"))));
     restarted.shutdown().await;
     Ok(())
 }

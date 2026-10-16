@@ -6,6 +6,7 @@ pub mod control;
 pub mod core;
 pub mod error;
 pub mod gateway;
+pub mod harness;
 pub mod stream;
 
 mod transport;

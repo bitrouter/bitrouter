@@ -10,7 +10,7 @@ use crate::gateway::model::decision::types::Question;
 use crate::gateway::routing::assessment;
 use crate::gateway::routing::preparation::Prepared;
 use crate::gateway::routing::preparation::Receipt;
-use crate::gateway::routing::signals::NextStepRole;
+use bitrouter_ai::harness::inspection::NextStepRole;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 

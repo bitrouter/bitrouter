@@ -1,5 +1,6 @@
 //! Shared fixtures for service behavior and fault tests.
 
+use crate::harness::agent::AgentConfigExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,11 +18,21 @@ use bitrouter_ai::types::{
 };
 use tempfile::TempDir;
 
-use crate::harness::agent::{AgentConfig, ToolMode};
-use crate::harness::service::{ErrorCode, ServiceError, ThreadService, unknown_turn};
+use crate::harness::service::ServiceError;
+use crate::harness::service::ThreadService;
+use crate::harness::service::unknown_turn;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore};
-use crate::harness::thread::{PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadTarget};
-use crate::harness::turn::{TurnEventPayload, TurnRequest, TurnSnapshot, TurnStatus};
+use crate::harness::thread::ThreadRequest;
+use crate::harness::thread::ThreadTarget;
+use crate::harness::turn::TurnRequest;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::agent::ToolMode;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 fn routing_target() -> RoutingTarget {
     RoutingTarget {

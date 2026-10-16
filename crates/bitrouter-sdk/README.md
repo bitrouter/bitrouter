@@ -158,6 +158,60 @@ Neither EOF nor dropping/closing a channel completes or cancels a run. The SDK
 does not reconnect or replay commands after uncertain delivery. Use the core's
 existing operation inspection and recovery protocol to resolve that state.
 
+`harness::HarnessClient` accesses the existing opt-in `/agent/v2` Thread API.
+Pass its endpoint and dedicated execution bearer explicitly. Its `connect()`
+method discovers v2 capabilities and binds the client to that server instance.
+`capabilities()` returns that report without refreshing it. After a restart,
+connect a new client deliberately; the SDK never refreshes identity and repeats
+a mutation. This client does not change the server's loopback-only listener or
+workspace authorization policy, and cannot access local-only IPC/ACP operations.
+
+```rust,no_run
+use bitrouter_ai::harness::api::HistoryQuery;
+use bitrouter_sdk::harness::HarnessClient;
+
+async fn inspect_thread(endpoint: &str, execution_bearer: &str, thread: &str)
+    -> bitrouter_sdk::error::Result<()>
+{
+    let client = HarnessClient::connect(endpoint, execution_bearer).await?;
+    let view = client.read_thread(thread).await?;
+    let page = client.history(thread, &HistoryQuery {
+        after: 0, cutoff: None, limit: 128,
+    }).await?;
+    println!("{:?}: {} committed events", view.thread.status, page.events.len());
+    Ok(())
+}
+```
+
+The client supports create/read Thread, submit/read/cancel Turn, steering,
+explicit input answers, queue resume, history pages and observation. Use the
+request/response contracts under `bitrouter_ai::harness`. Every mutation takes a
+caller-owned idempotency key; the server decides whether an explicit repeated
+submission is a duplicate or conflict. JSON mutation bodies are bounded to the
+existing 64 KiB server limit before dispatch. `connect_with_options()` accepts
+the shared `gateway::TransportOptions`; prefixes are retained, redirects and
+automatic retries are disabled, and proxy discovery requires explicit opt-in.
+Use HTTPS or a local tunnel when crossing an untrusted network.
+
+Observation is a continuing `EventStream<ThreadObservation>`, with no protocol
+completion sentinel. A finished Turn does not end the attachment. Clean EOF
+means detached; a truncated frame is an error. Dropping it neither cancels work
+nor answers an approval. The client never reconnects, advances a durable cursor
+from volatile `live.after_cursor`, or commits a session. Callers handle
+`Snapshot { resynchronized, catchup, .. }` and explicit history pagination.
+Current snapshots and page envelopes must match the bound instance; historical
+committed events retain their original instance IDs, and durable sequence gaps
+are valid. A cancelled pending poll preserves the stream's partially read frame.
+
+`Error::Harness` retains the HTTP status, headers and optional `{error, code}`
+body; `Error::HarnessObservation` retains the distinct `{message, code}` SSE error.
+Malformed or oversized HTTP error bodies preserve their response metadata.
+Neither a transport failure nor a response-decoding failure proves that a
+mutation was rejected. Inspect the service's recorded state before choosing a
+recovery action. A harness-only server still supports stored inspection and
+observation, while unavailable local native mutations return its explicit
+capability error. The SDK does not provide a second executor for that profile.
+
 This package replaces the former server-framework SDK in an alpha breaking
 migration. Server assembly and advanced trusted host adapters have moved to the
 `bitrouter` application. The managed channel preserves the existing WebSocket

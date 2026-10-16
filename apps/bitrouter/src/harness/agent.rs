@@ -1,3 +1,8 @@
+#[cfg(feature = "core")]
+use crate::harness::resources::McpToolExt;
+#[cfg(feature = "core")]
+use bitrouter_ai::harness::agent::EstimateRates;
+use bitrouter_ai::harness::agent::{AgentConfig, RunStatus, ToolMode};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,47 +25,17 @@ pub(crate) const NATIVE_UNAVAILABLE: &str =
 const DEFAULT_INSTRUCTIONS: &str = "You are BRO, a coding agent. Work in the selected server workspace. Use read, glob, and grep to inspect code; use write and edit to change it, and the shell tool to run commands and checks. For edit, supply unique oldText values from the original file. Report what actually happened; do not claim a check passed unless its tool result shows it.";
 const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Inspect the selected server workspace using read, glob, and grep. Do not change files or run commands. Report what you actually observed.";
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct EstimateRates {
-    /// Estimated micro-USD per million prompt tokens.
-    pub prompt: u64,
-    /// Estimated micro-USD per million completion tokens.
-    pub completion: u64,
+/// Application-owned helpers for the public AgentConfig contract.
+pub trait AgentConfigExt: Sized {
+    fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self;
+    fn read_only(self) -> Self;
+    fn with_model_mode(self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self;
+    fn with_output_reservation(self, tokens: Option<u32>) -> Self;
+    fn tool_mode(&self) -> ToolMode;
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AgentConfig {
-    pub model: String,
-    #[serde(default, skip_serializing_if = "fixed_model_mode")]
-    pub model_mode: bitrouter_ai::core::protocol::ModelMode,
-    pub effort: Option<ReasoningEffort>,
-    /// Per-step output reservation, retained with the Thread configuration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    pub instructions: String,
-    pub max_steps: u32,
-    pub max_tool_calls: u32,
-    pub max_duration: Duration,
-    pub max_context_bytes: usize,
-    pub max_spend_microusd: Option<u64>,
-    pub estimate_rates: Option<EstimateRates>,
-    tool_mode: ToolMode,
-}
-
-fn fixed_model_mode(mode: &bitrouter_ai::core::protocol::ModelMode) -> bool {
-    *mode == bitrouter_ai::core::protocol::ModelMode::Fixed
-}
-
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolMode {
-    #[default]
-    Coding,
-    ReadOnly,
-}
-
-impl AgentConfig {
-    pub fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self {
+impl AgentConfigExt for AgentConfig {
+    fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self {
         Self {
             model: model.into(),
             model_mode: bitrouter_ai::core::protocol::ModelMode::Fixed,
@@ -77,34 +52,25 @@ impl AgentConfig {
         }
     }
 
-    pub fn read_only(mut self) -> Self {
+    fn read_only(mut self) -> Self {
         self.tool_mode = ToolMode::ReadOnly;
         self.instructions = READ_ONLY_INSTRUCTIONS.into();
         self
     }
 
-    pub fn with_model_mode(mut self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self {
+    fn with_model_mode(mut self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self {
         self.model_mode = mode;
         self
     }
 
-    pub fn with_output_reservation(mut self, tokens: Option<u32>) -> Self {
+    fn with_output_reservation(mut self, tokens: Option<u32>) -> Self {
         self.max_output_tokens = tokens;
         self
     }
 
-    pub fn tool_mode(&self) -> ToolMode {
+    fn tool_mode(&self) -> ToolMode {
         self.tool_mode
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunStatus {
-    Completed,
-    Failed,
-    Cancelled,
-    BoundExceeded,
 }
 
 #[derive(Debug, Clone)]
@@ -162,7 +128,7 @@ pub enum RunEvent {
 pub struct RunReport {
     pub(crate) native: Option<native::Saved>,
     pub(crate) cleanup_unconfirmed: bool,
-    pub resources: Option<crate::harness::resources::HarnessInventory>,
+    pub resources: Option<bitrouter_ai::harness::resources::HarnessInventory>,
     pub context_version: u64,
     pub status: RunStatus,
     pub final_answer: Option<String>,
@@ -205,8 +171,8 @@ pub(crate) struct RunInput {
     pub checkpoint: Option<RunReport>,
     pub complete_checkpoint: bool,
     pub restored_verification: Option<(
-        crate::harness::turn::VerificationStatus,
-        crate::harness::turn::VerificationEvidence,
+        bitrouter_ai::harness::turn::VerificationStatus,
+        bitrouter_ai::harness::turn::VerificationEvidence,
     )>,
 }
 
@@ -282,7 +248,7 @@ impl Agent {
                     .inventory
                     .tools
                     .iter()
-                    .map(crate::harness::resources::McpTool::declaration),
+                    .map(bitrouter_ai::harness::resources::McpTool::declaration),
             );
         }
         tools
@@ -649,7 +615,7 @@ impl Agent {
             u64::try_from(cleanup_started.elapsed().as_millis()).unwrap_or(u64::MAX),
         );
         let settlement = ExecutionRecord::Settled {
-            outcome: Some(crate::harness::storage::SettlementOutcome {
+            outcome: Some(bitrouter_ai::harness::runtime::SettlementOutcome {
                 status,
                 final_answer: report.final_answer.clone(),
                 detail: detail.clone(),

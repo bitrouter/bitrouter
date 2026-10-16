@@ -7,7 +7,6 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::core::eval::compiler::{EvalEvidenceSnapshot, RouteEvalEvidence, TierEvalEvidence};
-use crate::gateway::routing::signals::NextStepRole;
 use crate::gateway::routing::workflow::predictive::PredictiveRouteProjection;
 use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, POLICY_COMPILER_ID,
@@ -17,6 +16,7 @@ use crate::policy_lock::{
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
 use bitrouter_ai::eval::EvaluatorKind;
+use bitrouter_ai::harness::inspection::NextStepRole;
 
 pub mod files;
 

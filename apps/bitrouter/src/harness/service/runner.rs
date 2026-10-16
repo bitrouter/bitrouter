@@ -9,10 +9,15 @@ use tokio_util::sync::CancellationToken;
 
 use super::ThreadService;
 use super::state::{QueuedTurn, VerificationBudget};
-use crate::harness::agent::{Agent, RunChannels, RunInput, RunStatus};
+use crate::harness::agent::Agent;
+use crate::harness::agent::RunChannels;
+use crate::harness::agent::RunInput;
 use crate::harness::storage::CommitRequest;
-use crate::harness::thread::PermissionProfile;
-use crate::harness::turn::{TurnEventPayload, TurnStatus, VerificationStatus};
+use bitrouter_ai::harness::agent::RunStatus;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 struct TurnWorker {
     service: ThreadService,

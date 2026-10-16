@@ -6,10 +6,16 @@ use tempfile::TempDir;
 use tokio::sync::oneshot;
 
 use super::support::{app, final_turn, input, target, thread_request, wait_for};
-use crate::harness::service::{ErrorCode, ServiceError, ThreadService, workspace};
-use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore, OwnerClaim};
-use crate::harness::thread::ThreadStatus;
-use crate::harness::turn::TurnStatus;
+use crate::harness::service::ServiceError;
+use crate::harness::service::ThreadService;
+use crate::harness::service::workspace;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::storage::ExecutionStore;
+use crate::harness::storage::MemoryExecutionStore;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::OwnerClaim;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 #[tokio::test]
 async fn independent_services_share_one_owner_and_transfer_only_after_joined_shutdown()
@@ -281,7 +287,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
         if matches!(fact.as_ref(), ExecutionRecord::WorkspaceReleasePrepared { execution_id, .. } if execution_id == &active.turn_id)))
         .ok_or("release preparation missing")?;
     let terminal = after.records.iter().position(|r| matches!(r, ExecutionRecord::TurnRecord { fact, .. }
-        if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::harness::turn::TurnLifecycle::Finished { .. }))))
+        if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, bitrouter_ai::harness::turn::TurnLifecycle::Finished { .. }))))
         .ok_or("terminal fact missing")?;
     assert!(prepared < terminal);
     // A rejected start has not consumed its key or the provider fixture.

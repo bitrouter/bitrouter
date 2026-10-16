@@ -5,7 +5,7 @@ use bitrouter::gateway::model::decision::types::{
 };
 use bitrouter::gateway::routing::assessment;
 use bitrouter::gateway::routing::input::Input;
-use bitrouter::gateway::routing::signals::NextStepRole;
+use bitrouter_ai::harness::inspection::NextStepRole;
 use bitrouter_ai::types::{Message, Prompt, Role};
 
 fn prompt(messages: Vec<Message>) -> Prompt {

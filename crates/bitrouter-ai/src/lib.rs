@@ -28,6 +28,7 @@ pub mod eval;
 pub mod event;
 pub mod extension;
 pub mod gateway;
+pub mod harness;
 pub mod observe;
 pub mod protocol;
 pub mod routing;

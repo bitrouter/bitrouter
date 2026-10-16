@@ -1,16 +1,18 @@
 //! Versioned OS-local task contract. This adapter only translates requests to
 //! the BRO task service; it never advances the native model/tool loop itself.
 
+use crate::harness::agent::AgentConfigExt;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "harness")]
 use crate::gateway::caller::CallerContext;
-use crate::harness::agent::AgentConfig;
 #[cfg(feature = "harness")]
 use crate::harness::service::ThreadService;
-use crate::harness::service::{ErrorCode, RuntimeCapabilities};
-use crate::harness::turn::TurnSnapshot;
 use anyhow::{Context, Result};
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeCapabilities;
+use bitrouter_ai::harness::turn::TurnSnapshot;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "harness")]
@@ -21,14 +23,18 @@ use tokio_util::sync::CancellationToken;
 
 use crate::daemon::transport;
 
-#[cfg(any(feature = "harness", test))]
-use crate::harness::thread::PermissionProfile;
-use crate::harness::thread::{ThreadHistoryPage, ThreadObservation, ThreadSnapshot, ThreadView};
 #[cfg(feature = "harness")]
 use crate::harness::thread::{ThreadHistoryRequest, ThreadRequest, ThreadTarget};
 #[cfg(feature = "harness")]
 use crate::harness::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest};
-use crate::harness::turn::{SteeringReceipt, TurnReceipt};
+#[cfg(any(feature = "harness", test))]
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadHistoryPage;
+use bitrouter_ai::harness::thread::ThreadObservation;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::thread::ThreadView;
+use bitrouter_ai::harness::turn::SteeringReceipt;
+use bitrouter_ai::harness::turn::TurnReceipt;
 
 pub const CONTRACT_VERSION: u32 = 17;
 const MAX_COMMAND_BYTES: u64 = 64 * 1024;
@@ -667,7 +673,7 @@ impl ThreadClient {
             model_mode: config.model_mode,
             effort: config.effort,
             max_output_tokens: config.max_output_tokens,
-            read_only: config.tool_mode() == crate::harness::agent::ToolMode::ReadOnly,
+            read_only: config.tool_mode() == bitrouter_ai::harness::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
         };
@@ -987,7 +993,7 @@ mod tests {
                                 snapshot: Box::new(ThreadSnapshot {
                                     server_instance_id: "fixture-epoch".into(),
                                     thread_id: "original-thread".into(),
-                                    status: crate::harness::thread::ThreadStatus::Idle,
+                                    status: bitrouter_ai::harness::thread::ThreadStatus::Idle,
                                     workspace: PathBuf::from("/fixture"),
                                     model: "fixture-model".into(),
                                     permission_profile: PermissionProfile::ReadOnly,
@@ -1024,7 +1030,7 @@ mod tests {
                                     thread_id,
                                     turn_id: "original-turn".into(),
                                     queue_order: 1,
-                                    status: crate::harness::turn::TurnStatus::Accepted,
+                                    status: bitrouter_ai::harness::turn::TurnStatus::Accepted,
                                 },
                             },
                         )

@@ -2,12 +2,15 @@
 use super::support::*;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::mcp::transport::{McpServerConfig, McpTransport};
+use crate::harness::agent::AgentConfigExt;
 use crate::harness::resources::HarnessConfig;
 use crate::harness::service::ThreadService;
-use crate::harness::storage::{
-    EffectStatus, ExecutionRecord, ExecutionStore, MemoryExecutionStore,
-};
-use crate::harness::turn::{CancelTurnRequest, TurnStatus};
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::storage::ExecutionStore;
+use crate::harness::storage::MemoryExecutionStore;
+use crate::harness::turn::CancelTurnRequest;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::turn::TurnStatus;
 use rmcp::model::ProtocolVersion;
 use serde_json::json;
 use std::sync::Arc;
@@ -533,7 +536,7 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resources()
         // A stopped, joined source and a precise prefix isolate continuation;
         // this is not evidence that an abruptly lost owner can be retired.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let crate::harness::storage::OwnerClaim::Acquired { owner } =
+        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&source.inner.instance_id).await?
         else {
             return Err("owner".into());

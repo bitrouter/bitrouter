@@ -11,15 +11,22 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 use super::support::{app, final_turn, input, target, thread_request, tool_call, turn};
-use crate::harness::item::CallOrigin;
-use crate::harness::service::{ErrorCode, ThreadService};
-use crate::harness::storage::{
-    AcceptedKey, ExecutionOwner, ExecutionPage, ExecutionRecord, ExecutionStore,
-    MemoryExecutionStore, StoredExecution, ThreadHistoryChunk,
-};
-use crate::harness::thread::{
-    PermissionProfile, ThreadRecoveryRequest, ThreadStatus, ThreadTarget, WorkspaceGrant,
-};
+use crate::harness::service::ThreadService;
+use crate::harness::storage::AcceptedKey;
+use crate::harness::storage::ExecutionPage;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::storage::ExecutionStore;
+use crate::harness::storage::MemoryExecutionStore;
+use crate::harness::storage::StoredExecution;
+use crate::harness::storage::ThreadHistoryChunk;
+use crate::harness::thread::ThreadRecoveryRequest;
+use crate::harness::thread::ThreadTarget;
+use crate::harness::thread::WorkspaceGrant;
+use bitrouter_ai::harness::item::CallOrigin;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::ExecutionOwner;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadStatus;
 
 #[derive(Serialize, Deserialize)]
 struct JournalImage {
@@ -65,7 +72,10 @@ impl ExecutionStore for CrashStore {
     ) -> Result<crate::harness::storage::ExecutionIndexPage, String> {
         self.memory.read_index(after, cutoff, limit, bytes).await
     }
-    async fn claim_owner(&self, id: &str) -> Result<crate::harness::storage::OwnerClaim, String> {
+    async fn claim_owner(
+        &self,
+        id: &str,
+    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(&self, id: &str) -> Result<Option<ExecutionOwner>, String> {
@@ -275,7 +285,7 @@ async fn native_process_loss_at_commit_windows_never_retires_owner_or_replays_wo
         // Reopen the test journal image with the original active owner. This
         // deliberately does not manufacture a stopped proof after waitpid.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let crate::harness::storage::OwnerClaim::Acquired { owner } =
+        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&image.owner.server_instance_id).await?
         else {
             return Err("journal owner restore failed".into());

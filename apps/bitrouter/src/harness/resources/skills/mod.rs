@@ -1,24 +1,16 @@
 //! Local skills are harness resources. Discovery publishes metadata; activation
 //! and instruction placement are decisions of the managed core.
 
+use bitrouter_ai::harness::resources::SkillMetadata;
 use std::path::PathBuf;
 
-use serde::Serialize;
-
-use super::MaterialRef;
 use super::sha256;
+use bitrouter_ai::harness::resources::MaterialRef;
 
 use crate::skills::format::{self, Error, Result, read_skill};
 
 const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SKILLS: usize = 256;
-
-#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct SkillMetadata {
-    pub name: String,
-    pub description: String,
-    pub material: MaterialRef,
-}
 
 /// A bounded, immutable metadata snapshot. Duplicate names from different
 /// roots remain distinct; callers select by material ID, never by name alone.

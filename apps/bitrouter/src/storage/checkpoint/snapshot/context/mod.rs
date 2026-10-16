@@ -46,7 +46,7 @@ pub struct WorkUnit {
     pub shared_evidence: Vec<String>,
     pub recalled: Vec<String>,
     pub last_view_id: Option<String>,
-    pub status: crate::storage::checkpoint::snapshot::AgentStatus,
+    pub status: bitrouter_ai::harness::inspection::AgentStatus,
     pub result_evidence: Vec<String>,
 }
 

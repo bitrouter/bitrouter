@@ -1,10 +1,12 @@
 //! Recover native execution from Core facts, retaining unselected evidence.
 
 use super::{Active, RecoveredCall, Step};
-use crate::harness::item::{CallOrigin, CallRecord};
-use crate::harness::storage::{EffectStatus, ExecutionRecord};
+use crate::harness::storage::ExecutionRecord;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use bitrouter_ai::core::protocol::ToolOutcome;
+use bitrouter_ai::harness::item::CallOrigin;
+use bitrouter_ai::harness::item::CallRecord;
+use bitrouter_ai::harness::runtime::EffectStatus;
 
 pub(super) fn is_projection(fact: &ExecutionRecord, calls: &[RecoveredCall]) -> bool {
     match fact {

@@ -15,9 +15,7 @@ use super::store::local::{Journal, NativePort, StartedTool, error};
 use super::store::{MAX_STORE_BYTES, NativeStore};
 use super::{super::HarnessConfig, NativeResources};
 use crate::core::session::{CoreSession, HarnessPort};
-use crate::harness::agent::ToolMode;
 use crate::harness::service::workspace::WorkspaceFence;
-use crate::harness::storage::ExecutionOwner;
 use crate::storage::checkpoint::sha256;
 use crate::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
 use bitrouter_ai::core::checkpoint::ToolStartFence;
@@ -25,6 +23,8 @@ use bitrouter_ai::core::protocol::{
     Bind, Capabilities, CoreError, ErrorCode, OwnershipGrant, Restore, ServerMessage, TaskInput,
     ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult, ToolStatus, VERSION,
 };
+use bitrouter_ai::harness::agent::ToolMode;
+use bitrouter_ai::harness::runtime::ExecutionOwner;
 
 #[async_trait]
 pub trait NativeApproval: Send + Sync {

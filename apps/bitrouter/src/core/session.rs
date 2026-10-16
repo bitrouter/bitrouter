@@ -1,11 +1,21 @@
 //! Managed session transitions. Provider calls and harness commits run outside
 //! the state lock. A separate commit serializer preserves the one-batch rule.
 
-use crate::storage::checkpoint::snapshot::{
-    AgentState, AgentStatus, AgentTurn, AttemptRecord, ContextValidationRecord, InputCountRecord,
-    Invocation, ModelStep, PreparationWorkRecord, ProviderWorkRecord, ResourceConstraint, RootRun,
-    RunStatus, SessionSnapshot, pending_dependencies,
-};
+use crate::storage::checkpoint::snapshot::AgentState;
+use crate::storage::checkpoint::snapshot::AgentTurn;
+use crate::storage::checkpoint::snapshot::AttemptRecord;
+use crate::storage::checkpoint::snapshot::ContextValidationRecord;
+use crate::storage::checkpoint::snapshot::InputCountRecord;
+use crate::storage::checkpoint::snapshot::Invocation;
+use crate::storage::checkpoint::snapshot::ModelStep;
+use crate::storage::checkpoint::snapshot::PreparationWorkRecord;
+use crate::storage::checkpoint::snapshot::ProviderWorkRecord;
+use crate::storage::checkpoint::snapshot::ResourceConstraint;
+use crate::storage::checkpoint::snapshot::RootRun;
+use crate::storage::checkpoint::snapshot::RunStatus;
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
+use crate::storage::checkpoint::snapshot::pending_dependencies;
+use bitrouter_ai::harness::inspection::AgentStatus;
 
 use crate::storage::checkpoint::validation::HarnessManifestExt;
 use crate::storage::checkpoint::validation::ToolResultLimitsExt;

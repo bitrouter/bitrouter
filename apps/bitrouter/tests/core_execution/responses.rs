@@ -1,9 +1,9 @@
 use super::*;
 use bitrouter::gateway::pipeline::hooks::HopOutcome;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter::storage::checkpoint::snapshot::AgentStatus;
 use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter_ai::harness::inspection::AgentStatus;
 
 #[derive(Clone)]
 struct HeldHop {

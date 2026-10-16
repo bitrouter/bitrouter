@@ -1,5 +1,6 @@
 //! Native ACP v1/v2 ingress over the daemon-owned ThreadService.
 
+use crate::harness::agent::AgentConfigExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
@@ -18,12 +19,17 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::harness::agent::AgentConfig;
 use crate::harness::service::{ServiceError, ThreadService};
-use crate::harness::thread::{
-    PermissionProfile, ThreadHistoryRequest, ThreadObservation, ThreadRequest, ThreadTarget,
-};
-use crate::harness::turn::{ApprovalAnswer, CancelTurnRequest, TurnRequest, TurnStatus};
+use crate::harness::thread::ThreadHistoryRequest;
+use crate::harness::thread::ThreadRequest;
+use crate::harness::thread::ThreadTarget;
+use crate::harness::turn::ApprovalAnswer;
+use crate::harness::turn::CancelTurnRequest;
+use crate::harness::turn::TurnRequest;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadObservation;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 mod flow;
 mod project;
@@ -113,7 +119,7 @@ impl NativeAcpServer {
 
     /// Override trusted connection defaults, preserving shared delivery ownership.
     pub fn with_agent_config(mut self, agent: AgentConfig) -> Self {
-        if agent.tool_mode() == crate::harness::agent::ToolMode::ReadOnly {
+        if agent.tool_mode() == bitrouter_ai::harness::agent::ToolMode::ReadOnly {
             self.config.permission_profile = PermissionProfile::ReadOnly;
         }
         self.config.agent = agent;
@@ -768,7 +774,7 @@ impl NativeAcpServer {
         connection: &Connection,
         cx: &ConnectionTo<Client>,
         attachment: &Arc<Attachment>,
-        turn: &crate::harness::turn::TurnSnapshot,
+        turn: &bitrouter_ai::harness::turn::TurnSnapshot,
         delivery: CancellationToken,
     ) {
         let owned = self

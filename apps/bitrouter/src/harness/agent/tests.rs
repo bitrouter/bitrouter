@@ -1,3 +1,4 @@
+use crate::harness::agent::AgentConfigExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,7 +20,9 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::harness::context;
 use crate::harness::control::TurnControl;
-use crate::harness::storage::{CommitRequest, EffectStatus, ExecutionRecord};
+use crate::harness::storage::CommitRequest;
+use crate::harness::storage::ExecutionRecord;
+use bitrouter_ai::harness::runtime::EffectStatus;
 
 #[path = "tests_native.rs"]
 mod native;

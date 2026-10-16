@@ -1,25 +1,42 @@
 //! Public Thread projections are published only after their execution
 //! transaction commits. They never supply SDK context or execution authority.
 
+use crate::harness::agent::AgentConfigExt;
+use crate::harness::turn::TurnLifecycleExt;
+use crate::harness::turn::TurnSnapshotExt;
 use crate::storage::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::snapshot::context::inspection::InspectionExt;
 use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::gateway::caller::CallerContext;
 use tokio::sync::broadcast;
 
-use super::{
-    ErrorCode, MAX_EVENT_PAGE, RuntimeLimits, ServiceError, ThreadService, now_ms, threads,
-};
-use crate::harness::agent::AgentConfig;
-use crate::harness::storage::{EffectStatus, ExecutionRecord};
-use crate::harness::thread::{
-    ThreadChange, ThreadEvent, ThreadHistoryPage, ThreadHistoryRequest, ThreadObservation,
-    ThreadSnapshot, ThreadStatus, ThreadTarget, ThreadView,
-};
-use crate::harness::turn::{
-    TurnEvent, TurnEventPayload, TurnReceipt, TurnSnapshot, TurnStatus, VerificationStatus,
-};
+use super::MAX_EVENT_PAGE;
+use super::ServiceError;
+use super::ThreadService;
+use super::now_ms;
+use super::threads;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::thread::ThreadHistoryRequest;
+use crate::harness::thread::ThreadTarget;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::runtime::RuntimeLimits;
+use bitrouter_ai::harness::thread::ThreadChange;
+use bitrouter_ai::harness::thread::ThreadEvent;
+use bitrouter_ai::harness::thread::ThreadHistoryPage;
+use bitrouter_ai::harness::thread::ThreadObservation;
+use bitrouter_ai::harness::thread::ThreadSnapshot;
+use bitrouter_ai::harness::thread::ThreadStatus;
+use bitrouter_ai::harness::thread::ThreadView;
+use bitrouter_ai::harness::turn::TurnEvent;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnReceipt;
+use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_ai::harness::turn::VerificationStatus;
 
 pub(super) struct Presentation {
     pub(super) view: ThreadView,
@@ -319,10 +336,7 @@ impl ThreadService {
         thread_id: &str,
         version: u64,
         facts: &[ExecutionRecord],
-        previous_context: Option<&(
-            String,
-            crate::storage::checkpoint::snapshot::context::inspection::Inspection,
-        )>,
+        previous_context: Option<&(String, bitrouter_ai::harness::inspection::Inspection)>,
     ) -> Result<(Vec<ExecutionRecord>, ThreadEvent), ServiceError> {
         let framed = super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
         let seq = version
@@ -421,9 +435,9 @@ pub(super) fn project_with_native(
                     decoded.as_ref()
                 }
             };
-            let Some(inspection) = snapshot.and_then(
-                crate::storage::checkpoint::snapshot::context::inspection::Inspection::capture,
-            ) else {
+            let Some(inspection) =
+                snapshot.and_then(bitrouter_ai::harness::inspection::Inspection::capture)
+            else {
                 return;
             };
             ThreadChange::ContextRouting {
@@ -592,8 +606,13 @@ pub(super) fn project_with_native(
     changes.push(change);
 }
 
-impl ThreadView {
-    pub fn apply(&mut self, event: &ThreadEvent) {
+/// Application-owned helpers for the public ThreadView contract.
+pub trait ThreadViewExt: Sized {
+    fn apply(&mut self, event: &ThreadEvent);
+}
+
+impl ThreadViewExt for ThreadView {
+    fn apply(&mut self, event: &ThreadEvent) {
         if event.thread_id != self.thread.thread_id
             || event.server_instance_id != self.thread.server_instance_id
             || event.seq <= self.thread.cursor

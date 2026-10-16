@@ -1,101 +1,20 @@
 //! Bounded public task/view observations. These are never execution authority.
 
-use serde::{Deserialize, Serialize};
+use bitrouter_ai::harness::inspection::{
+    DecisionUsage, Inspection, RoutingPhase, RoutingStatus, TaskView, Workflow,
+};
 
-use crate::gateway::routing::signals::NextStepRole;
-use crate::gateway::routing::signals::ProgressState;
-use crate::gateway::routing::signals::TaskFamily;
-use crate::storage::checkpoint::snapshot::{AgentStatus, ModelStep, SessionSnapshot};
+use crate::storage::checkpoint::snapshot::ModelStep;
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
+use bitrouter_ai::harness::inspection::AgentStatus;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Inspection {
-    pub run_id: String,
-    pub tasks: Vec<TaskView>,
-    pub tasks_truncated: bool,
-    pub evidence_blocks: usize,
-    pub retained_evidence_bytes: usize,
-    pub decisions: DecisionUsage,
+/// Application-owned helpers for the public Inspection contract.
+pub trait InspectionExt: Sized {
+    fn capture(state: &SessionSnapshot) -> Option<Self>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskView {
-    pub task_id: String,
-    pub agent_id: String,
-    pub parent_task_id: Option<String>,
-    pub text_preview: String,
-    pub status: AgentStatus,
-    pub view_id: Option<String>,
-    pub prompt_bytes: Option<usize>,
-    #[serde(default)]
-    pub selected_model: Option<String>,
-    #[serde(default)]
-    pub routing_reason: Option<String>,
-    pub source_groups: usize,
-    pub omitted_groups: usize,
-    pub result_references: usize,
-    /// Current-step presentation facts; absent in older observations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub routing: Option<RoutingStatus>,
-}
-
-/// Public progress from the current task's acknowledged execution state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoutingStatus {
-    pub phase: RoutingPhase,
-    /// Accepted classifier labels, including explicit abstention as unknown.
-    pub workflow: Option<Workflow>,
-    /// Current serving attempt, or the selected plan before dispatch.
-    pub model: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoutingPhase {
-    Preparing,
-    Classifying,
-    Routing,
-    Generating,
-    Tools,
-    Waiting,
-    Cancelling,
-    Finished,
-}
-
-impl RoutingPhase {
-    pub const fn key(self) -> &'static str {
-        match self {
-            Self::Preparing => "preparing",
-            Self::Classifying => "classifying",
-            Self::Routing => "routing",
-            Self::Generating => "generating",
-            Self::Tools => "tools",
-            Self::Waiting => "waiting",
-            Self::Cancelling => "cancelling",
-            Self::Finished => "finished",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Workflow {
-    pub task_family: TaskFamily,
-    pub next_step_role: NextStepRole,
-    pub progress_state: ProgressState,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DecisionUsage {
-    pub attempts: usize,
-    pub pending: usize,
-    pub failures: usize,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-    /// Frozen operator-price estimate, never a reported or reconciled bill.
-    pub estimated_micro_usd: Option<u64>,
-}
-
-impl Inspection {
-    pub fn capture(state: &SessionSnapshot) -> Option<Self> {
+impl InspectionExt for Inspection {
+    fn capture(state: &SessionSnapshot) -> Option<Self> {
         if !crate::storage::checkpoint::snapshot::context::enabled(state) {
             return None;
         }
