@@ -12,6 +12,9 @@ use bitrouter_orchestrator::thread::{
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
+#[path = "native_recovery.rs"]
+mod native_recovery;
+
 async fn coordinator(home: &Path, database_url: &str) -> Result<(Coordinator, DatabaseConnection)> {
     coordinator_with_config(home, database_url, "").await
 }
