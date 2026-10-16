@@ -33,7 +33,9 @@
       "docs/evidence/bro-goal-workflow/REPRODUCE.md",
       "skills/bitrouter/SKILL.md",
       "skills/bitrouter/references/cli.md"
-    ]
+    ],
+    "committedCheckpoint": "6a72cfb1da0e2d4641a96097e09a507d7d032189",
+    "committedInputsMatch": true
   },
   "local": {
     "id": "acp-continuation-final15",
@@ -153,12 +155,21 @@
   "archive": {
     "repository": "https://github.com/bitrouter/bitrouter",
     "branch": "codex/pr981-refactor-evidence-20261016",
-    "commit": null,
-    "publication": "pending",
-    "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46"
+    "commit": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+    "publication": "published and remote head verified",
+    "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46",
+    "url": "https://github.com/bitrouter/bitrouter/tree/0fc618e2594586da5f480a30fb9f2f035b1acb47",
+    "checksumManifest": "SHA256SUMS",
+    "checksumManifestSha256": "4b13ef23884b4cbd4466d62ed915a19228ee1752b176472798e962b171073683",
+    "originalPayloadFiles": 3966,
+    "originalPayloadBytes": 76719035,
+    "publishedFiles": 1115,
+    "packedDirectories": 5,
+    "independentGitArchiveChecksumsVerified": 1115
   },
   "hostedCi": {
-    "status": "pending exact pushed head; separate from local proof"
+    "status": "Exact final-head result is reported in the PR acceptance comment; separate from local proof.",
+    "checks": "https://github.com/bitrouter/bitrouter/pull/981/checks"
   },
   "limits": [
     "Actual vendor harness/provider requalification on this refactor is unpassed.",
