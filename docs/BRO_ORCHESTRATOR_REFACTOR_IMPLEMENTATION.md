@@ -310,7 +310,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
 | Stage | Status |
 | --- | --- |
 | S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
-| S1 | In progress: owner/input association, model and worker Turn source links, stable binding operations and original-key lookup implemented. Full interruption/compatibility proof remains. |
+| S1 | In progress: owner/input association, model/worker Turn links, stable binding operations and original-key lookup implemented. New ACP dispatches with no accepted Thread now stay on common admission; existing original supervisor starts keep reconciliation priority. Full interruption/compatibility proof remains. |
 | S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
 | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
 | S4 | In progress: generation/native SDK reports, prepared-input/router facts and actual content receipt intervals link to original work/Thread/Turn sources. ACP public session/route limits remain explicit. Complete historical qualification and final evidence/UI closure remain. |
@@ -967,6 +967,41 @@ fixture directories were not retained; their Cargo-built reproduction source
 remains in the PR. This is local Rust/HTTP qualification. A fresh final full
 workspace run, live harness/provider checks, native archive qualification,
 remaining recovery/resource work and the complete S0–S6 audit are still required.
+
+## ACP pre-admission recovery checkpoint
+
+A saved new ACP dispatch could reach `drive_task` before any Thread receipt
+existed and fall into the historical supervisor-only path. That path marked it
+unknown and did not submit its original common admission. The regression first
+reproduces that missing link with a real configured Rust ACP fixture.
+
+New attempts already retain their requested worker and task version. A current
+recorded request now stays on the common path even before Thread acceptance;
+`drive_worker` uses its saved input and original independent Thread/Turn keys.
+Original legacy supervisor startup receipts are read first and keep their
+read/stop reconciliation. A legacy worker selection frozen by a later edit is
+not treated as a current new attempt. Conflicting original supervisor/common
+admission evidence blocks selection instead of authorizing another execution.
+No ID, persistence format, permission, retry bound or unknown effect is reset.
+
+The new process test opens the original ACP session, retries coordination,
+checks unchanged work/source/Thread/Turn identities and observes one initialize.
+It stops before authorizing the fixture's tool permission and does not claim
+delivery completion, same-session cold continuation or the full A16 matrix.
+
+| Source2 check | Actual result |
+| --- | --- |
+| Interruption/owner/native/ACP original-action selection | Six passed |
+| Strict workspace/all-target/all-feature Clippy and formatting | Passed |
+| Complete Goal runtime selection | **77 passed**, no leak reports |
+| New ACP pre-admission and legacy paused-start recovery | **Five iterations each passed**, no leak reports |
+| Before/after source hashes | Zero changed files |
+
+The expected red result, green logs, exact source patch/tar, runner/config and
+source manifests remain in the independent archive under `ADMISSION_RECOVERY_INDEX.md`.
+Archive filenames are unique per run and refuse reuse. The preceding all-feature
+rustdoc result is from the native activity checkpoint; the final full workspace,
+live harness/provider and complete refactor gates remain pending.
 
 ## Delivery and evidence
 
