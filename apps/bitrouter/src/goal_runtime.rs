@@ -1499,6 +1499,24 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
                 .await?;
             return Ok(());
         }
+        let legacy_start = if execution.thread.is_none()
+            && execution.dispatch_requested
+            && task.execution_harness(execution).is_some()
+        {
+            self.supervisor
+                .start_snapshot(&self.grant, &execution.id)
+                .await?
+        } else {
+            None
+        };
+        // An original supervisor start remains authoritative even without a
+        // Goal link. New attempts record their worker before any Thread exists.
+        // Keep their original action on the common path even in that gap.
+        // Legacy selections frozen by a worker edit belong to an older task
+        // version and must retain their original supervisor reconciliation.
+        let current_worker_request = execution.worker.is_some()
+            && execution.task_revision == task.requirements_revision
+            && legacy_start.is_none();
         let admitted_worker = if execution.thread.is_none()
             && execution.dispatch_requested
             && goal.workflow.owner_thread_id.is_some()
@@ -1515,7 +1533,12 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
         } else {
             false
         };
-        if task.execution_harness(execution).is_none()
+        anyhow::ensure!(
+            !(legacy_start.is_some() && admitted_worker),
+            "original ACP supervisor and common Thread admissions conflict"
+        );
+        if current_worker_request
+            || task.execution_harness(execution).is_none()
             || execution.thread.is_some()
             || admitted_worker
         {
@@ -1526,10 +1549,7 @@ Use harness null (or omit it) for the built-in BRO executor; choose a configured
                 execution.observation,
                 Observation::Requested | Observation::Unknown { run_id: None, .. }
             )
-            && let Some(snapshot) = self
-                .supervisor
-                .start_snapshot(&self.grant, &execution.id)
-                .await?
+            && let Some(snapshot) = legacy_start
         {
             anyhow::ensure!(
                 task.execution_harness(execution) == Some(snapshot.agent_id.as_str())
