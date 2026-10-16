@@ -19,13 +19,16 @@ async fn append_turn(fixture: &Fixture) -> Result<()> {
     ] {
         fixture
             .recorder
-            .record(CaptureEvent {
-                direction,
-                kind,
-                call_id: Some(3),
-                method: "session/prompt".into(),
-                payload,
-            })
+            .append(
+                "session",
+                CaptureEvent {
+                    direction,
+                    kind,
+                    call_id: Some(3),
+                    method: "session/prompt".into(),
+                    payload,
+                },
+            )
             .await?;
     }
     Ok(())

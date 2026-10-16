@@ -1,22 +1,25 @@
 use super::*;
-use crate::acp_trajectory::Recorder;
 use crate::acp_trajectory::checkpoint::types::{Checkpoint, ResourceObservation};
+use crate::acp_trajectory::fixtures::PersistedHistory;
 use crate::gateway::observability::inventory::{COVERAGE_KIND, CoverageRegistration};
 
-async fn prompt(recorder: &Recorder, id: &str, call: u64, kind: CaptureKind) -> Result<()> {
+async fn prompt(recorder: &PersistedHistory, id: &str, call: u64, kind: CaptureKind) -> Result<()> {
     let payload = if kind == CaptureKind::Request {
         json!({"sessionId":id,"prompt":[{"type":"text","text":"Continue the fixture."}]})
     } else {
         json!({"result":{"stopReason":"end_turn"}})
     };
     recorder
-        .record(CaptureEvent {
-            direction: CaptureDirection::Client,
-            kind,
-            call_id: Some(call),
-            method: "session/prompt".into(),
-            payload,
-        })
+        .append(
+            id,
+            CaptureEvent {
+                direction: CaptureDirection::Client,
+                kind,
+                call_id: Some(call),
+                method: "session/prompt".into(),
+                payload,
+            },
+        )
         .await?;
     Ok(())
 }
@@ -84,13 +87,16 @@ async fn priced_gateway_requests_complete_a_stopped_prefix_and_exclude_later_wor
     assert_eq!(cumulative.known_cost_micro_usd, 56);
     assert_eq!(cumulative.requests.len(), 2);
     recorder
-        .record(CaptureEvent {
-            direction: CaptureDirection::Client,
-            kind: CaptureKind::Disconnected,
-            call_id: None,
-            method: "disconnected".into(),
-            payload: json!({"clean":true}),
-        })
+        .append(
+            "priced",
+            CaptureEvent {
+                direction: CaptureDirection::Client,
+                kind: CaptureKind::Disconnected,
+                call_id: None,
+                method: "disconnected".into(),
+                payload: json!({"clean":true}),
+            },
+        )
         .await?;
     assert!(
         pipeline
@@ -237,6 +243,8 @@ async fn fork_resources_union_inherited_requests_and_exclude_later_parent_work()
         .execute(request(&parent, "parent-before-fork", "coding")?)
         .await?;
     prompt(&recorder, "parent", 2, CaptureKind::Response).await?;
+    let canonical = CanonicalStore::new(fixture.assembled.db.clone());
+    let boundary = canonical.transcript(&parent).await?.session.head;
     for (kind, payload) in [
         (CaptureKind::Request, json!({"sessionId":"parent"})),
         (
@@ -245,19 +253,37 @@ async fn fork_resources_union_inherited_requests_and_exclude_later_parent_work()
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(3),
-                method: "session/fork".into(),
-                payload,
-            })
+            .append(
+                if kind == CaptureKind::Request {
+                    "parent"
+                } else {
+                    "child"
+                },
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(3),
+                    method: "session/fork".into(),
+                    payload,
+                },
+            )
             .await?;
     }
     let child = SessionIdentity {
         native_session_id: "child".into(),
         ..parent.clone()
     };
+    {
+        use crate::storage::capture::sessions;
+        use sea_orm::sea_query::Expr;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        sessions::Entity::update_many()
+            .col_expr(sessions::Column::ParentKey, Expr::value(parent.key()?))
+            .col_expr(sessions::Column::ParentWatermark, Expr::value(boundary))
+            .filter(sessions::Column::SessionKey.eq(child.key()?))
+            .exec(&fixture.assembled.db)
+            .await?;
+    }
     let (_, boundary_at_fork_request) = freeze(&fixture, &parent).await?;
     assert!(
         !boundary_at_fork_request.metering_complete,
@@ -411,13 +437,16 @@ async fn unresolved_post_stop_calls_stay_unknown_only_through_their_native_inter
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(4),
-                method: "session/new".into(),
-                payload,
-            })
+            .append(
+                "side-session",
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(4),
+                    method: "session/new".into(),
+                    payload,
+                },
+            )
             .await?;
     }
     let unknown = SessionIdentity {
@@ -588,14 +617,16 @@ async fn late_settlement_revises_resources_without_mutating_checkpoint_content()
 async fn capture_acknowledgement_fences_namespace_preexisting_requests_and_runtime_restart()
 -> Result<()> {
     let fixture = fixture(false).await?;
-    let recorder = CanonicalStore::new(fixture.assembled.db.clone())
-        .recorder(RecordingScope {
+    let recorder = PersistedHistory::new(
+        fixture.assembled.db.clone(),
+        FixtureScope {
             owner: "local".into(),
             source: "fixture".into(),
             controller_instance_id: Some("startup".into()),
             route_scope_id: Some("local".into()),
-        })
-        .await?;
+        },
+    )
+    .await?;
     let inventory = fixture.assembled.gateway_requests.inventory();
     assert!(
         inventory

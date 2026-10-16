@@ -1,12 +1,11 @@
 //! Shared recorded-session and live-upstream fixtures; no learning runtime setup.
 
-use crate::acp_trajectory::{CanonicalStore, RecordingScope};
+use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::config::Config;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::types::PipelineRequest;
 use crate::gateway::routing::blocks::allocation::BanditConfig;
 use crate::gateway::routing::blocks::control::{BlockDefinition, BlockRule};
-use crate::harness::acp::capture::CapturePort;
 use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use crate::storage::session_identity::SessionIdentity;
@@ -162,20 +161,22 @@ pub(crate) async fn recording(
     id: &str,
     source: &str,
     acknowledge: bool,
-) -> Result<(SessionIdentity, Arc<crate::acp_trajectory::Recorder>)> {
+) -> Result<(SessionIdentity, Arc<PersistedHistory>)> {
     let identity = SessionIdentity {
         owner: "local".into(),
         source: source.into(),
         native_session_id: id.into(),
     };
-    let recorder = CanonicalStore::new(fixture.assembled.db.clone())
-        .recorder(RecordingScope {
+    let recorder = PersistedHistory::new(
+        fixture.assembled.db.clone(),
+        FixtureScope {
             owner: identity.owner.clone(),
             source: identity.source.clone(),
             controller_instance_id: Some("controller".into()),
             route_scope_id: Some("local".into()),
-        })
-        .await?;
+        },
+    )
+    .await?;
     if acknowledge {
         fixture
             .assembled
@@ -205,13 +206,16 @@ pub(crate) async fn recording(
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(call_id),
-                method: method.into(),
-                payload,
-            })
+            .append(
+                id,
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(call_id),
+                    method: method.into(),
+                    payload,
+                },
+            )
             .await?;
     }
     Ok((identity, recorder))

@@ -5,11 +5,11 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::harness::acp::capture::CapturePort;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::json;
 
-use crate::acp_trajectory::{CanonicalStore, Recorder, RecordingScope};
+use crate::acp_trajectory::CanonicalStore;
+use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::administration_target::InspectionTarget;
 use crate::core::evolution::evidence::EvidenceKind;
 use crate::daemon::{AcpControlPlane, NoopObserveStatus, NoopReloader};
@@ -19,7 +19,7 @@ use crate::storage::session_identity::SessionIdentity;
 struct Fixture {
     services: CodeServices,
     canonical: CanonicalStore,
-    recorder: Arc<Recorder>,
+    recorder: Arc<PersistedHistory>,
     session: SessionRef,
     evolution: crate::core::evolution::runtime::EvolutionRuntime,
     routing: Arc<crate::config::routing_table::ConfigRoutingTable>,
@@ -67,7 +67,7 @@ presets:
     let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
     let canonical = CanonicalStore::new(assembled.db.clone());
     let recorder = canonical
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: "local".into(),
             source: "fixture".into(),
             controller_instance_id: None,
@@ -119,13 +119,16 @@ presets:
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction,
-                kind,
-                call_id,
-                method: method.into(),
-                payload,
-            })
+            .append(
+                "session",
+                CaptureEvent {
+                    direction,
+                    kind,
+                    call_id,
+                    method: method.into(),
+                    payload,
+                },
+            )
             .await?;
     }
     let socket = home.path().join("evolution.sock");
@@ -414,7 +417,7 @@ async fn manual_ui_preserves_unknowns_and_requires_original_verification_evidenc
 async fn continued_prefix_is_saved_with_explicit_stale_status() -> Result<()> {
     let fixture = fixture().await?;
     let draft = scored(fixture.review().await?)?;
-    fixture.recorder.record(CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request, call_id: Some(3), method: "session/prompt".into(), payload: json!({"sessionId":"session","prompt":[{"type":"text","text":"Continue with another change."}]}) }).await?;
+    fixture.recorder.append("session", CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request, call_id: Some(3), method: "session/prompt".into(), payload: json!({"sessionId":"session","prompt":[{"type":"text","text":"Continue with another change."}]}) }).await?;
     let result = fixture
         .step("evolution:submit", "save", Some(draft))
         .await?;

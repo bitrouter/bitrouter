@@ -37,19 +37,26 @@ use bitrouter::config;
 #[tokio::test]
 async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() -> anyhow::Result<()>
 {
-    use bitrouter::acp_trajectory::{CanonicalStore, RecordingScope};
     let dir = tempdir("coverage");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await?;
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
-    let recorder = CanonicalStore::new(assembled.db.clone())
-        .recorder(RecordingScope {
-            owner: "local".into(),
-            source: "fixture".into(),
-            controller_instance_id: Some("controller".into()),
-            route_scope_id: Some("principal".into()),
-        })
-        .await?;
+    use bitrouter::storage::capture::connections;
+    use sea_orm::{ActiveModelTrait, Set};
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    connections::ActiveModel {
+        connection_id: Set(connection_id.clone()),
+        owner: Set("local".into()),
+        source: Set("fixture".into()),
+        controller_instance_id: Set(Some("controller".into())),
+        route_scope_id: Set(Some("principal".into())),
+        state: Set("recording".into()),
+        head: Set(0),
+        started_at: Set(chrono::Utc::now().to_rfc3339()),
+        metadata_json: Set("{}".into()),
+    }
+    .insert(&assembled.db)
+    .await?;
     let socket = dir.join("bitrouter.sock");
     let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
         socket.clone(),
@@ -68,7 +75,7 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
     ));
     wait_until_ready(&socket).await;
     let command = |principal: &str| DaemonCommand::AcpRecordingRegister {
-        connection_id: recorder.connection_id().into(),
+        connection_id: connection_id.as_str().into(),
         api_principal: principal.into(),
         controller_instance_id: "controller".into(),
     };
@@ -80,7 +87,7 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
     let DaemonResponse::AcpRecordingRegistered { registration } = response else {
         anyhow::bail!("coverage acknowledgement missing");
     };
-    assert_eq!(registration.connection_id, recorder.connection_id());
+    assert_eq!(registration.connection_id, connection_id.as_str());
     assert_eq!(
         registration.version,
         bitrouter::gateway::observability::inventory::INVENTORY_VERSION

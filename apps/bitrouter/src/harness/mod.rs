@@ -17,6 +17,8 @@ pub mod storage;
 pub(crate) mod supervisor;
 pub mod thread;
 pub(crate) mod tools;
+#[cfg(feature = "harness")]
+pub mod trajectory;
 pub mod turn;
 
 pub mod permission;

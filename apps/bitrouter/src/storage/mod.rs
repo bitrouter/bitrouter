@@ -1,6 +1,8 @@
 //! Application-owned durable formats and their shared validation.
 //! Core and harness share codecs without sharing live execution authority.
 
+pub(crate) mod acp_history;
+
 pub mod checkpoint;
 
 pub mod evaluation;

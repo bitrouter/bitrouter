@@ -18,9 +18,10 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter::acp_trajectory::{CanonicalStore, RecordingScope, SessionTranscript};
+use bitrouter::acp_trajectory::{CanonicalStore, SessionTranscript};
 use bitrouter::db;
 use bitrouter::harness::acp::capture::CapturePort;
+use bitrouter::harness::trajectory::{Recorder, RecordingScope};
 use bitrouter::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use bitrouter::storage::session_identity::SessionIdentity;
 use serde_json::{Value, json};
@@ -74,7 +75,7 @@ async fn exercise(database_url: &str) -> Result<()> {
     let result = async {
         db::run_migrations(&connection).await?;
         let store = CanonicalStore::new(connection.clone());
-        let snapshots = capture_scenario(&store).await?;
+        let snapshots = capture_scenario(&connection, &store).await?;
         check_readback(&store, &snapshots).await?;
         Ok::<_, anyhow::Error>(snapshots)
     }
@@ -93,6 +94,7 @@ async fn exercise(database_url: &str) -> Result<()> {
 }
 
 async fn capture_scenario(
+    db: &sea_orm::DatabaseConnection,
     store: &CanonicalStore,
 ) -> Result<Vec<(SessionIdentity, SessionTranscript)>> {
     let scope = Uuid::new_v4().to_string();
@@ -105,7 +107,7 @@ async fn capture_scenario(
         native_session_id: format!("capture-{scope}-child"),
         ..parent.clone()
     };
-    let recorder = store.recorder(recording_scope(&parent)).await?;
+    let recorder = Recorder::new(db.clone(), recording_scope(&parent)).await?;
     let port = recorder.as_ref();
     let setup = record(
         port,
@@ -224,7 +226,7 @@ async fn capture_scenario(
             ..parent.clone()
         },
     ] {
-        let recorder = store.recorder(recording_scope(&identity)).await?;
+        let recorder = Recorder::new(db.clone(), recording_scope(&identity)).await?;
         let update = record(recorder.as_ref(), CaptureKind::Notification, None, "session/update", json!({
             "sessionId":identity.native_session_id,
             "update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":identity.owner}}
@@ -333,7 +335,6 @@ mod mysql_snapshot_races {
     use super::*;
     use std::sync::Arc;
 
-    use bitrouter::acp_trajectory::Recorder;
     use bitrouter::harness::acp::capture::CaptureError;
     use bitrouter::storage::capture::{connections, events, sessions};
     use sea_orm::sea_query::Expr;
@@ -367,6 +368,95 @@ mod mysql_snapshot_races {
     #[ignore = "requires harness,db-mysql and BITROUTER_TEST_DATABASE_URL naming a dedicated MySQL database"]
     async fn mysql_new_session_sees_concurrent_prior_event() -> Result<()> {
         exercise_race(Race::NativeIdReuse).await
+    }
+
+    #[tokio::test]
+    #[ignore = "requires harness,db-mysql and BITROUTER_TEST_DATABASE_URL naming a dedicated MySQL database"]
+    async fn mysql_parallel_new_sessions_keep_recordings_complete() -> Result<()> {
+        let database_url = std::env::var("BITROUTER_TEST_DATABASE_URL")
+            .context("set BITROUTER_TEST_DATABASE_URL to a dedicated MySQL test database")?;
+        let parsed = url::Url::parse(&database_url)?;
+        ensure!(
+            parsed.scheme() == "mysql" && !parsed.path().trim_matches('/').is_empty(),
+            "parallel capture requires an explicit MySQL test database"
+        );
+        let connection = db::connect(&database_url).await?;
+        let result = tokio::time::timeout(Duration::from_secs(60), async {
+            db::run_migrations(&connection).await?;
+            for _ in 0..4 {
+                let start = Arc::new(tokio::sync::Barrier::new(8));
+                let mut ready = Vec::new();
+                for _ in 0..8 {
+                    let id = Uuid::new_v4().to_string();
+                    let identity = SessionIdentity {
+                        owner: format!("parallel-{id}-owner"),
+                        source: "parallel-capture".into(),
+                        native_session_id: format!("parallel-{id}-session"),
+                    };
+                    let recorder =
+                        Recorder::new(connection.clone(), recording_scope(&identity)).await?;
+                    record(
+                        recorder.as_ref(),
+                        CaptureKind::Request,
+                        Some(1),
+                        "session/new",
+                        json!({"cwd":"/workspace"}),
+                    )
+                    .await?;
+                    ready.push((identity, recorder));
+                }
+                let mut tasks = JoinSet::new();
+                for (identity, recorder) in ready {
+                    let start = Arc::clone(&start);
+                    tasks.spawn(async move {
+                        start.wait().await;
+                        record(
+                            recorder.as_ref(),
+                            CaptureKind::Response,
+                            Some(1),
+                            "session/new",
+                            json!({"result":{"sessionId":identity.native_session_id}}),
+                        )
+                        .await?;
+                        record(
+                            recorder.as_ref(),
+                            CaptureKind::Disconnected,
+                            None,
+                            "disconnect",
+                            json!({"clean":true}),
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>((identity, recorder.connection_id().to_owned()))
+                    });
+                }
+                let store = CanonicalStore::new(connection.clone());
+                let completed = async {
+                    while let Some(completed) = tasks.join_next().await {
+                        let (identity, connection_id) = completed??;
+                        let transcript = store.transcript(&identity).await?;
+                        ensure!(transcript.session.head == 1);
+                        ensure!(transcript.session.history_origin == "new");
+                        let row = connections::Entity::find_by_id(connection_id)
+                            .one(&connection)
+                            .await?
+                            .context("parallel capture connection missing")?;
+                        ensure!(row.state == "complete" && row.head == 3);
+                    }
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                tasks.shutdown().await;
+                completed?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("parallel MySQL capture exceeded its deadline")
+        .and_then(|result| result);
+        let closed = connection.close().await;
+        result?;
+        closed?;
+        Ok(())
     }
 
     async fn exercise_race(race: Race) -> Result<()> {
@@ -439,7 +529,7 @@ mod mysql_snapshot_races {
         };
         let key = identity.key()?;
         let store = CanonicalStore::new(writer.clone());
-        let recorder = store.recorder(recording_scope(&identity)).await?;
+        let recorder = Recorder::new(writer.clone(), recording_scope(&identity)).await?;
         let prior = CaptureEvent {
             direction: CaptureDirection::Agent,
             kind: CaptureKind::Notification,
@@ -460,9 +550,7 @@ mod mysql_snapshot_races {
             parent_key: Set(None),
             parent_watermark: Set(None),
         };
-        let winner = CanonicalStore::new(observer.clone())
-            .recorder(recording_scope(&identity))
-            .await?;
+        let winner = Recorder::new(observer.clone(), recording_scope(&identity)).await?;
         if race == Race::Tombstone {
             winner.record(prior.clone()).await?;
         } else if race == Race::NativeIdReuse {
@@ -594,8 +682,9 @@ mod mysql_snapshot_races {
     ) -> Result<Result<(), CaptureError>> {
         let mut tasks = JoinSet::new();
         tasks.spawn(async move { recorder.record(pending).await });
-        // RR's first nonlocking read fixes the snapshot. Seeing this recorder's
-        // INSERT proves its earlier connection SELECT has already completed.
+        // Seeing this recorder's pending INSERT proves the connection read has
+        // completed. The earlier implementation froze its RR snapshot there;
+        // the corrected locking read defers that snapshot until session access.
         // https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html
         // PROCESSLIST exposes a user's own connections without PROCESS privilege;
         // match the connection ID and table, not prepared-statement parameter text.

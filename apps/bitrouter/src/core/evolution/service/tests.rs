@@ -9,11 +9,11 @@ use crate::storage::session_identity::SessionIdentity;
 use anyhow::Context;
 use std::collections::BTreeMap;
 mod revisions;
-use crate::harness::acp::capture::CapturePort;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::json;
 
-use crate::acp_trajectory::{CanonicalStore, RecordingScope};
+use crate::acp_trajectory::CanonicalStore;
+use crate::acp_trajectory::fixtures::FixtureScope;
 use crate::core::evolution::bandit::{EffectiveObservations, Observation, plan};
 use crate::gateway::routing::blocks::allocation::{BanditConfig, Recommendation, draw_assignment};
 
@@ -41,7 +41,7 @@ async fn new_session_with_updates(
         native_session_id: name.into(),
     };
     let recorder = canonical
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: identity.owner.clone(),
             source: identity.source.clone(),
             controller_instance_id: Some("controller".into()),
@@ -53,27 +53,33 @@ async fn new_session_with_updates(
         (CaptureKind::Response, json!({"result":{"sessionId":name}})),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(1),
-                method: "session/new".into(),
-                payload,
-            })
+            .append(
+                name,
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(1),
+                    method: "session/new".into(),
+                    payload,
+                },
+            )
             .await?;
     }
     for update in updates {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Agent,
-                kind: CaptureKind::Notification,
-                call_id: None,
-                method: "session/update".into(),
-                payload: json!({"sessionId":name,"update":update}),
-            })
+            .append(
+                name,
+                CaptureEvent {
+                    direction: CaptureDirection::Agent,
+                    kind: CaptureKind::Notification,
+                    call_id: None,
+                    method: "session/update".into(),
+                    payload: json!({"sessionId":name,"update":update}),
+                },
+            )
             .await?;
     }
-    recorder.record(CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request,
+    recorder.append(name, CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request,
         call_id: Some(2), method: "session/prompt".into(),
         payload: json!({"sessionId":name,"prompt":[{"type":"text","text":"Make a small change."}]}) }).await?;
     Ok(identity)

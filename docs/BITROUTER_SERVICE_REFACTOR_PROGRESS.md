@@ -60,10 +60,10 @@ the contract move must preserve its bytes.
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
-| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; independent profile wiring and terminal-free transcript formatting remain |
+| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; terminal-free transcript formatting and TUI feature isolation verified; base helpers, local supervisor, live capture and shared MCP transport ownership separated; remaining harness/MCP dependency closure is in progress |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; remaining harness/TUI module and dependency isolation precede the complete matrix |
+| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; remaining harness/MCP module and dependency isolation precede the complete matrix |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -2253,3 +2253,91 @@ This stage advances A02/A05/A06/A09/A11. A01–A16 remain open for final candida
 acceptance. The remaining ACP/MCP execution dependency split, complete SDK
 surfaces, packaged gateway/profile identity, compatibility/performance evidence
 and final independent P0 review still precede the requested PR.
+
+## P0 2/P0 5 Historical capture and shared MCP ownership (2026-10-16)
+
+`harness::trajectory::Recorder` now owns live ACP capture, call tracking, replay
+classification and durable acknowledgement. `acp_trajectory::CanonicalStore`
+retains historical projections, checkpoint operations and content deletion.
+Offline tests use explicitly bound persisted fixtures, not a second recorder:
+they do not emulate live call tracking, replay detection or write fences.
+Real capture tests still use the production recorder. Ten checkpoint scenarios
+and three MySQL races have one definition each, exercised through both offline
+and live adapters; the five controller/capture tests retain their live scope.
+
+Gateway history classification now uses `storage::acp_history` with private
+serde shapes instead of the ACP runtime schema. Differential tests preserve
+the baseline decoder's treatment of valid, malformed and unknown payloads,
+including outer and nested sequence representations. An independent review
+found a missing nested-sequence case; metadata fields and ordering now preserve
+that baseline behavior. The standalone contract probe passed all four tests.
+
+The bounded MCP discovery client and unchanged process cleanup implementation
+now belong to `gateway::mcp`. Gateway diagnostics call that client directly;
+harness resources retain workspace effects, approval, provenance and material
+adaptation. Existing client identity, headers, prefixes, instructions, catalog
+budgets and generation invalidation are preserved. MCP-only process fixtures
+verify child/descendant exit after success, cancellation and handshake timeout.
+The catalog-budget test checks the exact old declaration serialization overhead.
+
+Parallel MySQL validation exposed a lock-range defect in the prior transactional
+capture fix: two independent initial session responses both acquired event-index
+gap locks before inserting their events. The server's deadlock report identified
+`idx_acp_session_sequence`; the new four-wave/eight-recorder regression failed
+against the unfixed implementation in **0.135s**. The recorder now uses a current
+locking connection read, acquires session authority, then establishes its first
+consistent snapshot with a nonlocking prior-history query. It no longer locks
+unrelated event ranges. The session tombstone and prior-history checks remain
+authoritative, without retries or a global serialization lock. An independent
+review checked the SeaORM/SQLx transaction path, every production event writer,
+deletion fencing and lock order, and found no remaining issues. The maintenance
+invariant is no ordinary transactional read before acquiring session authority.
+
+Validation on the stage sources:
+
+- Minimum history/daemon/checkpoint/gateway selection: **44/44** passed in
+  2.503s; after the shared checkpoint test organization changed, its minimum
+  checkpoint selection passed **10/10** in 0.485s. Core-only history, learning
+  fixtures, gateway policy and process selection passed **121/121** in 6.633s.
+- MCP-only discovery, process cleanup, tools and ingress selection passed
+  **50/50** in 50.035s. All-feature history/capture, ACP, daemon, native resource
+  and MCP selection passed **185/185** in 59.326s. These runs preceded the
+  MySQL lock correction; the affected recorder has the following later evidence.
+- Corrected MySQL capture/checkpoint suite: **11/11** passed in 0.847s with two
+  test workers. Includes both offline/live checkpoint races, the three original
+  snapshot/creation/tombstone races, real server capture and 32 parallel session
+  creations. PostgreSQL and SQLite capture passed **2/2** in 0.181s. These used
+  real dedicated local database containers, not compiled-driver inference.
+- Harness-only live capture/checkpoint, MCP budget and SQLite capture selection
+  passed **17/17** in 0.788s; 2,698 unrelated tests skipped. This exercises live
+  recording without core and without OTLP after the lock correction.
+- Strict Rust 1.97 full-workspace/all-targets Clippy passed in 57.48s, minimum
+  in 40.42s, core-only in 1m04s and harness-only in 54.03s. After the recorder
+  correction and new regression, full-workspace and harness-only strict Clippy
+  passed again in **1m14s** and **49.96s**, respectively.
+- Strict full-workspace Rustdoc passed in 41.24s and minimum Rustdoc in 30.29s
+  before the recorder lock correction, which changes no public API. Formatting,
+  patch whitespace and CI YAML parsing pass. Logs use
+  `/tmp/bitrouter-p0-history-mcp-*`; the standalone decoder probe is
+  `/tmp/bitrouter-p0-history-probe-reviewed.log`.
+
+The initial strict check exposed unused test imports and duplicate module
+loading. Tests now use single-definition scenarios with explicit backend
+wrappers; no lint suppression or duplicated scenario source remains. The first
+parallel MySQL run failed; the deadlock was reproduced and repaired rather than
+hidden by serializing the test suite. Final source reviews found no remaining
+ownership or recorder-locking findings. Review does not stand in for platform
+execution: this stage ran locally on macOS, not Windows or hosted CI.
+
+CI retains database capture behind harness, exercises stored history in minimum
+and core-only profiles, live capture/checkpoints in headless harness profiles,
+and shared discovery/cleanup in MCP-only builds. Existing database jobs include
+the new ignored MySQL test through their backend-specific selection.
+
+The shared MCP client/process modules remain temporarily unconditional because
+the broader harness execution modules still compile in every profile. The next
+step separates CLI option data from ACP execution and gates those consumers
+before making ACP/MCP dependencies optional. This stage advances ownership and
+behavior evidence; it does not complete A05 or any final A01–A16 gate. SDK harness
+coverage, artifact identity/updates, historical profile transitions, packaged
+gateway/consumer validation, performance comparison and final P0 review remain.

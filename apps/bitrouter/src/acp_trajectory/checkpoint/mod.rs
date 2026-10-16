@@ -5,8 +5,6 @@
 
 mod assessment;
 pub mod entities;
-#[cfg(all(test, feature = "db-mysql"))]
-mod mysql_tests;
 mod resource;
 #[cfg(test)]
 mod tests;

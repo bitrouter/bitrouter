@@ -242,6 +242,10 @@ name = "harness_mcp_check"
 required-features = ["mcp"]
 
 [[test]]
+name = "database_capture"
+required-features = ["harness"]
+
+[[test]]
 name = "code_tui_pty"
 required-features = ["tui"]
 

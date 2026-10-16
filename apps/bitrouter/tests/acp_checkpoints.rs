@@ -1,11 +1,14 @@
 //! Persistent checkpoint/assessment behavior through separate CLI processes.
 
+#[path = "../src/acp_trajectory/fixtures.rs"]
+mod capture_fixtures;
+use bitrouter::storage;
+use capture_fixtures::{FixtureScope, PersistedHistory};
+
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter::acp_trajectory::{CanonicalStore, RecordingScope};
-use bitrouter::harness::acp::capture::CapturePort;
 use bitrouter::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::{Value, json};
 
@@ -50,15 +53,16 @@ async fn cli_preserves_checkpoints_and_revisions_across_processes() -> Result<()
     let url = bitrouter::db::anchor_url("sqlite://history.db?mode=rwc", temp.path());
     let db = bitrouter::db::connect(&url).await?;
     bitrouter::db::run_migrations(&db).await?;
-    let store = CanonicalStore::new(db);
-    let recorder = store
-        .recorder(RecordingScope {
+    let recorder = PersistedHistory::new(
+        db,
+        FixtureScope {
             owner: "local".into(),
             source: "fixture".into(),
             controller_instance_id: None,
             route_scope_id: None,
-        })
-        .await?;
+        },
+    )
+    .await?;
     for (kind, payload) in [
         (CaptureKind::Request, json!({"cwd":"/fixture"})),
         (
@@ -67,13 +71,16 @@ async fn cli_preserves_checkpoints_and_revisions_across_processes() -> Result<()
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(1),
-                method: "session/new".into(),
-                payload,
-            })
+            .append(
+                "native",
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(1),
+                    method: "session/new".into(),
+                    payload,
+                },
+            )
             .await?;
     }
     let created = run(&config, &cwd, &["create", "--watermark", "1"]).await?;
@@ -143,7 +150,7 @@ async fn cli_preserves_checkpoints_and_revisions_across_processes() -> Result<()
             .len(),
         1
     );
-    recorder.record(CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification, call_id: None,
+    recorder.append("native", CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification, call_id: None,
         method: "session/update".into(), payload: json!({"sessionId":"native","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"additional content"}}}) }).await?;
     assert_eq!(
         run(&config, &cwd, &["effective"]).await?["data"]["stale"],

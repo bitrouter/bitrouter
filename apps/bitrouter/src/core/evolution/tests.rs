@@ -1,11 +1,11 @@
-use crate::harness::acp::capture::CapturePort;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use anyhow::Result;
 use serde_json::json;
 
 use super::{evidence::EvidencePacket, rubric::*, scoring};
+use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use crate::acp_trajectory::{CanonicalStore, RecordingScope};
+use crate::acp_trajectory::fixtures::FixtureScope;
 use crate::storage::session_identity::SessionIdentity;
 
 pub(super) async fn fixture() -> Result<(CanonicalStore, SessionIdentity, String)> {
@@ -18,7 +18,7 @@ pub(super) async fn fixture() -> Result<(CanonicalStore, SessionIdentity, String
         native_session_id: "session".into(),
     };
     let recorder = store
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: identity.owner.clone(),
             source: identity.source.clone(),
             controller_instance_id: None,
@@ -56,13 +56,16 @@ pub(super) async fn fixture() -> Result<(CanonicalStore, SessionIdentity, String
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction,
-                kind,
-                call_id,
-                method: method.into(),
-                payload,
-            })
+            .append(
+                "session",
+                CaptureEvent {
+                    direction,
+                    kind,
+                    call_id,
+                    method: method.into(),
+                    payload,
+                },
+            )
             .await?;
     }
     let transcript = store.transcript(&identity).await?;
@@ -205,7 +208,7 @@ async fn fabricated_or_cross_checkpoint_citations_are_rejected() -> Result<()> {
 async fn projection_hides_boundary_usage_without_rewriting_tool_data() -> Result<()> {
     let (store, identity, _) = fixture().await?;
     let recorder = store
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: identity.owner.clone(),
             source: identity.source.clone(),
             controller_instance_id: None,
@@ -246,17 +249,20 @@ async fn projection_hides_boundary_usage_without_rewriting_tool_data() -> Result
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: if kind == CaptureKind::Request {
-                    CaptureDirection::Client
-                } else {
-                    CaptureDirection::Agent
+            .append(
+                "session",
+                CaptureEvent {
+                    direction: if kind == CaptureKind::Request {
+                        CaptureDirection::Client
+                    } else {
+                        CaptureDirection::Agent
+                    },
+                    kind,
+                    call_id,
+                    method: method.into(),
+                    payload,
                 },
-                kind,
-                call_id,
-                method: method.into(),
-                payload,
-            })
+            )
             .await?;
     }
     let transcript = store.transcript(&identity).await?;

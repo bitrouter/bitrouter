@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::allocation::Arm;
 use super::control::{BlockState, BlockStatus, ControlState, EvolutionMode};
+use crate::storage::acp_history::is_administrative_update;
 use crate::storage::capture::{events, sessions};
 use crate::storage::evolution::digest;
 use crate::storage::evolution::{EvolutionStore, records};
@@ -23,23 +24,6 @@ pub(crate) const CONTROL_KIND: &str = "control";
 pub(crate) const CONTROL_KEY: &str = "owner";
 pub(crate) const SESSION_KIND: &str = "enrollment";
 pub(crate) const REQUEST_KIND: &str = "route_intent";
-
-/// ACP setup notifications can precede the first model request. They do not
-/// by themselves establish that a turn has already executed. Unknown or
-/// malformed updates and all content/tool/usage updates remain conservative.
-/// https://agentclientprotocol.com/protocol/v1/schema#sessionupdate
-fn is_administrative_update(payload: &serde_json::Value) -> bool {
-    use agent_client_protocol::schema::v1::{SessionNotification, SessionUpdate};
-    serde_json::from_value::<SessionNotification>(payload.clone()).is_ok_and(|notification| {
-        matches!(
-            notification.update,
-            SessionUpdate::AvailableCommandsUpdate(_)
-                | SessionUpdate::ConfigOptionUpdate(_)
-                | SessionUpdate::CurrentModeUpdate(_)
-                | SessionUpdate::SessionInfoUpdate(_)
-        )
-    })
-}
 
 /// Live route contracts for active and retired experiments use separate keys.
 #[derive(Debug, Clone, Default)]

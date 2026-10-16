@@ -388,7 +388,7 @@ jobs:
           --test onboarding --test source_boundaries
 
       - uses: taiki-e/install-action@nextest
-        if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'core,harness'
+        if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness'
 
       - name: verify base contracts without harness
         if: matrix.features == ''
@@ -397,14 +397,23 @@ jobs:
           --lib --build-jobs 2 --test-threads 2
           -E 'test(providers::cli_install::) | test(skills::) | test(skills_init_tests) | test(client::sessions::) | test(daemon::tests::opaque_session)'
 
-      - name: verify headless ACP and shared transcript behavior
+      - name: verify stored history without live capture
+        if: matrix.features == '' || matrix.features == 'core'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib --test acp_checkpoints --test daemon --build-jobs 2 --test-threads 2
+          -E 'test(acp_trajectory::) | test(storage::acp_history::) | test(gateway::routing::blocks::) | test(core::evolution::) | binary(acp_checkpoints) | binary(daemon)'
+
+      - name: verify headless ACP, capture and shared transcript behavior
         if: matrix.features == 'harness' || matrix.features == 'core,harness'
         env:
           PROFILE_FEATURES: ${{ matrix.features }}
         run: >-
           cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
-          --lib --test acp --build-jobs 2 --test-threads 2
-          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(commands::tests::) | test(onboarding::tests::) | binary(acp)'
+          --lib --test acp --test database_capture --build-jobs 2 --test-threads 2
+          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | binary(acp) | binary(database_capture)'
 
       - name: verify database feature availability
         if: matrix.features == 'db-postgres' || matrix.features == 'db-mysql'
@@ -419,6 +428,12 @@ jobs:
         run: |
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib server_tool
+
+      - name: verify MCP discovery and process cleanup without harness
+        if: matrix.features == 'mcp'
+        run: >-
+          cargo test -p bitrouter --no-default-features --features mcp
+          --test harness_mcp_check --jobs 2 -- --test-threads=2
 
   database-backends:
     name: database (${{ matrix.backend }})

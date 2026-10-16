@@ -10,8 +10,7 @@ use crate::gateway::pipeline::hooks::PreRequestHook;
 use bitrouter_ai::types::ToolChoice;
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
-use crate::acp_trajectory::RecordingScope;
-use crate::harness::acp::capture::CapturePort;
+use crate::acp_trajectory::fixtures::FixtureScope;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use crate::storage::session_identity::SessionIdentity;
 
@@ -102,7 +101,7 @@ async fn setup() -> Result<(JudgeJobs, SessionIdentity, String)> {
     };
     let recorder = jobs
         .canonical
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: identity.owner.clone(),
             source: identity.source.clone(),
             controller_instance_id: None,
@@ -130,13 +129,16 @@ async fn setup() -> Result<(JudgeJobs, SessionIdentity, String)> {
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(id),
-                method: method.into(),
-                payload,
-            })
+            .append(
+                "job-session",
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(id),
+                    method: method.into(),
+                    payload,
+                },
+            )
             .await?;
     }
     let transcript = jobs.canonical.transcript(&identity).await?;

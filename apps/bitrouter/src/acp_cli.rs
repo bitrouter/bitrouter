@@ -2871,43 +2871,52 @@ async fn open_capture(
     if !config.acp_recording.enabled {
         return Ok(None);
     }
-    let db = crate::db::connect(&config.database.url)
-        .await
-        .context("opening the opt-in ACP content store")?;
-    crate::db::run_migrations(&db).await?;
-    let store = crate::acp_trajectory::CanonicalStore::new(db);
-    let recorder = store
-        .recorder(crate::acp_trajectory::RecordingScope {
-            owner: "local".into(),
-            source: agent_id.to_owned(),
-            controller_instance_id: binding.map(|value| value.controller_instance_id.clone()),
-            route_scope_id: binding.map(|value| value.api_principal.clone()),
-        })
-        .await?;
-    if let Some(binding) = binding {
-        let command = crate::daemon::DaemonCommand::AcpRecordingRegister {
-            connection_id: recorder.connection_id().to_owned(),
-            api_principal: binding.api_principal.clone(),
-            controller_instance_id: binding.controller_instance_id.clone(),
-        };
-        let acknowledged = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            crate::daemon::send_command(&binding.socket_path, &command),
-        )
-        .await;
-        match acknowledged {
-            Ok(Ok(crate::daemon::DaemonResponse::AcpRecordingRegistered { registration }))
-                if registration.connection_id == recorder.connection_id()
-                    && registration.version
-                        == crate::gateway::observability::inventory::INVENTORY_VERSION
-                    && registration.invalid_reason.is_none() => {}
-            response => tracing::warn!(
-                ?response,
-                "ACP capture has no acknowledged gateway cost coverage"
-            ),
-        }
+    #[cfg(not(feature = "harness"))]
+    {
+        let _ = (agent_id, binding);
+        anyhow::bail!("ACP recording requires the harness feature");
     }
-    Ok(Some(recorder))
+    #[cfg(feature = "harness")]
+    {
+        let db = crate::db::connect(&config.database.url)
+            .await
+            .context("opening the opt-in ACP content store")?;
+        crate::db::run_migrations(&db).await?;
+        let recorder = crate::harness::trajectory::Recorder::new(
+            db,
+            crate::harness::trajectory::RecordingScope {
+                owner: "local".into(),
+                source: agent_id.to_owned(),
+                controller_instance_id: binding.map(|value| value.controller_instance_id.clone()),
+                route_scope_id: binding.map(|value| value.api_principal.clone()),
+            },
+        )
+        .await?;
+        if let Some(binding) = binding {
+            let command = crate::daemon::DaemonCommand::AcpRecordingRegister {
+                connection_id: recorder.connection_id().to_owned(),
+                api_principal: binding.api_principal.clone(),
+                controller_instance_id: binding.controller_instance_id.clone(),
+            };
+            let acknowledged = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                crate::daemon::send_command(&binding.socket_path, &command),
+            )
+            .await;
+            match acknowledged {
+                Ok(Ok(crate::daemon::DaemonResponse::AcpRecordingRegistered { registration }))
+                    if registration.connection_id == recorder.connection_id()
+                        && registration.version
+                            == crate::gateway::observability::inventory::INVENTORY_VERSION
+                        && registration.invalid_reason.is_none() => {}
+                response => tracing::warn!(
+                    ?response,
+                    "ACP capture has no acknowledged gateway cost coverage"
+                ),
+            }
+        }
+        Ok(Some(recorder))
+    }
 }
 
 /// Launch `agent_id` behind an in-process controller and connect the shared

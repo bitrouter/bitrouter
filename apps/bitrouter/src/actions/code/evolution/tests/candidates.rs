@@ -486,17 +486,20 @@ async fn candidate_creation_registers_reviewed_joint_rules_and_retries_without_m
     ] {
         fixture
             .recorder
-            .record(CaptureEvent {
-                direction: if kind == CaptureKind::Request {
-                    CaptureDirection::Client
-                } else {
-                    CaptureDirection::Agent
+            .append(
+                &identity.native_session_id,
+                CaptureEvent {
+                    direction: if kind == CaptureKind::Request {
+                        CaptureDirection::Client
+                    } else {
+                        CaptureDirection::Agent
+                    },
+                    kind,
+                    call_id: Some(21),
+                    method: "session/new".into(),
+                    payload,
                 },
-                kind,
-                call_id: Some(21),
-                method: "session/new".into(),
-                payload,
-            })
+            )
             .await?;
     }
     let service = fixture.evolution.service("local")?;

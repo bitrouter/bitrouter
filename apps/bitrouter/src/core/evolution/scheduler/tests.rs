@@ -8,13 +8,12 @@ use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::MockExecutor;
 use crate::gateway::pipeline::hooks::HookDecision;
 use crate::gateway::pipeline::hooks::PreRequestHook;
-use crate::harness::acp::capture::CapturePort;
 use crate::storage::capture::CaptureDirection;
 use bitrouter_ai::types::ToolChoice;
 use serde_json::json;
 
 use crate::acp_trajectory::checkpoint::types::AssessmentSource;
-use crate::acp_trajectory::{Recorder, RecordingScope};
+use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::core::evolution::{evidence::EvidencePacket, scoring};
 
 struct CountRequests(Arc<AtomicUsize>);
@@ -40,7 +39,7 @@ impl PreRequestHook for CountRequests {
 struct Fixture {
     runtime: EvolutionRuntime,
     canonical: CanonicalStore,
-    recorder: Arc<Recorder>,
+    recorder: Arc<PersistedHistory>,
     identity: SessionIdentity,
     pipeline: Arc<Pipeline>,
     calls: Arc<AtomicUsize>,
@@ -92,7 +91,7 @@ providers:
         .await?;
     let canonical = CanonicalStore::new(runtime.db.clone());
     let recorder = canonical
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: "local".into(),
             source: "fixture".into(),
             controller_instance_id: Some("controller".into()),
@@ -130,13 +129,16 @@ providers:
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(call_id),
-                method: method.into(),
-                payload,
-            })
+            .append(
+                "session",
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(call_id),
+                    method: method.into(),
+                    payload,
+                },
+            )
             .await?;
     }
     // Deliberately unknown fixture labels test scheduling, not judge accuracy.
@@ -175,19 +177,22 @@ providers:
 async fn stop(fixture: &Fixture, call_id: u64) -> Result<()> {
     fixture
         .recorder
-        .record(CaptureEvent {
-            direction: CaptureDirection::Client,
-            kind: CaptureKind::Response,
-            call_id: Some(call_id),
-            method: "session/prompt".into(),
-            payload: json!({"result":{"stopReason":"end_turn"}}),
-        })
+        .append(
+            "session",
+            CaptureEvent {
+                direction: CaptureDirection::Client,
+                kind: CaptureKind::Response,
+                call_id: Some(call_id),
+                method: "session/prompt".into(),
+                payload: json!({"result":{"stopReason":"end_turn"}}),
+            },
+        )
         .await?;
     Ok(())
 }
 
 async fn continuation(fixture: &Fixture, call_id: u64) -> Result<()> {
-    fixture.recorder.record(CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request,
+    fixture.recorder.append("session", CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request,
         call_id: Some(call_id), method: "session/prompt".into(), payload: json!({"sessionId":"session","prompt":[{"type":"text","text":"Continue the recorded fixture."}]}) }).await?;
     Ok(())
 }

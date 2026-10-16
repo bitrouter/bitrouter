@@ -12,7 +12,6 @@ mod judge_costs;
 mod resource_coverage;
 mod revisions;
 use crate::gateway::caller::CallerContext;
-use crate::harness::acp::capture::CapturePort;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::{Value, json};
 use wiremock::{
@@ -20,7 +19,8 @@ use wiremock::{
     matchers::{body_partial_json, method, path},
 };
 
-use crate::acp_trajectory::{CanonicalStore, RecordingScope};
+use crate::acp_trajectory::CanonicalStore;
+use crate::acp_trajectory::fixtures::FixtureScope;
 use crate::gateway::routing::blocks::allocation::Arm;
 
 use crate::gateway::routing::blocks::control::{BlockStatus, EvolutionMode};

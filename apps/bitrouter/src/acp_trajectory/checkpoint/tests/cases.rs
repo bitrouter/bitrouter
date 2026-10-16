@@ -1,11 +1,11 @@
-use crate::harness::acp::capture::CapturePort;
+use super::{Backend, History, fork, history, new_session};
 use serde_json::json;
 
-use super::*;
-use crate::acp_trajectory::tests::{event, identity, new_session, scope, seed_request, store};
+use crate::acp_trajectory::checkpoint::*;
+use crate::acp_trajectory::tests::{event, identity, scope, seed_request, store};
 
-async fn update(recorder: &dyn CapturePort, session: &str, text: &str) -> Result<()> {
-    recorder.record(event(CaptureKind::Notification, None, "session/update", json!({"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}))).await?;
+async fn update(recorder: &History, session: &str, text: &str) -> Result<()> {
+    recorder.append(session, event(CaptureKind::Notification, None, "session/update", json!({"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}))).await?;
     Ok(())
 }
 
@@ -55,12 +55,13 @@ fn input(
     }
 }
 
-#[tokio::test]
-async fn immutable_prefixes_keep_old_tool_versions_and_detect_content_corruption() -> Result<()> {
+pub(super) async fn immutable_prefixes_keep_old_tool_versions_and_detect_content_corruption(
+    backend: Backend,
+) -> Result<()> {
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
-    recorder.record(event(CaptureKind::Notification, None, "session/update", json!({"sessionId":"s","update":{"sessionUpdate":"tool_call","toolCallId":"test","status":"in_progress"}}))).await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "s").await?;
+    recorder.append("s", event(CaptureKind::Notification, None, "session/update", json!({"sessionId":"s","update":{"sessionUpdate":"tool_call","toolCallId":"test","status":"in_progress"}}))).await?;
     let cp = freeze(&store, "s").await?;
     assert!(
         cp.gaps.is_empty(),
@@ -73,7 +74,7 @@ async fn immutable_prefixes_keep_old_tool_versions_and_detect_content_corruption
             .checkpoint_content(&identity("s"), &cp.checkpoint_id)
             .await?,
     )?;
-    recorder.record(event(CaptureKind::Notification, None, "session/update", json!({"sessionId":"s","update":{"sessionUpdate":"tool_call_update","toolCallId":"test","status":"completed"}}))).await?;
+    recorder.append("s", event(CaptureKind::Notification, None, "session/update", json!({"sessionId":"s","update":{"sessionUpdate":"tool_call_update","toolCallId":"test","status":"completed"}}))).await?;
     assert!(
         store
             .freeze_checkpoint(&identity("s"), cp.watermark)
@@ -115,11 +116,12 @@ async fn immutable_prefixes_keep_old_tool_versions_and_detect_content_corruption
     Ok(())
 }
 
-#[tokio::test]
-async fn revision_cas_retries_corrections_and_retractions_preserve_one_label() -> Result<()> {
+pub(super) async fn revision_cas_retries_corrections_and_retractions_preserve_one_label(
+    backend: Backend,
+) -> Result<()> {
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "s").await?;
     let cp = freeze(&store, "s").await?;
     let auto_input = input(&cp, "auto", None, AssessmentSource::Agentic);
     let auto = store
@@ -186,7 +188,7 @@ async fn revision_cas_retries_corrections_and_retractions_preserve_one_label() -
             .current_assessments,
         1
     );
-    update(recorder.as_ref(), "s", "late negative feedback").await?;
+    update(&recorder, "s", "late negative feedback").await?;
     assert!(store.effective_assessment(&identity("s")).await?.stale);
     assert_eq!(
         store
@@ -245,11 +247,12 @@ async fn revision_cas_retries_corrections_and_retractions_preserve_one_label() -
     Ok(())
 }
 
-#[tokio::test]
-async fn invalid_labels_and_out_of_prefix_citations_are_rejected() -> Result<()> {
+pub(super) async fn invalid_labels_and_out_of_prefix_citations_are_rejected(
+    backend: Backend,
+) -> Result<()> {
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "s").await?;
     let cp = freeze(&store, "s").await?;
     for field in ["assessment", "expected_revision"] {
         let mut incomplete =
@@ -286,13 +289,14 @@ async fn invalid_labels_and_out_of_prefix_citations_are_rejected() -> Result<()>
     Ok(())
 }
 
-#[tokio::test]
-async fn late_metering_changes_resources_without_changing_content_or_labels() -> Result<()> {
+pub(super) async fn late_metering_changes_resources_without_changing_content_or_labels(
+    backend: Backend,
+) -> Result<()> {
     use crate::metering::entities::requests;
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
+    let recorder = history(backend, &store, scope()).await?;
     seed_request(&store, "r", "principal", "s", 0, "unknown").await?;
-    new_session(recorder.as_ref(), "s").await?;
+    new_session(&recorder, "s").await?;
     let cp = freeze(&store, "s").await?;
     let original = store
         .checkpoint_resource_history(&identity("s"), &cp.checkpoint_id)
@@ -359,7 +363,7 @@ async fn late_metering_changes_resources_without_changing_content_or_labels() ->
         17
     );
     assert_eq!(freeze(&store, "s").await?.prefix_digest, cp.prefix_digest);
-    update(recorder.as_ref(), "s", "continued").await?;
+    update(&recorder, "s", "continued").await?;
     let next = freeze(&store, "s").await?;
     assert_eq!(
         store
@@ -373,33 +377,19 @@ async fn late_metering_changes_resources_without_changing_content_or_labels() ->
     Ok(())
 }
 
-#[tokio::test]
-async fn inherited_prefixes_family_unions_and_deletion_preserve_native_scope() -> Result<()> {
+pub(super) async fn inherited_prefixes_family_unions_and_deletion_preserve_native_scope(
+    backend: Backend,
+) -> Result<()> {
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "parent").await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "parent").await?;
     seed_request(&store, "root", "principal", "parent", 5, "computed").await?;
-    update(recorder.as_ref(), "parent", "inherited").await?;
+    update(&recorder, "parent", "inherited").await?;
     let parent_boundary = freeze(&store, "parent").await?;
-    recorder
-        .record(event(
-            CaptureKind::Request,
-            Some(2),
-            "session/fork",
-            json!({"sessionId":"parent"}),
-        ))
-        .await?;
-    recorder
-        .record(event(
-            CaptureKind::Response,
-            Some(2),
-            "session/fork",
-            json!({"result":{"sessionId":"child"}}),
-        ))
-        .await?;
+    fork(&store, &recorder, "parent", "child", 2).await?;
     seed_request(&store, "child-request", "principal", "child", 7, "computed").await?;
-    update(recorder.as_ref(), "child", "child work").await?;
-    update(recorder.as_ref(), "parent", "not inherited").await?;
+    update(&recorder, "child", "child work").await?;
+    update(&recorder, "parent", "not inherited").await?;
     let child = freeze(&store, "child").await?;
     let parent = freeze(&store, "parent").await?;
     assert_eq!(child.family_id, identity("parent").key()?);
@@ -454,8 +444,9 @@ async fn inherited_prefixes_family_unions_and_deletion_preserve_native_scope() -
     Ok(())
 }
 
-#[tokio::test]
-async fn concurrent_creation_and_revision_selection_are_durable() -> Result<()> {
+pub(super) async fn concurrent_creation_and_revision_selection_are_durable(
+    backend: Backend,
+) -> Result<()> {
     let dir = tempfile::tempdir()?;
     let url = format!(
         "sqlite://{}?mode=rwc",
@@ -464,8 +455,8 @@ async fn concurrent_creation_and_revision_selection_are_durable() -> Result<()> 
     let db = crate::db::connect(&url).await?;
     crate::db::run_migrations(&db).await?;
     let store = CanonicalStore::new(db);
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "s").await?;
     let identity = identity("s");
     let (first, second) = tokio::join!(
         store.freeze_checkpoint(&identity, 1),
@@ -490,7 +481,7 @@ async fn concurrent_creation_and_revision_selection_are_durable() -> Result<()> 
         .current_revision;
     let (frozen, appended) = tokio::join!(
         store.freeze_checkpoint(&identity, 1),
-        update(recorder.as_ref(), "s", "concurrent append")
+        update(&recorder, "s", "concurrent append")
     );
     appended?;
     if let Ok(frozen) = frozen {
@@ -522,26 +513,12 @@ async fn concurrent_creation_and_revision_selection_are_durable() -> Result<()> 
     Ok(())
 }
 
-#[tokio::test]
-async fn missing_parent_and_capture_gaps_remain_explicit() -> Result<()> {
+pub(super) async fn missing_parent_and_capture_gaps_remain_explicit(
+    backend: Backend,
+) -> Result<()> {
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    recorder
-        .record(event(
-            CaptureKind::Request,
-            Some(2),
-            "session/fork",
-            json!({"sessionId":"unrecorded"}),
-        ))
-        .await?;
-    recorder
-        .record(event(
-            CaptureKind::Response,
-            Some(2),
-            "session/fork",
-            json!({"result":{"sessionId":"child"}}),
-        ))
-        .await?;
+    let recorder = history(backend, &store, scope()).await?;
+    fork(&store, &recorder, "unrecorded", "child", 2).await?;
     let cp = freeze(&store, "child").await?;
     assert!(
         cp.gaps
@@ -562,15 +539,16 @@ async fn missing_parent_and_capture_gaps_remain_explicit() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn long_session_manifests_and_large_assessments_round_trip() -> Result<()> {
+pub(super) async fn long_session_manifests_and_large_assessments_round_trip(
+    backend: Backend,
+) -> Result<()> {
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "s").await?;
     for i in 0..400 {
-        update(recorder.as_ref(), "s", &format!("event-{i}")).await?;
+        update(&recorder, "s", &format!("event-{i}")).await?;
     }
-    update(recorder.as_ref(), "s", &"large tool output ".repeat(8000)).await?;
+    update(&recorder, "s", &"large tool output ".repeat(8000)).await?;
     let cp = freeze(&store, "s").await?;
     assert!(serde_json::to_vec(&cp)?.len() > 65_535);
     let mut submission = input(&cp, "large", None, AssessmentSource::Human);
@@ -602,12 +580,12 @@ async fn long_session_manifests_and_large_assessments_round_trip() -> Result<()>
     Ok(())
 }
 
-#[tokio::test]
-async fn interruption_after_scoring_invalidates_freshness_without_rewriting_the_prefix()
--> Result<()> {
+pub(super) async fn interruption_after_scoring_invalidates_freshness_without_rewriting_the_prefix(
+    backend: Backend,
+) -> Result<()> {
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "s").await?;
     let cp = freeze(&store, "s").await?;
     let label = store
         .submit_assessment(
@@ -622,12 +600,15 @@ async fn interruption_after_scoring_invalidates_freshness_without_rewriting_the_
             .await?,
     )?;
     recorder
-        .record(event(
-            CaptureKind::Disconnected,
-            None,
-            "controller/disconnected",
-            json!({"clean":false}),
-        ))
+        .append(
+            "s",
+            event(
+                CaptureKind::Disconnected,
+                None,
+                "controller/disconnected",
+                json!({"clean":false}),
+            ),
+        )
         .await?;
     let view = store.effective_assessment(&identity("s")).await?;
     assert_eq!(view.current_watermark, cp.watermark);
@@ -661,34 +642,19 @@ async fn interruption_after_scoring_invalidates_freshness_without_rewriting_the_
     Ok(())
 }
 
-#[tokio::test]
-async fn historical_assessments_lock_both_fork_ancestries_and_keep_duplicate_receipts() -> Result<()>
-{
+pub(super) async fn historical_assessments_lock_both_fork_ancestries_and_keep_duplicate_receipts(
+    backend: Backend,
+) -> Result<()> {
     // Fork request/response fixtures follow the upstream ACP session schema.
     // https://github.com/agentclientprotocol/agent-client-protocol
     let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "parent-a").await?;
-    new_session(recorder.as_ref(), "parent-b").await?;
+    let recorder = history(backend, &store, scope()).await?;
+    new_session(&recorder, "parent-a").await?;
+    new_session(&recorder, "parent-b").await?;
     let child = identity("reused-child");
     let mut checkpoints = Vec::new();
     for (call, parent) in [(10, "parent-a"), (11, "parent-b")] {
-        recorder
-            .record(event(
-                CaptureKind::Request,
-                Some(call),
-                "session/fork",
-                json!({"sessionId": parent}),
-            ))
-            .await?;
-        recorder
-            .record(event(
-                CaptureKind::Response,
-                Some(call),
-                "session/fork",
-                json!({"result": {"sessionId": child.native_session_id}}),
-            ))
-            .await?;
+        fork(&store, &recorder, parent, &child.native_session_id, call).await?;
         checkpoints.push(freeze(&store, &child.native_session_id).await?);
     }
     let first = checkpoints

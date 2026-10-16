@@ -7,7 +7,7 @@
 //! - `discover <server>` — connect to one server and emit a config stub a
 //!   user can paste into `bitrouter.yaml`.
 //!
-//! The canonical check uses the workspace-scoped harness client and closes
+//! The canonical check uses the application-owned bounded MCP client and closes
 //! connections before returning. Hidden compatibility verbs retain the gateway
 //! executor. These one-shot CLI invocations require no daemon.
 //! See the spec for the dispatched methods:
@@ -20,9 +20,9 @@ use crate::gateway::caller::CallerContext;
 use crate::gateway::mcp::Executor;
 use crate::gateway::mcp::McpRequest;
 use crate::gateway::mcp::McpTarget;
+use crate::gateway::mcp::client::BoundedMcpClient;
 use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
 use crate::gateway::mcp::transport::McpTransport;
-use crate::harness::resources::mcp::McpConnections;
 
 /// One row in `bro tools list`.
 #[derive(Debug, Clone)]
@@ -66,7 +66,7 @@ pub struct McpCheck {
 }
 
 /// Check one configured MCP server, or every server in stable name order.
-/// Uses the harness client lifecycle and bounded, paginated tool discovery.
+/// Uses shared bounded, paginated discovery and confirmed connection cleanup.
 pub async fn check(config: &Config, only: Option<&str>) -> Result<Vec<McpCheck>, String> {
     if let Some(name) = only
         && !config.mcp_servers.contains_key(name)
@@ -90,23 +90,23 @@ pub async fn check(config: &Config, only: Option<&str>) -> Result<Vec<McpCheck>,
             .clone()
             .unwrap_or_else(|| format!("{name}__"));
         let started = Instant::now();
-        let outcome = match McpConnections::connect(&workspace, &[selected], protocol.clone()).await
-        {
-            Ok(mut client) => {
-                let tools = client.validate_catalog().map(|()| {
-                    client
-                        .tools()
-                        .iter()
-                        .map(|tool| ToolSummary {
-                            name: tool.name.strip_prefix(&prefix).unwrap_or(&tool.name).into(),
-                            description: tool.description.clone(),
-                        })
-                        .collect()
-                });
-                client.shutdown().await.and(tools)
-            }
-            Err(error) => Err(error.to_string()),
-        };
+        let outcome =
+            match BoundedMcpClient::connect(&workspace, &[selected], protocol.clone()).await {
+                Ok(mut client) => {
+                    let tools = client.validate_catalog().map(|()| {
+                        client
+                            .tools()
+                            .iter()
+                            .map(|tool| ToolSummary {
+                                name: tool.name.strip_prefix(&prefix).unwrap_or(&tool.name).into(),
+                                description: tool.description.clone(),
+                            })
+                            .collect()
+                    });
+                    client.shutdown().await.and(tools)
+                }
+                Err(error) => Err(error.to_string()),
+            };
         rows.push(McpCheck {
             server: name.clone(),
             transport: describe_transport(&server_cfg.transport),
@@ -361,17 +361,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discover_unknown_server_is_user_facing_error() {
+    async fn discover_unknown_server_is_user_facing_error() -> Result<(), String> {
         let config = Config::default();
-        let err = discover(&config, "missing").await.unwrap_err();
+        let err = discover(&config, "missing")
+            .await
+            .err()
+            .ok_or("discovery unexpectedly succeeded")?;
         assert!(err.contains("no mcp server configured for 'missing'"));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn discover_propagates_transport_failure() {
+    async fn discover_propagates_transport_failure() -> Result<(), String> {
         let config = cfg_with("a", stdio_target("a", "/bin/false"));
-        let err = discover(&config, "a").await.unwrap_err();
+        let err = discover(&config, "a")
+            .await
+            .err()
+            .ok_or("discovery unexpectedly succeeded")?;
         assert!(err.contains("mcp 'a'"), "unexpected: {err}");
+        Ok(())
     }
 
     #[test]
@@ -425,11 +433,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_tools_accepts_missing_description() {
+    fn parse_tools_accepts_missing_description() -> Result<(), String> {
         let ok = serde_json::json!({"tools": [{"name": "search"}]});
-        let parsed = parse_tools(&ok).unwrap();
+        let parsed = parse_tools(&ok)?;
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "search");
         assert_eq!(parsed[0].description, "");
+        Ok(())
     }
 }

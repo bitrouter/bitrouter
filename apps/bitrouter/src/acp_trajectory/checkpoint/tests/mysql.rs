@@ -7,21 +7,19 @@
 //! ACP fixture updates follow https://github.com/agentclientprotocol/agent-client-protocol.
 
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
+use super::MIGRATIONS;
 use sea_orm::{ConnectOptions, Database, DatabaseBackend, DatabaseConnection, Statement};
 use serde_json::json;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use super::*;
-use crate::acp_trajectory::tests::{event, new_session};
-use crate::acp_trajectory::{Recorder, RecordingScope};
-use crate::harness::acp::capture::CapturePort;
+use super::{Backend, History, history, new_session};
+use crate::acp_trajectory::checkpoint::*;
+use crate::acp_trajectory::fixtures::FixtureScope;
+use crate::acp_trajectory::tests::event;
 
-// Serialize migration setup within this module, including parallel test runs.
-static MIGRATIONS: Mutex<()> = Mutex::const_new(());
 const RACE_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn with_mysql<F, Fut>(scenario: F) -> Result<()>
@@ -133,22 +131,25 @@ where
     .context("competing checkpoint write exceeded its deadline")?
 }
 
-async fn fixture(store: &CanonicalStore) -> Result<(SessionIdentity, Arc<Recorder>)> {
+async fn fixture(store: &CanonicalStore, backend: Backend) -> Result<(SessionIdentity, History)> {
     let id = Uuid::new_v4().to_string();
     let identity = SessionIdentity {
         owner: format!("checkpoint-{id}-owner"),
         source: format!("checkpoint-{id}-source"),
         native_session_id: format!("checkpoint-{id}-native"),
     };
-    let recorder = store
-        .recorder(RecordingScope {
+    let recorder = history(
+        backend,
+        store,
+        FixtureScope {
             owner: identity.owner.clone(),
             source: identity.source.clone(),
             controller_instance_id: Some(format!("checkpoint-{id}-controller")),
             route_scope_id: None,
-        })
-        .await?;
-    new_session(recorder.as_ref(), &identity.native_session_id).await?;
+        },
+    )
+    .await?;
+    new_session(&recorder, &identity.native_session_id).await?;
     ensure!(session(&store.db, &identity.key()?).await?.head == 1);
     Ok((identity, recorder))
 }
@@ -159,20 +160,24 @@ enum SessionChange {
     Delete,
 }
 
-#[tokio::test]
-#[ignore = "requires db-mysql and BITROUTER_TEST_DATABASE_URL naming a dedicated MySQL database"]
-async fn mysql_freeze_rejects_session_changed_after_snapshot() -> Result<()> {
-    with_mysql(|store| freeze_after_snapshot(store, SessionChange::Append)).await
+pub(super) async fn mysql_freeze_rejects_session_changed_after_snapshot(
+    backend: Backend,
+) -> Result<()> {
+    with_mysql(|store| freeze_after_snapshot(store, SessionChange::Append, backend)).await
 }
 
-#[tokio::test]
-#[ignore = "requires db-mysql and BITROUTER_TEST_DATABASE_URL naming a dedicated MySQL database"]
-async fn mysql_freeze_rejects_session_deleted_after_snapshot() -> Result<()> {
-    with_mysql(|store| freeze_after_snapshot(store, SessionChange::Delete)).await
+pub(super) async fn mysql_freeze_rejects_session_deleted_after_snapshot(
+    backend: Backend,
+) -> Result<()> {
+    with_mysql(|store| freeze_after_snapshot(store, SessionChange::Delete, backend)).await
 }
 
-async fn freeze_after_snapshot(store: CanonicalStore, change: SessionChange) -> Result<()> {
-    let (identity, recorder) = fixture(&store).await?;
+async fn freeze_after_snapshot(
+    store: CanonicalStore,
+    change: SessionChange,
+    backend: Backend,
+) -> Result<()> {
+    let (identity, recorder) = fixture(&store, backend).await?;
     let key = identity.key()?;
     let initial = session(&store.db, &key).await?;
     let old_session = initial.clone();
@@ -193,15 +198,18 @@ async fn freeze_after_snapshot(store: CanonicalStore, change: SessionChange) -> 
         match change {
             SessionChange::Append => {
                 recorder
-                    .record(event(
-                        CaptureKind::Notification,
-                        None,
-                        "session/update",
-                        json!({"sessionId":identity.native_session_id,"update":{
-                            "sessionUpdate":"agent_message_chunk",
-                            "content":{"type":"text","text":"committed after snapshot"}
-                        }}),
-                    ))
+                    .append(
+                        &identity.native_session_id,
+                        event(
+                            CaptureKind::Notification,
+                            None,
+                            "session/update",
+                            json!({"sessionId":identity.native_session_id,"update":{
+                                "sessionUpdate":"agent_message_chunk",
+                                "content":{"type":"text","text":"committed after snapshot"}
+                            }}),
+                        ),
+                    )
                     .await?;
                 ensure!(session(&store.db, &key).await?.head == initial.head + 1);
             }
@@ -303,11 +311,11 @@ fn assessment_input(
     }
 }
 
-#[tokio::test]
-#[ignore = "requires db-mysql and BITROUTER_TEST_DATABASE_URL naming a dedicated MySQL database"]
-async fn mysql_stale_assessment_cannot_overwrite_human_after_snapshot() -> Result<()> {
+pub(super) async fn mysql_stale_assessment_cannot_overwrite_human_after_snapshot(
+    backend: Backend,
+) -> Result<()> {
     with_mysql(|store| async move {
-        let (identity, _recorder) = fixture(&store).await?;
+        let (identity, _recorder) = fixture(&store, backend).await?;
         let key = identity.key()?;
         let cp = store.freeze_checkpoint(&identity, 1).await?;
         let original = store

@@ -1,12 +1,11 @@
 use super::*;
 use crate::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use crate::acp_trajectory::{Recorder, RecordingScope};
+use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::core::evolution::{
     rubric::{Applicability, RUBRIC_VERSION, RubricItem, library},
     scoring,
 };
 use crate::gateway::routing::blocks::control::{BlockDefinition, BlockRule};
-use crate::harness::acp::capture::CapturePort;
 use crate::storage::capture::{CaptureDirection, CaptureEvent};
 use crate::storage::execution::DecisionContext;
 use crate::storage::session_identity::SessionIdentity;
@@ -15,7 +14,7 @@ use std::sync::Arc;
 async fn fixture() -> Result<(
     BlockPolicyStore,
     CanonicalStore,
-    Arc<Recorder>,
+    Arc<PersistedHistory>,
     SessionIdentity,
 )> {
     fixture_with_inventory(false).await
@@ -26,7 +25,7 @@ async fn fixture_with_inventory(
 ) -> Result<(
     BlockPolicyStore,
     CanonicalStore,
-    Arc<Recorder>,
+    Arc<PersistedHistory>,
     SessionIdentity,
 )> {
     let db = crate::db::connect("sqlite::memory:").await?;
@@ -41,7 +40,7 @@ async fn fixture_in(
 ) -> Result<(
     BlockPolicyStore,
     CanonicalStore,
-    Arc<Recorder>,
+    Arc<PersistedHistory>,
     SessionIdentity,
 )> {
     let service = BlockPolicyStore::new(db.clone(), owner)?;
@@ -79,7 +78,7 @@ async fn fixture_in(
         native_session_id: "s".into(),
     };
     let recorder = canonical
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: owner.into(),
             source: "fixture".into(),
             controller_instance_id: Some("controller".into()),
@@ -112,13 +111,16 @@ async fn fixture_in(
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Client,
-                kind,
-                call_id: Some(id),
-                method: method.into(),
-                payload,
-            })
+            .append(
+                "s",
+                CaptureEvent {
+                    direction: CaptureDirection::Client,
+                    kind,
+                    call_id: Some(id),
+                    method: method.into(),
+                    payload,
+                },
+            )
             .await?;
     }
     service
@@ -132,18 +134,21 @@ async fn fixture_in(
             &BTreeMap::from([("a".into(), "routes".into())]),
         )
         .await?;
-    recorder.record(CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification,
+    recorder.append("s", CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification,
         call_id: None, method: "session/update".into(), payload: serde_json::json!({"sessionId":"s","update":{
             "sessionUpdate":"tool_call","toolCallId":"tests","status":"completed","title":"Parser tests",
             "rawOutput":{"stdout":"2 tests passed","exitCode":0}}}) }).await?;
     recorder
-        .record(CaptureEvent {
-            direction: CaptureDirection::Client,
-            kind: CaptureKind::Response,
-            call_id: Some(2),
-            method: "session/prompt".into(),
-            payload: serde_json::json!({"result":{"stopReason":"end_turn"}}),
-        })
+        .append(
+            "s",
+            CaptureEvent {
+                direction: CaptureDirection::Client,
+                kind: CaptureKind::Response,
+                call_id: Some(2),
+                method: "session/prompt".into(),
+                payload: serde_json::json!({"result":{"stopReason":"end_turn"}}),
+            },
+        )
         .await?;
     Ok((service, canonical, recorder, identity))
 }
@@ -380,7 +385,7 @@ async fn adopted_sessions_use_separate_quality_evidence_and_a_fenced_rollback() 
             native_session_id: name.clone(),
         };
         let recorder = canonical
-            .recorder(RecordingScope {
+            .fixture_history(FixtureScope {
                 owner: "owner".into(),
                 source: "fixture".into(),
                 controller_instance_id: None,
@@ -408,13 +413,16 @@ async fn adopted_sessions_use_separate_quality_evidence_and_a_fenced_rollback() 
             ),
         ] {
             recorder
-                .record(CaptureEvent {
-                    direction: CaptureDirection::Client,
-                    kind,
-                    call_id: Some(call_id),
-                    method: method.into(),
-                    payload,
-                })
+                .append(
+                    &name,
+                    CaptureEvent {
+                        direction: CaptureDirection::Client,
+                        kind,
+                        call_id: Some(call_id),
+                        method: method.into(),
+                        payload,
+                    },
+                )
                 .await?;
         }
         let intent = service
@@ -432,15 +440,18 @@ async fn adopted_sessions_use_separate_quality_evidence_and_a_fenced_rollback() 
         assert_eq!(intent.selected_route, "candidate");
         assert!(intent.assignments.is_empty());
         assert_eq!(intent.monitoring.len(), 1);
-        recorder.record(CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification, call_id: None, method: "session/update".into(), payload: serde_json::json!({"sessionId":name,"update":{"sessionUpdate":"tool_call","toolCallId":"tests","status":"failed","title":"Controlled parser tests","rawOutput":{"exitCode":1}}}) }).await?;
+        recorder.append(&name, CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification, call_id: None, method: "session/update".into(), payload: serde_json::json!({"sessionId":name,"update":{"sessionUpdate":"tool_call","toolCallId":"tests","status":"failed","title":"Controlled parser tests","rawOutput":{"exitCode":1}}}) }).await?;
         recorder
-            .record(CaptureEvent {
-                direction: CaptureDirection::Agent,
-                kind: CaptureKind::Response,
-                call_id: Some(2),
-                method: "session/prompt".into(),
-                payload: serde_json::json!({"result":{"stopReason":"end_turn"}}),
-            })
+            .append(
+                &name,
+                CaptureEvent {
+                    direction: CaptureDirection::Agent,
+                    kind: CaptureKind::Response,
+                    call_id: Some(2),
+                    method: "session/prompt".into(),
+                    payload: serde_json::json!({"result":{"stopReason":"end_turn"}}),
+                },
+            )
             .await?;
         score(&canonical, &identity, 200_000, &format!("score-{i}")).await?;
         monitored.push(identity);
@@ -666,7 +677,7 @@ async fn corrections_replace_and_appends_withdraw_the_effective_contribution() -
             .all(|observation| observation.quality == Some(0.1))
     );
     let snapshot = service.learning_snapshot("a", None).await?;
-    recorder.record(CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification,
+    recorder.append("s", CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification,
         call_id: None, method: "session/update".into(), payload: serde_json::json!({"sessionId":"s","update":{
             "sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"More work followed."}}}) }).await?;
     let tx = service.store.db.begin().await?;
