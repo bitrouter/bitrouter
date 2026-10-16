@@ -231,6 +231,7 @@ impl Driver for Reported {
             agent_id: "test-peer".into(),
             confirmed_model_route: None,
             capabilities: None,
+            restored_from: None,
         })
     }
     async fn prompt(&self, _: &Owner, _: &Binding, _: &str, _: &str) -> Result<(), String> {
@@ -295,7 +296,12 @@ async fn submitted_acp_prompt_is_not_recovered_as_unopened_metadata()
         .recovery
         .as_ref()
         .ok_or("submitted session inspection missing")?;
-    assert!(!report.context_valid);
+    assert!(
+        report
+            .turn
+            .as_ref()
+            .is_none_or(|turn| turn.acp_continuation.is_none())
+    );
     assert!(report.blockers.iter().any(|blocker| matches!(
         blocker,
         crate::thread::RecoveryBlocker::AcpSessionUnconfirmed

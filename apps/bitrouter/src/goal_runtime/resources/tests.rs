@@ -211,7 +211,15 @@ async fn startup_rejection(model_route: bool) -> Result<()> {
         ]
     };
     for descriptor in descriptors {
-        let directory = tempfile::tempdir()?;
+        let mut directory = tempfile::tempdir()?;
+        let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
+        directory.disable_cleanup(keep);
+        if keep {
+            eprintln!(
+                "Failure-retention resource startup fixture: {}",
+                directory.path().display()
+            );
+        }
         let captures = directory.path().join("captures");
         let controls = directory.path().join("controls");
         std::fs::create_dir(&captures)?;
@@ -302,7 +310,20 @@ async fn startup_rejection(model_route: bool) -> Result<()> {
                 .count(),
             usize::from(model_route)
         );
-        assert!(!error.to_string().contains("cleanup did not confirm"));
+        assert!(
+            !crate::acp_cli::is_lifecycle_teardown_unconfirmed(&error),
+            "resource rejection lacks confirmed controller teardown: {error:#}"
+        );
+        // This marker is positive evidence, not an exhaustive classification.
+        // Capability validation can reject before session/new without adding
+        // it; absence must remain unknown. Wire counts below pin each phase.
+        if crate::acp_cli::is_lifecycle_before_session(&error) {
+            assert!(
+                !model_route,
+                "before-session receipt conflicts with session/new"
+            );
+        }
+        directory.disable_cleanup(false);
     }
     Ok(())
 }

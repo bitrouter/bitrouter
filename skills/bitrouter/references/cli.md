@@ -401,7 +401,7 @@ Workflow distinguishes this wait from exhausted budget. A settled outcome with
 missing usage retains its quote and cannot be treated as a temporary wait. Pause,
 revocation and SDK cancellation close admission; the executor is not polled after
 cancelled admission. A saved wait or reservation is not provider/model execution.
-Confirmed ACP continuation remains incomplete. Do not treat
+Confirmed ACP continuation is limited to a complete pre-prompt journal, original stopped owner/process and negotiated session/load; private context beyond the protocol remains unverified. Do not treat
 controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
 remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
 Both `bro` and `bro code` open Goals; reading the directory does not create or
@@ -749,7 +749,7 @@ permission commits and shutdown ownership. Their current Turn duration is 600
 seconds. Generic supervisor lease/control commands cannot take over those Turns.
 Actual session/model-route acknowledgements and public observations are retained;
 private context/provider/model usage remains unreported. Cold inspection alone
-does not resume a session; confirmed session recovery remains under qualification.
+does not resume a session. A complete pre-prompt journal can continue the same Thread/Turn only after confirmed source/process stop and negotiated load of its original session; duration and frozen MCP requirements are retained. Possibly submitted prompts, uncertain restore startup and missing history/private state remain blocked.
 Metadata that never accepted a Turn can recover its original Thread only after
 confirmed source-owner shutdown and ordinary workspace/source checks; it then
 creates its first session, without replaying an earlier prompt.

@@ -1,6 +1,6 @@
 # BRO 执行重构：当前设计与验收状态
 
-本轮依据 [重构 spec v0.2](BRO_ORCHESTRATOR_REFACTOR_SPEC.md)，统一 BRO 的执行接纳与控制，保留现有存储职责。**重构仍在进行，尚未完成 S0–S6 全部退出条件，也未将本轮本地提交推送到 PR #981。**
+本轮依据 [重构 spec v0.2](BRO_ORCHESTRATOR_REFACTOR_SPEC.md)，统一 BRO 的执行接纳与控制，保留现有存储职责。**本轮 BRO 执行重构已完成本地实现与最终源码回归。** [验收映射](evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md)逐项说明 RF01–RF12 / A01–A22 的本地证明与范围；[最终摘要](evidence/bro-goal-workflow/2026-10-16-refactor-summary.json)记录源码绑定、归档发布和 CI 的分层状态。真实厂商 harness/provider 在本轮源码上的复验仍为未通过 gate。
 
 BRO 面向 Goal 和长期并行工作流。它负责理解、规划、委派、协调和验收；实际工作统一交给 ThreadService。内置执行器可独立完成 Goal，外部 ACP harness 是可选 worker。未来 core persistent workflow state、状态权威迁移、通用动态图和 Goal owner handoff 不进入本轮。
 
@@ -108,10 +108,11 @@ sequenceDiagram
 | 安全 native checkpoint、已停止 owner、效果和预算可核对 | 经既有恢复引擎继续原 Thread/Turn，不重新提交 prompt、不重放已确认读取 |
 | 原 owner 仍活跃、pending read、来源已暂停或迟到撤销 | 拒绝继续，保留恢复/阻塞事实 |
 | ACP Thread 仅有元数据、从未接纳 Turn | 原 owner 已确认停止且工作区与来源检查通过后，沿用原 Thread 和接纳 key 创建首个 session；不声称恢复私有 session |
-| ACP 私有会话冷恢复 | **尚未接通已确认同 session 的继续执行；保持 AcpSessionUnconfirmed** |
+| ACP 原 session 已记录、原 prompt 尚无派发 intent | 原 owner 与进程已确认停止、完整启动历史且支持 load 时，沿用原 Thread/Turn 加载原 session；保持原时限、MCP 摘要与原始输入 |
+| ACP prompt 可能已提交、恢复 start 映射未知、私有状态/历史缺失 | 保持恢复/未知与 AcpSessionUnconfirmed，不补造停止证明，不重放 prompt，不退回 session/new |
 | 旧 ACP run 的迟到停止/效果观察 | 保留原身份对账；不能直接覆盖新绑定或验证新要求 |
 
-Native 冷恢复证明使用受控 SQLite checkpoint 图像，并在实际原执行关闭、join 后转入同一 owner 的停止证明。它不证明任意崩溃后的强制接管，也不证明导入外部 ACP 私有状态。
+Native 与 ACP 冷恢复证明使用受控 SQLite checkpoint 图像；只有实际原执行关闭并 join、且 owner 确有停止证明时才转入该证明。pending read 若仍有未知效果，原 owner 不被强行退役，独立的效果 blocker 仍须保留。ACP Rust peer 会从原私有文件加载 nonce，再实际提交一次原 prompt、完成授权写入并确认停止；协议 load ACK 不证明所有厂商私有 context 无损。任意崩溃后的强制接管与导入外部私有状态不在该证明内。
 
 ## 4 资源、预算与证据
 
@@ -177,7 +178,7 @@ Goal 默认交付经过验证、可 review 的结果即完成；人工验收只�
 | 当前 native 历史 checkpoint | 86 项 Goal runtime 检查、6 项证据检查、归档矩阵 3 次重复、严格全 workspace Clippy 与 fmt |
 | 前一预算 checkpoint | 735 项 SDK 检查、4 项 Goal PTY、编辑器 10 次重复、6 个 doctest（1 ignored）；源码适用性单独核对 |
 
-**尚无这一最终重构版本的全 workspace 通过声明。** 最近完整运行是时间预算修正前的 4,749 通过、1 项编辑器 CAS 测试失败、24 skipped；原始失败已保留，后续修正与组件通过不能冒充当前源码全量通过。真实 harness/provider 与 hosted CI 另列，不由 Rust peer、HTTP fixture 或固定语义 verdict 代替。
+最终源码结果：**Summary [ 916.362s] 4757 tests run: 4757 passed (7 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、原 45 秒等等待、栈与产品上限保持原值。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
 
 必要的 Rust fixtures、输入评测案例与测试驱动保留在仓库。执行与测试夹具不要求 Python。常用本地入口：
 
@@ -191,18 +192,18 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
 
 失败保留使用测试专用 `BRO_GOAL_FIXTURE_KEEP_FAILURES=1`。失败 filesystem/SQLite copy 不是进程图像或全部外部效果快照；历史未保留的文件和内存数据库不宣称已恢复。
 
-独立本地归档根目录为 `/Users/kelsen/.codex/archives/bro-refactor/2026-10-16/`。各批次索引保存源码哈希、配置、原始失败、通过结果、独立解包校验及 Git bundle；当前尚未完成本轮独立远程发布。`native-history-prior-ledger5.md` 保存本文重写前的完整 1,339 行记录。主 PR 不复制这些多轮日志和快照。
+独立本地归档根目录为 `/Users/kelsen/.codex/archives/bro-refactor/2026-10-16/`。各批次索引保存源码哈希、配置、原始失败、通过结果、独立解包校验及 Git bundle；归档发布状态和不可变 commit 见最终摘要。`native-history-prior-ledger5.md` 保存本文重写前的完整 1,339 行记录。主 PR 不复制这些多轮日志和快照。
 
-## 8 剩余退出条件
+## 8 阶段结论与后续边界
 
-| 阶段 | 当前结论 / 剩余工作 |
+| 阶段 | 本轮结论 |
 | --- | --- |
-| S0 | 对象、事实职责和资源边界已明确；无未来 core persistence 前置依赖 |
-| S1 | 关联、原 key 对账和格式 fence 已接入；与剩余恢复边界一起完成最终中断审计 |
-| S2 | 内置闭环、权限/停止、等待与安全 native checkpoint 桥已有本地证明；最终源码回归仍需保留 |
-| S3 | **待完成同 ACP session 的已确认恢复资格与完整中断矩阵**；私有连续性未确认时继续阻塞 |
-| S4 | 资源来源、实际报告和 native 归档读取已有证明；完成最终当前/历史 UI 与能力范围核对 |
-| S5 | native/ACP 依赖与验收接入共同执行；完成剩余恢复场景和实际 harness 资格核对 |
-| S6 | 审计替代路径的消费者，只删除已被替代的逻辑；完成全量回归、证据发布和 PR 更新 |
+| S0 | 对象、事实职责和可控资源边界明确；没有未来 core persistence 前置依赖 |
+| S1 | 最小关联、原 key 对账、历史读取和格式 fence 接入；已确认无接纳与未知接纳分别处理 |
+| S2 | 内置独立闭环、权限/停止、额度等待与安全 native checkpoint 继续通过本地证明 |
+| S3 | Managed ACP 共同控制、worker 接替和受控同 session 恢复矩阵通过；恢复资格限首次 prompt 之前，未知效果保持阻塞 |
+| S4 | 要求/策略来源、实际报告、当前与历史 UI 证据有明确适用范围；完整 Turn 固定 model/context 仍是后续 core 工作 |
+| S5 | 两分支实际重叠、隔离写入、已检查依赖交接、要求修改及根验收接入共同执行 |
+| S6 | 已替代的执行路径收敛，仍有历史/停止对账消费者的无绑定记录保留；最终本地全量与证据分层完成 |
 
-main 的目录更新已在本地合入；registry validate/build/check 通过，产物没有漂移。最终交付还需：逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。
+main 的目录更新已合入；registry validate/build/check 通过且产物无漂移。独立归档、PR #981 和 exact-head hosted CI 状态见最终摘要；当前本地证明不扩展为真实厂商/provider 资格。未来 core persistent workflow state、完整 Turn 固定资源、动态节点/依赖编辑、子 Goal 分层和 Goal owner handoff 仍由后续 spec 处理。
