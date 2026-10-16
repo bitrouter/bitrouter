@@ -69,3 +69,44 @@ or later regressions, and it is not a production-performance result. Re-measure
 the final candidate under comparable conditions and assess any additional
 regression separately. A16 remains open until that comparison and the remaining
 size, normal-dependency and request/stream evidence are reconciled.
+
+## Final candidate comparison (2026-10-17)
+
+Candidate source: `d233944b0bb34f46ee3880dfed1af6939e8c293e`.
+[Raw final samples](gateway-final-2026-10-17.json) and
+[immutable artifact identities](artifacts-final-2026-10-17.json) retain the
+full/minimum/harness checksums, sizes and compiled capabilities. The baseline
+executable is unchanged from the first comparison. The same hardware, compiler,
+development profile, configuration, warmup, three rotating orders and bounded
+workload were used. All three candidate executables were built and copied
+before measurement; no Cargo build, test or lint ran during the samples.
+
+| Metric | Baseline full | Candidate full | Minimum gateway |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 322,416,544 | 317,003,456 | 116,035,872 |
+| Startup ms | 63.224 | 65.380 | 61.313 |
+| Warmed idle RSS MiB | 61.406 | 64.219 | 42.469 |
+| After-load RSS MiB | 211.047 | 208.922 | 182.125 |
+| Ordinary requests/s | 4,046.907 | 4,016.302 | 4,072.040 |
+| Streaming requests/s | 5,267.430 | 5,170.963 | 5,249.790 |
+| Ordinary p95 latency ms | 3.053 | 3.054 | 3.028 |
+| Streaming p95 latency ms | 2.046 | 2.089 | 2.059 |
+| Normal/build dependency name-version pairs | 435 | 431 | 304 |
+
+The final full-product idle increase is **2.8125 MiB / 4.58%**, below the
+previously accepted measured increase. The minimum profile uses **30.84% less**
+idle memory than the contemporaneous baseline. Full ordinary and streaming
+throughput medians differ by **-0.76%** and **-1.83%**. Baseline ordinary samples
+span 3,840–4,085 requests/s and streaming spans 4,902–5,334; candidate full spans
+4,002–4,034 and 5,157–5,197 respectively. These small local samples do not
+establish a sustained throughput change. Preserve the idle-memory optimization
+follow-up and the development-build interpretation limits above.
+
+Dependency counts use separate invocations of
+`cargo +1.99.0 tree --locked --offline -p bitrouter -e normal,build --prefix none`,
+adding `--no-default-features` only for the minimum candidate. Count distinct
+package name/version pairs, including the root package; repeated rendered edges
+are excluded. The corresponding rendered entry counts are 1,353 / 1,286 / 799.
+These isolated product closures are distinct from the earlier workspace-wide,
+all-features baseline in the progress ledger. No dependency reduction is
+inferred from the reduced number of workspace packages alone.

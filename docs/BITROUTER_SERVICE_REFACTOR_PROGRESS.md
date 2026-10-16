@@ -4,6 +4,13 @@ Implementation follows the [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 P1 remains out of scope. This ledger records evidence for the full P0 delivery;
 completing one extraction does not complete the milestone.
 
+Current local status: P0 implementation and all local executable checks have
+passed on the frozen runtime candidate. Independent final aggregate review passed;
+the final acceptance table below identifies exact evidence and limits. Required
+hosted OS checks belong to the implementation PR and must pass before the P0
+delivery is considered complete. P1, publication and external consumers' releases
+are not part of this result.
+
 ## Baseline
 
 - Source commit: `9956a427bd5d4316b3bf2359f88e293b158781d5`, also the remote
@@ -58,44 +65,47 @@ the contract move must preserve its bytes.
 
 ## Stages
 
-| Stage | Status | Evidence or remaining work |
+| Stage | Local status | Evidence |
 | --- | --- | --- |
-| P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; authentic formats 2/3/4/6/7 and baseline database retained and decoded; performance measurements remain |
-| P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
-| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; terminal-free transcript formatting and TUI feature isolation verified; base helpers, local supervisor, live capture and shared MCP transport ownership separated; harness/MCP dependency isolation and representative behavior are verified; the complete final matrix remains |
-| P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
-| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; harness HTTP/SSE contracts and client verified against the separate executable and the core-disabled HTTP service; independent SDK-only consumer passes against extracted development and optimized gateway packages; final candidate verification remains |
-| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; harness/MCP module and dependency isolation is verified; native-record/ledger full/minimum/full and full/harness/full process transitions verified; final feature matrix and gateway-policy/accounting/outbox transitions remain |
-| P0 6 Delivery and review | In progress | Standalone gateway packaging and independent SDK consumer verified; source inventory reconciled with residual findings; final compatibility/performance gates, final review and PR remain |
+| P0 0 Compatibility baseline | Passed | Frozen 4,473-test baseline, authentic serialized formats and database, immutable baseline executable and final comparable measurements |
+| P0 1 Public contracts | Passed | Isolated public builds/API guards, independent manifest fidelity, complete source inventory and reviewed intrinsic/runtime boundary |
+| P0 2 Application consolidation | Passed | Core/harness/TUI/telemetry ownership, shared operations/presentation/storage, isolated runtime and dependency checks |
+| P0 3 Gateway and lightweight AI | Passed | Gateway-owned execution/conversion/serving, AI contract-only graph/signatures, lifecycle and protocol compatibility |
+| P0 4 HTTP SDK | Passed | Packaged minimum gateway plus separate SDK client; independent core-only process and client-owned checkpoint journal |
+| P0 5 Feature isolation | Passed | 18 isolated build/dependency profiles, selected runtime suites, actual database execution and five immutable-artifact transitions |
+| P0 6 Delivery and review | Local checks and aggregate review passed | Package assets/bootstrap, MSRV/lint/docs, performance, source and focused acceptance reviews; aggregate review passed; hosted PR checks remain a separate gate |
 
 ## Acceptance ledger
 
-Every requirement in the plan remains open until linked evidence demonstrates it
-on the resulting implementation.
+The table records local results on macOS arm64, with production source
+`d233944b0bb34f46ee3880dfed1af6939e8c293e`; the final table below maps each gate
+to profiles, concrete evidence and limitations. The acceptance-only additions
+are described separately from that production freeze. Hosted Linux/macOS/Windows
+checks are a further required PR gate, not inferred from local results.
 
-| Gate | State |
+| Gate | Local state |
 | --- | --- |
-| A01 Package and module ownership | Pending |
-| A02 Lightweight AI public contract boundary | Pending final-candidate acceptance; residual semantic extraction and isolated/public-API checks verified below |
-| A03 SDK client dependency boundary | Pending |
-| A04 Independent official gateway process | Pending |
-| A05 Feature dependency closure | Pending |
-| A06 Runtime isolation | Pending |
-| A07 Protocol and conversion parity | Pending |
-| A08 Lifecycle parity | Pending |
-| A09 Persisted data compatibility | Pending |
-| A10 Core and harness authority | Pending |
-| A11 CLI and TUI parity | Pending |
-| A12 Telemetry behavior and names | Pending |
-| A13 Extension and legacy guardrail behavior | Pending |
-| A14 Build bootstrap and packaging | Pending |
-| A15 External Rust API migration guidance | Pending |
-| A16 Comparable performance measurements | Pending final-candidate comparison; recorded 3.094 MiB / 5.05% full-product idle RSS overhead accepted on 2026-10-17, with follow-up optimization retained |
+| A01 Package and module ownership | Passed |
+| A02 Lightweight AI public contract boundary | Passed |
+| A03 SDK client dependency boundary | Passed |
+| A04 Independent official gateway process | Passed |
+| A05 Feature dependency closure | Passed |
+| A06 Runtime isolation | Passed |
+| A07 Protocol and conversion parity | Passed |
+| A08 Lifecycle parity | Passed |
+| A09 Persisted data compatibility | Passed |
+| A10 Core and harness authority | Passed |
+| A11 CLI and TUI parity | Passed |
+| A12 Telemetry behavior and names | Passed |
+| A13 Extension and legacy guardrail behavior | Passed |
+| A14 Build bootstrap and packaging | Passed on native target; hosted platform checks required |
+| A15 External Rust API migration guidance | Passed; external releases remain separate |
+| A16 Comparable performance measurements | Passed with the recorded accepted memory overhead and retained optimization follow-up |
 
-Known out-of-tree hosts consume the old builder/server, telemetry exporter and
-legacy guardrails adapters. They require an explicit import and process-boundary
-migration guide. Their external release status must not be inferred from local
-workspace tests.
+Known out-of-tree hosts require the documented import/process-boundary migration.
+Local acceptance does not imply that their separate releases or migrations have
+completed. Earlier dated sections below retain their original intermediate
+findings and pending statuses; this ledger and the final evidence supersede them.
 
 ## Review evidence
 
@@ -3420,3 +3430,131 @@ This is stage evidence; final full-suite, isolated feature/runtime, package and
 performance evidence still must be collected on the frozen candidate. The
 optional `rust_diagnostics` tool remains unavailable; no MCP VERIFY pass is
 claimed. Repository-required Cargo checks remain the implementation evidence.
+
+## Final runtime candidate and independent core acceptance (2026-10-17)
+
+Production source is frozen at `d233944b0bb34f46ee3880dfed1af6939e8c293e`.
+Subsequent local additions are acceptance fixtures, CI and documentation; they
+do not change the measured product implementation. Immutable artifact records
+and the final controlled measurements are in
+[evidence/service-refactor](evidence/service-refactor/README.md#final-candidate-comparison-2026-10-17).
+
+The frozen workspace run passed **4,693 tests, with 46 configured skips and five
+slow tests**, in 724.234 seconds of execution (914.275 including build).
+Workspace doctests passed **10**, with one existing protocol-registration sketch ignored. Strict all-feature/all-target Clippy and
+strict workspace rustdoc passed with Rust 1.97.0. Independent AI/SDK/matcher
+default/all tests, five-package membership, normal/build dependency guards,
+public API rendering/foreign-type guards and the separately written prehashed
+manifest test passed. All **18** isolated application profiles passed production
+binary checking, all-target checking and normal/build dependency exclusions.
+Registry validation, committed generated-artifact checking and formatting passed.
+Commands, profiles and logs are under `/tmp/bitrouter-p0-d233944-validation` and
+`/tmp/bitrouter-p0-final-matrix-d233944`.
+
+Final independent requirements review identified missing separate-process core
+SDK evidence, distinct from the existing in-process managed SDK tests. The
+standalone consumer now has an optional `core` binary; its default remains empty.
+Its own journal verifies the original payload digest, identity and append order,
+retains each batch/fences, flushes and reopens the file before ACK. It explicitly
+reconnects after ACK loss and preserves the original proposal once before
+persisting/acknowledging the `session.reconnected` proposal. The server, client
+journal, two tenant credentials, mock provider and all children are private to
+the test; no application codec or storage helper is imported by the consumer.
+
+The core-only executable identifies the same frozen production revision and
+exactly `["core"]`; its
+[artifact record](evidence/service-refactor/core-artifact-final-2026-10-17.json)
+retains the checksum and size. The separate-process scenario passed **1/1 in
+3.21s** after review strengthening. It checks authentication/capabilities, ACK
+barriers, explicit reconnect, tenant/version/epoch rejection, head and unknown
+operation inspection, managed JSON/SSE reobservation, conflict/result rejection,
+one explicitly supplied mock tool result and final completion. Acceptance rejects
+any duplicate/second tool dispatch and checks the exact provider call identity
+and `mock file body` output, with exactly two generation calls after shutdown.
+Token-count requests are audited separately. Known-operation receipt semantics,
+release/takeover and transport framing/bounds retain their complementary existing
+suites; the new fixture does not claim to replace them.
+
+Two independent wire tests cover all **17 client command and 10 server message
+variants**, including optional revision fields, unit framing and opaque original
+checkpoint bytes. The nested lockfile preserves all 174 original package
+identities/checksums and adds 23 optional-core dependencies. The initial offline
+resolution's unrelated target-specific downgrades were discarded. The reviewed
+fixture required two test corrections: a control token satisfying the existing
+minimum length, and ACK of the real service's additional reconnect checkpoint.
+Neither correction changed production behavior. Independent review then
+strengthened duplicate-dispatch and exact provider-result assertions and found
+no remaining scoped issue. Build/process logs use
+`/tmp/bitrouter-p0-independent-core-{build-final,reviewed-build,reviewed-process}.log`.
+
+The new CI job explicitly runs the independent core process scenario on Linux,
+macOS and Windows; local execution is macOS arm64. Rust **1.93.0** workspace
+all-feature and independent core-consumer/all-target checks passed. Strict
+1.97.0 checks for the nested consumer and new host fixture passed; default
+consumer tests and the prehashed-manifest check passed again with the updated
+independent lockfile. Hosted execution and the remaining final runtime,
+backend/package/bootstrap gates are separate evidence, not inferred here.
+
+## Final local acceptance table (2026-10-17)
+
+The [machine-readable command/result record](evidence/service-refactor/validation-final-2026-10-17.json)
+contains exact Cargo arguments, feature selections, relevant environment,
+wall time, result and local log hashes. It includes the 18-profile matrix,
+independent runtime suites, actual backend execution, package-asset assertions
+and missing-artifact bootstrap. Immutable binaries and raw performance samples
+are linked from the [measurement report](evidence/service-refactor/README.md).
+The core client/host/wire fixtures and CI were added after production freeze,
+committed as `9fdcdb9c57225c8e7d182a7292e1f1a447897b45`; their file hashes are
+recorded with the final 1/1 process rerun (2.80 seconds). No product implementation
+or root/application/public-library manifest changed.
+
+All rows below are **passed locally**, with the following shared limits:
+macOS arm64 execution, Rust/Cargo 1.99.0 debug-symbol-free development/test
+builds; strict lint/docs on 1.97.0; minimum compiler checks on 1.93.0. Required
+hosted platform checks are part of the implementation PR. This record does not
+claim those runs before their results exist, or optimized production performance.
+
+| Gate | Candidate/profile and exercised evidence | Result and limits |
+| --- | --- | --- |
+| A01 | Five-member metadata check; all 141 baseline roots plus 11 telemetry children in the source inventory; final ownership review | Passed; reviewed retirements are explicit, and no implementation forwarding crate remains |
+| A02 | AI default/all tests and isolated normal/build trees; rendered public API/foreign-type guards; source review of pure algorithms | Passed; gateway admission, conversion and checkpoint enforcement remain application-owned |
+| A03 | SDK default/all tests and public API guards; separate default/core consumer graphs and prehashed-manifest regression; real gateway/core processes | Passed; SDK uses explicit endpoints/credentials and the harness retains persistence/ACK authority |
+| A04 | Extracted gateway archive with actual checksum/manifest/build identity, private configuration/database and separately resolved SDK process | Passed; eight expected provider calls, no client-side server assembly or source customization |
+| A05 | 18 isolated production-binary and all-target checks plus normal/build exclusions; public package default/all builds | Passed; gateway unconditional, TUI includes harness, harness does not enable core; new host fixture checked in minimum and all-features |
+| A06 | Minimum/H-only ingress, onboarding/source boundaries, disabled telemetry and offline stored-history suites | Passed; unavailable activation fails before side effects, with dormant configuration still readable |
+| A07 | Frozen 4,693-test workspace run and ten passed doctests (one protocol-registration sketch ignored); independent HTTP/SSE clients; all 27 core wire variants; managed JSON/SSE reobservation | Passed; protocol/conversion/history/usage/fallback tests retained, and invalid/replayed operations preserve their semantics |
+| A08 | Minimum, core-only and core+harness official-host lifecycle tests; control-error drain regression; daemon/artifact transitions; SDK disconnect/reconnect | Passed; cleanup/finalization is awaited and core hosts retain conservative handoff protection |
+| A09 | Baseline-written format/database readers; five real full/minimum/harness transitions; dedicated PostgreSQL/MySQL migration, transaction and retained-state regressions | Passed; record identities/digests/ledger, policy/judge accounting and trajectory outbox survive profile changes; no P1 shared authority claim |
+| A10 | Core-only 339-case scheduler/ACK/recovery run; H-only 222-case headless run and C+H suites; independent core SDK journal/tool scenario | Passed; no implicit SDK ACK or tool execution; deeper release/takeover and receipt behavior retain their existing dedicated tests |
+| A11 | Full-product CLI/TUI/PTY suites, isolated plain transcript and permission checks, retained baseline byte fixtures and terminal-free dependency guards | Passed locally; hosted OS-specific terminal/process results remain the PR's responsibility |
+| A12 | No-exporter minimum/H/TUI process checks; separate HTTP-only and gRPC-only collector/delivery/flush targets | Passed; basic logs/facts and harness-local capture remain available without OTLP |
+| A13 | Matcher default/all tests; real legacy static/dynamic plugin installation; native registration, revision/binding/fail-closed and permit lifetime tests | Passed; default activation unchanged; both native and legacy host migration examples compile |
+| A14 | Registry validation/dist checking; fresh source export with all eight registry snapshots and schema removed, regenerated and byte-compared; package inclusion assertions; packaged SDK process; MSRV | Passed on native target; release automation/platform packaging is checked by required hosted PR jobs; no publication occurred |
+| A15 | Migration guide and runnable client/native/legacy examples; retired/replaced SDK, AI, telemetry and host API paths reviewed | Passed; arbitrary custom callbacks still require a custom build, and external consumer migration is not claimed |
+| A16 | Three rotating 4,096 ordinary + 4,096 stream samples per profile, immutable baseline/full/minimum artifacts, separate dependency closures | Passed; full idle +2.8125 MiB/+4.58% is below the accepted measured overhead; follow-up memory optimization retained |
+
+The 46 skips in the frozen full suite are accounted for: **17 dedicated database
+scenarios** and **six artifact/package scenarios** were explicitly run in their
+required environments. The remaining 23 are 19 credentialed external-agent
+campaigns, two live search/extraction API tests, one fixture-authoring entrypoint
+and a nonterminating Docker fault-server entrypoint. They are not represented as
+passing tests or required local migration coverage. Ordinary mocked/runtime
+fault, policy, recovery and rendering suites remain part of the full run. The
+new independent core process test was separately selected and passed; it was
+added after that frozen workspace run and is not included in its 4,693 count.
+Standalone measurement parser/body tests, interruption cleanup and the independent
+manifest regression were also selected separately from the workspace suite.
+The single ignored protocol-registration doctest is a non-executable example,
+separate from those 46 nextest skips: `apps/bitrouter/src/gateway/model/protocol/mod.rs:54`.
+
+Independent review of the final production source found no actionable code or
+ownership issue. The additional core acceptance review found two proof gaps
+(duplicate dispatch and exact provider tool output), both repaired and re-reviewed
+without remaining findings. Final independent aggregate acceptance review passed
+all A01–A16 local gates with no actionable findings. It reconciled the 104 recorded
+log hashes, source and binary identities, archive checksum, regenerated snapshots
+and schema, named skips and performance calculations. Hosted Linux/macOS/Windows
+CI remains a required gate on the final PR revision; overall P0 delivery remains
+pending those results. The unavailable
+optional `rust_diagnostics` tool is not claimed as MCP verification; actual Cargo
+checks, runtime scenarios and artifact evidence are recorded above.

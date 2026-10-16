@@ -15,9 +15,9 @@ follow-up changes and runtime results are recorded in the progress ledger.
 
 | Audit | Baseline root coverage | Additional coverage | Outstanding follow-up |
 | --- | ---: | --- | --- |
-| AI and SDK | 28 | Pipeline descendants, public API and actual consumers | Residual AI extraction verification |
-| Application | 72 | Serving/learning, storage and local transport splits | G1–G3 source corrections reviewed and targeted profiles passed; final candidate evidence remains |
-| Other implementation packages | 41 | All 11 telemetry children, tests/assets, explicit legacy retirements | F1–F3 selection repaired; isolated execution results in progress ledger |
+| AI and SDK | 28 | Pipeline descendants, public API and actual consumers | Resolved by final source/API/dependency review; see final acceptance ledger |
+| Application | 72 | Serving/learning, storage and local transport splits | G1–G3 source corrections and final local candidate gates passed; see final acceptance ledger |
+| Other implementation packages | 41 | All 11 telemetry children, tests/assets, explicit legacy retirements | F1–F3 selection repaired and final isolated execution passed; see final acceptance ledger |
 
 The residual AI extraction after `59d1157` moves provider value conversion and
 citation identity synthesis to `gateway/model/protocol/values.rs`, request
@@ -26,6 +26,29 @@ to `storage/checkpoint/validation.rs`. The historical findings below identify
 why this follow-up was necessary. Its final verification and reviewed source
 identity belong in the progress ledger; this note does not retroactively change
 the audit's evidence.
+
+## Final candidate source review (2026-10-17)
+
+An independent review of `d233944b0bb34f46ee3880dfed1af6939e8c293e` reconciled
+the historical findings below with their current implementations and found no
+actionable P0 code or ownership gap. The eight baseline packages and 141 root
+modules retain the destination mapping recorded here, including the 11 telemetry
+children. The final workspace contains the five planned packages.
+
+The final provider-admission split moves
+`ModelTokenLimits::output_reservation_covers_model` and
+`NativeRoute::requires_input_count` from public AI evidence implementations into
+`apps/bitrouter/src/gateway/pipeline/provider_admission.rs`. Gateway execution
+and core routing/session consumers use that implementation; AI retains only
+the shared evidence representation. The public API guard rejects accidental
+reintroduction of either service decision. The guardrails migration includes
+`apps/bitrouter/examples/legacy_guardrails.rs` for explicit legacy plugin
+installation as well as the existing native request-check example.
+
+This is final-candidate source review evidence. Builds, runtime behavior,
+packaged artifacts, performance and aggregate A01–A16 acceptance are recorded
+separately in the progress ledger; the dated audit tables are not rewritten to
+pretend they originally inspected this revision.
 
 ## Follow-up ownership corrections after d2a3437
 
