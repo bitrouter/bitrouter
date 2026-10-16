@@ -44,6 +44,58 @@ jobs:
             exit 1
           fi
 
+  core-sdk:
+    name: independent core SDK (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.0"
+          components: rustfmt, clippy
+      - name: build and verify independent core consumer
+        shell: bash
+        run: |
+          manifest=apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml
+          cargo fmt --manifest-path "$manifest" -- --check
+          cargo clippy --locked --manifest-path "$manifest" --features core --all-targets --target-dir target/sdk-consumer -- -D warnings
+          cargo test --locked --manifest-path "$manifest" --features core --target-dir target/sdk-consumer
+          cargo build --locked --manifest-path "$manifest" --features core --bin bitrouter-core-sdk-consumer --target-dir target/sdk-consumer
+          cargo tree --locked --manifest-path "$manifest" --features core -e normal,build --prefix none > core-consumer-tree.txt
+          if grep -Eq '^(bitrouter|axum|sea-orm|sea-orm-migration|sqlx[^ ]*|ratatui[^ ]*|crossterm|opentelemetry[^ ]*|agent-client-protocol[^ ]*|rmcp) v' core-consumer-tree.txt; then
+            echo '::error::independent core consumer links a service implementation'; exit 1
+          fi
+      - name: run SDK harness against the official core-only process
+        shell: bash
+        run: |
+          cargo build --locked -p bitrouter --no-default-features --features core --bin bro
+          suffix=""
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix=".exe"; fi
+          mkdir -p "$RUNNER_TEMP/core-sdk-artifact"
+          cp "target/debug/bro$suffix" "$RUNNER_TEMP/core-sdk-artifact/bro$suffix"
+          core_binary="$RUNNER_TEMP/core-sdk-artifact/bro$suffix"
+          consumer_binary="$PWD/target/sdk-consumer/debug/bitrouter-core-sdk-consumer$suffix"
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then
+            core_binary="$(cygpath -m "$core_binary")"
+            consumer_binary="$(cygpath -m "$consumer_binary")"
+          fi
+          export BITROUTER_TEST_CORE_BINARY="$core_binary"
+          export BITROUTER_TEST_CORE_SDK_CONSUMER_BINARY="$consumer_binary"
+          export BITROUTER_TEST_EXPECTED_REVISION="$BITROUTER_BUILD_REVISION"
+          cargo test --locked -p bitrouter --no-default-features --test core_sdk \
+            independent_core_sdk_preserves_harness_authority -- --ignored --exact --nocapture
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest

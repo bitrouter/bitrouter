@@ -136,3 +136,56 @@ The test is ignored by ordinary `cargo test` because its input must come from
 the separately built writer. Select it explicitly as above; a missing fixture
 or missing provenance fails the selected test. Running ordinary consumer tests
 for packaged gateway acceptance does not establish this regression's result.
+
+## Independent core harness
+
+The optional fixture `core` feature adds `bitrouter-core-sdk-consumer` and its
+small checkpoint journal. The default gateway client remains unchanged. Supply
+a separately built **core-only** official executable; this scenario does not
+substitute for the packaged minimum-gateway scenario above.
+
+```sh
+cargo build --locked -p bitrouter --no-default-features --features core --bin bro
+mkdir -p target/core-sdk-artifact
+cp target/debug/bro target/core-sdk-artifact/bro
+cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
+  --features core --target-dir target/sdk-consumer
+cargo build --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
+  --features core --bin bitrouter-core-sdk-consumer --target-dir target/sdk-consumer
+export BITROUTER_TEST_CORE_BINARY="$PWD/target/core-sdk-artifact/bro"
+export BITROUTER_TEST_CORE_SDK_CONSUMER_BINARY="$PWD/target/sdk-consumer/debug/bitrouter-core-sdk-consumer"
+export BITROUTER_TEST_EXPECTED_REVISION="$(git rev-parse HEAD)"
+cargo test --locked -p bitrouter --no-default-features --test core_sdk \
+  independent_core_sdk_preserves_harness_authority -- --ignored --exact --nocapture
+```
+
+Use `.exe` on Windows. Both executable paths must be absolute. The supplied host
+must report exactly the `core` feature and the supplied source revision. The
+integration test owns the mock provider, two CLI-issued tenant credentials,
+configuration and server database; the consumer receives only the endpoint,
+two inference credentials and its separate journal directory. It imports no
+application codec, state snapshot, ORM, server framework or local service API.
+
+The harness checks the SHA-256 of the original decoded checkpoint bytes,
+identity/ownership, append bases, contiguous event sequence and schema. It
+persists the original batch (including any tool-start fences), flushes it and
+reopens the journal before returning an ACK. Exact repeated proposals reuse the
+existing append. This fixture accepts small inline results and rejects external
+artifact references; it is not a general harness implementation or a crash-safe
+storage library.
+
+The process scenario checks bind admission before persistence and before ACK,
+explicit reconnect after ACK loss, typed tenant/version/epoch rejection, durable
+head and unknown-operation inspection, JSON and SSE managed Responses,
+reobservation without replay, a mock tool result and final continuation. Tool
+execution must be authorized by a checkpoint already retained by this harness.
+The host counts exactly two generation calls after orderly shutdown; token-count
+requests are checked separately. Existing SDK framing/bounds tests and scheduler
+recovery/release tests remain complementary coverage.
+
+`core_wire` runs even without fixture `core`: its literal JSON cases cover all
+17 client commands and 10 server message variants, using exhaustive matching.
+They retain optional revision fields, unit-message framing and opaque checkpoint
+bytes without claiming those bytes are valid or persisted. Run formatting and
+Clippy against this nested manifest explicitly; root workspace checks do not
+include this separate consumer workspace.
