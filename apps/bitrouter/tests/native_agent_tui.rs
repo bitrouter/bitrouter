@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, ensure};
-use bitrouter::agent_local::{Operation, ReplyResult};
+use bitrouter::client::agent_local::{Operation, ReplyResult};
 use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::harness::turn::VerificationStatus;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -295,12 +295,13 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
         .spawn()?;
     let source = bitrouter::paths::ConfigSource::File(config.clone());
     let cfg = bitrouter::paths::load_config(&source).await?;
-    let socket =
-        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let socket = bitrouter::client::agent_local::socket_path(&bitrouter::daemon::socket_path_for(
+        &source, &cfg,
+    ));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if matches!(
-            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            bitrouter::client::agent_local::request(&socket, Operation::Capabilities).await,
             Ok(ReplyResult::Capabilities { .. })
         ) {
             break;
@@ -354,7 +355,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     // Drop a real observation connection while preserving an unsubmitted draft,
     // a pending approval and a durable queue, then reconnect in this same TUI.
     let proxy_control = home.path().join("proxy.sock");
-    let proxy_socket = bitrouter::agent_local::socket_path(&proxy_control);
+    let proxy_socket = bitrouter::client::agent_local::socket_path(&proxy_control);
     let listener = tokio::net::UnixListener::bind(&proxy_socket)?;
     let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (disconnect, _) = tokio::sync::watch::channel(0_u64);
@@ -364,7 +365,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
         blocked.clone(),
         disconnect.clone(),
     ));
-    let local = bitrouter::agent_local::ThreadClient::connect(&socket).await?;
+    let local = bitrouter::client::agent_local::ThreadClient::connect(&socket).await?;
     let queued = local
         .request(Operation::EnqueueTurn {
             thread_id: turn_id.thread_id.clone(),
@@ -461,7 +462,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     tui.send(b"Remember prior answer\r")?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let reply = bitrouter::agent_local::request(
+        let reply = bitrouter::client::agent_local::request(
             &socket,
             Operation::ReadThread {
                 thread_id: turn_id.thread_id.clone(),
@@ -486,7 +487,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     tui.send(b"y")?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let reply = bitrouter::agent_local::request(
+        let reply = bitrouter::client::agent_local::request(
             &socket,
             Operation::ReadThread {
                 thread_id: turn_id.thread_id.clone(),
@@ -558,7 +559,7 @@ async fn submit(
     workspace: &std::path::Path,
     check: Option<String>,
 ) -> Result<Execution> {
-    let client = bitrouter::agent_local::ThreadClient::connect(socket).await?;
+    let client = bitrouter::client::agent_local::ThreadClient::connect(socket).await?;
     let (thread, turn) = client
         .create_and_start(
             workspace.into(),
@@ -580,7 +581,7 @@ async fn wait_status(
 ) -> Result<bitrouter_ai::harness::turn::TurnSnapshot> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let snapshot = match bitrouter::agent_local::request(
+        let snapshot = match bitrouter::client::agent_local::request(
             socket,
             Operation::ReadTurn {
                 thread_id: execution.thread_id.clone(),
@@ -620,7 +621,7 @@ async fn observation_proxy(
                 connections.spawn(async move {
                     let mut incoming=tokio::io::BufReader::new(incoming);
                     let mut line=String::new();incoming.read_line(&mut line).await?;
-                    let command:bitrouter::agent_local::ThreadCommand=serde_json::from_str(&line)?;
+                    let command:bitrouter::client::agent_local::ThreadCommand=serde_json::from_str(&line)?;
                     let observing=matches!(command.operation,Operation::Observe { .. });
                     if observing && blocked.load(std::sync::atomic::Ordering::SeqCst) { return Ok::<_,anyhow::Error>(()); }
                     let mut outgoing=tokio::net::UnixStream::connect(&upstream).await?;
@@ -672,12 +673,13 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
         .spawn()?;
     let source = bitrouter::paths::ConfigSource::File(config.clone());
     let cfg = bitrouter::paths::load_config(&source).await?;
-    let socket =
-        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let socket = bitrouter::client::agent_local::socket_path(&bitrouter::daemon::socket_path_for(
+        &source, &cfg,
+    ));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if matches!(
-            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            bitrouter::client::agent_local::request(&socket, Operation::Capabilities).await,
             Ok(ReplyResult::Capabilities { .. })
         ) {
             break;
@@ -889,12 +891,13 @@ async fn native_status_bar_shows_classifier_workflow_model_and_live_spinner() ->
         .spawn()?;
     let source = bitrouter::paths::ConfigSource::File(config.clone());
     let cfg = bitrouter::paths::load_config(&source).await?;
-    let socket =
-        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let socket = bitrouter::client::agent_local::socket_path(&bitrouter::daemon::socket_path_for(
+        &source, &cfg,
+    ));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if matches!(
-            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            bitrouter::client::agent_local::request(&socket, Operation::Capabilities).await,
             Ok(ReplyResult::Capabilities { .. })
         ) {
             break;

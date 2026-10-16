@@ -8,7 +8,6 @@ use crate::gateway::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 
 use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::turn::TurnStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadTarget {
@@ -21,23 +20,6 @@ pub struct ThreadTarget {
 pub struct ThreadCloseReceipt {
     pub snapshot: ThreadSnapshot,
     pub replayed: bool,
-}
-
-/// A cold directory projection. Listing does not load context or subscribe.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThreadDirectoryEntry {
-    pub thread: ThreadSnapshot,
-    pub turn_status: Option<TurnStatus>,
-    pub turn_id: Option<String>,
-    pub needs_input: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThreadDirectoryPage {
-    /// Fixes directory membership, not the mutable status of each Thread.
-    pub cutoff: u64,
-    pub next_after: Option<u64>,
-    pub entries: Vec<ThreadDirectoryEntry>,
 }
 
 /// Explicitly accept one inspected durable checkpoint. A load alone never

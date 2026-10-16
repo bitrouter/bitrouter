@@ -303,7 +303,7 @@ async fn serve_with_options(
             .with_context(|| format!("bind inference listener {listen}"))?;
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
         #[cfg(feature = "harness")]
-        let task_socket = crate::agent_local::socket_path(&socket_path);
+        let task_socket = crate::client::agent_local::socket_path(&socket_path);
         #[cfg(feature = "harness")]
         let task_listener = daemon::transport::bind(&task_socket).await?;
         #[cfg(feature = "harness")]
@@ -452,7 +452,7 @@ async fn serve_with_options(
                     let runtime_shutdown = task_shutdown_for_server.clone();
                     let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
                     let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
-                    let local = crate::agent_local::serve(
+                    let local = crate::harness::local::serve(
                         task_listener,
                         task_service,
                         task_shutdown_for_server.clone(),

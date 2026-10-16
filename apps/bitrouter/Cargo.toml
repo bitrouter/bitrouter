@@ -22,7 +22,7 @@ path = "src/main.rs"
 [features]
 default = ["core", "harness", "tui", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql"]
 core = ["dep:rand_distr"]
-harness = ["mcp", "dep:agent-client-protocol", "dep:agent-client-protocol-schema", "dep:agent-client-protocol-conductor", "dep:globset", "dep:ignore", "dep:tokio-stream"]
+harness = ["mcp", "dep:jsonschema", "dep:agent-client-protocol", "dep:agent-client-protocol-schema", "dep:agent-client-protocol-conductor", "dep:globset", "dep:ignore", "dep:tokio-stream"]
 mcp = ["dep:rmcp", "dep:process-wrap"]
 server-tools = ["mcp"]
 tui = ["harness", "dep:ratatui", "dep:crossterm"]
@@ -132,7 +132,7 @@ shell-words.workspace = true
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
 crossterm = { workspace = true, optional = true }
-jsonschema = { version = "0.47.0", default-features = false }
+jsonschema = { version = "0.47.0", default-features = false, optional = true }
 schemars.workspace = true
 
 [target.'cfg(windows)'.dependencies]

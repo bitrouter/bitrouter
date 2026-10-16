@@ -10,7 +10,9 @@ pub mod catalog;
 mod context;
 pub(crate) mod control;
 pub mod item;
+pub(crate) mod local;
 pub mod resources;
+pub mod result_contract;
 pub mod service;
 pub mod storage;
 #[cfg(feature = "harness")]

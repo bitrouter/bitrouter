@@ -328,8 +328,8 @@ async fn result_line_for(script: &str) -> serde_json::Value {
             ..Default::default()
         },
     };
-    let contract =
-        bitrouter::result_contract::ResultContract::from_flag(OK_SCHEMA).expect("valid schema");
+    let contract = bitrouter::harness::result_contract::ResultContract::from_flag(OK_SCHEMA)
+        .expect("valid schema");
     let result = bitrouter::acp_cli::prompt(
         ctx,
         "do the task",

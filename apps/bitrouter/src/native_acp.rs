@@ -57,7 +57,7 @@ pub async fn bridge(
             "local daemon is unavailable and --no-start was selected"
         );
     } else {
-        crate::agent_local::connect_or_start(source, &control).await?;
+        crate::client::agent_local::connect_or_start(source, &control).await?;
     }
     let mut stream = transport::connect(&socket_path(&control))
         .await

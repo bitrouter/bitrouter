@@ -87,3 +87,24 @@ fn shared_presentation_and_policy_are_terminal_independent()
     }
     Ok(())
 }
+
+#[test]
+fn local_task_client_does_not_import_execution_or_storage() -> Result<(), Box<dyn std::error::Error>>
+{
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/client/agent_local.rs");
+    let source = std::fs::read_to_string(&path)?;
+    for forbidden in [
+        "crate::harness::",
+        "crate::db::",
+        "crate::agent_store::",
+        "sea_orm::",
+        "agent_client_protocol::",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "{} couples task transport to {forbidden}",
+            path.display(),
+        );
+    }
+    Ok(())
+}

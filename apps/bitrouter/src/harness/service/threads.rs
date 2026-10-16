@@ -78,7 +78,7 @@ impl ThreadService {
         after: u64,
         cutoff: Option<u64>,
         limit: usize,
-    ) -> Result<crate::harness::thread::ThreadDirectoryPage, ServiceError> {
+    ) -> Result<crate::client::agent_local::ThreadDirectoryPage, ServiceError> {
         self.ensure_instance(Some(epoch))?;
         if caller.is_anonymous()
             || !(1..=16).contains(&limit)
@@ -121,7 +121,7 @@ impl ThreadService {
                 }
                 Err(error) => return Err(error),
             };
-            entries.push(crate::harness::thread::ThreadDirectoryEntry {
+            entries.push(crate::client::agent_local::ThreadDirectoryEntry {
                 turn_status: view.latest_turn.as_ref().map(|turn| turn.status),
                 turn_id: view.latest_turn.as_ref().map(|turn| turn.turn_id.clone()),
                 needs_input: view
@@ -137,7 +137,7 @@ impl ThreadService {
         {
             return Err(ServiceError::storage("Thread directory made no progress"));
         }
-        let result = crate::harness::thread::ThreadDirectoryPage {
+        let result = crate::client::agent_local::ThreadDirectoryPage {
             cutoff: page.cutoff,
             next_after: page.next_after,
             entries,

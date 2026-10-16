@@ -16,8 +16,8 @@ follow-up changes and runtime results are recorded in the progress ledger.
 | Audit | Baseline root coverage | Additional coverage | Outstanding follow-up |
 | --- | ---: | --- | --- |
 | AI and SDK | 28 | Pipeline descendants, public API and actual consumers | Residual AI extraction verification |
-| Application | 72 | Serving/learning, storage and local transport splits | G1 offline replay, G2 local client/service separation, G3 harness result validation |
-| Other implementation packages | 41 | All 11 telemetry children, tests/assets, explicit legacy retirements | F1–F3 CI selection and profile-specific execution |
+| Application | 72 | Serving/learning, storage and local transport splits | G1–G3 source corrections reviewed and targeted profiles passed; final candidate evidence remains |
+| Other implementation packages | 41 | All 11 telemetry children, tests/assets, explicit legacy retirements | F1–F3 selection repaired; isolated execution results in progress ledger |
 
 The residual AI extraction after `59d1157` moves provider value conversion and
 citation identity synthesis to `gateway/model/protocol/values.rs`, request
@@ -26,6 +26,17 @@ to `storage/checkpoint/validation.rs`. The historical findings below identify
 why this follow-up was necessary. Its final verification and reviewed source
 identity belong in the progress ledger; this note does not retroactively change
 the audit's evidence.
+
+## Follow-up ownership corrections after d2a3437
+
+G1 now gates offline trajectory replay by core, retaining base health reduction.
+G2 places local task contracts/client/rejections in `client/agent_local.rs` and
+listener/dispatch in `harness/local.rs`; local directory data is application-owned,
+not a new AI API. G3 places validation in `harness/result_contract.rs` and enables
+jsonschema only with harness. Original Rust imports are intentionally retired.
+The source review and exact profile results are in the progress ledger; the
+historical tables below retain their observed paths rather than retroactively
+claiming these corrections had already landed at the audit revision.
 
 ## AI and SDK audit before the residual extraction
 

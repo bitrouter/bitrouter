@@ -3,6 +3,7 @@ pub mod correlation;
 pub mod evaluation;
 pub mod guard;
 pub mod health;
+#[cfg(feature = "core")]
 pub mod replay;
 pub mod settlement;
 pub mod store;

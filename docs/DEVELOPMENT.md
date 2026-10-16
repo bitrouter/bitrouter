@@ -461,6 +461,15 @@ AI observation declarations are ungated. Its pure conformance helpers use the
 default-off `testing` feature. The [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
 defines the final feature graph and isolated validation matrix.
 
+Application-local task transport and envelopes live in
+`client::agent_local`; its decoded rejection type is `ReplyError` rather than
+the harness's internal `ServiceError`. The listener/dispatch belongs to
+`harness::local`. Local directory DTOs stay application-owned because they are
+not part of the supported HTTP SDK surface. Result-schema execution and its
+`jsonschema` dependency belong to `harness::result_contract`; offline trajectory
+replay requires `core`, while request-time health reduction remains available
+to gateway routing in every profile.
+
 The application build script derives one normalized artifact identity from its
 manifest and Cargo's effective features. `bro build-info`, local daemon status
 and HTTP control capabilities expose that identity using AI data contracts.

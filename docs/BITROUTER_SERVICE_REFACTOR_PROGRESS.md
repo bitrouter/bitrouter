@@ -2784,3 +2784,91 @@ All aggregate A01–A16 gates remain open pending complete candidate evidence.
 Focused independent repair review confirmed the schema finding is resolved and
 found no further actionable A02 issue. Separate review confirmed F1–F3 are
 resolved at the workflow-selection level; it did not claim runtime execution.
+
+## Application ownership repairs after inventory review (2026-10-16)
+
+The G1–G3 implementation after `d2a3437` resolves the remaining source findings:
+
+- Offline `trajectory::replay` is compiled only with core. Gateway health
+  reduction and request-time guards stay available; base store and HTTP
+  regressions read persisted events directly instead of importing offline replay.
+- OS-local envelopes, directory DTOs, framing and typed transport moved to
+  `client::agent_local`. `harness::local` owns listener/dispatch and the shared
+  ThreadService. The client no longer imports service execution/error types;
+  `ReplyError` preserves wire codes/messages and caller retry/reconnect handling.
+  Wire version 17, instance checks, acceptance keys and limits are unchanged.
+  Explicit local clients compile without harness; autostart remains H-only.
+- Result schema loading, validator compilation and repair prompts moved to
+  `harness::result_contract`; `jsonschema` is optional under harness. CLI parsing
+  and existing missing-feature rejection remain separate from execution.
+
+Independent read-only repair review found no blocking source issue, missed
+consumer or newly introduced side effect. The reviewer explicitly distinguished
+source findings from runtime acceptance. New boundary coverage checks client
+imports and decodes every task error code to preserve its retry classification.
+Existing partial-frame/keyed-retry tests and unavailable-core local dispatch
+coverage moved with their owners.
+
+Validation on frozen repair source (Rust 1.99 tests; strict Rust 1.97 lint/docs):
+
+| Selection | Result |
+| --- | --- |
+| Harness-only library/ACP/capture/disabled-export/source-boundary selection | 226 passed, 2553 skipped by selection/platform, 8.229s |
+| Core-only `core_contract` and `core_execution` | 339 passed, zero skipped, 312.088s; three slow capacity scenarios |
+| Minimum client/store/telemetry/boundary/core-disabled/workflow/progress selection | 90 passed, 2196 skipped by selection/platform, 4.780s |
+| TUI without OTLP, `telemetry_disabled` | Six passed, zero skipped, 2.512s; includes Unix interactive rejection |
+| Workspace all-target/all-feature strict Clippy | Passed, 1m14s |
+| Minimum and core-only all-target strict Clippy | Passed, 40.48s and 50.41s |
+| Workspace all-feature strict rustdoc | Passed, 41.33s |
+| Minimum and harness normal/build dependency closures | Minimum excludes jsonschema/ACP/terminal/OTel; harness includes jsonschema but excludes terminal libraries |
+
+Logs are `/tmp/bitrouter-p0-ownership-*`. These runs exercise the F1–F3 selections
+added after the inventory audit. The complete post-repair all-feature suite and
+live core+harness/PTY reconnect scenarios remain required on the final candidate;
+no aggregate A01–A16 gate is closed by this source-stage result.
+
+## Authentic baseline format 7 capture (2026-10-16)
+
+The unchanged baseline executable was rehashed to
+`7336ae5ab9e36fd4af5e4fc78766ac0ad914f04b6d639ee3c6b9ec913cfccf6b`
+and invoked by a separate Cargo-built Rust fixture using a private configuration,
+workspace, runtime/data directories and synthetic local model endpoint. Two
+provider requests performed one read of synthetic `evidence.txt` and returned a
+completed native turn. Its foreground service stopped normally; the resident
+user service was not addressed. Initial capture attempts failed due to CLI flag
+placement and an omitted private data directory; only the final successful
+capture is treated as a payload fixture.
+
+The actual baseline SQLite database contains runtime format 7, **284 execution
+records**, including **92 nested core checkpoints**, and all **26 migration
+ledger rows**. SQLite `integrity_check` returned `ok`. The database is 1,200,128
+bytes, SHA-256
+`bf9f11c52a04eb7f654acac728b7ca432d760de4fbd07c12d0011e35a7e1f9fc`.
+Exact storage-envelope decompression verified each retained size/digest and
+preserved nested checkpoint bytes. The extracted journal SHA-256 is
+`c460809ed7218760ba88faf4a7fb56a1da03422555a66faecd4315bce99b450f`.
+
+Capture files and provenance are retained at
+`/tmp/bitrouter-p0-baseline-format7-capture-v3`; the Rust generator is at
+`/tmp/bitrouter-p0-baseline-capture-generator`. They still require repository
+fixture retention and candidate-reader/profile-transition tests. Capture proves
+writer provenance, not successful compatibility decoding or final A09.
+
+Historical source research also establishes that commit
+`a68c215f0b579aeb34dd15baf1670ef037c310f8` changes the writer from format 4 directly
+to format 6 while adding reader acceptance of 5. It does not establish a format-5
+writer. Do not manufacture historical evidence by changing a fixture's version
+field; evidence for other supported formats remains separate pending work.
+
+Before retaining the baseline database as a fixture, an isolated main-file-only
+read exposed that the capture still depends on its SQLite WAL. The earlier
+integrity/count result applies to the database **with its WAL**, not the main
+file alone. A read-only SQLite backup materialized a standalone snapshot without
+changing any execution payload: the ordered raw-record extraction is byte-for-byte
+identical to the retained extraction. The snapshot independently reports `ok`,
+format 7/version 284 and 26 migration rows, is 1,388,544 bytes, and hashes to
+`28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9`.
+The source WAL hashes to
+`fc7c19b510425654658e23dea790d650fe7b4b4f3ffb5a50fbd5d7997d311f28`.
+Retain this consistent snapshot and both source hashes in fixture provenance;
+do not ship the incomplete main file as a standalone database fixture.

@@ -24,8 +24,6 @@ pub mod administration_target;
 #[cfg(feature = "harness")]
 pub mod agent_api;
 #[cfg(feature = "harness")]
-pub mod agent_local;
-#[cfg(feature = "harness")]
 pub mod agent_registry;
 #[cfg(feature = "harness")]
 pub mod agent_sessions;
@@ -89,7 +87,6 @@ pub mod providers;
 pub mod reload;
 pub mod remote_control;
 pub mod request_checks;
-pub mod result_contract;
 pub mod router_migration;
 pub mod session_identity;
 pub mod skills;

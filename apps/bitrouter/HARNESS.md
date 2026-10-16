@@ -56,7 +56,7 @@ no observer holds them; this does not resolve their stored recovery blockers.
 | --- | --- |
 | AI `harness::{api,thread,turn}` | Public HTTP requests/envelopes, Thread/Turn status, receipts, snapshots, history, lifecycle, approval and recovery views |
 | AI `harness::{agent,item,runtime,resources,inspection}` | Nested public configuration, call identity, limits/ownership, material and context-inspection data |
-| `thread.rs` | App-local targets, authenticated requests, directory/close and explicit recovery commands |
+| `thread.rs` | App-local targets, authenticated requests, close and explicit recovery commands |
 | `turn.rs` and `service/observation.rs` | App-owned event projection and lifecycle helpers on public data; local runtime requests |
 | `item.rs` | Internal bounds for volatile output and status detail |
 | `storage.rs` | Authoritative execution facts, versioned commits, ownership and bounded durable queries |
@@ -79,6 +79,18 @@ keys, and consumes the existing continuing SSE surface. It does not discover
 sockets, perform workspace effects, acknowledge checkpoints or automatically
 replay an interrupted mutation. Local directory/close/recovery commands remain
 outside that HTTP surface.
+
+OS-local task envelopes, directory projections and typed transport live in
+application `client::agent_local`. They compile without harness execution and
+decode service failures as `ReplyError`, preserving the wire error codes. Local
+daemon autostart is available only with `harness`; explicit clients can connect
+to an already running service. The listener and dispatch live in `harness::local`
+and use the same ThreadService instance as HTTP and ACP. Moving these Rust
+imports does not change task protocol version 17, framing, instance checks or
+the existing keyed retry behavior.
+
+Harness result-schema loading, validation and repair prompts live in
+`harness::result_contract`; only the `harness` feature enables `jsonschema`.
 
 ## Follow one execution
 
@@ -125,7 +137,7 @@ an external integration test.
   `tools/tests/mod.rs`.
 - Service behavior suites live in `service/tests/`, indexed by `service/tests.rs`.
 - Core-disabled behavior uses `service/core_disabled_tests.rs` and the HTTP,
-  IPC and ACP adapter tests. Exact native writer records in
+  `local/core_disabled_tests.rs` IPC and ACP adapter tests. Exact native writer records in
   application-relative `tests/fixtures/native-replay/journal.json.zst` exercise offline replay in
   both profiles; the fixture README records its current-writer provenance.
 - Shared service fixtures, request constructors and synchronization helpers live

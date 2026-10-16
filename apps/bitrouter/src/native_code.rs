@@ -3,9 +3,9 @@ use crate::harness::service::observation::ThreadViewExt;
 use crate::harness::turn::TurnSnapshotExt;
 mod presentation;
 
-use crate::agent_local::{self, Operation, ReplyResult, ThreadClient};
-use crate::harness::service::ServiceError;
-use crate::harness::thread::ThreadDirectoryPage;
+use crate::client::agent_local::ReplyError;
+use crate::client::agent_local::ThreadDirectoryPage;
+use crate::client::agent_local::{self, Operation, ReplyResult, ThreadClient};
 use crate::presentation::agents::MenuEntry;
 use crate::presentation::native_agent::NativeEntryKind;
 use crate::presentation::native_agent::NativeLive;
@@ -262,7 +262,7 @@ pub async fn run(
                     Ok(None) => { subscription = None; state.status="disconnected".into(); state.pending_input_id=None; state.push("Connection lost; Thread remains on the server"); },
                     Err(error) => {
                         subscription = None;
-                        reconnect = !error.downcast_ref::<ServiceError>().is_some_and(|error| matches!(error.code, ErrorCode::InstanceChanged | ErrorCode::UnknownThread));
+                        reconnect = !error.downcast_ref::<ReplyError>().is_some_and(|error| matches!(error.code, ErrorCode::InstanceChanged | ErrorCode::UnknownThread));
                         state.status = if reconnect { "disconnected" } else { "server_instance_lost" }.into(); state.pending_input_id=None; state.push(error.to_string());
                     },
                 }
@@ -283,7 +283,7 @@ pub async fn run(
                     inventory_poll = Some(inventory_request(&client, &directory));
                 }
                 if subscription.is_none() && reconnect && let Some(id) = &session.thread_id { match client.observe(id, Some(cursor)).await { Ok(stream) => subscription=Some(stream), Err(error) => {
-                    if error.downcast_ref::<ServiceError>().is_some_and(|error| matches!(error.code, ErrorCode::InstanceChanged | ErrorCode::UnknownThread)) {
+                    if error.downcast_ref::<ReplyError>().is_some_and(|error| matches!(error.code, ErrorCode::InstanceChanged | ErrorCode::UnknownThread)) {
                         reconnect=false; state.status="server_instance_lost".into();
                     }
                     state.push(format!("Reconnect pending: {error}"));
@@ -991,7 +991,7 @@ fn update_snapshot(state: &mut NativeState, snapshot: &TurnSnapshot) {
 }
 
 fn known_rejection(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<ServiceError>().is_some_and(|error| {
+    error.downcast_ref::<ReplyError>().is_some_and(|error| {
         matches!(
             error.code,
             ErrorCode::InvalidRequest

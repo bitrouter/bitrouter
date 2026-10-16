@@ -1,49 +1,32 @@
-//! Versioned OS-local task contract. This adapter only translates requests to
-//! the BRO task service; it never advances the native model/tool loop itself.
+//! OS-local task envelopes and clients. These transport requests to a separately
+//! running harness; they neither construct ThreadService nor execute workspace tools.
 
-use crate::harness::agent::AgentConfigExt;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "harness")]
-use crate::gateway::caller::CallerContext;
-#[cfg(feature = "harness")]
-use crate::harness::service::ThreadService;
 use anyhow::{Context, Result};
 use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::RuntimeCapabilities;
-use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities};
+#[cfg(test)]
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::{
+    ThreadHistoryPage, ThreadObservation, ThreadSnapshot, ThreadView,
+};
+use bitrouter_ai::harness::turn::{SteeringReceipt, TurnReceipt, TurnSnapshot, TurnStatus};
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "harness")]
-use tokio::io::AsyncRead;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-#[cfg(feature = "harness")]
-use tokio_util::sync::CancellationToken;
 
 use crate::daemon::transport;
 
-#[cfg(feature = "harness")]
-use crate::harness::thread::{ThreadHistoryRequest, ThreadRequest, ThreadTarget};
-#[cfg(feature = "harness")]
-use crate::harness::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest};
-#[cfg(any(feature = "harness", test))]
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadHistoryPage;
-use bitrouter_ai::harness::thread::ThreadObservation;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::thread::ThreadView;
-use bitrouter_ai::harness::turn::SteeringReceipt;
-use bitrouter_ai::harness::turn::TurnReceipt;
-
 pub const CONTRACT_VERSION: u32 = 17;
-const MAX_COMMAND_BYTES: u64 = 64 * 1024;
+pub(crate) const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 const MAX_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
 pub fn socket_path(control_socket: &Path) -> PathBuf {
     control_socket.with_extension("agent.sock")
 }
 
+#[cfg(feature = "harness")]
 pub async fn connect_or_start(
     source: &crate::paths::ConfigSource,
     control_socket: &Path,
@@ -79,6 +62,23 @@ pub async fn connect_or_start(
         "BRO task service did not become ready at {}",
         socket.display()
     )
+}
+
+/// A cold directory projection. Listing does not load context or subscribe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadDirectoryEntry {
+    pub thread: ThreadSnapshot,
+    pub turn_status: Option<TurnStatus>,
+    pub turn_id: Option<String>,
+    pub needs_input: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadDirectoryPage {
+    /// Fixes directory membership, not the mutable status of each Thread.
+    pub cutoff: u64,
+    pub next_after: Option<u64>,
+    pub entries: Vec<ThreadDirectoryEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,7 +183,7 @@ pub struct ThreadReply {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplyResult {
     Directory {
-        page: crate::harness::thread::ThreadDirectoryPage,
+        page: ThreadDirectoryPage,
     },
     Capabilities {
         operations: Vec<String>,
@@ -220,413 +220,14 @@ pub enum ReplyResult {
     },
 }
 
-#[cfg(feature = "harness")]
-pub(crate) async fn serve(
-    mut listener: transport::ControlListener,
-    service: ThreadService,
-    shutdown: CancellationToken,
-) -> Result<()> {
-    let mut connections = tokio::task::JoinSet::new();
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            Some(result) = connections.join_next(), if !connections.is_empty() => {
-                if let Ok(Err(error)) = result { tracing::debug!(%error, "task observer disconnected"); }
-            }
-            accepted = listener.accept() => {
-                let stream = accepted?;
-                if connections.len() >= 64 {
-                    connections.spawn(async move {
-                        let mut stream = stream;
-                        write_reply(&mut stream, None, ReplyResult::Error { code: ErrorCode::Overloaded, message: "too many task connections".into() }).await
-                    });
-                    // Rejected connections also consume resources; wait for this
-                    // bounded reply before accepting another connection.
-                    let _ = connections.join_next().await;
-                } else {
-                    let service = service.clone();
-                    connections.spawn(async move { serve_connection(stream, service).await });
-                }
-            }
-        }
-    }
-    connections.abort_all();
-    while connections.join_next().await.is_some() {}
-    Ok(())
-}
-
-#[cfg(any(feature = "harness", test))]
-async fn write_reply(
-    write: &mut (impl AsyncWrite + Unpin),
-    request_id: Option<&str>,
-    result: ReplyResult,
-) -> Result<()> {
-    let mut encoded = serde_json::to_vec(&ThreadReply {
-        version: CONTRACT_VERSION,
-        command_id: request_id.map(str::to_string),
-        result,
-    })?;
-    encoded.push(b'\n');
-    anyhow::ensure!(
-        encoded.len() as u64 <= MAX_REPLY_BYTES,
-        "task reply is too large"
-    );
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        write.write_all(&encoded).await?;
-        write.flush().await
-    })
-    .await??;
-    Ok(())
-}
-
-#[cfg(feature = "harness")]
-async fn serve_connection<S>(stream: S, service: ThreadService) -> Result<()>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    let (read, mut write) = tokio::io::split(stream);
-    let mut reader = BufReader::new(read.take(MAX_COMMAND_BYTES + 1));
-    let mut line = String::new();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        reader.read_line(&mut line),
-    )
-    .await??;
-    let command = if line.len() as u64 <= MAX_COMMAND_BYTES {
-        serde_json::from_str::<ThreadCommand>(&line).ok()
-    } else {
-        None
-    };
-    let Some(command) = command else {
-        return write_reply(
-            &mut write,
-            None,
-            ReplyResult::Error {
-                code: ErrorCode::InvalidRequest,
-                message: "invalid or oversized task command".into(),
-            },
-        )
-        .await;
-    };
-    if let Operation::Observe { thread_id, after } = &command.operation
-        && command.version == CONTRACT_VERSION
-        && !command.command_id.is_empty()
-        && command.command_id.len() <= 128
-    {
-        let subscription = match target(&service, &command, thread_id) {
-            Ok(target) => match service.load_thread(&target, &CallerContext::local()).await {
-                Ok(_) => service.observe_thread(&target, &CallerContext::local(), *after),
-                Err(error) => Err(error),
-            },
-            Err(error) => Err(error),
-        };
-        match subscription {
-            Ok(mut subscription) => {
-                loop {
-                    let observation = tokio::select! {
-                        // EOF detaches even when a task is idle awaiting input.
-                        _ = reader.read_u8() => break,
-                        next = subscription.next() => match next? {
-                            Some(observation) => observation,
-                            None => break,
-                        },
-                    };
-                    write_reply(
-                        &mut write,
-                        Some(&command.command_id),
-                        ReplyResult::Observation {
-                            observation: Box::new(observation),
-                        },
-                    )
-                    .await?;
-                }
-                return Ok(());
-            }
-            Err(error) => {
-                return write_reply(
-                    &mut write,
-                    Some(&command.command_id),
-                    ReplyResult::Error {
-                        code: error.code,
-                        message: error.message,
-                    },
-                )
-                .await;
-            }
-        }
-    }
-    let request_id = command.command_id.clone();
-    write_reply(
-        &mut write,
-        Some(&request_id),
-        dispatch(&service, command).await,
-    )
-    .await
-}
-
-#[cfg(feature = "harness")]
-async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResult {
-    if command.command_id.is_empty() || command.command_id.len() > 128 {
-        return ReplyResult::Error {
-            code: ErrorCode::InvalidRequest,
-            message: "invalid request ID".into(),
-        };
-    }
-    if command.version != CONTRACT_VERSION {
-        return ReplyResult::UnsupportedVersion {
-            supported: CONTRACT_VERSION,
-        };
-    }
-    if !matches!(command.operation, Operation::Capabilities)
-        && let Err(error) = service.ensure_instance(command.server_instance_id.as_deref())
-    {
-        return ReplyResult::Error {
-            code: error.code,
-            message: error.message,
-        };
-    }
-    let caller = CallerContext::local();
-    let epoch = command.server_instance_id.clone().unwrap_or_default();
-    let make_target = |thread_id: String| ThreadTarget {
-        thread_id,
-        server_instance_id: epoch.clone(),
-    };
-    let result = match command.operation {
-        Operation::Capabilities => {
-            let runtime = service.capabilities();
-            let operations: &[&str] = if runtime.native_execution {
-                &[
-                    "list_threads",
-                    "create_thread",
-                    "read_thread",
-                    "read_turn",
-                    "start_turn",
-                    "enqueue_turn",
-                    "history",
-                    "observe",
-                    "input",
-                    "cancel_turn",
-                    "cancel_queued_turn",
-                    "steer",
-                    "resume_queue",
-                    "unload_thread",
-                ]
-            } else {
-                &[
-                    "list_threads",
-                    "read_thread",
-                    "read_turn",
-                    "history",
-                    "observe",
-                    "unload_thread",
-                ]
-            };
-            return ReplyResult::Capabilities {
-                runtime: Box::new(runtime),
-                operations: operations.iter().map(|name| (*name).to_owned()).collect(),
-            };
-        }
-        Operation::ListThreads {
-            after,
-            cutoff,
-            limit,
-        } => service
-            .list_threads(&epoch, &caller, after, cutoff, limit)
-            .await
-            .map(|page| ReplyResult::Directory { page }),
-        Operation::CreateThread {
-            workspace,
-            model,
-            model_mode,
-            effort,
-            max_output_tokens,
-            read_only,
-            verification_command,
-            idempotency_key,
-        } => match ThreadService::require_native_execution()
-            .and_then(|()| service.register_local_workspace(&workspace))
-        {
-            Ok(workspace) => service
-                .create_thread(
-                    &epoch,
-                    ThreadRequest {
-                        caller,
-                        workspace,
-                        config: if read_only {
-                            AgentConfig::fixed(model, effort)
-                                .with_model_mode(model_mode)
-                                .with_output_reservation(max_output_tokens)
-                                .read_only()
-                        } else {
-                            AgentConfig::fixed(model, effort)
-                                .with_model_mode(model_mode)
-                                .with_output_reservation(max_output_tokens)
-                        },
-                        permission_profile: if read_only {
-                            PermissionProfile::ReadOnly
-                        } else {
-                            PermissionProfile::Ask
-                        },
-                        verification_command,
-                        idempotency_key,
-                    },
-                )
-                .await
-                .map(|snapshot| ReplyResult::Thread {
-                    snapshot: Box::new(snapshot),
-                }),
-            Err(error) => Err(error),
-        },
-        Operation::ReadThread { thread_id } => service
-            .read_stored_thread_view(&make_target(thread_id), &caller)
-            .await
-            .map(|view| ReplyResult::View {
-                view: Box::new(view),
-            }),
-        Operation::UnloadThread { thread_id } => service
-            .unload_thread(&make_target(thread_id), &caller)
-            .await
-            .map(|_| ReplyResult::Ok),
-        Operation::ReadTurn { thread_id, turn_id } => service
-            .read_stored_turn(&make_target(thread_id), &caller, &turn_id)
-            .await
-            .map(|snapshot| ReplyResult::Turn {
-                snapshot: Box::new(snapshot),
-            }),
-        Operation::StartTurn {
-            thread_id,
-            prompt,
-            idempotency_key,
-        } => service
-            .start_turn(
-                &make_target(thread_id),
-                &caller,
-                TurnRequest {
-                    prompt,
-                    idempotency_key,
-                },
-            )
-            .await
-            .map(|receipt| ReplyResult::Receipt { receipt }),
-        Operation::EnqueueTurn {
-            thread_id,
-            prompt,
-            idempotency_key,
-        } => service
-            .enqueue_turn(
-                &make_target(thread_id),
-                &caller,
-                TurnRequest {
-                    prompt,
-                    idempotency_key,
-                },
-            )
-            .await
-            .map(|receipt| ReplyResult::Receipt { receipt }),
-        Operation::History {
-            thread_id,
-            after,
-            cutoff,
-            limit,
-        } => service
-            .thread_history(
-                &make_target(thread_id),
-                &caller,
-                ThreadHistoryRequest {
-                    after,
-                    cutoff,
-                    limit,
-                },
-            )
-            .await
-            .map(|page| ReplyResult::History { page }),
-        Operation::Input {
-            thread_id,
-            turn_id,
-            request_id,
-            approved,
-            idempotency_key,
-        } => service
-            .answer_thread_input(
-                &make_target(thread_id),
-                &caller,
-                ApprovalAnswer {
-                    turn_id,
-                    request_id,
-                    approved,
-                    idempotency_key,
-                },
-            )
-            .await
-            .map(|_| ReplyResult::Ok),
-        Operation::CancelTurn {
-            thread_id,
-            turn_id,
-            idempotency_key,
-        } => service
-            .cancel_turn(
-                &make_target(thread_id),
-                &caller,
-                CancelTurnRequest {
-                    turn_id,
-                    idempotency_key,
-                },
-            )
-            .await
-            .map(|_| ReplyResult::Ok),
-        Operation::CancelQueuedTurn {
-            thread_id,
-            turn_id,
-            idempotency_key,
-        } => service
-            .cancel_queued_turn(&make_target(thread_id), &caller, &turn_id, idempotency_key)
-            .await
-            .map(|receipt| ReplyResult::Receipt { receipt }),
-        Operation::Steer {
-            thread_id,
-            expected_turn_id,
-            text,
-            idempotency_key,
-        } => service
-            .steer(
-                &make_target(thread_id),
-                &caller,
-                SteeringRequest {
-                    expected_turn_id,
-                    text,
-                    idempotency_key,
-                },
-            )
-            .await
-            .map(|receipt| ReplyResult::Steering { receipt }),
-        Operation::ResumeQueue {
-            thread_id,
-            idempotency_key,
-        } => service
-            .resume_queue(&make_target(thread_id), &caller, idempotency_key)
-            .await
-            .map(|snapshot| ReplyResult::Thread {
-                snapshot: Box::new(snapshot),
-            }),
-        Operation::Observe { .. } => Err("observe requires a streaming connection".into()),
-    };
-    result.unwrap_or_else(|error| ReplyResult::Error {
-        code: error.code,
-        message: error.message,
-    })
-}
-
-#[cfg(feature = "harness")]
-fn target(
-    service: &ThreadService,
-    command: &ThreadCommand,
-    thread_id: &str,
-) -> std::result::Result<ThreadTarget, crate::harness::service::ServiceError> {
-    service.ensure_instance(command.server_instance_id.as_deref())?;
-    Ok(ThreadTarget {
-        thread_id: thread_id.into(),
-        server_instance_id: command.server_instance_id.clone().unwrap_or_default(),
-    })
+/// A decoded task-service rejection, independent of its execution implementation.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct ReplyError {
+    /// Stable service error code used for explicit retry classification.
+    pub code: ErrorCode,
+    /// Service diagnostic, preserved without changing local CLI output.
+    pub message: String,
 }
 
 /// A client stays bound to the instance it negotiated. Network retries never
@@ -673,7 +274,7 @@ impl ThreadClient {
             model_mode: config.model_mode,
             effort: config.effort,
             max_output_tokens: config.max_output_tokens,
-            read_only: config.tool_mode() == bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+            read_only: config.tool_mode == bitrouter_ai::harness::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
         };
@@ -791,17 +392,15 @@ pub async fn request(socket: &Path, operation: Operation) -> Result<ReplyResult>
 }
 
 fn uncertain(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<crate::harness::service::ServiceError>()
-        .is_none_or(|failure| {
-            matches!(
-                failure.code,
-                ErrorCode::StorageUnavailable
-                    | ErrorCode::RecoveryRequired
-                    | ErrorCode::InstanceChanged
-                    | ErrorCode::Overloaded
-            )
-        })
+    error.downcast_ref::<ReplyError>().is_none_or(|failure| {
+        matches!(
+            failure.code,
+            ErrorCode::StorageUnavailable
+                | ErrorCode::RecoveryRequired
+                | ErrorCode::InstanceChanged
+                | ErrorCode::Overloaded
+        )
+    })
 }
 
 async fn send_command(
@@ -870,10 +469,7 @@ fn decode_reply(line: &str, request_id: &str) -> Result<ReplyResult> {
     );
     match reply.result {
         ReplyResult::Error { code, message } => {
-            Err(anyhow::Error::new(crate::harness::service::ServiceError {
-                code,
-                message,
-            }))
+            Err(anyhow::Error::new(ReplyError { code, message }))
         }
         ReplyResult::UnsupportedVersion { supported } => anyhow::bail!(
             "task server supports contract version {supported}; client requires {CONTRACT_VERSION}"
@@ -882,8 +478,29 @@ fn decode_reply(line: &str, request_id: &str) -> Result<ReplyResult> {
     }
 }
 
-#[cfg(all(test, feature = "harness", not(feature = "core")))]
-mod core_disabled_tests;
+#[cfg(any(feature = "harness", test))]
+pub(crate) async fn write_reply(
+    write: &mut (impl AsyncWrite + Unpin),
+    request_id: Option<&str>,
+    result: ReplyResult,
+) -> Result<()> {
+    let mut encoded = serde_json::to_vec(&ThreadReply {
+        version: CONTRACT_VERSION,
+        command_id: request_id.map(str::to_string),
+        result,
+    })?;
+    encoded.push(b'\n');
+    anyhow::ensure!(
+        encoded.len() as u64 <= MAX_REPLY_BYTES,
+        "task reply is too large"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        write.write_all(&encoded).await?;
+        write.flush().await
+    })
+    .await??;
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -922,6 +539,43 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn decoded_rejections_keep_codes_and_retry_classification() -> Result<()> {
+        for (code, retryable) in [
+            (ErrorCode::UnknownThread, false),
+            (ErrorCode::Unauthorized, false),
+            (ErrorCode::RecoveryRequired, true),
+            (ErrorCode::InvalidRequest, false),
+            (ErrorCode::UnknownTurn, false),
+            (ErrorCode::Conflict, false),
+            (ErrorCode::Overloaded, true),
+            (ErrorCode::ShuttingDown, false),
+            (ErrorCode::InstanceChanged, true),
+            (ErrorCode::ResyncRequired, false),
+            (ErrorCode::StorageUnavailable, true),
+            (ErrorCode::UnsupportedCapability, false),
+        ] {
+            let encoded = serde_json::to_string(&ThreadReply {
+                version: CONTRACT_VERSION,
+                command_id: Some("request".into()),
+                result: ReplyResult::Error {
+                    code,
+                    message: "original service diagnostic".into(),
+                },
+            })?;
+            let error = decode_reply(&encoded, "request")
+                .err()
+                .context("rejection became a successful reply")?;
+            let rejection = error
+                .downcast_ref::<ReplyError>()
+                .context("missing rejection")?;
+            assert_eq!(rejection.code, code);
+            assert_eq!(error.to_string(), "original service diagnostic");
+            assert_eq!(uncertain(&error), retryable, "{code:?}");
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn interrupted_frame_read_keeps_partial_bytes() -> Result<()> {
         let (read, mut write) = tokio::io::duplex(4096);
@@ -956,7 +610,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing instance error"))?;
         assert!(
             error
-                .downcast_ref::<crate::harness::service::ServiceError>()
+                .downcast_ref::<ReplyError>()
                 .is_some_and(|error| error.code == ErrorCode::InstanceChanged)
         );
         Ok(())
@@ -1048,7 +702,20 @@ mod tests {
         let (thread, turn) = client
             .create_and_start(
                 PathBuf::from("/fixture"),
-                AgentConfig::fixed("fixture-model", None).read_only(),
+                AgentConfig {
+                    model: "fixture-model".into(),
+                    model_mode: Default::default(),
+                    effort: None,
+                    max_output_tokens: None,
+                    instructions: String::new(),
+                    max_steps: 32,
+                    max_tool_calls: 128,
+                    max_duration: std::time::Duration::from_secs(600),
+                    max_context_bytes: 512 * 1024,
+                    max_spend_microusd: None,
+                    estimate_rates: None,
+                    tool_mode: bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+                },
                 None,
                 "original prompt".into(),
             )

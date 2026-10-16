@@ -645,7 +645,7 @@ crate-root module declarations at the inventory baseline.
 | `adequacy` | `core::adequacy` existing evidence/read/report behavior; do not reactivate legacy learning merely by moving it |
 | `administration_target` | `client` endpoint/transport selection; portable remote HTTP implementation in SDK |
 | `agent_api` | `harness::api` handlers; public wire DTOs to AI, portable supported HTTP client methods to SDK |
-| `agent_local` | `client::agent_local` OS-local client and IPC envelopes; separate data from `ThreadService` execution. Only DTOs also exposed by supported public HTTP APIs move to AI; local-only envelopes and discovery stay application-owned. |
+| `agent_local` | Split the OS-local client, IPC envelopes and decoded reply errors into `client::agent_local`; move the listener, request dispatch and `ThreadService` calls into `harness::local`. Host wires the listener only with harness. Only DTOs also exposed by supported public HTTP APIs move to AI; local-only envelopes and discovery stay application-owned. |
 | `agent_registry` | `harness::registry` program metadata and selection |
 | `agent_sessions` | Local session client under `client`, shared operations/acknowledgements under `commands`, snapshot/history projection under `presentation`; interactive deck loops and terminal event handling under TUI; execution remains in harness |
 | `agent_store` | `harness::storage` existing codecs and durable execution repositories |
@@ -696,7 +696,7 @@ crate-root module declarations at the inventory baseline.
 | `reload` | `config::reload` validation and owner-specific application of supported changes |
 | `remote_control` | Server `auth/inventory/operations/reads` to `gateway::control`; HTTP client to SDK; DTOs to AI; runtime reload coordination stays host-owned |
 | `request_checks` | `gateway::extensions` registration binding, runner assembly and execution limits |
-| `result_contract` | Harness result validation; shared externally serialized result definitions to AI |
+| `result_contract` | `harness::result_contract`, including schema compilation, prompt/repair text and result validation. Activate `jsonschema` only with harness, including its supervisor consumers. Extract a serialized result definition to AI only when an actual public API consumer needs it. |
 | `router_migration` | `config::router_migration` explicit compatibility parse/write operations |
 | `session_identity` | `gateway::session_identity` request correlation and pure extraction; move its ACP runtime/route-lease lookup adapter behind harness and its workflow-analysis integration behind core; no ownership of harness session history |
 | `skills` | Offline parsing/discovery and CLI material inspection remain available with their existing management commands; runtime materialization belongs to harness; gateway Skills-over-MCP relay remains gateway behind `mcp`. Split shared format/name validation from execution resources. |
@@ -812,7 +812,7 @@ execution; a top-level `cfg` on the old module is insufficient.
 | `supervisor` local requests, replies, grants and leases | Move local envelopes/client transport under `client::sessions`; keep supervisor execution under harness. Several nested fields contain ACP schema types, so moving declarations alone does not remove ACP from the base build. Preserve disabled-operation decoding and explicit capability errors without constructing the supervisor. |
 | `daemon` session request/response variants | Retain their tags and compatibility behavior in reduced builds. Decode unsupported payloads as bounded opaque data when necessary, then reject the operation explicitly; do not turn an unavailable feature into an unknown protocol variant. These are local application contracts, outside AI. |
 | `acp_cli::{RoutingOptions, HeadlessOptions, PromptFormat, SessionSelection}` | Keep CLI options and static capability data separate from controllers, session hosts and execution adapters. Gate conversions into harness permission/runtime types with execution, not argument parsing. |
-| `agent_local` snapshots, receipts, capabilities and errors | Extract HTTP-shared DTOs from service/storage implementations before adapting local replies. Keep local wrappers, socket discovery and dispatch in the application; do not publish the IPC protocol simply to break an import cycle. |
+| `agent_local` snapshots, receipts, capabilities and errors | Extract HTTP-shared DTOs from service/storage implementations before adapting local replies. Keep local wrappers, socket discovery, framing and decoded reply errors in the application client; listener dispatch and execution belong to harness. Preserve error codes, display text and retry classification when removing the client's dependency on `ServiceError`; update callers that downcast it. Do not publish the IPC protocol simply to break an import cycle. |
 | `acp_trajectory::CanonicalStore` versus `Recorder` | Retain historical projections/checkpoint access needed by core independently of live ACP capture. Gate `Recorder`, `RecorderState`, recorder construction and `CapturePort` integration with harness; preserve storage validation and each caller's existing write authority. |
 | `evolution::service::is_administrative_update` | Published-policy serving currently deserializes ACP notifications to classify administrative updates. Preserve that validation/classification in an application-owned historical-record decoder, including inputs rejected by the baseline remaining nonadministrative and the baseline's tolerance of optional/nested fields. A discriminator-only whitelist or a stricter replacement decoder must not change enrollment behavior. |
 | Harness MCP resources used by `tools::check` | Move reusable bounded discovery, transport and confirmed process cleanup under the application MCP owner. Keep workspace-effect recording and approval adaptation in harness; retain timeout/cancellation semantics in MCP-only builds. |
@@ -838,6 +838,13 @@ the existing harness-enabled prompt/history transport.
 
 These splits belong to P0 feature isolation and behavior preservation (A02,
 A05, A06, A09 and A11), not a new IPC or plugin API.
+
+The local task client must not import harness execution, ORM repositories or
+storage handles, even behind a feature gate. Its explicit endpoint operations
+remain client operations; automatic local service startup is a separate
+harness-enabled application adapter. Shared framing helpers do not grant the
+client execution authority. Keep this source boundary explicit alongside the
+feature-build checks.
 
 ### Additional gateway and core observation splits
 
@@ -1369,6 +1376,12 @@ under their backend feature. Shared workspace declarations must not enable
 those optional features unconditionally. Headless startup must also avoid
 terminal initialization through an indirect onboarding, prompt or log helper.
 
+The result-schema compiler is a harness dependency, not part of the gateway's
+public protocol schema support. Make `jsonschema` optional under `harness` and
+keep its result-contract and supervisor consumers within that boundary.
+`schemars` derives for configuration or AI's optional `schema` feature do not
+justify retaining the execution-time result validator in a minimum gateway.
+
 In particular, `agent-client-protocol`, its schema package and conductor become
 optional harness dependencies after local envelopes and historical decoding are
 separated. A temporary base dependency on the schema package is an intermediate
@@ -1691,6 +1704,13 @@ over harness persistence or execution.
   before removing ACP dependencies; keep public AI additions limited to actual
   HTTP/extension contracts. Validate the historical administrative-update
   classifier against the baseline before removing its ACP schema dependency.
+- Split the local task client's framing/reply errors from its harness listener
+  and dispatcher. Preserve retry decisions and error downcasts at every caller.
+  Gate result-schema validation and its dependency with harness; gate offline
+  trajectory replay with core while retaining request-time health reduction and
+  its gateway-only tests. A test helper must not force an optional runtime owner
+  back into the minimum dependency graph.
+
 - Gate local task/ACP listeners and ThreadService with harness separately from
   the existing `agent_api.enabled` HTTP opt-in. Preserve full-product local
   endpoints and their feature-aware inspection/execution capabilities.
@@ -1827,7 +1847,7 @@ coverage that justifies a profile.
 | Core SDK | SDK-only consumer negotiates capabilities and the existing channel against a separate core-enabled server; bind and checkpoint ACK unblock work only after the test caller persists it; managed Responses, operation/head lookup, release, scope/epoch/version errors, bounded frames and disconnect preserve existing semantics; no implicit ACK, tool execution or mutation replay |
 | Harness HTTP SDK | SDK-only consumer uses the explicit loopback execution endpoint and credential; verify instance changes, workspace authorization, stored-session reads/observation, native mutations with core, and capability rejection without core; inference/control credentials are not interchangeable with execution credentials |
 | Harness only | Stored-session inspection, historical native snapshot decoding and corruption rejection, and existing external ACP/headless paths without production core or terminal drawing; native start/resume rejects before resource discovery, owner acquisition or durable mutation, with no automatic queue execution |
-| Base management and local protocol | Provider login through a stub vendor executable and offline skill inspection work without harness; local session requests remain decodable and return explicit unavailable-capability errors before service/state changes; IPC envelopes do not become public AI APIs |
+| Base management and local protocol | Provider login through a stub vendor executable and offline skill inspection work without harness; local session requests remain decodable and return explicit unavailable-capability errors before service/state changes; task-client reply codes and retry classification remain equivalent without imports of harness execution or storage; IPC envelopes do not become public AI APIs |
 | MCP only | Existing `mcp check` performs bounded discovery and confirms cleanup after success, failure and cancellation without enabling harness, ACP, core or TUI |
 | Historical ACP records | Gateway policy serving and core offline checkpoint/projection reads work without a live recorder; administrative-update classification matches baseline valid/malformed/unknown payload behavior, with no changes to enrollment or integrity checks |
 | Core and harness | Existing managed execution, ThreadService ownership/queue/approval transitions, scheduling-to-tool boundary and durable checkpoint acknowledgement tests |

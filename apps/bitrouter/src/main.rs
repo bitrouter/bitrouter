@@ -2499,7 +2499,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 }
                 let schema = result_schema
                     .as_deref()
-                    .map(bitrouter::result_contract::ResultContract::from_flag)
+                    .map(bitrouter::harness::result_contract::ResultContract::from_flag)
                     .transpose()?
                     .map(|contract| contract.schema().clone());
                 let permission_policy = headless.supervised_permission_policy()?;
@@ -2888,7 +2888,7 @@ async fn read_candidate_artifact(path: &Path) -> Result<bitrouter_ai::artifact::
 
 #[cfg(all(feature = "core", feature = "harness"))]
 async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
-    use bitrouter::agent_local::{Operation, ReplyResult};
+    use bitrouter::client::agent_local::{Operation, ReplyResult};
     use bitrouter_ai::harness::turn::TurnStatus;
 
     anyhow::ensure!(
@@ -2898,12 +2898,13 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     let source = bitrouter::paths::resolve_config(args.config.as_deref())?;
     let cfg = bitrouter::paths::load_config(&source).await?;
     let control_socket = daemon::socket_path_for(&source, &cfg);
-    let task_socket = bitrouter::agent_local::connect_or_start(&source, &control_socket).await?;
+    let task_socket =
+        bitrouter::client::agent_local::connect_or_start(&source, &control_socket).await?;
     let workspace = match args.workspace {
         Some(workspace) => workspace,
         None => std::env::current_dir()?,
     };
-    let client = bitrouter::agent_local::ThreadClient::connect(&task_socket).await?;
+    let client = bitrouter::client::agent_local::ThreadClient::connect(&task_socket).await?;
     let model = args
         .model
         .or_else(|| bitrouter::policy_lock::native_default_model(&cfg).map(str::to_owned))
@@ -3014,7 +3015,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                 .await;
             if let Err(error) = result
                 && !error
-                    .downcast_ref::<bitrouter::harness::service::ServiceError>()
+                    .downcast_ref::<bitrouter::client::agent_local::ReplyError>()
                     .is_some_and(|error| {
                         error.code == bitrouter_ai::harness::runtime::ErrorCode::Conflict
                     })
@@ -6789,7 +6790,7 @@ async fn run_agent_prompt(
     // A malformed schema or policy fails fast, before any session side effect.
     let contract = request
         .result_schema
-        .map(bitrouter::result_contract::ResultContract::from_flag)
+        .map(bitrouter::harness::result_contract::ResultContract::from_flag)
         .transpose()?;
     let prompt_options = bitrouter::acp_cli::PromptOptions {
         no_wait: request.no_wait,

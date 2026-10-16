@@ -21,7 +21,6 @@ use bitrouter::metering::{MeteringStore, TimeWindow};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
 use bitrouter::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
 use bitrouter::trajectory::health::reduce;
-use bitrouter::trajectory::replay::replay_episode;
 use bitrouter::trajectory::store::{EpisodeAudit, TrajectoryStore};
 #[cfg(feature = "core")]
 use bitrouter::trajectory::types::RequestStatus;
@@ -963,13 +962,7 @@ async fn normalized_outcome(
                 .cloned()
         })
         .collect();
-    let snapshot = replay_episode(
-        &store,
-        owner,
-        &episodes[0],
-        &BTreeSet::from(["strong".to_owned()]),
-    )
-    .await?;
+    let snapshot = reduce(&events, &BTreeSet::from(["strong".to_owned()]))?;
     Ok(NormalizedOutcome {
         completeness: snapshot.health.completeness,
         request_count: snapshot.health.request_count,

@@ -718,7 +718,7 @@ pub struct PromptOptions {
     /// Return as soon as the prompt is submitted.
     pub no_wait: bool,
     /// The `--result-schema` contract, when there is one.
-    pub contract: Option<crate::result_contract::ResultContract>,
+    pub contract: Option<crate::harness::result_contract::ResultContract>,
     /// How permission requests are answered.
     pub policy: Policy,
     /// What is printed.
@@ -2947,7 +2947,7 @@ async fn prompt_wait<W>(
     turn: &mut Turn<'_>,
     updates: &mut (impl futures::Stream<Item = SessionUpdate> + Unpin),
     text: &str,
-    contract: Option<crate::result_contract::ResultContract>,
+    contract: Option<crate::harness::result_contract::ResultContract>,
     presenter: &mut Presenter<'_, W>,
 ) -> Result<()>
 where

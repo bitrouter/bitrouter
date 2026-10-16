@@ -3163,6 +3163,7 @@ mod tests {
     use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+    #[cfg(feature = "core")]
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
     use {
@@ -3832,6 +3833,7 @@ mod tests {
             committed.intent.trajectory_snapshot_digest,
             factual_prefix.evidence_digest
         );
+        #[cfg(feature = "core")]
         assert_eq!(
             replay_episode(
                 &store,
@@ -3935,14 +3937,22 @@ mod tests {
         store.begin_request("owner-a", unmatched).await?;
 
         let protected_tiers = BTreeSet::new();
-        let incomplete =
-            replay_episode(&store, "owner-a", "episode-incomplete", &protected_tiers).await?;
+        let incomplete = reduce(
+            &store
+                .events_for_episode("owner-a", "episode-incomplete")
+                .await?,
+            &protected_tiers,
+        )?;
         assert_eq!(
             incomplete.health.completeness,
             HistoryCompleteness::Incomplete
         );
-        let unmatched =
-            replay_episode(&store, "owner-a", "episode-unmatched", &protected_tiers).await?;
+        let unmatched = reduce(
+            &store
+                .events_for_episode("owner-a", "episode-unmatched")
+                .await?,
+            &protected_tiers,
+        )?;
         assert_eq!(unmatched.health.completeness, HistoryCompleteness::Unknown);
         Ok(())
     }
