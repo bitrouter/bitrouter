@@ -19,6 +19,7 @@ use bitrouter_ai::harness::inspection::AgentStatus;
 
 use crate::storage::checkpoint::validation::HarnessManifestExt;
 use crate::storage::checkpoint::validation::ToolResultLimitsExt;
+use crate::storage::checkpoint::validation::limits_within;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -4617,7 +4618,7 @@ pub(super) fn validate_input(input: &TaskInput, limits: &Limits) -> Result<(), C
         ));
     }
     if let Some(requested) = &input.limits {
-        requested.within(limits)?;
+        limits_within(requested, limits)?;
         if serde_json::to_vec(input).map_err(json_error)?.len() as u64 > requested.input_bytes {
             return Err(reject(
                 ErrorCode::LimitExceeded,

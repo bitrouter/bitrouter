@@ -15,6 +15,7 @@
 //! OSS path uses [`DepositRulesHook`] to install one global set. With no rule
 //! set present, both hooks no-op (allow / pass).
 
+use crate::gateway::model::protocol::values::render_tool_result_output;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -51,7 +52,7 @@ fn request_text(ctx: &PipelineContext) -> Result<String> {
                 Content::ToolResult { output, .. } => {
                     // Scan the flattened text of the tool result (text parts and
                     // stringified JSON) so guardrail rules still see tool output.
-                    buf.push_str(&output.to_provider_string());
+                    buf.push_str(&render_tool_result_output(output));
                     buf.push('\n');
                 }
                 Content::ToolCall { arguments, .. } => {

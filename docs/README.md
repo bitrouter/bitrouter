@@ -5,6 +5,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [Service refactor source inventory](BITROUTER_SERVICE_REFACTOR_INVENTORY.md) —
+  revision-scoped reconciliation of baseline modules with actual destinations;
+  coverage and remaining gaps are explicit, separate from acceptance results.
+
 - [`DISTRIBUTION.md`](DISTRIBUTION.md) — full and gateway profiles, archive
   identity/checksums, profile-preserving updates and packaged SDK acceptance.
 - [`BITROUTER_SERVICE_REFACTOR_PLAN.md`](BITROUTER_SERVICE_REFACTOR_PLAN.md) —

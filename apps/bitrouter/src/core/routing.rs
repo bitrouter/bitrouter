@@ -1,6 +1,7 @@
 //! Immutable context evidence and model-step routing records. Estimates are
 //! distinct from observed usage; unknown token capacity is never a verified fit.
 
+use crate::gateway::model::capabilities::required_capabilities;
 use crate::storage::checkpoint::snapshot::routing::{
     ContextManifest, ExecutionReceipt, RouteFeasibility,
 };
@@ -90,7 +91,7 @@ impl ContextManifest {
 }
 
 pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, CoreError> {
-    let required = plan.prompt.required_capabilities();
+    let required = required_capabilities(&plan.prompt);
     plan.routes
         .iter()
         .enumerate()

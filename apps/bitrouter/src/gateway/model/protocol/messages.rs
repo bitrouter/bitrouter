@@ -11,6 +11,9 @@
 //! - #422: inbound `ping` events are ignored, not treated as errors.
 
 use crate::gateway::model::conversion::ReportAdmission;
+use crate::gateway::model::protocol::values::{
+    extra_value_for_protocol, extras_for_protocol, render_tool_result_output, synthesize_source_id,
+};
 use bitrouter_ai::protocol::messages::{
     MessagesOutputConfig, MessagesOutputFormat, MessagesRequest, MessagesTool,
 };
@@ -1360,12 +1363,11 @@ impl OutboundAdapter for MessagesAdapter {
         // requires unsupported schema attributes to be absent before rendering
         // the native format slot.
         // <https://platform.claude.com/docs/en/build-with-claude/effort>
-        let mut output_config = prompt
-            .params
-            .extra_value_for_protocol(&ApiProtocol::Messages, "output_config")
-            .and_then(|v| v.as_object())
-            .cloned()
-            .unwrap_or_default();
+        let mut output_config =
+            extra_value_for_protocol(&prompt.params, &ApiProtocol::Messages, "output_config")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
         if let Some(rf) = &prompt.response_format {
             output_config.insert("format".into(), render_messages_response_format(rf));
         }
@@ -1409,7 +1411,7 @@ impl OutboundAdapter for MessagesAdapter {
         }
         // Splat Anthropic-specific extras (metadata, thinking, …) only for a
         // native round trip. Typed fields win over same-named extras.
-        for (k, v) in prompt.params.extras_for_protocol(&ApiProtocol::Messages) {
+        for (k, v) in extras_for_protocol(&prompt.params, &ApiProtocol::Messages) {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
         req.insert("stream".into(), prompt.stream.into());
@@ -1778,7 +1780,7 @@ fn parse_messages_block_sources(block: &serde_json::Value, next_index: &mut usiz
         }
         out.push(Content::Source {
             source: Source::Url {
-                id: Source::synthesize_id(url, *next_index),
+                id: synthesize_source_id(url, *next_index),
                 url: url.to_string(),
                 title,
             },
@@ -2057,7 +2059,7 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
         // Anthropic converter likewise drops a `tool-approval-response` part
         // (`continue`), so both approval parts are skipped here. A denied
         // execution still degrades to a plain `tool_result` string on the
-        // request side (`render_tool_result_content` via `to_provider_string`).
+        // request side (`render_tool_result_content` via `render_tool_result_output`).
         // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/convert-to-anthropic-messages-prompt.ts>
         Content::ToolApprovalRequest { .. } | Content::ToolApprovalResponse { .. } => None,
     }
@@ -2108,7 +2110,7 @@ fn render_tool_result_content(output: &ToolResultOutput) -> (serde_json::Value, 
                 .collect();
             serde_json::Value::Array(blocks)
         }
-        other => serde_json::Value::String(other.to_provider_string()),
+        other => serde_json::Value::String(render_tool_result_output(other)),
     };
     (content, is_error)
 }

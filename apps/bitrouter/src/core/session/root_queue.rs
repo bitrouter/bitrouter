@@ -363,7 +363,7 @@ pub(super) fn validate(state: &SessionSnapshot, limits: &Limits) -> Result<(), C
         for id in &entry.required_materials {
             validate_id(id)?;
         }
-        entry.limits.within(limits)?;
+        limits_within(&entry.limits, limits)?;
         validate_input(&entry.input, &entry.limits)?;
         let receipt = state.operations.get(&entry.operation_id).ok_or_else(|| {
             reject(

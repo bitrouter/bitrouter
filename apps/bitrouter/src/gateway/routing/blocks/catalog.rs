@@ -1,5 +1,6 @@
 //! Dependency validation against the configuration and policy actually serving.
 
+use crate::gateway::model::capabilities::required_capabilities;
 use std::collections::BTreeMap;
 
 use crate::config::AccountStrategy;
@@ -60,7 +61,7 @@ pub(crate) async fn request_compatible(
     }
     let table = ConfigRoutingTable::from_config(stable);
     let mut prefs = resolution.prefs;
-    prefs.require_capabilities = preview.require_generation_prompt()?.required_capabilities();
+    prefs.require_capabilities = required_capabilities(preview.require_generation_prompt()?);
     prefs.inbound_protocol = ctx.inbound_protocol();
     for model in models {
         match table.route_resolved(&model, &prefs, ctx.caller()).await {

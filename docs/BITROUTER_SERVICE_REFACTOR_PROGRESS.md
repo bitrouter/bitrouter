@@ -64,9 +64,9 @@ the contract move must preserve its bytes.
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; terminal-free transcript formatting and TUI feature isolation verified; base helpers, local supervisor, live capture and shared MCP transport ownership separated; harness/MCP dependency isolation and representative behavior are verified; the complete final matrix remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
-| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; harness HTTP/SSE contracts and client verified against the separate executable and the core-disabled HTTP service; independent packaged-service consumer remains |
+| P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; harness HTTP/SSE contracts and client verified against the separate executable and the core-disabled HTTP service; independent SDK-only consumer passes against extracted development and optimized gateway packages; final candidate verification remains |
 | P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; harness/MCP module and dependency isolation is verified; final feature matrix and artifact/profile transitions remain |
-| P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
+| P0 6 Delivery and review | In progress | Standalone gateway packaging and independent SDK consumer verified; source inventory reconciled with residual findings; final compatibility/performance gates, final review and PR remain |
 
 ## Acceptance ledger
 
@@ -76,7 +76,7 @@ on the resulting implementation.
 | Gate | State |
 | --- | --- |
 | A01 Package and module ownership | Pending |
-| A02 Lightweight AI public contract boundary | Pending; two semantic ownership gaps recorded in the residual AI source audit below |
+| A02 Lightweight AI public contract boundary | Pending final-candidate acceptance; residual semantic extraction and isolated/public-API checks verified below |
 | A03 SDK client dependency boundary | Pending |
 | A04 Independent official gateway process | Pending |
 | A05 Feature dependency closure | Pending |
@@ -2712,3 +2712,75 @@ This follow-up records findings only. No source changes, builds, tests, commits
 or new implementation acceptance claims were made. The separate review of the
 planning document found no inventory, feature-graph or milestone-boundary defect;
 the findings above concern implementation conformance to that plan.
+
+## Residual contract extraction and complete source inventory (2026-10-16)
+
+The A02 follow-up after `59d1157` moves provider tool-result interpretation and
+rendering, data-URL adaptation, source-ID synthesis and outbound extra selection
+to application `gateway/model/protocol/values.rs`. Request capability projection
+lives in `gateway/model/capabilities.rs`. All existing protocol, provider,
+routing, accounting and extension consumers use these application helpers.
+Public representations, serde behavior and intrinsic queries remain in AI.
+
+Requested-versus-host limits and capability negotiation now live in
+`storage/checkpoint/validation.rs`, shared by live core admission and offline
+harness checkpoint validation without requiring a scheduler. Intrinsic bounds
+remain in AI. The original negotiation test and all 12 capability-projection
+tests moved with their implementations; six additional host-policy regressions
+cover all limit dimensions, boundary values, invalid host limits, error ordering,
+legacy defaults and stored-manifest validation. CI rejects the removed service
+methods from the generated AI public API.
+
+The independent stage review found one stale generated schema description.
+Regeneration changes only the Capability description; the parsed configuration
+schema is otherwise unchanged. The standard helper generation and staleness
+checks passed, including registry outputs. No wire shape or schema constraint
+was changed by that repair.
+
+Validation used frozen A02 source with Rust 1.99 for tests and Rust 1.97 for
+strict Clippy/rustdoc, debug symbols and incremental compilation disabled:
+
+- Locked workspace all-features nextest: **4670 passed, 42 skipped**, six slow,
+  **791.147s**. This includes relocated conversion/capability and host-policy
+  tests, native guardrails and existing core/harness/runtime coverage.
+- Workspace doctests: **9 passed, 1 ignored** (application 5/1; SDK 4/0).
+- Strict all-target/all-feature workspace Clippy passed in 1m24s; isolated
+  core-only, harness-only and minimum Clippy passed in 1m03s, 1m04s and 42.08s.
+- Strict workspace rustdoc passed in 1m26s.
+- AI default tests: **39 passed**; all public features: **44 passed**.
+- Pinned nightly/cargo-public-api checks passed for AI and SDK. Removed service
+  helpers and forbidden runtime roots are absent; foreign roots match the
+  committed API dependency manifests.
+- Workspace formatting and patch whitespace passed. Logs are retained at
+  `/tmp/bitrouter-p0-a02-*`; failed initial compilations exposed a missed UFCS
+  caller and unused import, both repaired before these final successful runs.
+
+The optional rust-coding skill's separate rust_diagnostics MCP verification is
+unavailable because that tool is not installed. It is not recorded as passed;
+the evidence above is the repository-required Cargo verification, not an MCP
+result.
+
+[The source inventory](BITROUTER_SERVICE_REFACTOR_INVENTORY.md) now accounts for
+all 141 baseline roots plus 11 telemetry children. The application audit found
+three further ownership corrections: offline replay must be core-gated; OS-local
+task client/contracts must be separated from service dispatch; and result-schema
+validation/jsonschema must belong to harness. These remain open implementation
+work, not a reason to claim A01/A05 complete.
+
+The other-package audit found three CI selection omissions. The workflow now
+selects H-only offline/native-rejection and permission tests, C-only scheduler
+ACK/recovery tests, and no-exporter tests in minimum/H/T profiles. Focused
+runtime results for those exact selections remain to be recorded; an all-feature
+pass cannot prove tests guarded by an absent feature.
+
+An additional retained optimized-artifact check passed: the full/gateway
+`artifact_profiles_preserve_residents_and_gate_explicit_replacement` process
+scenario ran **1/1 in 1.01s**, using the optimized packaging-stage binaries
+recorded above (`/tmp/bitrouter-p0-package-dist-profiles.log`). This is evidence
+for those immutable packaging-stage bytes, not the later A02 candidate.
+
+All aggregate A01–A16 gates remain open pending complete candidate evidence.
+
+Focused independent repair review confirmed the schema finding is resolved and
+found no further actionable A02 issue. Separate review confirmed F1–F3 are
+resolved at the workflow-selection level; it did not claim runtime execution.

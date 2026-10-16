@@ -534,46 +534,6 @@ fn malformed_sequence_schema_and_size_are_rejected() -> TestResult {
 }
 
 #[test]
-fn capabilities_reject_unsupported_requirements_and_escalated_limits() -> TestResult {
-    let capabilities = caps();
-    capabilities.negotiate(1, &["session.bind".into()], &Limits::default())?;
-    assert_eq!(
-        capabilities
-            .negotiate(2, &[], &Limits::default())
-            .err()
-            .map(|e| e.code),
-        Some(ErrorCode::UnsupportedVersion)
-    );
-    assert_eq!(
-        capabilities
-            .negotiate(1, &["response.inject".into()], &Limits::default())
-            .err()
-            .map(|e| e.code),
-        Some(ErrorCode::UnsupportedCapability)
-    );
-    let raised = Limits {
-        active_models: 5,
-        ..Limits::default()
-    };
-    assert_eq!(
-        capabilities
-            .negotiate(1, &[], &raised)
-            .err()
-            .map(|e| e.code),
-        Some(ErrorCode::LimitExceeded)
-    );
-    assert!(
-        Limits {
-            active_models: 0,
-            ..Limits::default()
-        }
-        .validate()
-        .is_err()
-    );
-    Ok(())
-}
-
-#[test]
 fn manifest_reserves_core_tools_and_verifies_digest() -> TestResult {
     let mut manifest = manifest()?;
     manifest.validate(&caps(), &Limits::default())?;

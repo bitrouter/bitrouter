@@ -1,7 +1,9 @@
 //! Phase-2 protocol-conversion tests: the 4×4 inbound/outbound matrix plus the
 //! v0 bug-regression suite.
 
+use crate::gateway::model::capabilities::required_capabilities;
 use crate::gateway::model::error::ModelError;
+use crate::gateway::model::protocol::values::render_tool_result_output;
 use crate::gateway::model::protocol::*;
 use crate::gateway::model::target::ModelTarget;
 use bitrouter_ai::types::*;
@@ -5176,9 +5178,7 @@ fn image_parses_to_file_in_every_protocol() -> crate::gateway::model::error::Res
         assert_eq!(media_type, "image/png", "{protocol:?} media type");
         assert_eq!(data, &base64, "{protocol:?} image data");
         assert!(
-            prompt
-                .required_capabilities()
-                .contains(&Capability::ImageInput),
+            required_capabilities(&prompt).contains(&Capability::ImageInput),
             "{protocol:?} must require image_input"
         );
     }
@@ -5244,11 +5244,7 @@ fn audio_round_trips_through_chat_completions() -> crate::gateway::model::error:
     let prompt = adapter.parse_request(body).unwrap();
     let (media_type, _) = first_file(&prompt);
     assert_eq!(media_type, "audio/mp3");
-    assert!(
-        prompt
-            .required_capabilities()
-            .contains(&Capability::AudioInput)
-    );
+    assert!(required_capabilities(&prompt).contains(&Capability::AudioInput));
     let req = adapter.render_request(&prompt).unwrap();
     let part = &req["messages"][0]["content"][0];
     assert_eq!(part["type"], "input_audio");
@@ -5272,11 +5268,7 @@ fn unnamed_pdf_file_renders_to_messages_document_block() -> crate::gateway::mode
             provider_metadata: Default::default(),
         }],
     }];
-    assert!(
-        prompt
-            .required_capabilities()
-            .contains(&Capability::FileInput)
-    );
+    assert!(required_capabilities(&prompt).contains(&Capability::FileInput));
     let original = prompt.clone();
     let report = request_projection_report(ApiProtocol::Messages, &prompt)?;
     assert_eq!(
@@ -5330,11 +5322,7 @@ fn response_modalities_round_trip_through_chat_completions()
         prompt.params.response_modalities,
         vec![Modality::Text, Modality::Image]
     );
-    assert!(
-        prompt
-            .required_capabilities()
-            .contains(&Capability::ImageOutput)
-    );
+    assert!(required_capabilities(&prompt).contains(&Capability::ImageOutput));
     let req = adapter.render_request(&prompt).unwrap();
     assert_eq!(req["modalities"], serde_json::json!(["text", "image"]));
     Ok(())
@@ -5476,7 +5464,7 @@ fn tool_result_json_degrades_to_text_on_string_wires() -> crate::gateway::model:
         assert_eq!(
             back,
             ToolResultOutput::Text {
-                value: output.to_provider_string(),
+                value: render_tool_result_output(&output),
             },
             "{protocol:?} Json tool result must degrade to a stringified Text output"
         );
@@ -5496,7 +5484,7 @@ fn tool_result_json_degrades_to_text_on_anthropic() -> crate::gateway::model::er
     assert_eq!(
         back,
         ToolResultOutput::Text {
-            value: output.to_provider_string(),
+            value: render_tool_result_output(&output),
         },
         "Anthropic Json tool result degrades to a stringified Text output"
     );
@@ -5531,7 +5519,7 @@ fn tool_result_error_json_round_trips_through_anthropic() -> crate::gateway::mod
     assert_eq!(
         back,
         ToolResultOutput::ErrorText {
-            value: output.to_provider_string(),
+            value: render_tool_result_output(&output),
         },
         "Anthropic ErrorJson keeps the error flag, flattening to ErrorText"
     );

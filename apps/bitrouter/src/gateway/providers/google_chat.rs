@@ -3,6 +3,7 @@
 //! The gateway returns a replay proof alongside a Google signature. Clients must
 //! retain both; a native signature alone does not prove its selected account.
 
+use crate::gateway::model::protocol::values::extras_for_protocol;
 use base64::Engine;
 use futures::{Stream, StreamExt};
 
@@ -180,18 +181,14 @@ pub fn admission(prompt: &Prompt, target: &ModelTarget) -> ConversionReport {
             || prompt.params.seed.is_some()
             || prompt.params.presence_penalty.is_some()
             || prompt.params.frequency_penalty.is_some()
-            || prompt
-                .params
-                .extras_for_protocol(&ApiProtocol::ChatCompletions)
+            || extras_for_protocol(&prompt.params, &ApiProtocol::ChatCompletions)
                 .filter(|(key, _)| *key == "extra_body")
                 .any(|(_, extra)| {
                     extra
                         .as_object()
                         .is_none_or(|fields| fields.keys().any(|key| key != "google"))
                 })
-            || prompt
-                .params
-                .extras_for_protocol(&ApiProtocol::ChatCompletions)
+            || extras_for_protocol(&prompt.params, &ApiProtocol::ChatCompletions)
                 .any(|(key, _)| key != "extra_body")
         {
             report.issues.push(issue(

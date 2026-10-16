@@ -1943,7 +1943,7 @@ impl Pipeline {
         let mut prefs = resolution.prefs;
         prefs.require_capabilities = ctx
             .generation_prompt()
-            .map(Prompt::required_capabilities)
+            .map(crate::gateway::model::capabilities::required_capabilities)
             .unwrap_or_default();
         prefs.operation = ctx.operation();
         // Carry the inbound protocol so the table can prefer a native,

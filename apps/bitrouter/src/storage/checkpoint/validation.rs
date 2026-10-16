@@ -1,4 +1,4 @@
-//! Shared manifest, artifact and frozen tool-result checks for durable
+//! Shared host-policy, manifest, artifact and frozen tool-result checks for durable
 //! harness records. Wire data lives in AI; live connection admission stays core-owned.
 
 use bitrouter_ai::core::protocol::{
@@ -17,6 +17,77 @@ pub(crate) const CONTEXT_TOOLS: &[&str] = &[
     "context_publish",
     "context_extract",
 ];
+
+/// Check host policy without a live scheduler, for both admission and restoration.
+pub(crate) fn limits_within(limits: &Limits, host: &Limits) -> Result<(), CoreError> {
+    limits.validate()?;
+    host.validate()?;
+    let requested = [
+        limits.active_models as u64,
+        limits.agents as u64,
+        limits.child_depth as u64,
+        limits.model_attempts as u64,
+        limits.outstanding_tools as u64,
+        limits.total_tools as u64,
+        limits.queued_runs as u64,
+        limits.mailbox_messages as u64,
+        limits.active_seconds,
+        limits.checkpoint_bytes,
+        limits.unacknowledged_bytes,
+        limits.ephemeral_bytes,
+        limits.input_bytes,
+    ];
+    let allowed = [
+        host.active_models as u64,
+        host.agents as u64,
+        host.child_depth as u64,
+        host.model_attempts as u64,
+        host.outstanding_tools as u64,
+        host.total_tools as u64,
+        host.queued_runs as u64,
+        host.mailbox_messages as u64,
+        host.active_seconds,
+        host.checkpoint_bytes,
+        host.unacknowledged_bytes,
+        host.ephemeral_bytes,
+        host.input_bytes,
+    ];
+    if requested
+        .iter()
+        .zip(allowed)
+        .any(|(request, cap)| *request > cap)
+    {
+        return Err(CoreError::rejected(
+            ErrorCode::LimitExceeded,
+            "requested limits exceed host policy",
+        ));
+    }
+    Ok(())
+}
+
+fn negotiate_capabilities(
+    capabilities: &Capabilities,
+    version: u32,
+    required: &[String],
+    limits: &Limits,
+) -> Result<(), CoreError> {
+    if version != capabilities.version || version != VERSION {
+        return Err(CoreError::rejected(
+            ErrorCode::UnsupportedVersion,
+            "unsupported harness protocol version",
+        ));
+    }
+    if let Some(feature) = required
+        .iter()
+        .find(|feature| !capabilities.operations.contains(feature))
+    {
+        return Err(CoreError::rejected(
+            ErrorCode::UnsupportedCapability,
+            format!("unsupported required feature: {feature}"),
+        ));
+    }
+    limits_within(limits, &capabilities.limits)
+}
 
 /// Count immutable objects once even when a payload references one repeatedly.
 pub(crate) fn artifact_bytes(references: &[ArtifactRef]) -> Result<u64, CoreError> {
@@ -63,7 +134,7 @@ impl HarnessManifestExt for HarnessManifest {
     }
 
     fn validate(&self, capabilities: &Capabilities, limits: &Limits) -> Result<(), CoreError> {
-        capabilities.negotiate(VERSION, &self.required_features, limits)?;
+        negotiate_capabilities(capabilities, VERSION, &self.required_features, limits)?;
         validate_id(&self.workspace_id)?;
         if self.max_tool_output_bytes == 0
             || self.max_tool_output_bytes > limits.input_bytes / 2
@@ -189,3 +260,6 @@ fn validate_tool_payload(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod host_policy_tests;

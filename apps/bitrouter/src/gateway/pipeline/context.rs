@@ -3,6 +3,7 @@
 //! view borrowed from it). `SettlementContext` lives in
 //! [`crate::gateway::pipeline::settlement`].
 
+use crate::gateway::model::protocol::values::render_tool_result_output;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1044,7 +1045,7 @@ fn prompt_content_chars(content: &Content) -> u64 {
         } => tool_name
             .as_deref()
             .map_or(0u64, |name| name.chars().count() as u64)
-            .saturating_add(output.to_provider_string().chars().count() as u64),
+            .saturating_add(render_tool_result_output(output).chars().count() as u64),
         other => serde_json::to_string(other)
             .map(|value| value.chars().count() as u64)
             .unwrap_or(0),

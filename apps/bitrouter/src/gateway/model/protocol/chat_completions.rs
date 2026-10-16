@@ -7,6 +7,10 @@
 //! directly onto the internal representation.
 
 use crate::gateway::model::conversion::ReportAdmission;
+use crate::gateway::model::protocol::values::{
+    data_from_url, data_to_url, extras_for_protocol, parse_untyped_tool_result,
+    render_tool_result_output, synthesize_source_id,
+};
 use bitrouter_ai::protocol::chat_completions::{ChatRequest, ChatResponseFormat};
 use std::collections::HashMap;
 
@@ -209,7 +213,7 @@ fn parse_tool_result_output(value: &serde_json::Value) -> ToolResultOutput {
                 .filter_map(content_to_tool_result_part)
                 .collect(),
         },
-        other => ToolResultOutput::from_untyped_value(other),
+        other => parse_untyped_tool_result(other),
     }
 }
 
@@ -255,7 +259,7 @@ fn parse_chat_part(part: &serde_json::Value) -> Option<Content> {
         "image_url" => {
             let image_url = part.get("image_url")?;
             let url = image_url.get("url").and_then(|u| u.as_str())?;
-            let (media_type, data) = DataContent::from_url(url);
+            let (media_type, data) = data_from_url(url);
             // The OpenAI image `detail` hint (`auto` | `low` | `high`) is
             // provider metadata, not a payload field — preserve it under the
             // `openai` namespace so it survives a round-trip (and is ignored,
@@ -303,7 +307,7 @@ fn parse_chat_part(part: &serde_json::Value) -> Option<Content> {
         "file" => {
             let file = part.get("file")?;
             let file_data = file.get("file_data").and_then(|d| d.as_str())?;
-            let (media_type, data) = DataContent::from_url(file_data);
+            let (media_type, data) = data_from_url(file_data);
             Some(Content::File {
                 media_type: media_type.unwrap_or_else(|| "application/octet-stream".to_string()),
                 data,
@@ -344,7 +348,7 @@ fn parse_chat_annotations(annotations: Option<&serde_json::Value>) -> Vec<Conten
                 .map(str::to_string);
             Some(Content::Source {
                 source: Source::Url {
-                    id: Source::synthesize_id(&url, i),
+                    id: synthesize_source_id(&url, i),
                     url,
                     title,
                 },
@@ -893,10 +897,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         // remaining Chat-specific untyped fields (`n`, `logit_bias`, …)
         // survive a native round trip. A different inbound wire's leftovers
         // are never replayed onto this protocol. Typed fields above win.
-        for (k, v) in prompt
-            .params
-            .extras_for_protocol(&ApiProtocol::ChatCompletions)
-        {
+        for (k, v) in extras_for_protocol(&prompt.params, &ApiProtocol::ChatCompletions) {
             if matches!(k.as_str(), "max_tokens" | "max_completion_tokens") {
                 continue;
             }
@@ -1340,7 +1341,7 @@ fn render_input_part(c: &Content) -> Option<serde_json::Value> {
         } => Some(if media_type.starts_with("image/") {
             // <https://platform.openai.com/docs/guides/vision>
             let mut image_url = serde_json::Map::new();
-            image_url.insert("url".into(), data.to_url(media_type).into());
+            image_url.insert("url".into(), data_to_url(data, media_type).into());
             // Restore the OpenAI `detail` hint from the `openai` namespace when
             // it round-tripped through `provider_metadata` (set by this
             // protocol's `parse_chat_part`).
@@ -1365,7 +1366,7 @@ fn render_input_part(c: &Content) -> Option<serde_json::Value> {
             serde_json::json!({ "type": "input_audio", "input_audio": audio })
         } else {
             // Documents (PDF, …) — OpenAI `file` part.
-            let mut file = serde_json::json!({ "file_data": data.to_url(media_type) });
+            let mut file = serde_json::json!({ "file_data": data_to_url(data, media_type) });
             if let Some(name) = filename {
                 file["filename"] = serde_json::Value::String(name.clone());
             }
@@ -1391,7 +1392,7 @@ fn render_tool_result_content(output: &ToolResultOutput) -> serde_json::Value {
                 .collect();
             parts.into()
         }
-        other => other.to_provider_string().into(),
+        other => render_tool_result_output(other).into(),
     }
 }
 

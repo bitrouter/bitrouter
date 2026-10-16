@@ -1,3 +1,4 @@
+use crate::gateway::model::protocol::values::render_tool_result_output;
 use crate::harness::agent::AgentConfigExt;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -261,7 +262,7 @@ async fn chat_tool_calls_execute_separately_and_replay_provider_ids()
             } => {
                 assert!(!call_id.is_empty());
                 assert!(ids.insert(call_id.clone()));
-                Some(output.to_provider_string())
+                Some(render_tool_result_output(output))
             }
             _ => None,
         })

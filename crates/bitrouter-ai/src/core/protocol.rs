@@ -522,32 +522,6 @@ pub enum ServerMessage {
     Error(CoreError),
 }
 
-impl Capabilities {
-    pub fn negotiate(
-        &self,
-        version: u32,
-        required: &[String],
-        limits: &Limits,
-    ) -> Result<(), CoreError> {
-        if version != self.version || version != VERSION {
-            return Err(CoreError::rejected(
-                ErrorCode::UnsupportedVersion,
-                "unsupported harness protocol version",
-            ));
-        }
-        if let Some(feature) = required
-            .iter()
-            .find(|feature| !self.operations.contains(feature))
-        {
-            return Err(CoreError::rejected(
-                ErrorCode::UnsupportedCapability,
-                format!("unsupported required feature: {feature}"),
-            ));
-        }
-        limits.within(&self.limits)
-    }
-}
-
 impl CoreError {
     pub fn rejected(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
@@ -594,52 +568,6 @@ impl Limits {
             return Err(CoreError::rejected(
                 ErrorCode::LimitExceeded,
                 "invalid execution or byte limits",
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn within(&self, host: &Self) -> Result<(), CoreError> {
-        self.validate()?;
-        host.validate()?;
-        let requested = [
-            self.active_models as u64,
-            self.agents as u64,
-            self.child_depth as u64,
-            self.model_attempts as u64,
-            self.outstanding_tools as u64,
-            self.total_tools as u64,
-            self.queued_runs as u64,
-            self.mailbox_messages as u64,
-            self.active_seconds,
-            self.checkpoint_bytes,
-            self.unacknowledged_bytes,
-            self.ephemeral_bytes,
-            self.input_bytes,
-        ];
-        let allowed = [
-            host.active_models as u64,
-            host.agents as u64,
-            host.child_depth as u64,
-            host.model_attempts as u64,
-            host.outstanding_tools as u64,
-            host.total_tools as u64,
-            host.queued_runs as u64,
-            host.mailbox_messages as u64,
-            host.active_seconds,
-            host.checkpoint_bytes,
-            host.unacknowledged_bytes,
-            host.ephemeral_bytes,
-            host.input_bytes,
-        ];
-        if requested
-            .iter()
-            .zip(allowed)
-            .any(|(request, cap)| *request > cap)
-        {
-            return Err(CoreError::rejected(
-                ErrorCode::LimitExceeded,
-                "requested limits exceed host policy",
             ));
         }
         Ok(())

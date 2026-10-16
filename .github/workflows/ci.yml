@@ -399,6 +399,14 @@ jobs:
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --test onboarding --test source_boundaries
 
+      - name: verify unavailable telemetry before startup side effects
+        if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'tui'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test telemetry_disabled --jobs 2 -- --test-threads=2
+
       - uses: taiki-e/install-action@nextest
         if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness'
 
@@ -425,7 +433,13 @@ jobs:
         run: >-
           cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
           --lib --test acp --test database_capture --build-jobs 2 --test-threads 2
-          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(agent_api::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | binary(acp) | binary(database_capture)'
+          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(agent_api::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | test(harness::service::core_disabled_tests::) | test(harness::agent::native::replay_tests::) | test(harness::acp::native::core_disabled_tests::) | test(harness::permission::) | binary(acp) | binary(database_capture)'
+
+      - name: verify scheduler acknowledgements and recovery without harness
+        if: matrix.features == 'core'
+        run: >-
+          cargo nextest run --locked -p bitrouter --no-default-features --features core
+          --test core_contract --test core_execution --build-jobs 2 --test-threads 2
 
       - name: verify execution SDK against the headless service
         if: matrix.features == 'core,harness'
@@ -626,7 +640,7 @@ jobs:
                 'pub struct bitrouter_ai::core::protocol::ErrorEnvelope'
                 'pub struct bitrouter_ai::core::checkpoint::CheckpointBatch'
               )
-              forbidden='NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+              forbidden='NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
             else
               sentinels=(
                 'pub struct bitrouter_sdk::gateway::GatewayClient'

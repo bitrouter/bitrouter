@@ -41,7 +41,7 @@ pub struct RoutingPrefs {
     /// authoritative support constraints; the configured model catalog contains
     /// positive observations, so omitted capabilities remain unknown rather
     /// than proving a route unsupported. The pipeline populates this from
-    /// [`Prompt::required_capabilities`](bitrouter_ai::types::Prompt::required_capabilities).
+    /// the gateway's request capability projection.
     /// Empty (the default) imposes no capability constraint.
     pub require_capabilities: Vec<Capability>,
     /// The inbound wire protocol the request arrived on, if known. A

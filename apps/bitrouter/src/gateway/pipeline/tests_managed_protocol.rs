@@ -1,4 +1,5 @@
 use super::*;
+use crate::gateway::model::capabilities::required_capabilities;
 use crate::gateway::model::protocol::OutboundDispatch;
 use bitrouter_ai::core::evidence::NativeProtocolValidation;
 use bitrouter_ai::types::{DataContent, ToolResultContentPart, ToolResultOutput};
@@ -85,7 +86,7 @@ fn managed_protocol_checks_nested_tool_media_and_shared_capabilities() {
             );
         }
         if let Some(capability) = capability {
-            assert!(prompt.required_capabilities().contains(&capability));
+            assert!(required_capabilities(&prompt).contains(&capability));
         }
     }
 }

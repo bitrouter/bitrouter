@@ -411,7 +411,7 @@ fn validate_snapshot(
     if let Some(run) = &state.run {
         validate_id(&run.run_id)?;
         validate_id(&run.agent_turn_id)?;
-        run.limits.within(&binding.limits)?;
+        limits_within(&run.limits, &binding.limits)?;
         if run
             .input
             .max_concurrent_subagents

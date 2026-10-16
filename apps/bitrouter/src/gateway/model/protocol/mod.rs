@@ -67,6 +67,8 @@
 //! `api_protocol` is `ApiProtocol::Custom("my-wire")`, and the executor
 //! dispatches through the registered adapter + transport.
 
+pub(crate) mod values;
+
 use crate::gateway::model::conversion::ReportAdmission;
 use std::collections::HashMap;
 use std::sync::Arc;

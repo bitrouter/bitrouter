@@ -361,6 +361,28 @@ Use these existing symbols as concrete split points during extraction:
 | `observe::schema`, `SpanAttributes` and the committed span schema | Move the shared observation contract and pure conformance helpers to AI; the telemetry renderer, subscriber, exporter authentication and processing runtime stay in the application. |
 | Telemetry endpoint/opt-in configuration | Keep in application configuration, available without exporter dependencies; SDK or extension reuse is not established merely because this data can be serialized. |
 
+The same review applies to methods attached to a public data type. At the
+baseline, `types.rs` contains provider adaptation alongside model definitions,
+and core `protocol.rs` contains host-policy checks alongside wire messages.
+Use these additional split points; moving the containing type must not move its
+service methods into the final AI API:
+
+| Baseline method | P0 owner and preserved behavior |
+| --- | --- |
+| `ToolResultOutput::from_untyped_value` and `to_provider_string` | Gateway model codecs; preserve provider input interpretation, string-only rendering, denial text and treatment of media. The enum and intrinsic `is_error` query may remain in AI. |
+| `DataContent::to_url` and `from_url` | Gateway model codecs; preserve URL/data-URL interpretation and media metadata. Public content representations remain in AI. |
+| `Source::synthesize_id` | Gateway model codecs; preserve generated citation/source identity rather than changing it during relocation. |
+| `GenerationParams::extras_for_protocol` and `extra_value_for_protocol` | Gateway model codecs; preserve source-protocol ownership, supplemental defaults and precedence. Keeping the serialized fields in AI does not make outbound selection a contract helper. |
+| `Prompt::required_capabilities` | Gateway model capability projection, shared internally with routing/core; preserve tool, reasoning, input-media and output-modality derivation. The capability vocabulary remains in AI. |
+| Core `Limits::validate` | Intrinsic validation may remain with the public limits contract; it checks the representation's own bounds. |
+| Core `Limits::within` and `Capabilities::negotiate` | Application host-policy validation, shared with core admission and offline checkpoint validation where required. Requested-versus-host limits, supported operations and negotiation decisions stay outside AI. |
+
+The last row must remain usable for offline native-record validation with
+`harness` and without live `core`. Keep shared format/policy validation in
+application `storage::checkpoint`, and keep live authorization and scheduling
+in core. Preserve validation order, error codes and commit status as well as
+success cases. No new execution path or public validation framework is needed.
+
 A trait is not automatically a public contract: its inputs, return types and
 default methods must fit the same boundary. Conversely, a callback signature
 does not require its registration or execution framework to live in AI. This
@@ -864,7 +886,7 @@ are request evidence, not authority over the harness conversation.
 | `providers` | `gateway::providers`, including `anthropic/claude_code/codex/copilot/google_chat/hosted/login/retired/supergrok`; product account assembly remains integrations/host |
 | `stream` | Shared event/error representation in AI where public; framing/collection/provider processing in gateway, service-response parsing in SDK |
 | `target` | Credential-bearing `ModelTarget` and credential priority to gateway; expose only bounded public resource references where needed |
-| `types` | Keep public model semantics; split out service-only auth/compatibility settings and execution details based on actual consumers |
+| `types` | Keep public model semantics and intrinsic queries/validation; move provider rendering, data-URL mapping, citation ID synthesis, outbound extra selection and required-capability projection into gateway model helpers, as enumerated in the public-contract split points; service-only auth/compatibility settings stay internal |
 
 Moving codecs includes their snapshots, history and Decisions tests. Preserve
 unknown-field handling, native reasoning, opaque payload provenance, tool-call
@@ -940,6 +962,13 @@ implementation. Split `protocol` definitions and serializable checkpoint
 envelopes from validation that requires live scheduler authority. Neither
 extracting a checkpoint type nor moving `service` transfers harness commit
 authority to core.
+
+In `core::protocol`, retain the limits/capabilities wire data and intrinsic
+limit validation in AI, but move host-relative limit checks and capability
+negotiation to application validation. Move their tests with the algorithms;
+public contract tests continue to cover serialization, defaults and intrinsic
+bounds. Availability without a live scheduler does not make host policy a
+client-library responsibility.
 
 There is also a persisted-data dependency: ThreadService recovery calls native
 replay, which decodes `SessionSnapshot` and validates context-store history.
@@ -1577,6 +1606,10 @@ This ordering prevents `orchestrator -> application -> orchestrator` and
   MCP, server tools, finalization and host extension machinery into the application.
 - Move AI codecs, conversion algorithms, upstream execution, auth/provider and
   catalog runtime into the application.
+- Split service methods from retained model and core protocol types using the
+  concrete method inventory above. Move their regression tests with the
+  algorithms, preserve rejection order and rendering behavior, and update
+  rustdoc links and generated schema descriptions affected by the relocation.
 - Keep serving-time workflow projection and published-policy validation in the
   gateway, including deterministic assignment for published experiments and
   their identity/certificate checks, plus progress-guard evaluation and its
@@ -1805,7 +1838,7 @@ coverage that justifies a profile.
 | Guardrails | Real `GuardrailsPlugin::install` path plus native checker host tests; denied input makes zero upstream calls, output block/redact works, dynamic rules do not leak between requests |
 | HTTP-only telemetry | Trace/metric delivery to a test collector, configured headers, current bearer-refresh behavior and shutdown flushing |
 | gRPC-only telemetry | Trace/metric delivery through actual gRPC transport, configured metadata and shutdown flushing; all-features tests cannot substitute because HTTP wins there |
-| No OTLP transport | Minimum and harness-only profiles retain essential request/usage facts, finalization, basic logs and enabled harness-local records; dormant export configuration is readable, while effective export opt-in is rejected at startup/reload/profile preflight before installation-ID creation, bearer resolution or exporter tasks |
+| No OTLP transport | Minimum and harness-only profiles retain essential request/usage facts, finalization, basic logs and enabled harness-local records; dormant export configuration is readable, while effective export opt-in is rejected at startup/reload/profile preflight before installation-ID creation, bearer resolution or exporter tasks. Also exercise the TUI-without-OTLP profile to verify interactive entry points reject unavailable export before setup or agent side effects. |
 | Persistence | Baseline serialized fixtures reopened after migration; full → minimum → full and full → harness-only → full transitions preserve the complete ledger and harness data; backend execution results recorded separately |
 | Reserved request identities | Create judge reservations and accounting in a full build; submit the reserved IDs through the minimum gateway, including an early authentication rejection; assert zero upstream calls and unchanged original attempt/charge records. Separately exercise canonical inventory under its existing authenticated controller/capture scope: preserve duplicate rejection, unresolved-binding tracking, terminal/settlement facts and original accounting with core disabled, without starting a recorder or learning runtime. |
 | Trajectory settlement and outbox | Minimum gateway records terminal facts only from authoritative metering and applies equivalent cost-based progress guards; preexisting and new outbox rows remain pending without core, with no disabled-consumer retry loop; restoring core validates and drains them idempotently without repeated settlement or duplicate admitted evidence |
@@ -1815,6 +1848,13 @@ not newly written data with a different version field. Reuse existing historical
 fixtures where available and record any unsupported evidence claim as an open
 acceptance item. Likewise, a PostgreSQL/MySQL driver build does not establish
 that migrations or reads have been exercised against that backend.
+
+CI must select the profile-specific runtime suites as well as compile their
+targets. In particular, run core ACK/recovery tests in the core-only build,
+native-record replay and unavailable-native-execution tests in harness-only,
+and disabled-export tests in builds with neither OTLP transport. Record nonzero
+selected/executed test counts for these suites. An all-features run cannot cover
+tests disabled by its own feature selection.
 
 Backend execution evidence must include fresh and repeated migrations, pool
 close/reopen, scoped reads and writes, duplicate handling, and the concurrent

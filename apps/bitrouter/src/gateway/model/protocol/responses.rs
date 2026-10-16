@@ -16,6 +16,10 @@
 //!   argument deltas are not duplicated.
 
 use crate::gateway::model::conversion::ReportAdmission;
+use crate::gateway::model::protocol::values::{
+    data_from_url, data_to_url, extra_value_for_protocol, extras_for_protocol,
+    parse_untyped_tool_result, render_tool_result_output, synthesize_source_id,
+};
 use bitrouter_ai::protocol::responses::{
     ResponsesReasoningConfig, ResponsesRequest, ResponsesText, ResponsesTextFormat, ResponsesTool,
 };
@@ -34,10 +38,10 @@ use crate::gateway::model::protocol::{
 use crate::gateway::model::stream::{SseFrame, StreamError};
 use crate::gateway::model::target::ModelTarget;
 use bitrouter_ai::types::{
-    ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    NativeReasoning, Prompt, ProviderMetadata, ReasoningTextKind, ResponseFormat,
-    ResponseOutputCommitment, Role, Source, StreamPart, Tool, ToolChoice, ToolResultContentPart,
-    ToolResultOutput, Usage, UsageOrigin, provider_namespace, set_provider_metadata,
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, NativeReasoning,
+    Prompt, ProviderMetadata, ReasoningTextKind, ResponseFormat, ResponseOutputCommitment, Role,
+    Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
+    UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
@@ -1529,7 +1533,7 @@ fn parse_responses_part(part: &serde_json::Value) -> Option<Content> {
         }),
         "input_image" => {
             let url = part.get("image_url").and_then(|u| u.as_str())?;
-            let (media_type, data) = DataContent::from_url(url);
+            let (media_type, data) = data_from_url(url);
             // The Responses `input_image` carries the same `detail` hint
             // (`auto` | `low` | `high`) as Chat Completions' `image_url`; it is
             // provider metadata, not a payload field. Preserve it under the
@@ -1554,7 +1558,7 @@ fn parse_responses_part(part: &serde_json::Value) -> Option<Content> {
         }
         "input_file" => {
             let file_data = part.get("file_data").and_then(|d| d.as_str())?;
-            let (media_type, data) = DataContent::from_url(file_data);
+            let (media_type, data) = data_from_url(file_data);
             Some(Content::File {
                 media_type: media_type.unwrap_or_else(|| "application/octet-stream".to_string()),
                 data,
@@ -1600,7 +1604,7 @@ fn parse_responses_annotations(
                     continue;
                 };
                 Source::Url {
-                    id: Source::synthesize_id(url, *next_index),
+                    id: synthesize_source_id(url, *next_index),
                     url: url.to_string(),
                     title: ann
                         .get("title")
@@ -1615,7 +1619,7 @@ fn parse_responses_annotations(
                     .unwrap_or_default()
                     .to_string();
                 Source::Document {
-                    id: Source::synthesize_id(&filename, *next_index),
+                    id: synthesize_source_id(&filename, *next_index),
                     media_type: "text/plain".to_string(),
                     title: filename.clone(),
                     filename: (!filename.is_empty()).then_some(filename),
@@ -1628,7 +1632,7 @@ fn parse_responses_annotations(
                     .unwrap_or_default()
                     .to_string();
                 Source::Document {
-                    id: Source::synthesize_id(&file_id, *next_index),
+                    id: synthesize_source_id(&file_id, *next_index),
                     media_type: "application/octet-stream".to_string(),
                     title: file_id.clone(),
                     filename: (!file_id.is_empty()).then_some(file_id),
@@ -2358,11 +2362,10 @@ fn render_responses_request(prompt: &Prompt, replay_reasoning: bool) -> Result<s
     if let Some(mt) = prompt.params.max_tokens {
         req.insert("max_output_tokens".into(), mt.into());
     }
-    let mut reasoning = prompt
-        .params
-        .extra_value_for_protocol(&ApiProtocol::Responses, "reasoning")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
+    let mut reasoning =
+        extra_value_for_protocol(&prompt.params, &ApiProtocol::Responses, "reasoning")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
     if let Some(effort) = &prompt.params.reasoning_effort {
         reasoning.insert("effort".into(), effort.as_str().into());
     }
@@ -2379,9 +2382,7 @@ fn render_responses_request(prompt: &Prompt, replay_reasoning: bool) -> Result<s
     // Merge with any extras-supplied `text` blob so caller-supplied
     // sibling keys (e.g. `verbosity`) survive.
     if let Some(rf) = &prompt.response_format {
-        let mut text = prompt
-            .params
-            .extra_value_for_protocol(&ApiProtocol::Responses, "text")
+        let mut text = extra_value_for_protocol(&prompt.params, &ApiProtocol::Responses, "text")
             .and_then(|t| t.as_object().cloned())
             .unwrap_or_default();
         text.insert("format".into(), render_responses_response_format(rf));
@@ -2394,7 +2395,7 @@ fn render_responses_request(prompt: &Prompt, replay_reasoning: bool) -> Result<s
     }
     // Splat Responses-API extras (metadata, include, …) only for a native
     // round trip. Typed fields win.
-    for (k, v) in prompt.params.extras_for_protocol(&ApiProtocol::Responses) {
+    for (k, v) in extras_for_protocol(&prompt.params, &ApiProtocol::Responses) {
         req.entry(k.clone()).or_insert_with(|| v.clone());
     }
     req.insert("stream".into(), prompt.stream.into());
@@ -3041,7 +3042,7 @@ fn render_message_items(m: &Message, replay_reasoning: bool) -> Vec<serde_json::
             } => {
                 let part = if media_type.starts_with("image/") {
                     let mut image = serde_json::json!({
-                        "type": "input_image", "image_url": data.to_url(media_type)
+                        "type": "input_image", "image_url": data_to_url(data, media_type)
                     });
                     // Restore the OpenAI `detail` hint from the `openai`
                     // namespace when it round-tripped through `provider_metadata`
@@ -3057,7 +3058,7 @@ fn render_message_items(m: &Message, replay_reasoning: bool) -> Vec<serde_json::
                     image
                 } else {
                     let mut file = serde_json::json!({
-                        "type": "input_file", "file_data": data.to_url(media_type)
+                        "type": "input_file", "file_data": data_to_url(data, media_type)
                     });
                     if let Some(name) = filename {
                         file["filename"] = serde_json::Value::String(name.clone());
@@ -3181,7 +3182,7 @@ fn render_responses_tool_output(output: &ToolResultOutput) -> serde_json::Value 
                 .map(render_responses_tool_output_part)
                 .collect(),
         ),
-        other => serde_json::Value::String(other.to_provider_string()),
+        other => serde_json::Value::String(render_tool_result_output(other)),
     }
 }
 
@@ -3199,7 +3200,7 @@ fn render_responses_tool_output_part(part: &ToolResultContentPart) -> serde_json
         ToolResultContentPart::Media { media_type, data } => {
             if media_type.starts_with("image/") {
                 serde_json::json!({
-                    "type": "input_image", "image_url": data.to_url(media_type)
+                    "type": "input_image", "image_url": data_to_url(data, media_type)
                 })
             } else {
                 // The reference renders a `url`-form file as `file_url` and a
@@ -3207,7 +3208,7 @@ fn render_responses_tool_output_part(part: &ToolResultContentPart) -> serde_json
                 // inline bytes into a `data:` URL, so both land in `file_data`
                 // here — a value the Responses wire accepts for either form.
                 serde_json::json!({
-                    "type": "input_file", "file_data": data.to_url(media_type)
+                    "type": "input_file", "file_data": data_to_url(data, media_type)
                 })
             }
         }
@@ -3234,7 +3235,7 @@ fn parse_responses_tool_output(value: &serde_json::Value) -> ToolResultOutput {
                 .filter_map(parse_responses_tool_output_part)
                 .collect(),
         },
-        other => ToolResultOutput::from_untyped_value(other),
+        other => parse_untyped_tool_result(other),
     }
 }
 
@@ -3256,7 +3257,7 @@ fn parse_responses_tool_output_part(part: &serde_json::Value) -> Option<ToolResu
                 });
             }
             let url = part.get("image_url").and_then(|u| u.as_str())?;
-            let (media_type, data) = DataContent::from_url(url);
+            let (media_type, data) = data_from_url(url);
             Some(ToolResultContentPart::Media {
                 media_type: media_type.unwrap_or_else(|| "image/*".to_string()),
                 data,
@@ -3275,7 +3276,7 @@ fn parse_responses_tool_output_part(part: &serde_json::Value) -> Option<ToolResu
                 .get("file_data")
                 .or_else(|| part.get("file_url"))
                 .and_then(|d| d.as_str())?;
-            let (media_type, data) = DataContent::from_url(payload);
+            let (media_type, data) = data_from_url(payload);
             Some(ToolResultContentPart::Media {
                 media_type: media_type.unwrap_or_else(|| "application/octet-stream".to_string()),
                 data,
@@ -3512,7 +3513,7 @@ fn render_output_items(result: &GenerateResult) -> Result<Vec<serde_json::Value>
                 {
                     items.push(serde_json::json!({
                 "type": "message", "role": "assistant",
-                "content": [{ "type": "output_image", "image_url": data.to_url(media_type) }],
+                "content": [{ "type": "output_image", "image_url": data_to_url(data, media_type) }],
             }));
                 }
             }
