@@ -48,13 +48,65 @@ fn gate() -> (Arc<Gate>, tokio::sync::mpsc::UnboundedReceiver<()>) {
 async fn refusal(
     visits: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // The outer live check and the underlying admission check happen on the
-    // first pass. A third visit proves a second pass after an actual refusal.
-    for _ in 0..3 {
+    // Outer, entrypoint and serialized acceptance checks happen on the first
+    // pass. A fourth visit proves another pass after an actual refusal.
+    for _ in 0..4 {
         tokio::time::timeout(Duration::from_secs(3), visits.recv())
             .await?
             .ok_or("waiting source check channel closed")?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoked_worker_waiting_on_admission_lock_cannot_accept_a_turn()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let service = ThreadService::new(app(vec![final_turn()])?, &[directory.path().into()])?;
+    let root = root(&service, &directory).await?;
+    let (worker, source) = worker(&service, &root, &directory, "revoked").await?;
+    let (control, mut visits) = gate();
+    let admission = service.inner.admission.lock().await;
+    let waiting = {
+        let service = service.clone();
+        let target = target(&worker);
+        let source = source.clone();
+        let control = control.clone();
+        tokio::spawn(async move {
+            service
+                .start_goal_worker_turn(
+                    &target,
+                    &CallerContext::local(),
+                    source,
+                    input("must not run after revocation", "revoked-work"),
+                    control,
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(3), visits.recv())
+        .await?
+        .ok_or("the entrypoint source check was not reached")?;
+    control.budget.revoked.store(true, Ordering::SeqCst);
+    drop(admission);
+    let result = tokio::time::timeout(Duration::from_secs(3), waiting).await??;
+    let error = result
+        .err()
+        .ok_or("revoked work was admitted after waiting for the lock")?;
+    assert_eq!(error.code, ErrorCode::Unauthorized);
+    assert!(
+        service
+            .find_goal_worker_admission(
+                &service.inner.instance_id,
+                &CallerContext::local(),
+                &source,
+                "revoked-work"
+            )
+            .await?
+            .is_none()
+    );
+    assert_eq!(control.budget.admitted.load(Ordering::SeqCst), 0);
+    service.shutdown().await;
     Ok(())
 }
 

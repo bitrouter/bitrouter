@@ -89,6 +89,103 @@ async fn delivery(
     Ok((id, artifact))
 }
 
+#[tokio::test]
+async fn no_admission_history_allows_verified_replacement_sources_but_unknown_history_does_not()
+-> Result<()> {
+    let db = database().await?;
+    let goals = service(db.clone());
+    let workspace = tempfile::tempdir()?;
+    let id = planned(&goals, workspace.path()).await?;
+    // Domain receipts only: the host's real no-admission/fencing proof is
+    // covered by goal_runtime::tests::threads and the shared admission tests.
+    for (index, mutation) in [
+        Change::RequestExecution {
+            task_id: "left".into(),
+            execution_id: "refused-left".into(),
+            workspace: workspace.path().join("refused-left"),
+        },
+        Change::RegisterWorkspace {
+            execution_id: "refused-left".into(),
+            base_commit: "a".repeat(40),
+        },
+        Change::RequestWorkerDispatch {
+            execution_id: "refused-left".into(),
+        },
+        Change::ObserveExecution {
+            execution_id: "refused-left".into(),
+            observation: Observation::Unknown {
+                run_id: None,
+                reason: "Domain fixture: dispatch result not yet reconciled".into(),
+            },
+        },
+        Change::RejectWorkerDispatch {
+            execution_id: "refused-left".into(),
+            reason: "Domain fixture: original Turn not admitted after source revocation".into(),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        goals
+            .workflow_change(actor(), &id, &format!("refusal-{index}"), 1, mutation, 100)
+            .await?;
+    }
+    for task in ["left", "right", "integrate"] {
+        let handoff = request_handoff(&goals, &id, workspace.path(), task).await?;
+        goals
+            .workflow_change(
+                actor(),
+                &id,
+                &format!("{task}-handoff"),
+                1,
+                Change::ApproveHandoff {
+                    execution_id: format!("{task}-execution"),
+                    handoff,
+                },
+                110,
+            )
+            .await?;
+    }
+    let ready = snapshot(&goals, &id).await?;
+    let refused = &ready.workflow.tasks[0].executions[0];
+    assert!(refused.dispatch_requested);
+    assert!(refused.thread.is_none());
+    assert!(refused.stop.is_none());
+    let sources = completion::sources(&ready)
+        .context("a settled no-admission history blocked the current verified handoffs")?;
+    assert_eq!(sources.len(), 3);
+    assert!(
+        sources
+            .iter()
+            .all(|source| source.execution_id != "refused-left")
+    );
+    let mut uncertain = ready.clone();
+    uncertain.workflow.tasks[0].executions[0].observation = Observation::Unknown {
+        run_id: None,
+        reason: "Missing association is not a no-admission verdict".into(),
+    };
+    assert!(completion::sources(&uncertain).is_err());
+    change(
+        &goals,
+        &id,
+        "replacement-integration",
+        1,
+        Event::Begin {
+            attempt_id: "verified-replacement".into(),
+            sources,
+            workspace: workspace.path().join("delivery"),
+        },
+    )
+    .await?;
+    assert_eq!(
+        snapshot(&goals, &id).await?.workflow.tasks[0].executions[0],
+        *refused
+    );
+    drop(goals);
+    db.close().await?;
+    Ok(())
+}
+
 fn verdict() -> Verdict {
     Verdict {
         conditions: vec![ConditionResult {

@@ -219,11 +219,16 @@ pub fn sources(goal: &GoalSnapshot) -> Result<Vec<Source>, GoalError> {
     let mut result = Vec::new();
     for task in &goal.workflow.tasks {
         for execution in &task.executions {
-            let known_no_dispatch = !execution.dispatch_requested
-                && matches!(
-                    execution.observation,
-                    Observation::Failed { run_id: None, .. }
-                );
+            // Retain the saved intent without treating a fenced no-admission
+            // verdict as an unresolved running attempt. Unknown remains a
+            // blocker even if a later candidate has current handoff evidence.
+            let known_no_dispatch =
+                matches!(execution.observation, Observation::NotAdmitted { .. })
+                    || !execution.dispatch_requested
+                        && matches!(
+                            execution.observation,
+                            Observation::Failed { run_id: None, .. }
+                        );
             let settled = execution.dispatch_requested
                 && matches!(execution.stop, Some(StopState::Confirmed { .. }))
                 && (execution.effects_reconciled()
