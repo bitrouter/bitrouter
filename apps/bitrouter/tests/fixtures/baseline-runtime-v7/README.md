@@ -36,9 +36,20 @@ without core; no test opens its recorded workspace or executes its tools.
 Complete Thread reconstruction is Unix-only because its instruction snapshot
 retains a macOS absolute working-directory path. Database decoding and native
 checkpoint replay remain cross-platform; they do not grant workspace authority.
-Corrupt checkpoint digests remain rejected. These checks do not establish live
-scheduler restoration, full/minimum/full artifact transitions or formats 2–6.
-The current-writer fixture in `../native-replay` remains separate.
+Corrupt checkpoint digests remain rejected. These reader checks do not establish
+live scheduler restoration or formats 2–6. The current-writer fixture in
+`../native-replay` remains separate.
+
+The separately selected `artifact_profiles` test copies this same database
+through full → minimum → full → harness-only → full process starts and stops.
+It compares every column in the migration ledger, execution roots/index/records,
+acceptance keys, managed-session table and two original request rows, plus the
+original stopped owner and application schema. Core-free processes must leave
+both ownership tables unchanged. The original workspace has no grant in the
+private host: live inspection must remain unauthorized, and harness-only native
+start must remain unavailable. This preserves authority as well as data; it does
+not claim successful authorized live recovery or policy/outbox payload coverage.
+CI supplies separate immutable executables from one revision on Linux/macOS.
 
 To capture deliberately on macOS, build the pinned historical source, verify its
 identity, and supply an absolute executable path and a nonexistent output path:

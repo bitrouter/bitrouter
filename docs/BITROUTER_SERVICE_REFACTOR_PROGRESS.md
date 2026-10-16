@@ -60,12 +60,12 @@ the contract move must preserve its bytes.
 
 | Stage | Status | Evidence or remaining work |
 | --- | --- | --- |
-| P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
+| P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; authentic formats 2/3/4/6/7 and baseline database retained and decoded; performance measurements remain |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
 | P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; terminal-free transcript formatting and TUI feature isolation verified; base helpers, local supervisor, live capture and shared MCP transport ownership separated; harness/MCP dependency isolation and representative behavior are verified; the complete final matrix remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; harness HTTP/SSE contracts and client verified against the separate executable and the core-disabled HTTP service; independent SDK-only consumer passes against extracted development and optimized gateway packages; final candidate verification remains |
-| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; harness/MCP module and dependency isolation is verified; final feature matrix and artifact/profile transitions remain |
+| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; harness/MCP module and dependency isolation is verified; native-record/ledger full/minimum/full and full/harness/full process transitions verified; final feature matrix and gateway-policy/accounting/outbox transitions remain |
 | P0 6 Delivery and review | In progress | Standalone gateway packaging and independent SDK consumer verified; source inventory reconciled with residual findings; final compatibility/performance gates, final review and PR remain |
 
 ## Acceptance ledger
@@ -2995,3 +2995,68 @@ No authentic format-5 writer has been established: the inspected source changes
 its writer directly from 4 to 6 while accepting 5. This stage makes no fabricated
 format-5, stored-artifact, Windows-native instruction, live restoration or
 cross-artifact data-transition claim. A09 and overall P0 remain open.
+
+## Historical database across real artifact profiles (2026-10-16)
+
+Stage base: `8095438967d260317eb9088832c138e43f99e59f`. Three immutable
+Rust/Cargo 1.99.0 development executables, with debug symbols and incremental
+compilation disabled, were built from the unchanged production source:
+
+| Profile | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Full default | 316,998,896 | `f76ff858e6d958262402661dec6256c565bd9332fd53214bd36db1a353cb1a73` |
+| Minimum gateway | 115,919,184 | `002f8935d33fbff24b0e7038fcd5ef497b3299acb20295df3b2f03cfa65ac26e` |
+| Harness-only (`harness,mcp`) | 239,633,328 | `e081101c026f07859ac0f5c54941a51c9cc400a9ee31f648eb041b3695841eda` |
+
+They are retained under `/tmp/bitrouter-p0-baseline-profiles-8095438`.
+The existing resident/profile compatibility scenario and the new historical-data
+transition scenario both passed: **2/2 in 2.87s**, after a 27.87s test build.
+The new scenario opens the exact retained baseline SQLite snapshot through
+full → minimum → full → harness-only → full in one private home, with the same
+configuration and database. Every startup checks the actual executable identity,
+resident PID and HTTP health. Every running/stopped phase compares all columns
+in seven tables (26 migration entries, execution root/index, 284 original record
+payloads, two acceptance keys, the empty managed-session table and two request
+records), the original stopped owner and application schema. Minimum/H-only
+must also preserve both complete owner history and the ownership singleton
+before startup, after rejected requests and after shutdown. The fixture checks
+that minimum has no task listener and H-only rejects native start.
+
+The first run exposed an invalid test precondition: the new private host has no
+grant for the historical workspace. The test now requires the existing
+`Unauthorized` result instead of bypassing permission checks or creating the old
+path. Independent review also identified that cold public inspection does not
+validate native context, and H-only does not initialize execution/startup scan.
+The revised assertions retain those contracts; complete original journal decoding
+and checkpoint validation remain the separate baseline reader evidence above.
+The final review tightened SQLite's reserved-name filter from a LIKE wildcard
+to the literal `sqlite_` prefix and checked the stronger ownership comparisons;
+no remaining scoped source issue was found. No authorized live reconstruction,
+workspace execution or recovery is claimed by this process test.
+
+Strict workspace/all-target/all-feature Clippy passed with Rust 1.97.0 in
+58.25s before the final test-only strengthening; the final artifact test target
+then passed strict all-feature Clippy in 31.27s. Formatting and diff checks pass.
+CI now builds/preserves all three profiles and explicitly executes both ignored
+process tests on Linux/macOS. Local runtime evidence is macOS arm64; CI execution
+on other platforms remains separate. Logs are
+`/tmp/bitrouter-p0-baseline-profile-{build-full,build-gateway,build-harness,execution,repaired,final,clippy,final-clippy}.log`.
+The full development link reported the large `__eh_frame` compact-unwind warning;
+this is not an optimized-release performance result.
+
+Fresh isolated normal/build dependency inventories at this stage contain 435
+unique rendered package identities for the baseline full product, 431 for the
+candidate full product, 304 for minimum and 370 for harness-only. Minimum has no
+ACP, Ratatui/Crossterm, MCP, OTel or PostgreSQL/MySQL driver family; harness-only
+retains ACP/MCP without terminal, OTel or those server database drivers. These
+counts use `cargo tree --locked --offline -p bitrouter --edges normal,build
+--prefix none --format '{p}'`, with each profile selected separately and repeated
+`(*)` lines deduplicated. They are not the earlier workspace-wide 596-entry
+inventory. Files are `/tmp/bitrouter-p0-{baseline,full,gateway,harness}-normal-tree-8095438.txt`.
+
+This closes the exercised native-record/ledger process-transition scenario,
+not all A09: the retained capture has no adopted policy blocks, reserved judge
+identities or trajectory outbox payloads. Their cross-profile behavior still
+needs process-level evidence. Comparable idle-memory/load measurements, the
+final feature/runtime/package candidate, final independent acceptance review and
+PR remain outstanding. P0 stays active and P1 is not implemented.

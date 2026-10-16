@@ -3,8 +3,13 @@
 //! Set BITROUTER_TEST_FULL_BINARY and BITROUTER_TEST_GATEWAY_BINARY to absolute
 //! paths before explicitly selecting this ignored test. The latter must have
 //! no application features. This test never builds or substitutes an artifact.
+//! The historical-data transition test additionally requires
+//! BITROUTER_TEST_HARNESS_BINARY built with --no-default-features --features harness.
 
 #![cfg(unix)]
+
+#[path = "artifact_profiles/persistence.rs"]
+mod persistence;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};

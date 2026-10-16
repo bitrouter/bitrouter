@@ -435,6 +435,17 @@ endpoint, managed Responses HTTP/SSE and versioned WebSocket channel. Local-only
 harness operations remain explicitly local; these clients do not constitute
 complete HTTP coverage for the long-term core service.
 
+Managed Responses needs its own request contract and explicit SDK operation even
+though it shares `/v1/responses` with ordinary inference. Extract the existing
+strict managed request and continuation DTOs into AI, and send the required
+`BitRouter-Beta: orchestrator_core=v1` header from the SDK. An ordinary Responses
+request with extra fields is not a substitute: the managed handler rejects
+unknown fields and applies session, epoch and operation authority. HTTP/SSE
+support uses the base SDK transport; only the additional channel transport needs
+the SDK's optional `core` feature. Preserve typed core errors, commit status and
+response metadata for both HTTP failures and streamed error envelopes, including
+when the error body itself is malformed.
+
 The channel client must send every existing `ClientMessage` command and decode
 every existing `ServerMessage` variant. That includes bind/restore, durable-head
 and operation lookup, enqueue/steer/cancel/resume, signal/tool/provider/material
@@ -1674,6 +1685,10 @@ server API.
   managed Responses and typed channel clients with the WebSocket boundary
   intact. Verify bind, explicit durable checkpoint ACK, operation/head lookup,
   release and error/disconnect behavior through the SDK against a real server.
+- Exercise managed Responses with its strict request DTO and beta header,
+  including raw-request to SDK replay, conflicting operation fingerprints,
+  invalid continuations and caller-supplied tool results. Preserve extension
+  events and terminal responses without automatic acknowledgement or execution.
 - Carry the service-surface table into endpoint/capability tests. Preserve
   separate inference, control and execution credentials and listener exposure;
   never route an unsupported managed request into ordinary inference.
@@ -1868,6 +1883,14 @@ not newly written data with a different version field. Reuse existing historical
 fixtures where available and record any unsupported evidence claim as an open
 acceptance item. Likewise, a PostgreSQL/MySQL driver build does not establish
 that migrations or reads have been exercised against that backend.
+
+Record the fixture's writer revision, format, content coverage and platform
+assumptions. Distinguish checkpoint batches from separately stored artifacts;
+an empty artifact collection does not prove artifact compatibility. Captures
+containing absolute workspace paths must preserve their original bytes and be
+tested on a compatible path dialect. Platform-specific captures must be gated
+explicitly, with portable or platform-native evidence for the remaining CI
+targets; do not weaken runtime path validation merely to admit a foreign capture.
 
 CI must select the profile-specific runtime suites as well as compile their
 targets. In particular, run core ACK/recovery tests in the core-only build,

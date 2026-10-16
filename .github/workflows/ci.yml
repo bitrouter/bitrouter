@@ -488,22 +488,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: preserve full and minimum executables from the same revision
+      - name: preserve full, minimum and harness executables from the same revision
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway"
+          mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway" "$RUNNER_TEMP/profile-harness"
           cargo build --locked -p bitrouter --bin bro --jobs 2
           cp target/debug/bro "$RUNNER_TEMP/profile-full/bro"
           cargo build --locked -p bitrouter --no-default-features --bin bro --jobs 2
           cp target/debug/bro "$RUNNER_TEMP/profile-gateway/bro"
+          cargo build --locked -p bitrouter --no-default-features --features harness --bin bro --jobs 2
+          cp target/debug/bro "$RUNNER_TEMP/profile-harness/bro"
       - name: verify real daemon profile transitions and artifact metadata
         shell: bash
         env:
           BITROUTER_TEST_FULL_BINARY: ${{ runner.temp }}/profile-full/bro
           BITROUTER_TEST_GATEWAY_BINARY: ${{ runner.temp }}/profile-gateway/bro
+          BITROUTER_TEST_HARNESS_BINARY: ${{ runner.temp }}/profile-harness/bro
         run: |
           cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_build_metadata
-          cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_profiles -- --ignored --exact artifact_profiles_preserve_residents_and_gate_explicit_replacement
+          cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_profiles -- --ignored --test-threads=1
 
   database-backends:
     name: database (${{ matrix.backend }})
