@@ -1,0 +1,28 @@
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 12s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID dac2120b-119e-48c4-ab36-5cbbfacee7e4 with nextest profile: default
+    Starting 13 tests across 7 binaries (3653 tests skipped)
+        PASS [   1.735s] ( 1/13) bitrouter goal_runtime::tests::threads::acp_recovery::acp_pre_prompt_recovery_loads_only_the_original_stopped_session
+        PASS [   0.070s] ( 2/13) bitrouter-orchestrator service::tests::worker::acp::unopened_acp_metadata_cannot_retire_a_live_execution_owner
+        PASS [   0.078s] ( 3/13) bitrouter-orchestrator service::tests::worker::acp::submitted_acp_prompt_is_not_recovered_as_unopened_metadata
+        PASS [   0.081s] ( 4/13) bitrouter-orchestrator service::tests::worker::acp::acp_last_dispatch_check_rejects_changed_owner_source_and_workspace_grant
+        PASS [   0.014s] ( 5/13) bitrouter-orchestrator service::tests::worker::waiting::revoked_worker_waiting_on_admission_lock_cannot_accept_a_turn
+        PASS [   0.295s] ( 6/13) bitrouter-orchestrator service::tests::worker::decisions::revoked_native_decision_waits_for_usage_settlement_before_finishing
+        PASS [   0.383s] ( 7/13) bitrouter-orchestrator service::tests::worker::failed_host_outcome_ack_retains_provider_evidence_without_running_its_tools
+        PASS [   0.435s] ( 8/13) bitrouter-orchestrator service::tests::worker::revoked_worker_source_cannot_ask_for_or_launch_configured_verification
+        PASS [   0.496s] ( 9/13) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_never_treats_a_foreign_os_workspace_lock_as_known_contention
+        PASS [   0.645s] (10/13) bitrouter-orchestrator service::tests::worker::native_workers_share_one_budget_and_ordinary_rpcs_cannot_bypass_it
+        PASS [   0.944s] (11/13) bitrouter-orchestrator service::tests::worker::decisions::native_decisions_use_shared_admission_and_require_host_outcome_ack
+        PASS [   1.407s] (12/13) bitrouter-orchestrator service::tests::worker::waiting::native_worker_waits_for_known_capacity_and_replays_only_original_admission
+        PASS [   2.708s] (13/13) bitrouter-orchestrator service::tests::worker::waiting::native_worker_wait_refuses_withdrawn_sources_deadlines_and_unknown_workspace_owners
+────────────
+     Summary [   4.463s] 13 tests run: 13 passed, 3653 skipped

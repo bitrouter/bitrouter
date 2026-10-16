@@ -1,0 +1,171 @@
+{
+  "id": "ci-portability-final36",
+  "scope": "Correct exact-head CI failures from 25cbd553: keep protocol wire material independent of optional ACP runtime; preserve original permission IDs and deny unoffered option; use MSRV-compatible CAS in concurrent budget test instead of newly deprecated fetch_update. Full post-fix regression, zero-LEAK qualification and source-drift audit. Prior CI and local final15 results retain their original source binding; no fixture/runtime limit changes. Original hosted Linux lib run additionally reached root checking with all three stopped/reviewed worker handoffs but exceeded its single 45s aggregate fixture wait. This one integration test now waits separately for handoffs and root acceptance, each using the unchanged 45s helper (aggregate allowance increased). Actual overlap/isolation/checked dependency/delivery assertions and all product budgets stay intact. Local final26 was explicitly interrupted after discovering this independent hosted failure; it is not a complete pass. The complete same-source final31 reports an output LEAK for public_help_exposes_canonical_agent_entry_points (assertions pass); it remains unqualified, not relabeled clean. This verification explicitly uses two outer test slots, matching the small Linux runner, while preserving internally concurrent workflows, original time/stack/product limits and the same strict LEAK detector. No source change is made for the scheduling diagnostic.",
+  "jobs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ]
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ]
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "help-output-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "help-output-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "help-output-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "acp-recovery",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session) | test(service::tests::worker::) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

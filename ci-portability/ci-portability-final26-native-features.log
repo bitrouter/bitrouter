@@ -1,0 +1,35 @@
+    Checking futures-io v0.3.32
+    Checking slab v0.4.12
+    Checking tokio v1.52.3
+    Checking tracing-core v0.1.36
+    Checking log v0.4.33
+    Checking serde_json v1.0.150
+    Checking regex-automata v0.4.15
+   Compiling rustix v1.1.4
+    Checking chrono v0.4.45
+    Checking rustls-platform-verifier v0.7.0
+    Checking futures-util v0.3.32
+    Checking tracing v0.1.44
+    Checking schemars v1.2.1
+    Checking globset v0.4.19
+    Checking regex v1.13.0
+    Checking ignore v0.4.32
+    Checking tempfile v3.27.0
+    Checking futures-executor v0.3.32
+    Checking sse-stream v0.2.4
+    Checking futures v0.3.32
+    Checking hyper v1.10.1
+    Checking tokio-rustls v0.26.4
+    Checking tower v0.5.3
+    Checking tokio-util v0.7.18
+    Checking tokio-stream v0.1.18
+    Checking process-wrap v10.0.0
+    Checking tower-http v0.6.11
+    Checking hyper-util v0.1.20
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.13.4
+    Checking bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+    Checking rmcp v3.3.0
+    Checking bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Checking bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+    Finished `dev` profile [unoptimized] target(s) in 13.87s

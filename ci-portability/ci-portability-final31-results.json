@@ -1,0 +1,156 @@
+{
+  "source": "ci-portability-final31-source.json",
+  "scope": "Correct exact-head CI failures from 25cbd553: keep protocol wire material independent of optional ACP runtime; preserve original permission IDs and deny unoffered option; use MSRV-compatible CAS in concurrent budget test instead of newly deprecated fetch_update. Full post-fix regression, zero-LEAK qualification and source-drift audit. Prior CI and local final15 results retain their original source binding; no fixture/runtime limit changes. Original hosted Linux lib run additionally reached root checking with all three stopped/reviewed worker handoffs but exceeded its single 45s aggregate fixture wait. This one integration test now waits separately for handoffs and root acceptance, each using the unchanged 45s helper (aggregate allowance increased). Actual overlap/isolation/checked dependency/delivery assertions and all product budgets stay intact. Local final26 was explicitly interrupted after discovering this independent hosted failure; it is not a complete pass.",
+  "startedAt": "2026-10-16T20:54:02.441Z",
+  "runs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "ci-portability-final31-native-features.log",
+      "startedAt": "2026-10-16T20:54:02.441Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:54:02.733Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "ci-portability-final31-acp-features.log",
+      "startedAt": "2026-10-16T20:54:02.733Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:54:02.919Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "ci-portability-final31-native-tree.log",
+      "startedAt": "2026-10-16T20:54:02.919Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:54:03.020Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "ci-portability-final31-msrv-native.log",
+      "startedAt": "2026-10-16T20:54:03.020Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:54:03.414Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-recovery",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session) | test(service::tests::worker::) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)"
+      ],
+      "log": "ci-portability-final31-acp-recovery.log",
+      "startedAt": "2026-10-16T20:54:03.414Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:55:29.453Z",
+      "summaries": [
+        "     Summary [  28.681s] 14 tests run: 14 passed, 3652 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "ci-portability-final31-typed-startup.log",
+      "startedAt": "2026-10-16T20:55:29.453Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:55:30.689Z",
+      "summaries": [
+        "     Summary [   0.472s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "ci-portability-final31-workspace.log",
+      "startedAt": "2026-10-16T20:55:30.689Z",
+      "status": "failed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:24.296Z",
+      "summaries": [
+        "     Summary [ 892.880s] 4757 tests run: 4757 passed (6 slow, 1 leaky), 24 skipped"
+      ],
+      "leaks": [
+        "        LEAK [   0.221s] (2079/4757) bitrouter::onboarding public_help_exposes_canonical_agent_entry_points"
+      ],
+      "qualificationFailure": "nextest_reported_output_leak"
+    }
+  ],
+  "finishedAt": "2026-10-16T21:10:24.512Z",
+  "changed": [],
+  "passed": false
+}

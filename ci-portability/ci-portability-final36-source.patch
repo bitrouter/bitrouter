@@ -1,0 +1,172 @@
+diff --git a/apps/bitrouter/src/goal_runtime/acp.rs b/apps/bitrouter/src/goal_runtime/acp.rs
+index ab2a200e..246a403b 100644
+--- a/apps/bitrouter/src/goal_runtime/acp.rs
++++ b/apps/bitrouter/src/goal_runtime/acp.rs
+@@ -276,14 +276,21 @@ impl Driver for Adapter {
+             permissions: snapshot
+                 .pending_permissions
+                 .into_iter()
+-                .map(
+-                    |permission| bitrouter_orchestrator::service::worker::acp::Permission {
+-                        request_id: permission.permission_id,
+-                        tool_call: permission.tool_call,
+-                        options: permission.options,
+-                    },
+-                )
+-                .collect(),
++                .map(|permission| {
++                    Ok::<_, serde_json::Error>(
++                        bitrouter_orchestrator::service::worker::acp::Permission {
++                            request_id: permission.permission_id,
++                            tool_call: serde_json::to_value(permission.tool_call)?,
++                            options: permission
++                                .options
++                                .into_iter()
++                                .map(serde_json::to_value)
++                                .collect::<Result<Vec<_>, _>>()?,
++                        },
++                    )
++                })
++                .collect::<Result<Vec<_>, _>>()
++                .map_err(|error| error.to_string())?,
+         })
+     }
+ }
+diff --git a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+index 3e17ee08..84b076ec 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+@@ -361,6 +361,13 @@ async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Re
+                         tokio::time::sleep(Duration::from_millis(10)).await;
+                     }
+                 }).await??;
++                let invalid = current.threads.answer_acp_permission(&target, &CallerContext::local(),
++                    bitrouter_orchestrator::service::worker::acp::Approval {
++                        turn_id: link.turn_id.clone(), request_id: permission.request_id.clone(),
++                        option_id: "not-offered".into(), idempotency_key: "reject-unoffered-restored-option".into(),
++                    }).await;
++                assert!(invalid.is_err());
++                assert!(current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?.acp_selected.is_empty());
+                 current.threads.answer_acp_permission(&target, &CallerContext::local(),
+                     bitrouter_orchestrator::service::worker::acp::Approval {
+                         turn_id: link.turn_id.clone(), request_id: permission.request_id,
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs b/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs
+index 106c5fa7..f16a4400 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs
+@@ -242,6 +242,11 @@ async fn native_branches_overlap_isolate_conflicting_local_writes_and_read_check
+     let fixture = setup.start().await?;
+     let result=async {
+         let id=fixture.create_with("Deliver LEFT and RIGHT files with actual overlapping native branches in isolated workspaces, then read their checked contents and join them. Keep ignored branch-local scratch files isolated. Verify all delivery files; no external harness or human acceptance is needed.").await?;
++        // Bound worker handoff and root acceptance separately. The full path
++        // exceeded one shared 45s wait on Linux after every worker succeeded.
++        wait_for(&fixture.socket,&id,|goal| goal.workflow.tasks.len() == 3
++            && goal.workflow.tasks.iter().all(|task| task.executions.last()
++                .is_some_and(|execution| execution.handoff.is_some()))).await?;
+         let goal=wait_for(&fixture.socket,&id,|goal| goal.workflow.completion.completed_for(1)).await?;
+         let task=|id| goal.workflow.tasks.iter().find(|task| task.spec.id == id).context("native task missing");
+         let left=task("left")?; let right=task("right")?; let join=task("join")?;
+diff --git a/crates/bitrouter-orchestrator/src/service/tests/worker.rs b/crates/bitrouter-orchestrator/src/service/tests/worker.rs
+index f88c7e88..69f235eb 100644
+--- a/crates/bitrouter-orchestrator/src/service/tests/worker.rs
++++ b/crates/bitrouter-orchestrator/src/service/tests/worker.rs
+@@ -71,14 +71,24 @@ impl NativeExecutionControl for SharedBudget {
+         })
+     }
+     async fn before_attempt(&self, _: &str, _: u32) -> bitrouter_sdk::Result<()> {
+-        self.admitted
+-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+-                (value < self.limit).then_some(value + 1)
+-            })
+-            .map(|_| ())
+-            .map_err(|_| {
+-                bitrouter_sdk::error::BitrouterError::bad_request("shared Goal budget exhausted")
+-            })
++        // Keep the concurrent admission fixture compatible with the workspace MSRV.
++        let mut admitted = self.admitted.load(Ordering::SeqCst);
++        loop {
++            if admitted >= self.limit {
++                return Err(bitrouter_sdk::error::BitrouterError::bad_request(
++                    "shared Goal budget exhausted",
++                ));
++            }
++            match self.admitted.compare_exchange_weak(
++                admitted,
++                admitted + 1,
++                Ordering::SeqCst,
++                Ordering::SeqCst,
++            ) {
++                Ok(_) => return Ok(()),
++                Err(current) => admitted = current,
++            }
++        }
+     }
+     async fn after_attempt(&self, _: NativeAttemptReport) {
+         self.observed.fetch_add(1, Ordering::SeqCst);
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp.rs b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+index 16948985..8dcbd844 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp.rs
+@@ -2,7 +2,6 @@
+ //! Public ACP observations are retained without manufacturing native state.
+ use std::sync::Arc;
+ 
+-use agent_client_protocol::schema::v1::{PermissionOption, ToolCallUpdate};
+ use bitrouter_sdk::caller::CallerContext;
+ use serde::{Deserialize, Serialize};
+ 
+@@ -43,8 +42,10 @@ pub struct Continuation {
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct Permission {
+     pub request_id: String,
+-    pub tool_call: ToolCallUpdate,
+-    pub options: Vec<PermissionOption>,
++    /// Original wire material stays readable without the optional ACP runtime.
++    /// The adapter decodes protocol types; this owner checks the offered IDs.
++    pub tool_call: serde_json::Value,
++    pub options: Vec<serde_json::Value>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs b/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
+index 624c4727..1b0d94c2 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs
+@@ -350,6 +350,17 @@ impl ThreadService {
+                 || permission.request_id.len() > 128
+                 || permission.options.is_empty()
+                 || permission.options.len() > 16
++                || permission
++                    .tool_call
++                    .get("toolCallId")
++                    .and_then(serde_json::Value::as_str)
++                    .is_none_or(str::is_empty)
++                || permission.options.iter().any(|option| {
++                    option
++                        .get("optionId")
++                        .and_then(serde_json::Value::as_str)
++                        .is_none_or(str::is_empty)
++                })
+                 || serde_json::to_vec(permission)
+                     .map_err(|error| error.to_string())?
+                     .len()
+diff --git a/crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs b/crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs
+index 8294c798..f62e11a8 100644
+--- a/crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs
++++ b/crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs
+@@ -73,11 +73,10 @@ impl ThreadService {
+                 .iter()
+                 .find(|permission| permission.request_id == answer.request_id)
+                 .ok_or("ACP permission is not pending on this Turn")?;
+-            if !permission
+-                .options
+-                .iter()
+-                .any(|option| option.option_id.0.as_ref() == answer.option_id)
+-            {
++            if !permission.options.iter().any(|option| {
++                option.get("optionId").and_then(serde_json::Value::as_str)
++                    == Some(answer.option_id.as_str())
++            }) {
+                 return Err("ACP option was not offered by the original request".into());
+             }
+         }

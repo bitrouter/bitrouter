@@ -1,5 +1,7 @@
 # PR #981 BRO refactor evidence
 
+Latest correction: [CI portability and final regression](ci-portability/CI_PORTABILITY_INDEX.md), [provenance](CORRECTION_PROVENANCE.json), [additional original file manifest](CORRECTION_PAYLOAD.json). The initial archive below remains unchanged at its own pinned commit. SHA256SUMS covers this complete archive tree.
+
 Feature checkpoint: 6a72cfb1da0e2d4641a96097e09a507d7d032189. Final local verification: acp-continuation-final15. This separate branch preserves original failures, superseded runs, retained fixtures, source bindings, exact configurations, runners and recoverable Git bundles. Actual vendor harness/provider requalification remains unpassed.
 
 Start with [the final index](payload/ACP_CONTINUATION_INDEX.md) and other *_INDEX.md files. Feature documentation pins this archive commit separately; production inputs match the final run's source hashes.

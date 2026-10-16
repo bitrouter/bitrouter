@@ -1,0 +1,307 @@
+{
+  "source": "ci-portability-final36-source.json",
+  "scope": "Correct exact-head CI failures from 25cbd553: keep protocol wire material independent of optional ACP runtime; preserve original permission IDs and deny unoffered option; use MSRV-compatible CAS in concurrent budget test instead of newly deprecated fetch_update. Full post-fix regression, zero-LEAK qualification and source-drift audit. Prior CI and local final15 results retain their original source binding; no fixture/runtime limit changes. Original hosted Linux lib run additionally reached root checking with all three stopped/reviewed worker handoffs but exceeded its single 45s aggregate fixture wait. This one integration test now waits separately for handoffs and root acceptance, each using the unchanged 45s helper (aggregate allowance increased). Actual overlap/isolation/checked dependency/delivery assertions and all product budgets stay intact. Local final26 was explicitly interrupted after discovering this independent hosted failure; it is not a complete pass. The complete same-source final31 reports an output LEAK for public_help_exposes_canonical_agent_entry_points (assertions pass); it remains unqualified, not relabeled clean. This verification explicitly uses two outer test slots, matching the small Linux runner, while preserving internally concurrent workflows, original time/stack/product limits and the same strict LEAK detector. No source change is made for the scheduling diagnostic.",
+  "startedAt": "2026-10-16T21:10:43.376Z",
+  "runs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "ci-portability-final36-native-features.log",
+      "startedAt": "2026-10-16T21:10:43.376Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:43.566Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "ci-portability-final36-acp-features.log",
+      "startedAt": "2026-10-16T21:10:43.566Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:43.736Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "ci-portability-final36-native-tree.log",
+      "startedAt": "2026-10-16T21:10:43.736Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:43.838Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "ci-portability-final36-msrv-native.log",
+      "startedAt": "2026-10-16T21:10:43.838Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:44.219Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "help-output-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "ci-portability-final36-help-output-1.log",
+      "startedAt": "2026-10-16T21:10:44.219Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:48.722Z",
+      "summaries": [
+        "     Summary [   3.939s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "help-output-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "ci-portability-final36-help-output-2.log",
+      "startedAt": "2026-10-16T21:10:48.722Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:53.175Z",
+      "summaries": [
+        "     Summary [   3.925s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "help-output-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "ci-portability-final36-help-output-3.log",
+      "startedAt": "2026-10-16T21:10:53.175Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:10:57.686Z",
+      "summaries": [
+        "     Summary [   3.980s] 1 test run: 1 passed, 9 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "acp-recovery",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session) | test(service::tests::worker::) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "ci-portability-final36-acp-recovery.log",
+      "startedAt": "2026-10-16T21:10:57.686Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:11:27.573Z",
+      "summaries": [
+        "     Summary [  29.407s] 14 tests run: 14 passed, 3652 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "ci-portability-final36-typed-startup.log",
+      "startedAt": "2026-10-16T21:11:27.573Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:11:28.523Z",
+      "summaries": [
+        "     Summary [   0.479s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ],
+      "log": "ci-portability-final36-workspace.log",
+      "startedAt": "2026-10-16T21:11:28.523Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:31:01.353Z",
+      "summaries": [
+        "     Summary [1172.177s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "ci-portability-final36-clippy.log",
+      "startedAt": "2026-10-16T21:31:01.356Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:32:22.693Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "ci-portability-final36-fmt.log",
+      "startedAt": "2026-10-16T21:32:22.694Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:32:44.706Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "ci-portability-final36-doctest.log",
+      "startedAt": "2026-10-16T21:32:44.706Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:32:52.601Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ],
+      "log": "ci-portability-final36-registry.log",
+      "startedAt": "2026-10-16T21:32:52.601Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T21:32:53.436Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T21:32:53.555Z",
+  "changed": [],
+  "passed": true
+}

@@ -1,0 +1,1689 @@
+﻿2026-10-16T20:37:03.2981426Z Current runner version: '2.337.0'
+2026-10-16T20:37:03.3024234Z ##[group]Runner Image Provisioner
+2026-10-16T20:37:03.3024863Z Hosted Compute Agent
+2026-10-16T20:37:03.3025316Z Version: 20261002.596
+2026-10-16T20:37:03.3025822Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-16T20:37:03.3026361Z Build Date: 2026-10-02T22:28:27Z
+2026-10-16T20:37:03.3026916Z Worker ID: {c6a3ab29-dd16-47da-894a-2c4d656bfda5}
+2026-10-16T20:37:03.3027438Z Region: westus3
+2026-10-16T20:37:03.3027866Z Cloud: Azure
+2026-10-16T20:37:03.3028301Z ##[endgroup]
+2026-10-16T20:37:03.3029275Z ##[group]Operating System
+2026-10-16T20:37:03.3029776Z Microsoft Windows Server 2025
+2026-10-16T20:37:03.3030223Z 10.0.26100
+2026-10-16T20:37:03.3030598Z Datacenter
+2026-10-16T20:37:03.3030981Z ##[endgroup]
+2026-10-16T20:37:03.3031373Z ##[group]Runner Image
+2026-10-16T20:37:03.3031814Z Image: windows-2025-vs2026
+2026-10-16T20:37:03.3032458Z Version: 20261007.264.1
+2026-10-16T20:37:03.3033965Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20261007.264/images/windows/Windows2025-VS2026-Readme.md
+2026-10-16T20:37:03.3035281Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20261007.264
+2026-10-16T20:37:03.3036018Z ##[endgroup]
+2026-10-16T20:37:03.3036884Z ##[group]GITHUB_TOKEN Permissions
+2026-10-16T20:37:03.3038460Z Contents: read
+2026-10-16T20:37:03.3038889Z Metadata: read
+2026-10-16T20:37:03.3039336Z ##[endgroup]
+2026-10-16T20:37:03.3041028Z Secret source: Actions
+2026-10-16T20:37:03.3041712Z Cache mode: write
+2026-10-16T20:37:03.3042307Z Prepare workflow directory
+2026-10-16T20:37:03.3354979Z Prepare all required actions
+2026-10-16T20:37:03.3411319Z Getting action download info
+2026-10-16T20:37:03.6834603Z Download action repository 'actions/checkout@v6' (SHA:d23441a48e516b6c34aea4fa41551a30e30af803)
+2026-10-16T20:37:03.7948482Z Download action repository 'actions-rust-lang/setup-rust-toolchain@v1' (SHA:166cdcfd11aee3cb47222f9ddb555ce30ddb9659)
+2026-10-16T20:37:04.0769504Z Download action repository 'taiki-e/install-action@nextest' (SHA:9252097d36d2d3618ad98f5d873696a962b6897c)
+2026-10-16T20:37:04.8638775Z Getting action download info
+2026-10-16T20:37:05.0118225Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-16T20:37:05.7478507Z Complete job name: test (windows-latest)
+2026-10-16T20:37:05.8802642Z ##[group]Run actions/checkout@v6
+2026-10-16T20:37:05.8803467Z with:
+2026-10-16T20:37:05.8803841Z   repository: bitrouter/bitrouter
+2026-10-16T20:37:05.8806445Z   token: ***
+2026-10-16T20:37:05.8806796Z   ssh-strict: true
+2026-10-16T20:37:05.8807118Z   ssh-user: git
+2026-10-16T20:37:05.8807439Z   persist-credentials: true
+2026-10-16T20:37:05.8807781Z   clean: true
+2026-10-16T20:37:05.8808090Z   sparse-checkout-cone-mode: true
+2026-10-16T20:37:05.8808438Z   fetch-depth: 1
+2026-10-16T20:37:05.8808771Z   fetch-tags: false
+2026-10-16T20:37:05.8809108Z   show-progress: true
+2026-10-16T20:37:05.8809468Z   lfs: false
+2026-10-16T20:37:05.8809771Z   submodules: false
+2026-10-16T20:37:05.8810094Z   set-safe-directory: true
+2026-10-16T20:37:05.8810464Z   allow-unsafe-pr-checkout: false
+2026-10-16T20:37:05.8811050Z env:
+2026-10-16T20:37:05.8811362Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:05.8811700Z ##[endgroup]
+2026-10-16T20:37:06.0094016Z Syncing repository: bitrouter/bitrouter
+2026-10-16T20:37:06.0095830Z ##[group]Getting Git version info
+2026-10-16T20:37:06.0096236Z Working directory is 'D:\a\bitrouter\bitrouter'
+2026-10-16T20:37:06.0761827Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-16T20:37:06.4234726Z git version 2.56.0.windows.2
+2026-10-16T20:37:06.4275478Z ##[endgroup]
+2026-10-16T20:37:06.4290893Z Temporarily overriding HOME='D:\a\_temp\93de06d2-12c0-4e33-ac72-fa396f613177' before making global git config changes
+2026-10-16T20:37:06.4291771Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-16T20:37:06.4299872Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\bitrouter\bitrouter
+2026-10-16T20:37:06.4929092Z Deleting the contents of 'D:\a\bitrouter\bitrouter'
+2026-10-16T20:37:06.4934163Z ##[group]Determining repository object format
+2026-10-16T20:37:06.4936134Z ##[endgroup]
+2026-10-16T20:37:06.4936860Z ##[group]Initializing the repository
+2026-10-16T20:37:06.4944021Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\bitrouter\bitrouter
+2026-10-16T20:37:06.5803694Z Initialized empty Git repository in D:/a/bitrouter/bitrouter/.git/
+2026-10-16T20:37:06.5859836Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/bitrouter/bitrouter
+2026-10-16T20:37:06.6557682Z ##[endgroup]
+2026-10-16T20:37:06.6565996Z ##[group]Disabling automatic garbage collection
+2026-10-16T20:37:06.6566757Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-10-16T20:37:06.6870249Z ##[endgroup]
+2026-10-16T20:37:06.6870843Z ##[group]Setting up auth
+2026-10-16T20:37:06.6872879Z Removing SSH command configuration
+2026-10-16T20:37:06.6883963Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-16T20:37:06.7260722Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-16T20:37:08.1299606Z Removing HTTP extra header
+2026-10-16T20:37:08.1310561Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-16T20:37:08.1626081Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-16T20:37:08.6163589Z Removing includeIf entries pointing to credentials config files
+2026-10-16T20:37:08.6173065Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-16T20:37:08.6477785Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-16T20:37:09.1403543Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-10-16T20:37:09.1723462Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/bitrouter/bitrouter/.git.path D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:37:09.2029794Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/bitrouter/bitrouter/.git/worktrees/*.path D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:37:09.2386893Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:37:09.2698669Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:37:09.3011542Z ##[endgroup]
+2026-10-16T20:37:09.3011896Z ##[group]Fetching the repository
+2026-10-16T20:37:09.3026021Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +f9e76ae6e59d1972ef4c9b5c5b6a911c394170ab:refs/remotes/pull/981/merge
+2026-10-16T20:37:10.9130862Z From https://github.com/bitrouter/bitrouter
+2026-10-16T20:37:10.9131778Z  * [new ref]         f9e76ae6e59d1972ef4c9b5c5b6a911c394170ab -> pull/981/merge
+2026-10-16T20:37:10.9165373Z ##[endgroup]
+2026-10-16T20:37:10.9165785Z ##[group]Determining the checkout info
+2026-10-16T20:37:10.9167446Z ##[endgroup]
+2026-10-16T20:37:10.9175126Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-10-16T20:37:10.9630129Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-10-16T20:37:10.9934595Z ##[group]Checking out the ref
+2026-10-16T20:37:10.9943278Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/remotes/pull/981/merge
+2026-10-16T20:37:11.4600608Z Note: switching to 'refs/remotes/pull/981/merge'.
+2026-10-16T20:37:11.4600972Z 
+2026-10-16T20:37:11.4601216Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-16T20:37:11.4601748Z changes and commit them, and you can discard any commits you make in this
+2026-10-16T20:37:11.4602285Z state without impacting any branches by switching back to a branch.
+2026-10-16T20:37:11.4602570Z 
+2026-10-16T20:37:11.4602750Z If you want to create a new branch to retain commits you create, you may
+2026-10-16T20:37:11.4603138Z do so (now or later) by using -c with the switch command. Example:
+2026-10-16T20:37:11.4603327Z 
+2026-10-16T20:37:11.4603415Z   git switch -c <new-branch-name>
+2026-10-16T20:37:11.4603579Z 
+2026-10-16T20:37:11.4603660Z Or undo this operation with:
+2026-10-16T20:37:11.4603789Z 
+2026-10-16T20:37:11.4603864Z   git switch -
+2026-10-16T20:37:11.4603956Z 
+2026-10-16T20:37:11.4604129Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-16T20:37:11.4604356Z 
+2026-10-16T20:37:11.4604656Z HEAD is now at f9e76ae Merge 25cbd553a075056879dcf8b5a356a95ddf206dd6 into 54c822a34d4dbfd75d484ca35e108b497048efef
+2026-10-16T20:37:11.4710141Z ##[endgroup]
+2026-10-16T20:37:11.5155941Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-10-16T20:37:11.5444067Z f9e76ae6e59d1972ef4c9b5c5b6a911c394170ab
+2026-10-16T20:37:11.5950712Z ##[group]Run actions-rust-lang/setup-rust-toolchain@v1
+2026-10-16T20:37:11.5951018Z with:
+2026-10-16T20:37:11.5951185Z   cache: true
+2026-10-16T20:37:11.5951352Z   cache-on-failure: true
+2026-10-16T20:37:11.5951515Z   cache-bin: true
+2026-10-16T20:37:11.5951670Z   cache-provider: github
+2026-10-16T20:37:11.5951851Z   cache-all-crates: false
+2026-10-16T20:37:11.5952048Z   cache-workspace-crates: false
+2026-10-16T20:37:11.5952230Z   cache-save-if: true
+2026-10-16T20:37:11.5952622Z   cache-targets: true
+2026-10-16T20:37:11.5952777Z   matcher: true
+2026-10-16T20:37:11.5952949Z   rustflags: -D warnings
+2026-10-16T20:37:11.5953114Z   override: true
+2026-10-16T20:37:11.5953254Z env:
+2026-10-16T20:37:11.5953393Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:11.5953558Z ##[endgroup]
+2026-10-16T20:37:11.6003475Z ##[start-action display=Unbork mac;id=__actions-rust-lang_setup-rust-toolchain.__run]
+2026-10-16T20:37:11.6017612Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-16T20:37:11.6028174Z ##[start-action display=Run : construct rustup command line;id=__actions-rust-lang_setup-rust-toolchain.flags]
+2026-10-16T20:37:11.6156355Z ##[group]Run : construct rustup command line
+2026-10-16T20:37:11.6156683Z [36;1m: construct rustup command line[0m
+2026-10-16T20:37:11.6157055Z [36;1mecho "targets=$(for t in ${_srt_targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-16T20:37:11.6157557Z [36;1mecho "components=$(for c in ${_srt_components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-16T20:37:11.6157921Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-16T20:37:11.6172157Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-16T20:37:11.6172472Z env:
+2026-10-16T20:37:11.6172618Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:11.6172791Z   _srt_targets: 
+2026-10-16T20:37:11.6172938Z   _srt_components: 
+2026-10-16T20:37:11.6173112Z ##[endgroup]
+2026-10-16T20:37:11.8388416Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=235]
+2026-10-16T20:37:11.8393474Z ##[start-action display=Setting Environment Variables;id=__actions-rust-lang_setup-rust-toolchain.__run_2]
+2026-10-16T20:37:11.8500014Z ##[group]Run if [[ ! -v CARGO_INCREMENTAL ]]; then
+2026-10-16T20:37:11.8500318Z [36;1mif [[ ! -v CARGO_INCREMENTAL ]]; then[0m
+2026-10-16T20:37:11.8500569Z [36;1m  echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV[0m
+2026-10-16T20:37:11.8500956Z [36;1mfi[0m
+2026-10-16T20:37:11.8501168Z [36;1mif [[ ! -v CARGO_PROFILE_DEV_DEBUG ]]; then[0m
+2026-10-16T20:37:11.8501568Z [36;1m  echo "CARGO_PROFILE_DEV_DEBUG=0" >> $GITHUB_ENV[0m
+2026-10-16T20:37:11.8501792Z [36;1mfi[0m
+2026-10-16T20:37:11.8501957Z [36;1mif [[ ! -v CARGO_TERM_COLOR ]]; then[0m
+2026-10-16T20:37:11.8502194Z [36;1m  echo "CARGO_TERM_COLOR=always" >> $GITHUB_ENV[0m
+2026-10-16T20:37:11.8502433Z [36;1mfi[0m
+2026-10-16T20:37:11.8502580Z [36;1mif [[ ! -v RUST_BACKTRACE ]]; then[0m
+2026-10-16T20:37:11.8502807Z [36;1m  echo "RUST_BACKTRACE=short" >> $GITHUB_ENV[0m
+2026-10-16T20:37:11.8503025Z [36;1mfi[0m
+2026-10-16T20:37:11.8503215Z [36;1mif [[ ( ! -v RUSTFLAGS ) && $_srt_NEW_RUSTFLAGS != "" ]]; then[0m
+2026-10-16T20:37:11.8503511Z [36;1m  echo "RUSTFLAGS=$_srt_NEW_RUSTFLAGS" >> $GITHUB_ENV[0m
+2026-10-16T20:37:11.8503735Z [36;1mfi[0m
+2026-10-16T20:37:11.8503901Z [36;1m# Enable faster sparse index on nightly[0m
+2026-10-16T20:37:11.8504164Z [36;1m# The value is ignored on stable and causes no problems[0m
+2026-10-16T20:37:11.8504555Z [36;1m# https://internals.rust-lang.org/t/call-for-testing-cargo-sparse-registry/16862[0m
+2026-10-16T20:37:11.8504926Z [36;1mif [[ ! -v CARGO_UNSTABLE_SPARSE_REGISTRY ]]; then[0m
+2026-10-16T20:37:11.8505212Z [36;1m  echo "CARGO_UNSTABLE_SPARSE_REGISTRY=true" >> $GITHUB_ENV[0m
+2026-10-16T20:37:11.8505456Z [36;1mfi[0m
+2026-10-16T20:37:11.8506981Z [36;1mif [[ ! -v CARGO_REGISTRIES_CRATES_IO_PROTOCOL ]]; then[0m
+2026-10-16T20:37:11.8507343Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse" >> $GITHUB_ENV[0m
+2026-10-16T20:37:11.8507616Z [36;1mfi[0m
+2026-10-16T20:37:11.8517039Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-16T20:37:11.8517333Z env:
+2026-10-16T20:37:11.8517484Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:11.8517667Z   _srt_NEW_RUSTFLAGS: -D warnings
+2026-10-16T20:37:11.8517849Z ##[endgroup]
+2026-10-16T20:37:11.8842228Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=44]
+2026-10-16T20:37:11.8844387Z ##[start-action display=Install Rust Problem Matcher;id=__actions-rust-lang_setup-rust-toolchain.__run_3]
+2026-10-16T20:37:11.8972632Z ##[group]Run echo "::add-matcher::D:\a\_actions\actions-rust-lang\setup-rust-toolchain\v1/rust.json"
+2026-10-16T20:37:11.8973121Z [36;1mecho "::add-matcher::D:\a\_actions\actions-rust-lang\setup-rust-toolchain\v1/rust.json"[0m
+2026-10-16T20:37:11.8983388Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-16T20:37:11.8983690Z env:
+2026-10-16T20:37:11.8983834Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:11.8984007Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:11.8984176Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:11.8984352Z   RUST_BACKTRACE: short
+2026-10-16T20:37:11.8984519Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:11.8984698Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:11.8984920Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:11.8985126Z ##[endgroup]
+2026-10-16T20:37:11.9291196Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=44]
+2026-10-16T20:37:11.9294666Z ##[start-action display=Install rustup, if needed;id=__actions-rust-lang_setup-rust-toolchain.__run_4]
+2026-10-16T20:37:11.9395252Z ##[group]Run if ! command -v rustup &> /dev/null ; then
+2026-10-16T20:37:11.9395578Z [36;1mif ! command -v rustup &> /dev/null ; then[0m
+2026-10-16T20:37:11.9396088Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y[0m
+2026-10-16T20:37:11.9396709Z [36;1m[0m
+2026-10-16T20:37:11.9396914Z [36;1m  # Resolve the correct CARGO_HOME path depending on OS[0m
+2026-10-16T20:37:11.9397190Z [36;1m  if [[ "$RUNNER_OS" == "Windows" ]]; then[0m
+2026-10-16T20:37:11.9397513Z [36;1m    echo "${CARGO_HOME:-$USERPROFILE/.cargo}/bin" | sed 's|/|\\|g' >> $GITHUB_PATH[0m
+2026-10-16T20:37:11.9397805Z [36;1m  else[0m
+2026-10-16T20:37:11.9398003Z [36;1m    echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH[0m
+2026-10-16T20:37:11.9398237Z [36;1m  fi[0m
+2026-10-16T20:37:11.9398373Z [36;1mfi[0m
+2026-10-16T20:37:11.9408298Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-16T20:37:11.9408589Z env:
+2026-10-16T20:37:11.9408749Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:11.9408933Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:11.9409104Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:11.9409285Z   RUST_BACKTRACE: short
+2026-10-16T20:37:11.9409444Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:11.9409621Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:11.9409842Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:11.9410063Z   RUNNER_OS: Windows
+2026-10-16T20:37:11.9410219Z ##[endgroup]
+2026-10-16T20:37:11.9964146Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=66]
+2026-10-16T20:37:11.9969204Z ##[start-action display=rustup toolchain install stable;id=__actions-rust-lang_setup-rust-toolchain.__run_5]
+2026-10-16T20:37:12.0075229Z ##[group]Run # Check if value is set
+2026-10-16T20:37:12.0075485Z [36;1m# Check if value is set[0m
+2026-10-16T20:37:12.0075691Z [36;1mif [[ -n "$_srt_rust_src_dir" ]][0m
+2026-10-16T20:37:12.0075893Z [36;1mthen[0m
+2026-10-16T20:37:12.0076774Z [36;1m  # If value is set the directory must exist[0m
+2026-10-16T20:37:12.0077026Z [36;1m  if [[ -d "$_srt_rust_src_dir" ]][0m
+2026-10-16T20:37:12.0077240Z [36;1m  then[0m
+2026-10-16T20:37:12.0077393Z [36;1m    cd "$_srt_rust_src_dir"[0m
+2026-10-16T20:37:12.0077581Z [36;1m  else[0m
+2026-10-16T20:37:12.0077807Z [36;1m    echo "'rust-src-dir' does not point to an existing directory" >&2[0m
+2026-10-16T20:37:12.0078147Z [36;1m    echo "The value of 'rust-src-dir' is: ${_srt_rust_src_dir}" >&2[0m
+2026-10-16T20:37:12.0078400Z [36;1m    exit 1[0m
+2026-10-16T20:37:12.0078551Z [36;1m  fi[0m
+2026-10-16T20:37:12.0078700Z [36;1mfi[0m
+2026-10-16T20:37:12.0078959Z [36;1mif [[ -z "$_srt_toolchain" && ( -f "rust-toolchain" || -f "rust-toolchain.toml") ]][0m
+2026-10-16T20:37:12.0079246Z [36;1mthen[0m
+2026-10-16T20:37:12.0079431Z [36;1m  # Install the toolchain as specified in the file[0m
+2026-10-16T20:37:12.0079747Z [36;1m  # rustup show is the old way that implicitly installed a toolchain[0m
+2026-10-16T20:37:12.0080060Z [36;1m  # rustup toolchain install is the new explicit way[0m
+2026-10-16T20:37:12.0080407Z [36;1m  # https://github.com/rust-lang/rustup/issues/3635#issuecomment-2343511297[0m
+2026-10-16T20:37:12.0080761Z [36;1m  rustup show active-toolchain || rustup toolchain install[0m
+2026-10-16T20:37:12.0081032Z [36;1m  if [[ -n $_srt_components ]]; then[0m
+2026-10-16T20:37:12.0081273Z [36;1m    rustup component add ${_srt_components//,/ }[0m
+2026-10-16T20:37:12.0081490Z [36;1m  fi[0m
+2026-10-16T20:37:12.0081645Z [36;1m  if [[ -n $_srt_targets ]]; then[0m
+2026-10-16T20:37:12.0081889Z [36;1m    rustup target add ${_srt_targets//,/ }[0m
+2026-10-16T20:37:12.0082147Z [36;1m  fi[0m
+2026-10-16T20:37:12.0082282Z [36;1melse[0m
+2026-10-16T20:37:12.0082433Z [36;1m  if [[ -z "$_srt_toolchain" ]][0m
+2026-10-16T20:37:12.0082619Z [36;1m  then[0m
+2026-10-16T20:37:12.0082774Z [36;1m    _srt_toolchain=stable[0m
+2026-10-16T20:37:12.0082958Z [36;1m  fi[0m
+2026-10-16T20:37:12.0083228Z [36;1m  rustup toolchain install ${_srt_toolchain//,/ }  --profile minimal --no-self-update[0m
+2026-10-16T20:37:12.0083986Z [36;1m  # Take the last element from the list[0m
+2026-10-16T20:37:12.0084215Z [36;1m  if [[ "$_srt_override" == "true" ]][0m
+2026-10-16T20:37:12.0084412Z [36;1m  then[0m
+2026-10-16T20:37:12.0084595Z [36;1m    rustup override set ${_srt_toolchain//*,/ }[0m
+2026-10-16T20:37:12.0085081Z [36;1m  fi[0m
+2026-10-16T20:37:12.0085266Z [36;1mfi[0m
+2026-10-16T20:37:12.0094958Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-16T20:37:12.0095271Z env:
+2026-10-16T20:37:12.0095417Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:12.0095594Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:12.0095760Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:12.0095932Z   RUST_BACKTRACE: short
+2026-10-16T20:37:12.0096093Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:12.0096278Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:12.0096523Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:12.0096728Z   _srt_toolchain: 
+2026-10-16T20:37:12.0096882Z   _srt_targets: 
+2026-10-16T20:37:12.0097027Z   _srt_components: 
+2026-10-16T20:37:12.0097180Z   _srt_override: true
+2026-10-16T20:37:12.0097332Z   _srt_rust_src_dir: 
+2026-10-16T20:37:12.0097489Z ##[endgroup]
+2026-10-16T20:37:17.1328333Z info: syncing channel updates for stable-x86_64-pc-windows-msvc
+2026-10-16T20:37:17.7165516Z info: latest update on 2026-10-15 for version 1.99.1 (58cf8f9c3 2026-10-13)
+2026-10-16T20:37:17.7597723Z info: removing previous version of component rustfmt
+2026-10-16T20:37:17.7926522Z info: removing previous version of component clippy
+2026-10-16T20:37:17.8109590Z info: removing previous version of component rust-std for target x86_64-pc-windows-gnu
+2026-10-16T20:37:17.9608464Z info: removing previous version of component rust-std for target i686-pc-windows-msvc
+2026-10-16T20:37:18.1086421Z info: removing previous version of component cargo
+2026-10-16T20:37:18.2290176Z info: removing previous version of component rust-std
+2026-10-16T20:37:18.3473952Z info: removing previous version of component rustc
+2026-10-16T20:37:18.4879115Z info: downloading 7 components
+2026-10-16T20:37:34.5661292Z 
+2026-10-16T20:37:34.5925662Z   stable-x86_64-pc-windows-msvc updated - rustc 1.99.1 (58cf8f9c3 2026-10-13) (from rustc 1.99.0 (b940084d7 2026-09-28))
+2026-10-16T20:37:34.5926055Z 
+2026-10-16T20:37:34.6194659Z info: override toolchain for D:\a\bitrouter\bitrouter set to stable-x86_64-pc-windows-msvc
+2026-10-16T20:37:34.6303380Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=22633]
+2026-10-16T20:37:34.6306161Z ##[start-action display=Print installed versions;id=__actions-rust-lang_setup-rust-toolchain.versions]
+2026-10-16T20:37:34.6431464Z ##[group]Run echo "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT
+2026-10-16T20:37:34.6431865Z [36;1mecho "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT[0m
+2026-10-16T20:37:34.6432134Z [36;1mrustc --version --verbose[0m
+2026-10-16T20:37:34.6432404Z [36;1mecho "cargo-version=$(cargo --version)" >> $GITHUB_OUTPUT[0m
+2026-10-16T20:37:34.6432655Z [36;1mcargo --version --verbose[0m
+2026-10-16T20:37:34.6432894Z [36;1mecho "rustup-version=$(rustup --version)" >> $GITHUB_OUTPUT[0m
+2026-10-16T20:37:34.6433148Z [36;1mrustup --version[0m
+2026-10-16T20:37:34.6433317Z [36;1m[0m
+2026-10-16T20:37:34.6433651Z [36;1m_srt_DATE=$(rustc --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-16T20:37:34.6434100Z [36;1m_srt_HASH=$(rustc --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-16T20:37:34.6434486Z [36;1mecho "cachekey=$(echo $_srt_DATE$_srt_HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-16T20:37:34.6445670Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-16T20:37:34.6445978Z env:
+2026-10-16T20:37:34.6446139Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:34.6446316Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:34.6446651Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:34.6446838Z   RUST_BACKTRACE: short
+2026-10-16T20:37:34.6447009Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:34.6447188Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:34.6447420Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:34.6447636Z ##[endgroup]
+2026-10-16T20:37:35.8130655Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+2026-10-16T20:37:35.8131084Z binary: rustc
+2026-10-16T20:37:35.8131404Z commit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-16T20:37:35.8131767Z commit-date: 2026-10-13
+2026-10-16T20:37:35.8132039Z host: x86_64-pc-windows-msvc
+2026-10-16T20:37:35.8132307Z release: 1.99.1
+2026-10-16T20:37:35.8133677Z LLVM version: 23.1.1
+2026-10-16T20:37:37.1572546Z cargo 1.99.1 (5f94df478 2026-08-27)
+2026-10-16T20:37:37.1572840Z release: 1.99.1
+2026-10-16T20:37:37.1573102Z commit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e
+2026-10-16T20:37:37.1573358Z commit-date: 2026-08-27
+2026-10-16T20:37:37.1573544Z host: x86_64-pc-windows-msvc
+2026-10-16T20:37:37.1573758Z libgit2: 1.9.6 (sys:0.21.0 vendored)
+2026-10-16T20:37:37.1574018Z libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:Schannel)
+2026-10-16T20:37:37.1574330Z os: Windows 10.0.26100 (Windows 11 ServerDatacenter) [64-bit]
+2026-10-16T20:37:37.1866967Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-10-16T20:37:37.2069020Z info: the currently active `rustc` version is `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
+2026-10-16T20:37:37.2397265Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-10-16T20:37:37.2397900Z rustup 1.29.1 (d95a37b6a 2026-08-13)
+2026-10-16T20:37:37.2585147Z info: the currently active `rustc` version is `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
+2026-10-16T20:37:37.4742495Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.versions;outcome=success;conclusion=success;duration_ms=2843]
+2026-10-16T20:37:37.4745635Z ##[start-action display=Downgrade registry access protocol when needed;id=__actions-rust-lang_setup-rust-toolchain.__run_6]
+2026-10-16T20:37:37.4869504Z ##[group]Run # Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-10-16T20:37:37.4869960Z [36;1m# Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL[0m
+2026-10-16T20:37:37.4870354Z [36;1m# On versions 1.66, 1.67, and 1.68.0-nightly the value "sparse" is still unstable.[0m
+2026-10-16T20:37:37.4870778Z [36;1m# https://github.com/dtolnay/rust-toolchain/pull/69#discussion_r1107268108[0m
+2026-10-16T20:37:37.4871185Z [36;1m# If we detect an incompatible value, set it to "git" which is always supported.[0m
+2026-10-16T20:37:37.4871743Z [36;1mif [[ "rustc 1.99.1 (58cf8f9c3 2026-10-13)" =~ ^rustc\ (1\.6[67]\.|1\.68\.0-nightly) && "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL}" == "sparse" ]]; then[0m
+2026-10-16T20:37:37.4872263Z [36;1m  echo "Downgrade cargo registry protocol to git"[0m
+2026-10-16T20:37:37.4872572Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git" >> $GITHUB_ENV[0m
+2026-10-16T20:37:37.4872848Z [36;1mfi[0m
+2026-10-16T20:37:37.4883536Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-10-16T20:37:37.4883848Z env:
+2026-10-16T20:37:37.4884005Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:37.4884192Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:37.4884366Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:37.4884557Z   RUST_BACKTRACE: short
+2026-10-16T20:37:37.4884734Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:37.4884924Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:37.4885155Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:37.4885367Z ##[endgroup]
+2026-10-16T20:37:37.5228359Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=48]
+2026-10-16T20:37:37.5230623Z ##[start-action display=Setup Rust Caching;id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache]
+2026-10-16T20:37:37.5389342Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-16T20:37:37.5389809Z with:
+2026-10-16T20:37:37.5389963Z   cache-on-failure: true
+2026-10-16T20:37:37.5390135Z   cache-bin: true
+2026-10-16T20:37:37.5390296Z   cache-provider: github
+2026-10-16T20:37:37.5390465Z   cache-all-crates: false
+2026-10-16T20:37:37.5390648Z   cache-workspace-crates: false
+2026-10-16T20:37:37.5390841Z   cache-targets: true
+2026-10-16T20:37:37.5391001Z   save-if: true
+2026-10-16T20:37:37.5391158Z   prefix-key: v0-rust
+2026-10-16T20:37:37.5391319Z   add-job-id-key: true
+2026-10-16T20:37:37.5391504Z   add-rust-environment-hash-key: true
+2026-10-16T20:37:37.5391708Z   lookup-only: false
+2026-10-16T20:37:37.5391867Z   cmd-format: {0}
+2026-10-16T20:37:37.5392015Z env:
+2026-10-16T20:37:37.5392459Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:37.5392643Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:37.5392828Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:37.5393085Z   RUST_BACKTRACE: short
+2026-10-16T20:37:37.5393355Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:37.5393574Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:37.5393800Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:37.5394015Z ##[endgroup]
+2026-10-16T20:37:37.7999706Z (node:1372) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-16T20:37:37.8000417Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-16T20:37:38.3857300Z ##[group]Cache Configuration
+2026-10-16T20:37:38.3857780Z Cache Provider:
+2026-10-16T20:37:38.3858022Z     github
+2026-10-16T20:37:38.3858255Z Workspaces:
+2026-10-16T20:37:38.3858493Z     D:\a\bitrouter\bitrouter
+2026-10-16T20:37:38.3858774Z Cache Paths:
+2026-10-16T20:37:38.3859015Z     C:\Users\runneradmin\.cargo\bin
+2026-10-16T20:37:38.3860755Z     C:\Users\runneradmin\.cargo\.crates.toml
+2026-10-16T20:37:38.3861314Z     C:\Users\runneradmin\.cargo\.crates2.json
+2026-10-16T20:37:38.3861678Z     C:\Users\runneradmin\.cargo\registry
+2026-10-16T20:37:38.3862025Z     C:\Users\runneradmin\.cargo\git
+2026-10-16T20:37:38.3862334Z     D:\a\bitrouter\bitrouter\target
+2026-10-16T20:37:38.3862963Z Restore Key:
+2026-10-16T20:37:38.3863223Z     v0-rust-test-Windows_NT-x64-58461147
+2026-10-16T20:37:38.3863541Z Cache Key:
+2026-10-16T20:37:38.3863804Z     v0-rust-test-Windows_NT-x64-58461147-23f256e7
+2026-10-16T20:37:38.3864158Z .. Prefix:
+2026-10-16T20:37:38.3864391Z   - v0-rust-test-Windows_NT-x64
+2026-10-16T20:37:38.3864693Z .. Environment considered:
+2026-10-16T20:37:38.3864966Z   - Rust Versions:
+2026-10-16T20:37:38.3865341Z     - 1.99.1 x86_64-pc-windows-msvc 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-16T20:37:38.3865850Z     - 1.99.1 x86_64-pc-windows-msvc 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-16T20:37:38.3866255Z   - CARGO_INCREMENTAL
+2026-10-16T20:37:38.3866529Z   - CARGO_PROFILE_DEV_DEBUG
+2026-10-16T20:37:38.3866823Z   - CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-10-16T20:37:38.3867129Z   - CARGO_TERM_COLOR
+2026-10-16T20:37:38.3867406Z   - CARGO_UNSTABLE_SPARSE_REGISTRY
+2026-10-16T20:37:38.3867944Z   - RUST_BACKTRACE
+2026-10-16T20:37:38.3868168Z   - RUSTFLAGS
+2026-10-16T20:37:38.3868391Z .. Lockfiles considered:
+2026-10-16T20:37:38.3868709Z   - D:\a\bitrouter\bitrouter\apps\bitrouter\Cargo.toml
+2026-10-16T20:37:38.3869098Z   - D:\a\bitrouter\bitrouter\Cargo.lock
+2026-10-16T20:37:38.3869464Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-ai\Cargo.toml
+2026-10-16T20:37:38.3869971Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-orchestrator\Cargo.toml
+2026-10-16T20:37:38.3870477Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-sdk\Cargo.toml
+2026-10-16T20:37:38.3870937Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-telemetry\Cargo.toml
+2026-10-16T20:37:38.3871291Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-tui\Cargo.toml
+2026-10-16T20:37:38.3871611Z   - D:\a\bitrouter\bitrouter\extensions\regex-checker\matcher\Cargo.toml
+2026-10-16T20:37:38.3871959Z   - D:\a\bitrouter\bitrouter\helpers\bitrouter-test-fixtures\Cargo.toml
+2026-10-16T20:37:38.3872575Z   - D:\a\bitrouter\bitrouter\helpers\dist-helper\Cargo.toml
+2026-10-16T20:37:38.3873025Z ##[endgroup]
+2026-10-16T20:37:38.3873116Z 
+2026-10-16T20:37:38.3873183Z ... Restoring cache ...
+2026-10-16T20:37:38.8094820Z No cache found.
+2026-10-16T20:37:38.8219985Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=1298]
+2026-10-16T20:37:38.8409873Z ##[group]Run taiki-e/install-action@nextest
+2026-10-16T20:37:38.8410151Z with:
+2026-10-16T20:37:38.8410302Z   tool: nextest
+2026-10-16T20:37:38.8410448Z   checksum: true
+2026-10-16T20:37:38.8410608Z   fallback: cargo-binstall
+2026-10-16T20:37:38.8410775Z env:
+2026-10-16T20:37:38.8410915Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:38.8411098Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:38.8411275Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:38.8411453Z   RUST_BACKTRACE: short
+2026-10-16T20:37:38.8411623Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:38.8411997Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:38.8412221Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:38.8412433Z   CACHE_ON_FAILURE: true
+2026-10-16T20:37:38.8412589Z ##[endgroup]
+2026-10-16T20:37:38.8417682Z ##[start-action display=Run bail() {;id=__taiki-e_install-action.__run]
+2026-10-16T20:37:38.8423775Z ##[end-action id=__taiki-e_install-action.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-16T20:37:38.8426442Z ##[start-action display=Run Set-StrictMode -Version Latest;id=__taiki-e_install-action.__run_2]
+2026-10-16T20:37:38.8528994Z ##[group]Run Set-StrictMode -Version Latest
+2026-10-16T20:37:38.8529274Z [36;1mSet-StrictMode -Version Latest[0m
+2026-10-16T20:37:38.8529572Z [36;1m$remove_env = @('ENV','BASH_ENV','CDPATH','SHELLOPTS','BASHOPTS','BASH_FUNC_*')[0m
+2026-10-16T20:37:38.8529889Z [36;1mforeach ($name in $remove_env) {[0m
+2026-10-16T20:37:38.8530144Z [36;1m  if (Test-Path "Env:$name") { Remove-Item "Env:\$name" }[0m
+2026-10-16T20:37:38.8530400Z [36;1m}[0m
+2026-10-16T20:37:38.8530549Z [36;1mfor ($i=1; $i -le 10; $i++) {[0m
+2026-10-16T20:37:38.8530780Z [36;1m  $prev_err_action = $ErrorActionPreference[0m
+2026-10-16T20:37:38.8531025Z [36;1m  $ErrorActionPreference = "Continue"[0m
+2026-10-16T20:37:38.8531298Z [36;1m  & bash --noprofile --norc "$env:GITHUB_ACTION_PATH\main.sh"[0m
+2026-10-16T20:37:38.8531571Z [36;1m  $code = $LASTEXITCODE[0m
+2026-10-16T20:37:38.8531793Z [36;1m  $ErrorActionPreference = "$prev_err_action"[0m
+2026-10-16T20:37:38.8532080Z [36;1m  if (Test-Path "$env:USERPROFILE\.install-action\init") {[0m
+2026-10-16T20:37:38.8532386Z [36;1m    # If bash started successfully, main.sh creates init file.[0m
+2026-10-16T20:37:38.8532701Z [36;1m    Remove-Item "$env:USERPROFILE\.install-action\init" -Force[0m
+2026-10-16T20:37:38.8532952Z [36;1m    exit $code[0m
+2026-10-16T20:37:38.8533113Z [36;1m  }[0m
+2026-10-16T20:37:38.8533262Z [36;1m  if ($i -lt 10) {[0m
+2026-10-16T20:37:38.8533797Z [36;1m    Write-Output "::warning::install-action: installation failed due to bash startup failure (<https://github.com/actions/partner-runner-images/issues/169>); retrying..."[0m
+2026-10-16T20:37:38.8534320Z [36;1m  }[0m
+2026-10-16T20:37:38.8534454Z [36;1m}[0m
+2026-10-16T20:37:38.8534979Z [36;1mWrite-Output "::error::install-action: installation failed due to bash startup failure (<https://github.com/actions/partner-runner-images/issues/169>); this maybe resolved by re-running job"[0m
+2026-10-16T20:37:38.8535542Z [36;1mexit 1[0m
+2026-10-16T20:37:39.1616316Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-16T20:37:39.1616611Z env:
+2026-10-16T20:37:39.1616770Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:39.1616953Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:39.1617118Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:39.1617291Z   RUST_BACKTRACE: short
+2026-10-16T20:37:39.1617455Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:39.1617642Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:39.1618707Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:39.1618927Z   CACHE_ON_FAILURE: true
+2026-10-16T20:37:39.1619086Z   INPUT_TOOL: nextest
+2026-10-16T20:37:39.1619241Z   INPUT_CHECKSUM: true
+2026-10-16T20:37:39.1619408Z   INPUT_FALLBACK: cargo-binstall
+2026-10-16T20:37:39.1621629Z   DEFAULT_GITHUB_TOKEN: ***
+2026-10-16T20:37:39.1623738Z   ACTION_USER_AGENT: taiki-e/install-action (nextest)
+2026-10-16T20:37:39.1624100Z   RUNNER_OS: Windows
+2026-10-16T20:37:39.1624317Z   RUNNER_ARCH: X64
+2026-10-16T20:37:39.1624541Z ##[endgroup]
+2026-10-16T20:37:39.9134893Z info: host platform: x86_64_windows
+2026-10-16T20:37:39.9538018Z info: cargo is located at /c/Users/runneradmin/.cargo/bin/cargo
+2026-10-16T20:37:40.5472332Z info: installing cargo-nextest@latest
+2026-10-16T20:37:40.8731021Z info: downloading https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.148/cargo-nextest-0.9.148-x86_64-pc-windows-msvc.tar.gz
+2026-10-16T20:37:41.5145933Z info: verifying sha256 checksum for cargo-nextest-0.9.148-x86_64-pc-windows-msvc.tar.gz
+2026-10-16T20:37:42.3730355Z info: cargo-nextest installed at /c/Users/runneradmin/.cargo/bin/cargo-nextest.exe
+2026-10-16T20:37:42.3813358Z + cargo-nextest nextest --version
+2026-10-16T20:37:42.4013014Z cargo-nextest 0.9.148 (cd1d6d546 2026-10-07)
+2026-10-16T20:37:42.4013415Z release: 0.9.148
+2026-10-16T20:37:42.4013748Z commit-hash: cd1d6d5467322dbc0d39a80cb671d000ac302798
+2026-10-16T20:37:42.4014105Z commit-date: 2026-10-07
+2026-10-16T20:37:42.4014358Z host: x86_64-pc-windows-msvc
+2026-10-16T20:37:42.4037657Z 
+2026-10-16T20:37:42.4650832Z ##[end-action id=__taiki-e_install-action.__run_2;outcome=success;conclusion=success;duration_ms=3622]
+2026-10-16T20:37:42.4783603Z ##[group]Run cargo nextest run --workspace --all-features --no-fail-fast --retries "2"
+2026-10-16T20:37:42.4784134Z [36;1mcargo nextest run --workspace --all-features --no-fail-fast --retries "2"[0m
+2026-10-16T20:37:42.4841012Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-10-16T20:37:42.4841298Z env:
+2026-10-16T20:37:42.4841452Z   CARGO_TERM_COLOR: always
+2026-10-16T20:37:42.4841633Z   CARGO_INCREMENTAL: 0
+2026-10-16T20:37:42.4841796Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-16T20:37:42.4841970Z   RUST_BACKTRACE: short
+2026-10-16T20:37:42.4842128Z   RUSTFLAGS: -D warnings
+2026-10-16T20:37:42.4842301Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-16T20:37:42.4842521Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-16T20:37:42.4842737Z   CACHE_ON_FAILURE: true
+2026-10-16T20:37:42.4842903Z ##[endgroup]
+2026-10-16T20:37:42.9170846Z [1m[92m    Updating[0m crates.io index
+2026-10-16T20:37:44.7683299Z [1m[92m Downloading[0m crates ...
+2026-10-16T20:37:44.9333641Z [1m[92m  Downloaded[0m anstyle-wincon v3.0.11
+2026-10-16T20:37:44.9543104Z [1m[92m  Downloaded[0m idna_adapter v1.2.2
+2026-10-16T20:37:44.9647656Z [1m[92m  Downloaded[0m aliasable v0.1.3
+2026-10-16T20:37:44.9762313Z [1m[92m  Downloaded[0m agent-client-protocol-derive v3.3.0
+2026-10-16T20:37:44.9915070Z [1m[92m  Downloaded[0m alloca v0.4.0
+2026-10-16T20:37:45.0077157Z [1m[92m  Downloaded[0m assert-json-diff v2.0.2
+2026-10-16T20:37:45.0307799Z [1m[92m  Downloaded[0m async-stream-impl v0.3.6
+2026-10-16T20:37:45.0386872Z [1m[92m  Downloaded[0m atomicwrites v0.4.4
+2026-10-16T20:37:45.7167148Z [1m[92m  Downloaded[0m axoprocess v0.2.1
+2026-10-16T20:37:45.7338230Z [1m[92m  Downloaded[0m axotag v0.3.0
+2026-10-16T20:37:45.7648378Z [1m[92m  Downloaded[0m inventory v0.3.24
+2026-10-16T20:37:45.7892260Z [1m[92m  Downloaded[0m anstyle-query v1.1.5
+2026-10-16T20:37:45.7970543Z [1m[92m  Downloaded[0m instability v0.3.13
+2026-10-16T20:37:45.8256886Z [1m[92m  Downloaded[0m async-stream v0.3.6
+2026-10-16T20:37:45.8494950Z [1m[92m  Downloaded[0m atoi v2.0.0
+2026-10-16T20:37:45.8665933Z [1m[92m  Downloaded[0m cfg-if v1.0.4
+2026-10-16T20:37:45.8882256Z [1m[92m  Downloaded[0m cfg_aliases v0.1.1
+2026-10-16T20:37:45.9023947Z [1m[92m  Downloaded[0m cfg_aliases v0.2.1
+2026-10-16T20:37:45.9133676Z [1m[92m  Downloaded[0m crypto-common v0.2.2
+2026-10-16T20:37:45.9214276Z [1m[92m  Downloaded[0m block-buffer v0.10.4
+2026-10-16T20:37:45.9369670Z [1m[92m  Downloaded[0m byteorder-lite v0.1.0
+2026-10-16T20:37:45.9510940Z [1m[92m  Downloaded[0m castaway v0.2.4
+2026-10-16T20:37:46.0183191Z [1m[92m  Downloaded[0m is_terminal_polyfill v1.70.2
+2026-10-16T20:37:46.0399526Z [1m[92m  Downloaded[0m crc v3.4.0
+2026-10-16T20:37:46.0817055Z [1m[92m  Downloaded[0m crossterm_winapi v0.9.1
+2026-10-16T20:37:46.1674584Z [1m[92m  Downloaded[0m ident_case v1.0.1
+2026-10-16T20:37:46.1870374Z [1m[92m  Downloaded[0m jsonschema-regex v0.47.0
+2026-10-16T20:37:46.2011849Z [1m[92m  Downloaded[0m md-5 v0.10.6
+2026-10-16T20:37:46.2293857Z [1m[92m  Downloaded[0m percent-encoding v2.3.2
+2026-10-16T20:37:46.2527553Z [1m[92m  Downloaded[0m proc-macro2-diagnostics v0.10.1
+2026-10-16T20:37:46.2960590Z [1m[92m  Downloaded[0m itoa v1.0.18
+2026-10-16T20:37:46.3261482Z [1m[92m  Downloaded[0m num v0.4.3
+2026-10-16T20:37:46.3430928Z [1m[92m  Downloaded[0m plotters-backend v0.3.7
+2026-10-16T20:37:46.3750638Z [1m[92m  Downloaded[0m lazy_static v1.5.0
+2026-10-16T20:37:46.4019741Z [1m[92m  Downloaded[0m bit-set v0.8.0
+2026-10-16T20:37:46.9168194Z [1m[92m  Downloaded[0m borrow-or-share v0.2.4
+2026-10-16T20:37:46.9373242Z [1m[92m  Downloaded[0m colorchoice v1.0.5
+2026-10-16T20:37:46.9500928Z [1m[92m  Downloaded[0m plotters-svg v0.3.7
+2026-10-16T20:37:46.9652723Z [1m[92m  Downloaded[0m clap_lex v1.1.0
+2026-10-16T20:37:46.9827496Z [1m[92m  Downloaded[0m cpufeatures v0.2.17
+2026-10-16T20:37:47.0023017Z [1m[92m  Downloaded[0m crypto-common v0.1.6
+2026-10-16T20:37:47.0255051Z [1m[92m  Downloaded[0m block-buffer v0.12.1
+2026-10-16T20:37:47.0399263Z [1m[92m  Downloaded[0m cast v0.3.0
+2026-10-16T20:37:47.0852089Z [1m[92m  Downloaded[0m ciborium-io v0.2.2
+2026-10-16T20:37:47.0908081Z [1m[92m  Downloaded[0m cpufeatures v0.3.0
+2026-10-16T20:37:47.1066667Z [1m[92m  Downloaded[0m atomic-waker v1.1.2
+2026-10-16T20:37:47.1189748Z [1m[92m  Downloaded[0m strum v0.26.3
+2026-10-16T20:37:47.1244906Z [1m[92m  Downloaded[0m agent-client-protocol-trace-viewer v3.3.0
+2026-10-16T20:37:47.1434898Z [1m[92m  Downloaded[0m anes v0.1.6
+2026-10-16T20:37:47.1781668Z [1m[92m  Downloaded[0m anstream v1.0.0
+2026-10-16T20:37:47.1961917Z [1m[92m  Downloaded[0m anstyle v1.0.14
+2026-10-16T20:37:47.2157914Z [1m[92m  Downloaded[0m anstyle-parse v1.0.0
+2026-10-16T20:37:47.2300781Z [1m[92m  Downloaded[0m async-channel v2.5.0
+2026-10-16T20:37:47.2452858Z [1m[92m  Downloaded[0m async-process v2.5.0
+2026-10-16T20:37:47.2609098Z [1m[92m  Downloaded[0m async-trait v0.1.92
+2026-10-16T20:37:47.3092528Z [1m[92m  Downloaded[0m autocfg v1.5.1
+2026-10-16T20:37:47.3258068Z [1m[92m  Downloaded[0m arraydeque v0.5.1
+2026-10-16T20:37:47.3377870Z [1m[92m  Downloaded[0m axum-core v0.5.6
+2026-10-16T20:37:47.3609402Z [1m[92m  Downloaded[0m bitflags v1.3.2
+2026-10-16T20:37:47.4606495Z [1m[92m  Downloaded[0m blocking v1.6.2
+2026-10-16T20:37:47.4766273Z [1m[92m  Downloaded[0m bs58 v0.5.1
+2026-10-16T20:37:47.5292167Z [1m[92m  Downloaded[0m bytecount v0.6.9
+2026-10-16T20:37:47.5565732Z [1m[92m  Downloaded[0m byteorder v1.5.0
+2026-10-16T20:37:47.5832415Z [1m[92m  Downloaded[0m bytesize v2.4.2
+2026-10-16T20:37:47.6024530Z [1m[92m  Downloaded[0m ciborium-ll v0.2.2
+2026-10-16T20:37:47.6098894Z [1m[92m  Downloaded[0m cmake v0.1.58
+2026-10-16T20:37:47.6234628Z [1m[92m  Downloaded[0m cmov v0.5.4
+2026-10-16T20:37:47.6399404Z [1m[92m  Downloaded[0m criterion-plot v0.8.2
+2026-10-16T20:37:47.6808120Z [1m[92m  Downloaded[0m lru v0.12.5
+2026-10-16T20:37:47.6884578Z [1m[92m  Downloaded[0m lru-slab v0.1.2
+2026-10-16T20:37:47.6995168Z [1m[92m  Downloaded[0m num-iter v0.1.46
+2026-10-16T20:37:47.7133623Z [1m[92m  Downloaded[0m outref v0.5.2
+2026-10-16T20:37:47.7236024Z [1m[92m  Downloaded[0m bit-vec v0.8.0
+2026-10-16T20:37:47.7382664Z [1m[92m  Downloaded[0m cassowary v0.3.0
+2026-10-16T20:37:47.7528457Z [1m[92m  Downloaded[0m concurrent-queue v2.5.0
+2026-10-16T20:37:48.4845196Z [1m[92m  Downloaded[0m crc-catalog v2.5.0
+2026-10-16T20:37:48.4989799Z [1m[92m  Downloaded[0m crossbeam-deque v0.8.7
+2026-10-16T20:37:48.5180149Z [1m[92m  Downloaded[0m nohash-hasher v0.2.0
+2026-10-16T20:37:48.5246667Z [1m[92m  Downloaded[0m page_size v0.6.0
+2026-10-16T20:37:48.5365215Z [1m[92m  Downloaded[0m inherent v1.0.13
+2026-10-16T20:37:48.5608010Z [1m[92m  Downloaded[0m arrayvec v0.7.8
+2026-10-16T20:37:48.5862883Z [1m[92m  Downloaded[0m convert_case v0.10.0
+2026-10-16T20:37:48.6092342Z [1m[92m  Downloaded[0m crossbeam-queue v0.3.13
+2026-10-16T20:37:48.6295361Z [1m[92m  Downloaded[0m num-cmp v0.1.0
+2026-10-16T20:37:48.6390236Z [1m[92m  Downloaded[0m num_cpus v1.17.0
+2026-10-16T20:37:48.6865387Z [1m[92m  Downloaded[0m synstructure v0.13.2
+2026-10-16T20:37:48.7045683Z [1m[92m  Downloaded[0m tokio-macros v2.7.0
+2026-10-16T20:37:48.7162551Z [1m[92m  Downloaded[0m ahash v0.8.12
+2026-10-16T20:37:48.7426798Z [1m[92m  Downloaded[0m allocator-api2 v0.2.21
+2026-10-16T20:37:48.7723860Z [1m[92m  Downloaded[0m anyhow v1.0.103
+2026-10-16T20:37:48.8608423Z [1m[92m  Downloaded[0m async-task v4.7.1
+2026-10-16T20:37:48.8965714Z [1m[92m  Downloaded[0m axoupdater v0.10.0
+2026-10-16T20:37:48.9086462Z [1m[92m  Downloaded[0m base64ct v1.8.3
+2026-10-16T20:37:48.9452579Z [1m[92m  Downloaded[0m bitflags v2.13.0
+2026-10-16T20:37:49.0021184Z [1m[92m  Downloaded[0m chacha20 v0.10.1
+2026-10-16T20:37:49.0335659Z [1m[92m  Downloaded[0m ciborium v0.2.2
+2026-10-16T20:37:49.1425780Z [1m[92m  Downloaded[0m clap v4.6.1
+2026-10-16T20:37:50.0781680Z [1m[92m  Downloaded[0m clap_derive v4.6.1
+2026-10-16T20:37:50.1035425Z [1m[92m  Downloaded[0m const-oid v0.9.6
+2026-10-16T20:37:50.1597328Z [1m[92m  Downloaded[0m cookie v0.18.1
+2026-10-16T20:37:50.1976477Z [1m[92m  Downloaded[0m crossbeam-epoch v0.9.20
+2026-10-16T20:37:50.2686280Z [1m[92m  Downloaded[0m crossbeam-utils v0.8.22
+2026-10-16T20:37:50.3508751Z [1m[92m  Downloaded[0m thiserror-impl v1.0.69
+2026-10-16T20:37:50.3681733Z [1m[92m  Downloaded[0m thiserror-impl v2.0.18
+2026-10-16T20:37:50.3867192Z [1m[92m  Downloaded[0m toml_datetime v1.1.1+spec-1.1.0
+2026-10-16T20:37:50.3941071Z [1m[92m  Downloaded[0m toml_parser v1.1.2+spec-1.1.0
+2026-10-16T20:37:50.4077355Z [1m[92m  Downloaded[0m tracing-attributes v0.1.31
+2026-10-16T20:37:50.5181033Z [1m[92m  Downloaded[0m unicode-xid v0.2.6
+2026-10-16T20:37:50.6662984Z [1m[92m  Downloaded[0m untrusted v0.9.0
+2026-10-16T20:37:50.7410777Z [1m[92m  Downloaded[0m webpki-roots v0.26.11
+2026-10-16T20:37:50.7492751Z [1m[92m  Downloaded[0m annotate-snippets v0.12.5
+2026-10-16T20:37:50.7778138Z [1m[92m  Downloaded[0m async-io v2.6.0
+2026-10-16T20:37:50.7952573Z [1m[92m  Downloaded[0m base64 v0.22.1
+2026-10-16T20:37:52.3227043Z [1m[92m  Downloaded[0m base64 v0.23.0
+2026-10-16T20:37:52.3490950Z [1m[92m  Downloaded[0m bytemuck v1.25.1
+2026-10-16T20:37:52.3837275Z [1m[92m  Downloaded[0m bytes v1.12.1
+2026-10-16T20:37:52.4375955Z [1m[92m  Downloaded[0m camino v1.2.4
+2026-10-16T20:37:52.4523360Z [1m[92m  Downloaded[0m compact_str v0.8.2
+2026-10-16T20:37:52.4755935Z [1m[92m  Downloaded[0m const-oid v0.10.2
+2026-10-16T20:37:52.5443217Z [1m[92m  Downloaded[0m matchers v0.2.0
+2026-10-16T20:37:52.5589445Z [1m[92m  Downloaded[0m num-conv v0.2.2
+2026-10-16T20:37:52.5696877Z [1m[92m  Downloaded[0m num-integer v0.1.46
+2026-10-16T20:37:52.6302444Z [1m[92m  Downloaded[0m num-rational v0.4.2
+2026-10-16T20:37:52.6421871Z [1m[92m  Downloaded[0m once_cell_polyfill v1.70.2
+2026-10-16T20:37:52.6493296Z [1m[92m  Downloaded[0m oorandom v11.1.5
+2026-10-16T20:37:52.6549821Z [1m[92m  Downloaded[0m ouroboros v0.18.5
+2026-10-16T20:37:52.6600828Z [1m[92m  Downloaded[0m ouroboros_macro v0.18.5
+2026-10-16T20:37:52.6784656Z [1m[92m  Downloaded[0m parking v2.2.1
+2026-10-16T20:37:52.7067362Z [1m[92m  Downloaded[0m pin-project-lite v0.2.17
+2026-10-16T20:37:52.8487908Z [1m[92m  Downloaded[0m pkg-config v0.3.33
+2026-10-16T20:37:52.8593001Z [1m[92m  Downloaded[0m potential_utf v0.1.5
+2026-10-16T20:37:52.8662630Z [1m[92m  Downloaded[0m powerfmt v0.2.0
+2026-10-16T20:37:52.8786584Z [1m[92m  Downloaded[0m proc-macro-error-attr2 v2.0.0
+2026-10-16T20:37:52.8900964Z [1m[92m  Downloaded[0m proc-macro-error2 v2.0.1
+2026-10-16T20:37:52.9756890Z [1m[92m  Downloaded[0m subtle v2.6.1
+2026-10-16T20:37:52.9866619Z [1m[92m  Downloaded[0m tinyvec v1.12.0
+2026-10-16T20:37:53.0030756Z [1m[92m  Downloaded[0m toml v1.1.2+spec-1.1.0
+2026-10-16T20:37:53.1139644Z [1m[92m  Downloaded[0m unicode-general-category v1.1.0
+2026-10-16T20:37:53.1280865Z [1m[92m  Downloaded[0m unicode-ident v1.0.24
+2026-10-16T20:37:53.2301541Z [1m[92m  Downloaded[0m url v2.5.8
+2026-10-16T20:37:53.2670489Z [1m[92m  Downloaded[0m vte v0.14.1
+2026-10-16T20:37:53.2821354Z [1m[92m  Downloaded[0m windows-collections v0.2.0
+2026-10-16T20:37:53.6173068Z [1m[92m  Downloaded[0m windows-link v0.1.3
+2026-10-16T20:37:53.6232234Z [1m[92m  Downloaded[0m windows-link v0.2.1
+2026-10-16T20:37:53.6318783Z [1m[92m  Downloaded[0m agent-client-protocol-conductor v3.0.0
+2026-10-16T20:37:53.6971939Z [1m[92m  Downloaded[0m axoasset v2.0.1
+2026-10-16T20:37:53.7516516Z [1m[92m  Downloaded[0m axum v0.8.9
+2026-10-16T20:37:53.8204714Z [1m[92m  Downloaded[0m cc v1.2.67
+2026-10-16T20:37:53.8371085Z [1m[92m  Downloaded[0m clap_builder v4.6.0
+2026-10-16T20:37:53.8921155Z [1m[92m  Downloaded[0m criterion v0.8.2
+2026-10-16T20:37:53.9739637Z [1m[92m  Downloaded[0m crossterm v0.28.1
+2026-10-16T20:37:54.0191647Z [1m[92m  Downloaded[0m ctutils v0.4.2
+2026-10-16T20:37:54.0336630Z [1m[92m  Downloaded[0m indoc v2.0.7
+2026-10-16T20:37:54.1149434Z [1m[92m  Downloaded[0m ipnet v2.12.0
+2026-10-16T20:37:54.1490288Z [1m[92m  Downloaded[0m jobserver v0.1.35
+2026-10-16T20:37:54.1635893Z [1m[92m  Downloaded[0m litemap v0.8.2
+2026-10-16T20:37:54.1778565Z [1m[92m  Downloaded[0m lock_api v0.4.14
+2026-10-16T20:37:54.1842067Z [1m[92m  Downloaded[0m miette-derive v7.6.0
+2026-10-16T20:37:54.2033994Z [1m[92m  Downloaded[0m nu-ansi-term v0.50.3
+2026-10-16T20:37:54.2307485Z [1m[92m  Downloaded[0m once_cell v1.21.4
+2026-10-16T20:37:54.2500413Z [1m[92m  Downloaded[0m opentelemetry-http v0.32.0
+2026-10-16T20:37:54.2903328Z [1m[92m  Downloaded[0m ordered-float v4.6.0
+2026-10-16T20:37:54.2985656Z [1m[92m  Downloaded[0m parking_lot v0.12.5
+2026-10-16T20:37:54.3138167Z [1m[92m  Downloaded[0m paste v1.0.15
+2026-10-16T20:37:54.3760132Z [1m[92m  Downloaded[0m pin-project-internal v1.1.13
+2026-10-16T20:37:54.3908148Z [1m[92m  Downloaded[0m piper v0.2.5
+2026-10-16T20:37:54.3993481Z [1m[92m  Downloaded[0m pkcs1 v0.7.5
+2026-10-16T20:37:54.4183858Z [1m[92m  Downloaded[0m pkcs8 v0.10.2
+2026-10-16T20:37:54.4472504Z [1m[92m  Downloaded[0m portable-pty v0.9.0
+2026-10-16T20:37:54.4566529Z [1m[92m  Downloaded[0m ppv-lite86 v0.2.21
+2026-10-16T20:37:54.4645873Z [1m[92m  Downloaded[0m toml_writer v1.1.1+spec-1.1.0
+2026-10-16T20:37:54.4727666Z [1m[92m  Downloaded[0m webpki-roots v1.0.8
+2026-10-16T20:37:54.4832555Z [1m[92m  Downloaded[0m windows-future v0.2.1
+2026-10-16T20:37:54.4927519Z [1m[92m  Downloaded[0m windows-numerics v0.2.0
+2026-10-16T20:37:54.5459641Z [1m[92m  Downloaded[0m windows-numerics v0.3.1
+2026-10-16T20:37:54.5548517Z [1m[92m  Downloaded[0m windows-result v0.3.4
+2026-10-16T20:37:54.5712825Z [1m[92m  Downloaded[0m windows-result v0.4.1
+2026-10-16T20:37:54.5836338Z [1m[92m  Downloaded[0m zerofrom v0.1.8
+2026-10-16T20:37:54.5890921Z [1m[92m  Downloaded[0m zerofrom-derive v0.1.7
+2026-10-16T20:37:54.6387326Z [1m[92m  Downloaded[0m zstd v0.13.3
+2026-10-16T20:37:54.6580883Z [1m[92m  Downloaded[0m agent-client-protocol v3.0.0
+2026-10-16T20:37:55.9373265Z [1m[92m  Downloaded[0m agent-client-protocol-schema v1.10.2
+2026-10-16T20:37:55.9590633Z [1m[92m  Downloaded[0m aho-corasick v1.1.4
+2026-10-16T20:37:55.9854088Z [1m[92m  Downloaded[0m aws-lc-rs v1.17.1
+2026-10-16T20:37:56.3347758Z [1m[92m  Downloaded[0m axum-test v21.0.0
+2026-10-16T20:37:56.4166319Z [1m[92m  Downloaded[0m bstr v1.13.1
+2026-10-16T20:37:56.4574939Z [1m[92m  Downloaded[0m chrono v0.4.45
+2026-10-16T20:37:56.5113448Z [1m[92m  Downloaded[0m darling v0.20.11
+2026-10-16T20:37:56.6300367Z [1m[92m  Downloaded[0m darling v0.23.0
+2026-10-16T20:37:56.6923486Z [1m[92m  Downloaded[0m darling v0.24.0
+2026-10-16T20:37:56.7608851Z [1m[92m  Downloaded[0m der v0.7.10
+2026-10-16T20:37:56.7931546Z [1m[92m  Downloaded[0m deranged v0.5.8
+2026-10-16T20:37:56.7997426Z [1m[92m  Downloaded[0m derive_more v2.1.1
+2026-10-16T20:37:56.9471014Z [1m[92m  Downloaded[0m encoding_rs_io v0.1.7
+2026-10-16T20:37:56.9543113Z [1m[92m  Downloaded[0m enum-ordinalize v4.4.1
+2026-10-16T20:37:56.9593434Z [1m[92m  Downloaded[0m enum-ordinalize-derive v4.4.1
+2026-10-16T20:37:56.9677353Z [1m[92m  Downloaded[0m equivalent v1.0.2
+2026-10-16T20:37:56.9741526Z [1m[92m  Downloaded[0m find-msvc-tools v0.1.9
+2026-10-16T20:37:56.9842526Z [1m[92m  Downloaded[0m form_urlencoded v1.2.2
+2026-10-16T20:37:56.9892410Z [1m[92m  Downloaded[0m fraction v0.15.4
+2026-10-16T20:37:57.0285157Z [1m[92m  Downloaded[0m futures v0.3.32
+2026-10-16T20:37:57.0657328Z [1m[92m  Downloaded[0m futures-core v0.3.32
+2026-10-16T20:37:57.0780523Z [1m[92m  Downloaded[0m futures-executor v0.3.32
+2026-10-16T20:37:57.0868472Z [1m[92m  Downloaded[0m futures-io v0.3.32
+2026-10-16T20:37:57.0931726Z [1m[92m  Downloaded[0m icu_properties v2.2.0
+2026-10-16T20:37:57.1057542Z [1m[92m  Downloaded[0m icu_provider v2.2.0
+2026-10-16T20:37:57.1200967Z [1m[92m  Downloaded[0m ignore v0.4.32
+2026-10-16T20:37:57.1512223Z [1m[92m  Downloaded[0m indexmap v1.9.3
+2026-10-16T20:37:57.1712594Z [1m[92m  Downloaded[0m keyring v3.6.3
+2026-10-16T20:37:57.1851026Z [1m[92m  Downloaded[0m log v0.4.33
+2026-10-16T20:37:57.1988720Z [1m[92m  Downloaded[0m matchit v0.8.4
+2026-10-16T20:37:57.2114524Z [1m[92m  Downloaded[0m micromap v0.3.0
+2026-10-16T20:37:57.2449541Z [1m[92m  Downloaded[0m mime v0.3.17
+2026-10-16T20:37:57.2532753Z [1m[92m  Downloaded[0m num-complex v0.4.6
+2026-10-16T20:37:57.2604486Z [1m[92m  Downloaded[0m num-traits v0.2.19
+2026-10-16T20:37:57.3513761Z [1m[92m  Downloaded[0m open v5.4.2
+2026-10-16T20:37:57.3647350Z [1m[92m  Downloaded[0m opentelemetry-otlp v0.32.0
+2026-10-16T20:37:57.4581466Z [1m[92m  Downloaded[0m parking_lot_core v0.9.12
+2026-10-16T20:37:57.4726943Z [1m[92m  Downloaded[0m pem-rfc7468 v0.7.0
+2026-10-16T20:37:57.4873145Z [1m[92m  Downloaded[0m pin-project v1.1.13
+2026-10-16T20:37:58.2953176Z [1m[92m  Downloaded[0m polling v3.11.0
+2026-10-16T20:37:58.3161485Z [1m[92m  Downloaded[0m pretty_assertions v1.4.1
+2026-10-16T20:37:58.3275063Z [1m[92m  Downloaded[0m proc-macro2 v1.0.106
+2026-10-16T20:37:58.3727870Z [1m[92m  Downloaded[0m prost-derive v0.14.4
+2026-10-16T20:37:58.3841864Z [1m[92m  Downloaded[0m rustversion v1.0.23
+2026-10-16T20:37:58.4070044Z [1m[92m  Downloaded[0m ryu v1.0.23
+2026-10-16T20:37:58.4289080Z [1m[92m  Downloaded[0m sha1 v0.10.7
+2026-10-16T20:37:58.4379683Z [1m[92m  Downloaded[0m darling_macro v0.24.0
+2026-10-16T20:37:58.4425034Z [1m[92m  Downloaded[0m derive_more-impl v2.1.1
+2026-10-16T20:37:58.4749981Z [1m[92m  Downloaded[0m fs_extra v1.3.0
+2026-10-16T20:37:58.4826003Z [1m[92m  Downloaded[0m futures-channel v0.3.32
+2026-10-16T20:37:58.4944257Z [1m[92m  Downloaded[0m futures-concurrency v7.7.1
+2026-10-16T20:37:58.5913364Z [1m[92m  Downloaded[0m futures-intrusive v0.5.0
+2026-10-16T20:37:58.6207443Z [1m[92m  Downloaded[0m hmac v0.12.1
+2026-10-16T20:37:58.6419366Z [1m[92m  Downloaded[0m hmac v0.13.0
+2026-10-16T20:37:58.6570567Z [1m[92m  Downloaded[0m home v0.5.12
+2026-10-16T20:37:58.6695568Z [1m[92m  Downloaded[0m homedir v0.3.6
+2026-10-16T20:37:58.6814125Z [1m[92m  Downloaded[0m http v1.4.2
+2026-10-16T20:37:58.7032419Z [1m[92m  Downloaded[0m http-body v1.0.1
+2026-10-16T20:37:58.7111512Z [1m[92m  Downloaded[0m http-body-util v0.1.3
+2026-10-16T20:37:58.7255512Z [1m[92m  Downloaded[0m httparse v1.10.1
+2026-10-16T20:37:58.7416754Z [1m[92m  Downloaded[0m httpdate v1.0.3
+2026-10-16T20:37:58.7488834Z [1m[92m  Downloaded[0m hybrid-array v0.4.13
+2026-10-16T20:37:58.7648339Z [1m[92m  Downloaded[0m indexmap v2.14.0
+2026-10-16T20:37:58.7872239Z [1m[92m  Downloaded[0m itertools v0.13.0
+2026-10-16T20:37:58.8366019Z [1m[92m  Downloaded[0m memchr v2.8.3
+2026-10-16T20:37:59.1535738Z [1m[92m  Downloaded[0m miette v7.6.0
+2026-10-16T20:37:59.1816831Z [1m[92m  Downloaded[0m minimal-lexical v0.2.1
+2026-10-16T20:37:59.2111467Z [1m[92m  Downloaded[0m mio v1.2.1
+2026-10-16T20:37:59.2503912Z [1m[92m  Downloaded[0m nom v7.1.3
+2026-10-16T20:37:59.2804390Z [1m[92m  Downloaded[0m num-bigint v0.4.8
+2026-10-16T20:37:59.3126500Z [1m[92m  Downloaded[0m num-bigint-dig v0.8.6
+2026-10-16T20:37:59.3409605Z [1m[92m  Downloaded[0m opentelemetry v0.32.0
+2026-10-16T20:37:59.3715672Z [1m[92m  Downloaded[0m opentelemetry-semantic-conventions v0.32.1
+2026-10-16T20:37:59.3854412Z [1m[92m  Downloaded[0m prost v0.14.4
+2026-10-16T20:37:59.3984580Z [1m[92m  Downloaded[0m prost-types v0.14.4
+2026-10-16T20:37:59.4153326Z [1m[92m  Downloaded[0m rustls-native-certs v0.8.4
+2026-10-16T20:37:59.4235848Z [1m[92m  Downloaded[0m rustls-pki-types v1.15.0
+2026-10-16T20:37:59.4601601Z [1m[92m  Downloaded[0m rustls-platform-verifier v0.7.0
+2026-10-16T20:37:59.4860482Z [1m[92m  Downloaded[0m rustls-webpki v0.103.13
+2026-10-16T20:37:59.5052022Z [1m[92m  Downloaded[0m socket2 v0.6.4
+2026-10-16T20:37:59.5157998Z [1m[92m  Downloaded[0m spin v0.9.8
+2026-10-16T20:37:59.5300342Z [1m[92m  Downloaded[0m spki v0.7.3
+2026-10-16T20:37:59.5430563Z [1m[92m  Downloaded[0m sqlx-core v0.8.6
+2026-10-16T20:37:59.5931935Z [1m[92m  Downloaded[0m strsim v0.11.1
+2026-10-16T20:37:59.6007381Z [1m[92m  Downloaded[0m strum v0.28.0
+2026-10-16T20:37:59.6065180Z [1m[92m  Downloaded[0m strum_macros v0.26.4
+2026-10-16T20:37:59.6256979Z [1m[92m  Downloaded[0m sync_wrapper v1.0.2
+2026-10-16T20:37:59.6309016Z [1m[92m  Downloaded[0m thiserror v1.0.69
+2026-10-16T20:37:59.6912355Z [1m[92m  Downloaded[0m thread_local v1.1.10
+2026-10-16T20:37:59.6992964Z [1m[92m  Downloaded[0m time-core v0.1.9
+2026-10-16T20:37:59.7058286Z [1m[92m  Downloaded[0m tinystr v0.8.3
+2026-10-16T20:37:59.7286268Z [1m[92m  Downloaded[0m tinyvec_macros v0.1.1
+2026-10-16T20:37:59.7359164Z [1m[92m  Downloaded[0m tonic-prost v0.14.6
+2026-10-16T20:37:59.7423935Z [1m[92m  Downloaded[0m typenum v1.20.1
+2026-10-16T20:37:59.7605615Z [1m[92m  Downloaded[0m utf8_iter v1.0.4
+2026-10-16T20:37:59.7667526Z [1m[92m  Downloaded[0m utf8parse v0.2.2
+2026-10-16T20:37:59.7728092Z [1m[92m  Downloaded[0m whoami v1.6.1
+2026-10-16T20:37:59.7871895Z [1m[92m  Downloaded[0m yoke-derive v0.8.2
+2026-10-16T20:37:59.7943540Z [1m[92m  Downloaded[0m zerocopy-derive v0.8.54
+2026-10-16T20:37:59.8862482Z [1m[92m  Downloaded[0m darling_macro v0.20.11
+2026-10-16T20:37:59.8910356Z [1m[92m  Downloaded[0m darling_macro v0.23.0
+2026-10-16T20:37:59.8957581Z [1m[92m  Downloaded[0m dashmap v6.2.1
+2026-10-16T20:37:59.9136952Z [1m[92m  Downloaded[0m data-encoding v2.11.0
+2026-10-16T20:37:59.9195376Z [1m[92m  Downloaded[0m fixedbitset v0.5.7
+2026-10-16T20:37:59.9299446Z [1m[92m  Downloaded[0m fnv v1.0.7
+2026-10-16T20:37:59.9356138Z [1m[92m  Downloaded[0m foldhash v0.1.5
+2026-10-16T20:37:59.9434401Z [1m[92m  Downloaded[0m foldhash v0.2.0
+2026-10-16T20:37:59.9513410Z [1m[92m  Downloaded[0m icu_properties_data v2.2.0
+2026-10-16T20:38:00.0523309Z [1m[92m  Downloaded[0m idna v1.1.0
+2026-10-16T20:38:00.0670611Z [1m[92m  Downloaded[0m image v0.25.10
+2026-10-16T20:38:00.1262274Z [1m[92m  Downloaded[0m itertools v0.14.0
+2026-10-16T20:38:00.1794877Z [1m[92m  Downloaded[0m jsonschema v0.47.0
+2026-10-16T20:38:00.2744422Z [1m[92m  Downloaded[0m libm v0.2.16
+2026-10-16T20:38:01.1023043Z [1m[92m  Downloaded[0m moxcms v0.8.1
+2026-10-16T20:38:01.1688484Z [1m[92m  Downloaded[0m nix v0.28.0
+2026-10-16T20:38:01.2371972Z [1m[92m  Downloaded[0m opentelemetry-proto v0.32.0
+2026-10-16T20:38:01.3063180Z [1m[92m  Downloaded[0m opentelemetry_sdk v0.32.1
+2026-10-16T20:38:01.3698082Z [1m[92m  Downloaded[0m plotters v0.3.7
+2026-10-16T20:38:01.4622209Z [1m[92m  Downloaded[0m process-wrap v10.0.0
+2026-10-16T20:38:01.5200886Z [1m[92m  Downloaded[0m sqlx v0.8.6
+2026-10-16T20:38:02.0657307Z [1m[92m  Downloaded[0m strum_macros v0.28.0
+2026-10-16T20:38:02.0864614Z [1m[92m  Downloaded[0m tempfile v3.27.0
+2026-10-16T20:38:02.1006063Z [1m[92m  Downloaded[0m thiserror v2.0.18
+2026-10-16T20:38:02.2671489Z [1m[92m  Downloaded[0m time-macros v0.2.31
+2026-10-16T20:38:02.2830504Z [1m[92m  Downloaded[0m tinytemplate v1.2.1
+2026-10-16T20:38:02.2993563Z [1m[92m  Downloaded[0m tokio-rustls v0.26.4
+2026-10-16T20:38:02.3105549Z [1m[92m  Downloaded[0m tonic v0.14.6
+2026-10-16T20:38:02.3493373Z [1m[92m  Downloaded[0m tracing-core v0.1.36
+2026-10-16T20:38:02.3991967Z [1m[92m  Downloaded[0m windows_x86_64_msvc v0.52.6
+2026-10-16T20:38:02.4145905Z [1m[92m  Downloaded[0m winreg v0.10.1
+2026-10-16T20:38:02.4338441Z [1m[92m  Downloaded[0m wiremock v0.6.5
+2026-10-16T20:38:02.4539796Z [1m[92m  Downloaded[0m writeable v0.6.3
+2026-10-16T20:38:02.4663103Z [1m[92m  Downloaded[0m yansi v1.0.1
+2026-10-16T20:38:02.5342961Z [1m[92m  Downloaded[0m yoke v0.8.3
+2026-10-16T20:38:02.5473533Z [1m[92m  Downloaded[0m darling_core v0.20.11
+2026-10-16T20:38:02.6510655Z [1m[92m  Downloaded[0m darling_core v0.23.0
+2026-10-16T20:38:02.6899354Z [1m[92m  Downloaded[0m darling_core v0.24.0
+2026-10-16T20:38:02.8733090Z [1m[92m  Downloaded[0m deadpool v0.12.3
+2026-10-16T20:38:02.8945122Z [1m[92m  Downloaded[0m digest v0.10.7
+2026-10-16T20:38:02.9064600Z [1m[92m  Downloaded[0m downcast-rs v1.2.1
+2026-10-16T20:38:02.9142095Z [1m[92m  Downloaded[0m dunce v1.0.5
+2026-10-16T20:38:02.9232879Z [1m[92m  Downloaded[0m fluent-uri v0.4.1
+2026-10-16T20:38:02.9411211Z [1m[92m  Downloaded[0m flume v0.11.1
+2026-10-16T20:38:02.9610339Z [1m[92m  Downloaded[0m futures-lite v2.6.1
+2026-10-16T20:38:02.9697169Z [1m[92m  Downloaded[0m hkdf v0.12.4
+2026-10-16T20:38:02.9829484Z [1m[92m  Downloaded[0m hyper v1.10.1
+2026-10-16T20:38:03.0284907Z [1m[92m  Downloaded[0m libc v0.2.186
+2026-10-16T20:38:04.0706205Z [1m[92m  Downloaded[0m widestring v1.2.1
+2026-10-16T20:38:04.0914632Z [1m[92m  Downloaded[0m winnow v1.0.3
+2026-10-16T20:38:04.2561645Z [1m[92m  Downloaded[0m zerocopy v0.8.54
+2026-10-16T20:38:04.4582791Z [1m[92m  Downloaded[0m zeroize v1.9.0
+2026-10-16T20:38:04.4669675Z [1m[92m  Downloaded[0m zeroize_derive v1.5.0
+2026-10-16T20:38:04.4728829Z [1m[92m  Downloaded[0m zerotrie v0.2.4
+2026-10-16T20:38:04.7236317Z [1m[92m  Downloaded[0m zerovec v0.11.6
+2026-10-16T20:38:04.8687171Z [1m[92m  Downloaded[0m zerovec-derive v0.11.3
+2026-10-16T20:38:04.8946048Z [1m[92m  Downloaded[0m zmij v1.0.21
+2026-10-16T20:38:04.9047101Z [1m[92m  Downloaded[0m zstd-safe v7.3.0
+2026-10-16T20:38:04.9129493Z [1m[92m  Downloaded[0m deadpool-runtime v0.1.4
+2026-10-16T20:38:04.9182344Z [1m[92m  Downloaded[0m diff v0.1.13
+2026-10-16T20:38:04.9306527Z [1m[92m  Downloaded[0m digest v0.11.3
+2026-10-16T20:38:04.9598695Z [1m[92m  Downloaded[0m displaydoc v0.2.6
+2026-10-16T20:38:04.9749958Z [1m[92m  Downloaded[0m dotenvy v0.15.7
+2026-10-16T20:38:05.0374428Z [1m[92m  Downloaded[0m dyn-clone v1.0.20
+2026-10-16T20:38:05.0478193Z [1m[92m  Downloaded[0m either v1.16.0
+2026-10-16T20:38:05.0815632Z [1m[92m  Downloaded[0m email_address v0.2.9
+2026-10-16T20:38:05.0935501Z [1m[92m  Downloaded[0m errno v0.3.14
+2026-10-16T20:38:05.1026363Z [1m[92m  Downloaded[0m etcetera v0.8.0
+2026-10-16T20:38:05.1158867Z [1m[92m  Downloaded[0m globset v0.4.19
+2026-10-16T20:38:05.1240771Z [1m[92m  Downloaded[0m half v2.7.1
+2026-10-16T20:38:05.1385995Z [1m[92m  Downloaded[0m rustls v0.23.41
+2026-10-16T20:38:05.3583274Z [1m[92m  Downloaded[0m syn v2.0.118
+2026-10-16T20:38:05.4346470Z [1m[92m  Downloaded[0m syn v3.0.3
+2026-10-16T20:38:05.6188099Z [1m[92m  Downloaded[0m time v0.3.53
+2026-10-16T20:38:06.6305453Z [1m[92m  Downloaded[0m tonic-types v0.14.6
+2026-10-16T20:38:06.6517933Z [1m[92m  Downloaded[0m educe v0.6.0
+2026-10-16T20:38:06.7193158Z [1m[92m  Downloaded[0m erased-serde v0.4.10
+2026-10-16T20:38:06.7352805Z [1m[92m  Downloaded[0m event-listener v5.4.1
+2026-10-16T20:38:06.7470022Z [1m[92m  Downloaded[0m futures-macro v0.3.32
+2026-10-16T20:38:06.7536291Z [1m[92m  Downloaded[0m futures-sink v0.3.32
+2026-10-16T20:38:06.7818970Z [1m[92m  Downloaded[0m futures-task v0.3.32
+2026-10-16T20:38:06.8851891Z [1m[92m  Downloaded[0m futures-util v0.3.32
+2026-10-16T20:38:06.9964409Z [1m[92m  Downloaded[0m generic-array v0.14.9
+2026-10-16T20:38:07.0083946Z [1m[92m  Downloaded[0m getrandom v0.2.17
+2026-10-16T20:38:07.0914426Z [1m[92m  Downloaded[0m getrandom v0.3.4
+2026-10-16T20:38:07.1141842Z [1m[92m  Downloaded[0m getrandom v0.4.3
+2026-10-16T20:38:07.1731373Z [1m[92m  Downloaded[0m glob v0.3.3
+2026-10-16T20:38:07.1818770Z [1m[92m  Downloaded[0m granit-parser v0.0.7
+2026-10-16T20:38:07.2249634Z [1m[92m  Downloaded[0m h2 v0.4.15
+2026-10-16T20:38:07.2708022Z [1m[92m  Downloaded[0m hashbrown v0.12.3
+2026-10-16T20:38:07.2897137Z [1m[92m  Downloaded[0m hashbrown v0.14.5
+2026-10-16T20:38:07.7994888Z [1m[92m  Downloaded[0m hashbrown v0.15.5
+2026-10-16T20:38:07.8363823Z [1m[92m  Downloaded[0m rand_pcg v0.10.2
+2026-10-16T20:38:07.8482868Z [1m[92m  Downloaded[0m windows-future v0.3.2
+2026-10-16T20:38:07.8584996Z [1m[92m  Downloaded[0m windows-strings v0.4.2
+2026-10-16T20:38:07.8726879Z [1m[92m  Downloaded[0m windows-strings v0.5.1
+2026-10-16T20:38:07.8861748Z [1m[92m  Downloaded[0m eventsource-stream v0.2.3
+2026-10-16T20:38:07.9104214Z [1m[92m  Downloaded[0m expect-json-macros v1.11.0
+2026-10-16T20:38:07.9222502Z [1m[92m  Downloaded[0m hashlink v0.10.0
+2026-10-16T20:38:07.9440971Z [1m[92m  Downloaded[0m heck v0.4.1
+2026-10-16T20:38:07.9573572Z [1m[92m  Downloaded[0m heck v0.5.0
+2026-10-16T20:38:07.9671802Z [1m[92m  Downloaded[0m hyper-rustls v0.27.9
+2026-10-16T20:38:07.9764779Z [1m[92m  Downloaded[0m hyper-timeout v0.5.2
+2026-10-16T20:38:08.1508187Z [1m[92m  Downloaded[0m icu_collections v2.2.0
+2026-10-16T20:38:08.4605534Z [1m[92m  Downloaded[0m icu_locale_core v2.2.0
+2026-10-16T20:38:08.6615967Z [1m[92m  Downloaded[0m icu_normalizer v2.2.0
+2026-10-16T20:38:08.6840788Z [1m[92m  Downloaded[0m icu_normalizer_data v2.2.0
+2026-10-16T20:38:08.6961110Z [1m[92m  Downloaded[0m quinn v0.11.11
+2026-10-16T20:38:08.7195529Z [1m[92m  Downloaded[0m quinn-udp v0.5.15
+2026-10-16T20:38:09.0091960Z [1m[92m  Downloaded[0m quote v1.0.46
+2026-10-16T20:38:09.0308070Z [1m[92m  Downloaded[0m rand v0.8.7
+2026-10-16T20:38:09.0517714Z [1m[92m  Downloaded[0m rand_chacha v0.3.1
+2026-10-16T20:38:09.0620718Z [1m[92m  Downloaded[0m rand_chacha v0.9.0
+2026-10-16T20:38:09.0713178Z [1m[92m  Downloaded[0m rand_core v0.6.4
+2026-10-16T20:38:09.0811113Z [1m[92m  Downloaded[0m rand_core v0.9.5
+2026-10-16T20:38:09.0888671Z [1m[92m  Downloaded[0m rand_core v0.10.1
+2026-10-16T20:38:09.0999554Z [1m[92m  Downloaded[0m rand_distr v0.6.0
+2026-10-16T20:38:09.1838338Z [1m[92m  Downloaded[0m sea-bae v0.2.1
+2026-10-16T20:38:09.1914678Z [1m[92m  Downloaded[0m sea-query-binder v0.7.0
+2026-10-16T20:38:09.2006111Z [1m[92m  Downloaded[0m sqlx-macros v0.8.6
+2026-10-16T20:38:09.2120021Z [1m[92m  Downloaded[0m tokio v1.52.3
+2026-10-16T20:38:09.6057671Z [1m[92m  Downloaded[0m tracing-log v0.2.0
+2026-10-16T20:38:09.6141124Z [1m[92m  Downloaded[0m uuid v1.23.4
+2026-10-16T20:38:09.6311130Z [1m[92m  Downloaded[0m windows_x86_64_msvc v0.53.1
+2026-10-16T20:38:09.6481620Z [1m[92m  Downloaded[0m event-listener-strategy v0.5.4
+2026-10-16T20:38:09.6557281Z [1m[92m  Downloaded[0m expect-json v1.11.0
+2026-10-16T20:38:09.7357607Z [1m[92m  Downloaded[0m hashbrown v0.17.1
+2026-10-16T20:38:09.7652936Z [1m[92m  Downloaded[0m hyper-util v0.1.20
+2026-10-16T20:38:09.8049720Z [1m[92m  Downloaded[0m rand v0.9.5
+2026-10-16T20:38:09.8561397Z [1m[92m  Downloaded[0m rand v0.10.2
+2026-10-16T20:38:09.8814143Z [1m[92m  Downloaded[0m rayon v1.12.0
+2026-10-16T20:38:10.9762960Z [1m[92m  Downloaded[0m sea-orm-cli v1.1.20
+2026-10-16T20:38:11.0501207Z [1m[92m  Downloaded[0m sea-orm-macros v1.1.20
+2026-10-16T20:38:11.0933034Z [1m[92m  Downloaded[0m sea-orm-migration v1.1.20
+2026-10-16T20:38:11.1153826Z [1m[92m  Downloaded[0m sqlx-macros-core v0.8.6
+2026-10-16T20:38:11.1295922Z [1m[92m  Downloaded[0m sqlx-mysql v0.8.6
+2026-10-16T20:38:11.1698761Z [1m[92m  Downloaded[0m tokio-stream v0.1.18
+2026-10-16T20:38:11.3114175Z [1m[92m  Downloaded[0m tokio-tungstenite v0.29.0
+2026-10-16T20:38:11.3325370Z [1m[92m  Downloaded[0m tower v0.5.3
+2026-10-16T20:38:11.4173589Z [1m[92m  Downloaded[0m tower-http v0.6.11
+2026-10-16T20:38:11.7411487Z [1m[92m  Downloaded[0m tower-service v0.3.3
+2026-10-16T20:38:11.7461373Z [1m[92m  Downloaded[0m uuid-simd v0.8.0
+2026-10-16T20:38:11.7543593Z [1m[92m  Downloaded[0m zstd-sys v2.1.1+zstd.1.5.7
+2026-10-16T20:38:11.8303496Z [1m[92m  Downloaded[0m fastrand v2.4.1
+2026-10-16T20:38:11.8385439Z [1m[92m  Downloaded[0m filedescriptor v0.8.3
+2026-10-16T20:38:11.8472287Z [1m[92m  Downloaded[0m hex v0.4.3
+2026-10-16T20:38:11.8567451Z [1m[92m  Downloaded[0m quinn-proto v0.11.16
+2026-10-16T20:38:11.8879162Z [1m[92m  Downloaded[0m sha2 v0.11.0
+2026-10-16T20:38:11.9135594Z [1m[92m  Downloaded[0m tokio-util v0.7.18
+2026-10-16T20:38:11.9674979Z [1m[92m  Downloaded[0m tower-layer v0.3.3
+2026-10-16T20:38:11.9827321Z [1m[92m  Downloaded[0m tracing-opentelemetry v0.33.0
+2026-10-16T20:38:12.0010747Z [1m[92m  Downloaded[0m ratatui v0.29.0
+2026-10-16T20:38:12.1172284Z [1m[92m  Downloaded[0m sea-query v0.32.7
+2026-10-16T20:38:12.1940515Z [1m[92m  Downloaded[0m serde_urlencoded v0.7.1
+2026-10-16T20:38:12.2040773Z [1m[92m  Downloaded[0m serial2 v0.2.38
+2026-10-16T20:38:12.2315353Z [1m[92m  Downloaded[0m sharded-slab v0.1.7
+2026-10-16T20:38:12.2599519Z [1m[92m  Downloaded[0m ref-cast v1.0.25
+2026-10-16T20:38:12.2918510Z [1m[92m  Downloaded[0m ref-cast-impl v1.0.25
+2026-10-16T20:38:12.2976218Z [1m[92m  Downloaded[0m reserve-port v2.5.0
+2026-10-16T20:38:12.3103224Z [1m[92m  Downloaded[0m rust-multipart-rfc7578_2 v0.9.0
+2026-10-16T20:38:12.3185981Z [1m[92m  Downloaded[0m rustc-hash v2.1.3
+2026-10-16T20:38:12.3264101Z [1m[92m  Downloaded[0m rustc_version v0.4.1
+2026-10-16T20:38:12.3358002Z [1m[92m  Downloaded[0m same-file v1.0.6
+2026-10-16T20:38:12.3442012Z [1m[92m  Downloaded[0m scopeguard v1.2.0
+2026-10-16T20:38:12.3525381Z [1m[92m  Downloaded[0m serde_with_macros v3.21.0
+2026-10-16T20:38:12.3652331Z [1m[92m  Downloaded[0m rayon-core v1.13.0
+2026-10-16T20:38:12.3879593Z [1m[92m  Downloaded[0m referencing v0.47.0
+2026-10-16T20:38:12.4195183Z [1m[92m  Downloaded[0m schannel v0.1.29
+2026-10-16T20:38:12.4304313Z [1m[92m  Downloaded[0m schemars_derive v1.2.1
+2026-10-16T20:38:12.4502866Z [1m[92m  Downloaded[0m sha2 v0.10.9
+2026-10-16T20:38:12.4864000Z [1m[92m  Downloaded[0m tracing v0.1.44
+2026-10-16T20:38:12.5567321Z [1m[92m  Downloaded[0m unicode-properties v0.1.4
+2026-10-16T20:38:12.5862279Z [1m[92m  Downloaded[0m pxfm v0.1.30
+2026-10-16T20:38:12.7592195Z [1m[92m  Downloaded[0m rsa v0.9.10
+2026-10-16T20:38:12.8100790Z [1m[92m  Downloaded[0m schemars v0.9.0
+2026-10-16T20:38:13.8518116Z [1m[92m  Downloaded[0m schemars v1.2.1
+2026-10-16T20:38:14.0341024Z [1m[92m  Downloaded[0m serde_with v3.21.0
+2026-10-16T20:38:14.2166929Z [1m[92m  Downloaded[0m tracing-subscriber v0.3.23
+2026-10-16T20:38:14.7370916Z [1m[92m  Downloaded[0m try-lock v0.2.5
+2026-10-16T20:38:14.7636664Z [1m[92m  Downloaded[0m typeid v1.0.3
+2026-10-16T20:38:14.7726993Z [1m[92m  Downloaded[0m typetag-impl v0.2.22
+2026-10-16T20:38:14.8192381Z [1m[92m  Downloaded[0m unicode-bidi v0.3.18
+2026-10-16T20:38:14.8339781Z [1m[92m  Downloaded[0m fancy-regex v0.18.0
+2026-10-16T20:38:14.8983366Z [1m[92m  Downloaded[0m regex v1.13.0
+2026-10-16T20:38:15.0365693Z [1m[92m  Downloaded[0m reqwest v0.13.4
+2026-10-16T20:38:15.0636757Z [1m[92m  Downloaded[0m tungstenite v0.29.0
+2026-10-16T20:38:15.0862194Z [1m[92m  Downloaded[0m unicode-normalization v0.1.25
+2026-10-16T20:38:15.1036168Z [1m[92m  Downloaded[0m encoding_rs v0.8.35
+2026-10-16T20:38:15.2466594Z [1m[92m  Downloaded[0m regex-syntax v0.8.11
+2026-10-16T20:38:15.3512714Z [1m[92m  Downloaded[0m sea-query-derive v0.4.3
+2026-10-16T20:38:15.3829133Z [1m[92m  Downloaded[0m rustix v1.1.4
+2026-10-16T20:38:15.5878274Z [1m[92m  Downloaded[0m serde_derive_internals v0.29.1
+2026-10-16T20:38:15.5972806Z [1m[92m  Downloaded[0m winapi v0.3.9
+2026-10-16T20:38:16.1321372Z [1m[92m  Downloaded[0m sea-schema-derive v0.3.0
+2026-10-16T20:38:16.1386251Z [1m[92m  Downloaded[0m self-replace v1.5.0
+2026-10-16T20:38:16.1491682Z [1m[92m  Downloaded[0m serde_core v1.0.228
+2026-10-16T20:38:16.1650641Z [1m[92m  Downloaded[0m serde_derive v1.0.228
+2026-10-16T20:38:16.1954790Z [1m[92m  Downloaded[0m serde_path_to_error v0.1.20
+2026-10-16T20:38:16.2051810Z [1m[92m  Downloaded[0m serde_spanned v1.1.1
+2026-10-16T20:38:16.2279400Z [1m[92m  Downloaded[0m typetag v0.2.22
+2026-10-16T20:38:16.2464975Z [1m[92m  Downloaded[0m semver v1.0.28
+2026-10-16T20:38:16.2660768Z [1m[92m  Downloaded[0m serde v1.0.228
+2026-10-16T20:38:16.2853476Z [1m[92m  Downloaded[0m sqlx-postgres v0.8.6
+2026-10-16T20:38:16.3516843Z [1m[92m  Downloaded[0m rmcp v3.3.0
+2026-10-16T20:38:16.6746241Z [1m[92m  Downloaded[0m regex-automata v0.4.15
+2026-10-16T20:38:16.7559468Z [1m[92m  Downloaded[0m serde_json v1.0.150
+2026-10-16T20:38:16.8164740Z [1m[92m  Downloaded[0m libsqlite3-sys v0.30.1
+2026-10-16T20:38:16.9006267Z [1m[92m  Downloaded[0m unicode-truncate v1.1.0
+2026-10-16T20:38:16.9100293Z [1m[92m  Downloaded[0m version_check v0.9.5
+2026-10-16T20:38:16.9187751Z [1m[92m  Downloaded[0m windows-collections v0.3.2
+2026-10-16T20:38:16.9454370Z [1m[92m  Downloaded[0m vsimd v0.8.0
+2026-10-16T20:38:16.9611229Z [1m[92m  Downloaded[0m vte v0.11.1
+2026-10-16T20:38:16.9746520Z [1m[92m  Downloaded[0m walkdir v2.5.0
+2026-10-16T20:38:17.5510306Z [1m[92m  Downloaded[0m want v0.3.1
+2026-10-16T20:38:17.5576903Z [1m[92m  Downloaded[0m windows-core v0.62.2
+2026-10-16T20:38:17.5872482Z [1m[92m  Downloaded[0m windows-implement v0.60.2
+2026-10-16T20:38:17.5937430Z [1m[92m  Downloaded[0m vte_generate_state_changes v0.1.2
+2026-10-16T20:38:17.5987518Z [1m[92m  Downloaded[0m serde-saphyr v0.0.29
+2026-10-16T20:38:18.1981724Z [1m[92m  Downloaded[0m vt100 v0.15.2
+2026-10-16T20:38:18.2861130Z [1m[92m  Downloaded[0m winapi-util v0.1.11
+2026-10-16T20:38:18.4953334Z [1m[92m  Downloaded[0m vcpkg v0.2.15
+2026-10-16T20:38:19.4344084Z [1m[92m  Downloaded[0m windows-core v0.61.2
+2026-10-16T20:38:19.4550664Z [1m[92m  Downloaded[0m unicode-width v0.1.14
+2026-10-16T20:38:20.9820323Z [1m[92m  Downloaded[0m unicode-width v0.2.0
+2026-10-16T20:38:21.2437579Z [1m[92m  Downloaded[0m shared_library v0.1.9
+2026-10-16T20:38:21.2492855Z [1m[92m  Downloaded[0m shell-words v1.1.1
+2026-10-16T20:38:21.2649871Z [1m[92m  Downloaded[0m signature v2.2.0
+2026-10-16T20:38:21.2745133Z [1m[92m  Downloaded[0m static_assertions v1.1.0
+2026-10-16T20:38:21.2842189Z [1m[92m  Downloaded[0m ring v0.17.14
+2026-10-16T20:38:21.7325271Z [1m[92m  Downloaded[0m stable_deref_trait v1.2.1
+2026-10-16T20:38:21.7405817Z [1m[92m  Downloaded[0m stringprep v0.1.5
+2026-10-16T20:38:21.7489912Z [1m[92m  Downloaded[0m shlex v2.0.1
+2026-10-16T20:38:21.7564064Z [1m[92m  Downloaded[0m smallvec v1.15.2
+2026-10-16T20:38:21.7635494Z [1m[92m  Downloaded[0m slab v0.4.12
+2026-10-16T20:38:21.7709781Z [1m[92m  Downloaded[0m unicode-segmentation v1.13.3
+2026-10-16T20:38:21.7819279Z [1m[92m  Downloaded[0m similar v3.1.2
+2026-10-16T20:38:21.8007170Z [1m[92m  Downloaded[0m strip-ansi-escapes v0.2.1
+2026-10-16T20:38:21.8077845Z [1m[92m  Downloaded[0m sqlx-sqlite v0.8.6
+2026-10-16T20:38:21.8360995Z [1m[92m  Downloaded[0m windows-targets v0.53.5
+2026-10-16T20:38:21.8415801Z [1m[92m  Downloaded[0m windows-sys v0.52.0
+2026-10-16T20:38:22.0806626Z [1m[92m  Downloaded[0m windows-targets v0.52.6
+2026-10-16T20:38:22.0861277Z [1m[92m  Downloaded[0m windows-targets v0.48.5
+2026-10-16T20:38:22.0914921Z [1m[92m  Downloaded[0m sse-stream v0.2.4
+2026-10-16T20:38:22.1307565Z [1m[92m  Downloaded[0m windows-sys v0.48.0
+2026-10-16T20:38:23.4154203Z [1m[92m  Downloaded[0m windows-threading v0.1.0
+2026-10-16T20:38:23.4226082Z [1m[92m  Downloaded[0m windows-threading v0.2.1
+2026-10-16T20:38:23.4290753Z [1m[92m  Downloaded[0m sea-orm v1.1.20
+2026-10-16T20:38:23.5968797Z [1m[92m  Downloaded[0m windows_x86_64_msvc v0.48.5
+2026-10-16T20:38:23.6210143Z [1m[92m  Downloaded[0m sea-schema v0.16.2
+2026-10-16T20:38:24.1127341Z [1m[92m  Downloaded[0m windows-interface v0.59.3
+2026-10-16T20:38:24.1200397Z [1m[92m  Downloaded[0m ratatui-markdown v0.3.6
+2026-10-16T20:38:24.2997477Z [1m[92m  Downloaded[0m windows-sys v0.61.2
+2026-10-16T20:38:24.5886862Z [1m[92m  Downloaded[0m aws-lc-sys v0.42.0
+2026-10-16T20:38:28.5370647Z [1m[92m  Downloaded[0m windows-sys v0.60.2
+2026-10-16T20:38:28.7690018Z [1m[92m  Downloaded[0m windows v0.61.3
+2026-10-16T20:38:32.1801002Z [1m[92m  Downloaded[0m windows v0.62.2
+2026-10-16T20:38:36.9009527Z [1m[92m   Compiling[0m proc-macro2 v1.0.106
+2026-10-16T20:38:36.9010094Z [1m[92m   Compiling[0m unicode-ident v1.0.24
+2026-10-16T20:38:36.9010576Z [1m[92m   Compiling[0m quote v1.0.46
+2026-10-16T20:38:36.9017974Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-10-16T20:38:36.9526416Z [1m[92m   Compiling[0m serde_core v1.0.228
+2026-10-16T20:38:37.0021187Z [1m[92m   Compiling[0m windows-link v0.2.1
+2026-10-16T20:38:37.0511986Z [1m[92m   Compiling[0m serde v1.0.228
+2026-10-16T20:38:39.6860746Z [1m[92m   Compiling[0m windows-sys v0.61.2
+2026-10-16T20:38:39.6954575Z [1m[92m   Compiling[0m memchr v2.8.3
+2026-10-16T20:38:40.7718749Z [1m[92m   Compiling[0m futures-core v0.3.32
+2026-10-16T20:38:40.8925678Z [1m[92m   Compiling[0m syn v2.0.118
+2026-10-16T20:38:40.9071235Z [1m[92m   Compiling[0m pin-project-lite v0.2.17
+2026-10-16T20:38:40.9732925Z [1m[92m   Compiling[0m scopeguard v1.2.0
+2026-10-16T20:38:41.0433499Z [1m[92m   Compiling[0m lock_api v0.4.14
+2026-10-16T20:38:41.2715023Z [1m[92m   Compiling[0m itoa v1.0.18
+2026-10-16T20:38:41.4547816Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-10-16T20:38:41.6651739Z [1m[92m   Compiling[0m allocator-api2 v0.2.21
+2026-10-16T20:38:42.0362718Z [1m[92m   Compiling[0m parking_lot_core v0.9.12
+2026-10-16T20:38:42.4990212Z [1m[92m   Compiling[0m equivalent v1.0.2
+2026-10-16T20:38:42.5628900Z [1m[92m   Compiling[0m getrandom v0.4.3
+2026-10-16T20:38:42.5719092Z [1m[92m   Compiling[0m log v0.4.33
+2026-10-16T20:38:42.7784189Z [1m[92m   Compiling[0m find-msvc-tools v0.1.9
+2026-10-16T20:38:43.1264183Z [1m[92m   Compiling[0m jobserver v0.1.35
+2026-10-16T20:38:43.5180054Z [1m[92m   Compiling[0m bytes v1.12.1
+2026-10-16T20:38:43.8197339Z [1m[92m   Compiling[0m shlex v2.0.1
+2026-10-16T20:38:44.2410457Z [1m[92m   Compiling[0m cc v1.2.67
+2026-10-16T20:38:44.4973242Z [1m[92m   Compiling[0m foldhash v0.2.0
+2026-10-16T20:38:44.8704541Z [1m[92m   Compiling[0m futures-io v0.3.32
+2026-10-16T20:38:45.1350992Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-10-16T20:38:46.0558957Z [1m[92m   Compiling[0m indexmap v2.14.0
+2026-10-16T20:38:46.8557366Z [1m[92m   Compiling[0m futures-sink v0.3.32
+2026-10-16T20:38:46.9560752Z [1m[92m   Compiling[0m slab v0.4.12
+2026-10-16T20:38:47.0270513Z [1m[92m   Compiling[0m futures-channel v0.3.32
+2026-10-16T20:38:47.1694352Z [1m[92m   Compiling[0m autocfg v1.5.1
+2026-10-16T20:38:47.3169112Z [1m[92m   Compiling[0m futures-task v0.3.32
+2026-10-16T20:38:47.5997957Z [1m[92m   Compiling[0m tracing-core v0.1.36
+2026-10-16T20:38:47.8933748Z [1m[92m   Compiling[0m zmij v1.0.21
+2026-10-16T20:38:48.5454318Z [1m[92m   Compiling[0m libm v0.2.16
+2026-10-16T20:38:48.8828930Z [1m[92m   Compiling[0m serde_derive v1.0.228
+2026-10-16T20:38:48.8891182Z [1m[92m   Compiling[0m futures-macro v0.3.32
+2026-10-16T20:38:50.1652861Z [1m[92m   Compiling[0m tokio-macros v2.7.0
+2026-10-16T20:38:51.0481742Z [1m[92m   Compiling[0m futures-util v0.3.32
+2026-10-16T20:38:51.1529920Z [1m[92m   Compiling[0m tracing-attributes v0.1.31
+2026-10-16T20:38:52.4598008Z [1m[92m   Compiling[0m mio v1.2.1
+2026-10-16T20:38:53.1317505Z [1m[92m   Compiling[0m smallvec v1.15.2
+2026-10-16T20:38:53.2185856Z [1m[92m   Compiling[0m socket2 v0.6.4
+2026-10-16T20:38:53.3185940Z [1m[92m   Compiling[0m tracing v0.1.44
+2026-10-16T20:38:53.6388078Z [1m[92m   Compiling[0m parking_lot v0.12.5
+2026-10-16T20:38:53.7630874Z [1m[92m   Compiling[0m subtle v2.6.1
+2026-10-16T20:38:53.9391551Z [1m[92m   Compiling[0m tokio v1.52.3
+2026-10-16T20:38:54.0469610Z [1m[92m   Compiling[0m num-traits v0.2.19
+2026-10-16T20:38:54.0516990Z [1m[92m   Compiling[0m synstructure v0.13.2
+2026-10-16T20:38:54.2754659Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-10-16T20:38:54.5169693Z [1m[92m   Compiling[0m zeroize v1.9.0
+2026-10-16T20:38:54.8407937Z [1m[92m   Compiling[0m serde_json v1.0.150
+2026-10-16T20:38:55.3005275Z [1m[92m   Compiling[0m zerofrom-derive v0.1.7
+2026-10-16T20:38:55.5161656Z [1m[92m   Compiling[0m percent-encoding v2.3.2
+2026-10-16T20:38:57.2453432Z [1m[92m   Compiling[0m yoke-derive v0.8.2
+2026-10-16T20:38:57.5543788Z [1m[92m   Compiling[0m thiserror-impl v2.0.18
+2026-10-16T20:38:57.5545309Z [1m[92m   Compiling[0m zerofrom v0.1.8
+2026-10-16T20:38:57.6719367Z [1m[92m   Compiling[0m stable_deref_trait v1.2.1
+2026-10-16T20:38:57.7223344Z [1m[92m   Compiling[0m zerovec-derive v0.11.3
+2026-10-16T20:38:58.9545544Z [1m[92m   Compiling[0m tokio-util v0.7.18
+2026-10-16T20:38:59.4978482Z [1m[92m   Compiling[0m yoke v0.8.3
+2026-10-16T20:38:59.6675624Z [1m[92m   Compiling[0m getrandom v0.2.17
+2026-10-16T20:38:59.6932033Z [1m[92m   Compiling[0m thiserror v2.0.18
+2026-10-16T20:38:59.8188738Z [1m[92m   Compiling[0m zerovec v0.11.6
+2026-10-16T20:38:59.9630891Z [1m[92m   Compiling[0m displaydoc v0.2.6
+2026-10-16T20:39:00.1559857Z [1m[92m   Compiling[0m cmake v0.1.58
+2026-10-16T20:39:00.4992974Z [1m[92m   Compiling[0m dunce v1.0.5
+2026-10-16T20:39:00.5883605Z [1m[92m   Compiling[0m fs_extra v1.3.0
+2026-10-16T20:39:00.7404559Z [1m[92m   Compiling[0m fnv v1.0.7
+2026-10-16T20:39:00.8005604Z [1m[92m   Compiling[0m ring v0.17.14
+2026-10-16T20:39:00.8353334Z [1m[92m   Compiling[0m http v1.4.2
+2026-10-16T20:39:00.8759024Z [1m[92m   Compiling[0m base64 v0.22.1
+2026-10-16T20:39:00.8867505Z [1m[92m   Compiling[0m aws-lc-sys v0.42.0
+2026-10-16T20:39:01.3103376Z [1m[92m   Compiling[0m tinystr v0.8.3
+2026-10-16T20:39:01.4830636Z [1m[92m   Compiling[0m rustls-pki-types v1.15.0
+2026-10-16T20:39:01.9320036Z [1m[92m   Compiling[0m bitflags v2.13.0
+2026-10-16T20:39:01.9446777Z [1m[92m   Compiling[0m aws-lc-rs v1.17.1
+2026-10-16T20:39:02.1639539Z [1m[92m   Compiling[0m writeable v0.6.3
+2026-10-16T20:39:02.2301846Z [1m[92m   Compiling[0m litemap v0.8.2
+2026-10-16T20:39:02.3301541Z [1m[92m   Compiling[0m zerotrie v0.2.4
+2026-10-16T20:39:02.3909776Z [1m[92m   Compiling[0m icu_locale_core v2.2.0
+2026-10-16T20:39:02.5783331Z [1m[92m   Compiling[0m potential_utf v0.1.5
+2026-10-16T20:39:02.6685523Z [1m[92m   Compiling[0m icu_normalizer_data v2.2.0
+2026-10-16T20:39:02.8024870Z [1m[92m   Compiling[0m icu_properties_data v2.2.0
+2026-10-16T20:39:03.0136174Z [1m[92m   Compiling[0m utf8_iter v1.0.4
+2026-10-16T20:39:03.1168305Z [1m[92m   Compiling[0m icu_collections v2.2.0
+2026-10-16T20:39:03.4377317Z [1m[92m   Compiling[0m icu_provider v2.2.0
+2026-10-16T20:39:03.5815265Z [1m[92m   Compiling[0m untrusted v0.9.0
+2026-10-16T20:39:03.6969031Z [1m[92m   Compiling[0m atomic-waker v1.1.2
+2026-10-16T20:39:03.7823908Z [1m[92m   Compiling[0m rustls v0.23.41
+2026-10-16T20:39:03.8169707Z [1m[92m   Compiling[0m libc v0.2.186
+2026-10-16T20:39:03.9831797Z [1m[92m   Compiling[0m icu_properties v2.2.0
+2026-10-16T20:39:04.4326399Z [1m[92m   Compiling[0m icu_normalizer v2.2.0
+2026-10-16T20:39:04.8649398Z [1m[92m   Compiling[0m http-body v1.0.1
+2026-10-16T20:39:04.9468619Z [1m[92m   Compiling[0m form_urlencoded v1.2.2
+2026-10-16T20:39:05.0477819Z [1m[92m   Compiling[0m httparse v1.10.1
+2026-10-16T20:39:05.0697371Z [1m[92m   Compiling[0m ryu v1.0.23
+2026-10-16T20:39:05.2014526Z [1m[92m   Compiling[0m idna_adapter v1.2.2
+2026-10-16T20:39:05.3859537Z [1m[92m   Compiling[0m version_check v0.9.5
+2026-10-16T20:39:05.6049100Z [1m[92m   Compiling[0m idna v1.1.0
+2026-10-16T20:39:05.6511292Z [1m[92m   Compiling[0m syn v3.0.3
+2026-10-16T20:39:06.1376958Z [1m[92m   Compiling[0m tower-service v0.3.3
+2026-10-16T20:39:06.1907449Z [1m[92m   Compiling[0m try-lock v0.2.5
+2026-10-16T20:39:06.2495978Z [1m[92m   Compiling[0m want v0.3.1
+2026-10-16T20:39:06.3453043Z [1m[92m   Compiling[0m url v2.5.8
+2026-10-16T20:39:07.0119457Z [1m[92m   Compiling[0m h2 v0.4.15
+2026-10-16T20:39:10.5574171Z [1m[92m   Compiling[0m httpdate v1.0.3
+2026-10-16T20:39:10.7555828Z [1m[92m   Compiling[0m ipnet v2.12.0
+2026-10-16T20:39:11.2622657Z [1m[92m   Compiling[0m hyper v1.10.1
+2026-10-16T20:39:11.6721719Z [1m[92m   Compiling[0m http-body-util v0.1.3
+2026-10-16T20:39:11.9448827Z [1m[92m   Compiling[0m spin v0.9.8
+2026-10-16T20:39:12.1211587Z [1m[92m   Compiling[0m sync_wrapper v1.0.2
+2026-10-16T20:39:12.1354607Z [1m[92m   Compiling[0m tower-layer v0.3.3
+2026-10-16T20:39:12.2096714Z [1m[92m   Compiling[0m serde_urlencoded v0.7.1
+2026-10-16T20:39:12.2877197Z [1m[92m   Compiling[0m tower v0.5.3
+2026-10-16T20:39:12.4812779Z [1m[92m   Compiling[0m futures-executor v0.3.32
+2026-10-16T20:39:12.7367924Z [1m[92m   Compiling[0m hyper-util v0.1.20
+2026-10-16T20:39:13.3078353Z [1m[92m   Compiling[0m lazy_static v1.5.0
+2026-10-16T20:39:13.3662761Z [1m[92m   Compiling[0m regex-syntax v0.8.11
+2026-10-16T20:39:13.5795776Z [1m[92m   Compiling[0m rand_core v0.10.1
+2026-10-16T20:39:13.9952711Z [1m[92m   Compiling[0m aho-corasick v1.1.4
+2026-10-16T20:39:14.8816371Z [1m[92m   Compiling[0m zerocopy v0.8.54
+2026-10-16T20:39:15.3034450Z [1m[92m   Compiling[0m ref-cast v1.0.25
+2026-10-16T20:39:15.6266454Z [1m[92m   Compiling[0m regex-automata v0.4.15
+2026-10-16T20:39:16.3288502Z [1m[92m   Compiling[0m ref-cast-impl v1.0.25
+2026-10-16T20:39:16.6735015Z [1m[92m   Compiling[0m zerocopy-derive v0.8.54
+2026-10-16T20:39:16.9374617Z [1m[92m   Compiling[0m hybrid-array v0.4.13
+2026-10-16T20:39:17.5147468Z [1m[92m   Compiling[0m serde_derive_internals v0.29.1
+2026-10-16T20:39:18.5842144Z [1m[92m   Compiling[0m cpufeatures v0.3.0
+2026-10-16T20:39:18.6341108Z [1m[92m   Compiling[0m schemars_derive v1.2.1
+2026-10-16T20:39:20.3056306Z [1m[92m   Compiling[0m async-trait v0.1.92
+2026-10-16T20:39:20.9241609Z [1m[92m   Compiling[0m dyn-clone v1.0.20
+2026-10-16T20:39:21.0123693Z [1m[92m   Compiling[0m schemars v1.2.1
+2026-10-16T20:39:21.3949535Z [1m[92m   Compiling[0m crypto-common v0.2.2
+2026-10-16T20:39:22.5406507Z [1m[92m   Compiling[0m block-buffer v0.12.1
+2026-10-16T20:39:22.5983379Z [1m[92m   Compiling[0m futures v0.3.32
+2026-10-16T20:39:22.6479175Z [1m[92m   Compiling[0m generic-array v0.14.9
+2026-10-16T20:39:22.6499663Z [1m[92m   Compiling[0m const-oid v0.9.6
+2026-10-16T20:39:22.6999200Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-10-16T20:39:22.7937256Z [1m[92m   Compiling[0m tower-http v0.6.11
+2026-10-16T20:39:22.8958271Z [1m[92m   Compiling[0m chacha20 v0.10.1
+2026-10-16T20:39:23.1413936Z [1m[92m   Compiling[0m uuid v1.23.4
+2026-10-16T20:39:23.2165919Z [1m[92m   Compiling[0m chrono v0.4.45
+2026-10-16T20:39:23.4952063Z [1m[92m   Compiling[0m cmov v0.5.4
+2026-10-16T20:39:23.5475016Z [1m[92m   Compiling[0m crypto-common v0.1.6
+2026-10-16T20:39:23.6328786Z [1m[92m   Compiling[0m block-buffer v0.10.4
+2026-10-16T20:39:23.7073283Z [1m[92m   Compiling[0m ctutils v0.4.2
+2026-10-16T20:39:23.7403614Z [1m[92m   Compiling[0m rand v0.10.2
+2026-10-16T20:39:23.9117057Z [1m[92m   Compiling[0m async-stream-impl v0.3.6
+2026-10-16T20:39:24.4537761Z [1m[92m   Compiling[0m async-stream v0.3.6
+2026-10-16T20:39:24.4915596Z [1m[92m   Compiling[0m digest v0.11.3
+2026-10-16T20:39:24.5494668Z [1m[92m   Compiling[0m digest v0.10.7
+2026-10-16T20:39:24.6410755Z [1m[92m   Compiling[0m ppv-lite86 v0.2.21
+2026-10-16T20:39:24.6507494Z [1m[92m   Compiling[0m regex v1.13.0
+2026-10-16T20:39:24.7368874Z [1m[92m   Compiling[0m minimal-lexical v0.2.1
+2026-10-16T20:39:24.9771500Z [1m[92m   Compiling[0m fastrand v2.4.1
+2026-10-16T20:39:25.0190809Z [1m[92m   Compiling[0m nom v7.1.3
+2026-10-16T20:39:25.1224545Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-10-16T20:39:25.1751432Z [1m[92m   Compiling[0m getrandom v0.3.4
+2026-10-16T20:39:25.4835723Z [1m[92m   Compiling[0m cpufeatures v0.2.17
+2026-10-16T20:39:25.6473953Z [1m[92m   Compiling[0m tokio-stream v0.1.18
+2026-10-16T20:39:25.9898275Z [1m[92m   Compiling[0m crossbeam-utils v0.8.22
+2026-10-16T20:39:26.1537605Z [1m[92m   Compiling[0m windows-interface v0.59.3
+2026-10-16T20:39:26.7426957Z [1m[92m   Compiling[0m eventsource-stream v0.2.3
+2026-10-16T20:39:26.8239967Z [1m[92m   Compiling[0m windows-implement v0.60.2
+2026-10-16T20:39:26.9501813Z [1m[92m   Compiling[0m tempfile v3.27.0
+2026-10-16T20:39:27.0045525Z [1m[92m   Compiling[0m sha1 v0.10.7
+2026-10-16T20:39:27.1734099Z [1m[92m   Compiling[0m rand_core v0.9.5
+2026-10-16T20:39:27.3199123Z [1m[92m   Compiling[0m rand_chacha v0.9.0
+2026-10-16T20:39:27.3502934Z [1m[92m   Compiling[0m deadpool-runtime v0.1.4
+2026-10-16T20:39:27.4477331Z [1m[92m   Compiling[0m anstyle v1.0.14
+2026-10-16T20:39:27.5808165Z [1m[92m   Compiling[0m rand v0.9.5
+2026-10-16T20:39:27.6398194Z [1m[92m   Compiling[0m num_cpus v1.17.0
+2026-10-16T20:39:27.6959310Z [1m[92m   Compiling[0m ident_case v1.0.1
+2026-10-16T20:39:27.7165980Z [1m[92m   Compiling[0m deadpool v0.12.3
+2026-10-16T20:39:27.7659804Z [1m[92m   Compiling[0m assert-json-diff v2.0.2
+2026-10-16T20:39:28.0279602Z [1m[92m   Compiling[0m mime v0.3.17
+2026-10-16T20:39:28.1109885Z [1m[92m   Compiling[0m strsim v0.11.1
+2026-10-16T20:39:28.2307106Z [1m[92m   Compiling[0m wiremock v0.6.5
+2026-10-16T20:39:28.2594184Z [1m[92m   Compiling[0m windows-strings v0.5.1
+2026-10-16T20:39:28.4085046Z [1m[92m   Compiling[0m windows-result v0.4.1
+2026-10-16T20:39:28.5192917Z [1m[92m   Compiling[0m hex v0.4.3
+2026-10-16T20:39:28.6277277Z [1m[92m   Compiling[0m data-encoding v2.11.0
+2026-10-16T20:39:28.7746400Z [1m[92m   Compiling[0m unicode-width v0.2.0
+2026-10-16T20:39:28.9879869Z [1m[92m   Compiling[0m windows-core v0.62.2
+2026-10-16T20:39:29.0838569Z [1m[92m   Compiling[0m heck v0.5.0
+2026-10-16T20:39:29.2783361Z [1m[92m   Compiling[0m anyhow v1.0.103
+2026-10-16T20:39:29.4659228Z [1m[92m   Compiling[0m tungstenite v0.29.0
+2026-10-16T20:39:29.5534325Z [1m[92m   Compiling[0m ahash v0.8.12
+2026-10-16T20:39:29.7760413Z [1m[92m   Compiling[0m axum-core v0.5.6
+2026-10-16T20:39:29.9462571Z [1m[92m   Compiling[0m serde_path_to_error v0.1.20
+2026-10-16T20:39:30.3269518Z [1m[92m   Compiling[0m tokio-tungstenite v0.29.0
+2026-10-16T20:39:30.5561125Z [1m[92m   Compiling[0m windows-threading v0.2.1
+2026-10-16T20:39:30.6077534Z [1m[92m   Compiling[0m matchit v0.8.4
+2026-10-16T20:39:30.6505860Z [1m[92m   Compiling[0m windows-future v0.3.2
+2026-10-16T20:39:31.1519212Z [1m[92m   Compiling[0m windows-collections v0.3.2
+2026-10-16T20:39:31.3171030Z [1m[92m   Compiling[0m axum v0.8.9
+2026-10-16T20:39:31.4557660Z [1m[92m   Compiling[0m windows-numerics v0.3.1
+2026-10-16T20:39:31.6619750Z [1m[92m   Compiling[0m windows v0.62.2
+2026-10-16T20:39:31.6706542Z [1m[92m   Compiling[0m encoding_rs v0.8.35
+2026-10-16T20:39:33.6724108Z [1m[92m   Compiling[0m parking v2.2.1
+2026-10-16T20:39:33.7911708Z [1m[92m   Compiling[0m rmcp v3.3.0
+2026-10-16T20:39:34.0271421Z [1m[92m   Compiling[0m arraydeque v0.5.1
+2026-10-16T20:39:34.2024033Z [1m[92m   Compiling[0m granit-parser v0.0.7
+2026-10-16T20:39:34.4377063Z [1m[92m   Compiling[0m process-wrap v10.0.0
+2026-10-16T20:39:35.0697206Z [1m[92m   Compiling[0m encoding_rs_io v0.1.7
+2026-10-16T20:39:35.2104702Z [1m[92m   Compiling[0m annotate-snippets v0.12.5
+2026-10-16T20:39:35.2924821Z [1m[92m   Compiling[0m concurrent-queue v2.5.0
+2026-10-16T20:39:35.4730334Z [1m[92m   Compiling[0m sse-stream v0.2.4
+2026-10-16T20:39:35.6755155Z [1m[92m   Compiling[0m base64 v0.23.0
+2026-10-16T20:39:36.1449768Z [1m[92m   Compiling[0m nohash-hasher v0.2.0
+2026-10-16T20:39:36.2152231Z [1m[92m   Compiling[0m serde-saphyr v0.0.29
+2026-10-16T20:39:36.3594921Z [1m[92m   Compiling[0m either v1.16.0
+2026-10-16T20:39:36.4508877Z [1m[92m   Compiling[0m event-listener v5.4.1
+2026-10-16T20:39:36.6007913Z [1m[92m   Compiling[0m unicode-segmentation v1.13.3
+2026-10-16T20:39:36.6994206Z [1m[92m   Compiling[0m pin-project-internal v1.1.13
+2026-10-16T20:39:37.1662904Z [1m[92m   Compiling[0m utf8parse v0.2.2
+2026-10-16T20:39:37.2576975Z [1m[92m   Compiling[0m foldhash v0.1.5
+2026-10-16T20:39:37.3900151Z [1m[92m   Compiling[0m winapi v0.3.9
+2026-10-16T20:39:37.8474072Z [1m[92m   Compiling[0m hashbrown v0.15.5
+2026-10-16T20:39:37.8850379Z [1m[92m   Compiling[0m pin-project v1.1.13
+2026-10-16T20:39:37.9357552Z [1m[92m   Compiling[0m num-integer v0.1.46
+2026-10-16T20:39:38.3021311Z [1m[92m   Compiling[0m once_cell_polyfill v1.70.2
+2026-10-16T20:39:38.3722956Z [1m[92m   Compiling[0m anstyle-wincon v3.0.11
+2026-10-16T20:39:38.5731199Z [1m[92m   Compiling[0m anstyle-parse v1.0.0
+2026-10-16T20:39:38.7245615Z [1m[92m   Compiling[0m convert_case v0.10.0
+2026-10-16T20:39:39.0149644Z [1m[92m   Compiling[0m darling_core v0.23.0
+2026-10-16T20:39:39.6978328Z [1m[92m   Compiling[0m anstyle-query v1.1.5
+2026-10-16T20:39:39.8059051Z [1m[92m   Compiling[0m pkg-config v0.3.33
+2026-10-16T20:39:40.4319091Z [1m[92m   Compiling[0m crossbeam-epoch v0.9.20
+2026-10-16T20:39:40.6646605Z [1m[92m   Compiling[0m is_terminal_polyfill v1.70.2
+2026-10-16T20:39:40.7239514Z [1m[92m   Compiling[0m colorchoice v1.0.5
+2026-10-16T20:39:40.7999321Z [1m[92m   Compiling[0m unicode-xid v0.2.6
+2026-10-16T20:39:40.8827969Z [1m[92m   Compiling[0m derive_more-impl v2.1.1
+2026-10-16T20:39:41.0784835Z [1m[92m   Compiling[0m anstream v1.0.0
+2026-10-16T20:39:41.4446598Z [1m[92m   Compiling[0m winapi-util v0.1.11
+2026-10-16T20:39:41.6412195Z [1m[92m   Compiling[0m clap_lex v1.1.0
+2026-10-16T20:39:41.8247128Z [1m[92m   Compiling[0m crossbeam-deque v0.8.7
+2026-10-16T20:39:42.0614701Z [1m[92m   Compiling[0m clap_builder v4.6.0
+2026-10-16T20:39:42.3937304Z [1m[92m   Compiling[0m darling_macro v0.23.0
+2026-10-16T20:39:42.8362400Z [1m[92m   Compiling[0m darling v0.23.0
+2026-10-16T20:39:42.8928738Z [1m[92m   Compiling[0m same-file v1.0.6
+2026-10-16T20:39:43.3459616Z [1m[92m   Compiling[0m num-iter v0.1.46
+2026-10-16T20:39:43.3627771Z [1m[92m   Compiling[0m derive_more v2.1.1
+2026-10-16T20:39:43.4351802Z [1m[92m   Compiling[0m clap_derive v4.6.1
+2026-10-16T20:39:43.4711879Z [1m[92m   Compiling[0m matchers v0.2.0
+2026-10-16T20:39:43.5698394Z [1m[92m   Compiling[0m sharded-slab v0.1.7
+2026-10-16T20:39:44.1067057Z [1m[92m   Compiling[0m nu-ansi-term v0.50.3
+2026-10-16T20:39:44.4321226Z [1m[92m   Compiling[0m tracing-log v0.2.0
+2026-10-16T20:39:44.6284598Z [1m[92m   Compiling[0m thread_local v1.1.10
+2026-10-16T20:39:44.8196688Z [1m[92m   Compiling[0m rustversion v1.0.23
+2026-10-16T20:39:45.1636608Z [1m[92m   Compiling[0m tracing-subscriber v0.3.23
+2026-10-16T20:39:45.4382370Z [1m[92m   Compiling[0m clap v4.6.1
+2026-10-16T20:39:45.6751692Z [1m[92m   Compiling[0m walkdir v2.5.0
+2026-10-16T20:39:45.8128873Z [1m[92m   Compiling[0m serde_with_macros v3.21.0
+2026-10-16T20:39:46.0056205Z [1m[92m   Compiling[0m strum_macros v0.28.0
+2026-10-16T20:39:46.9876653Z [1m[92m   Compiling[0m rand_core v0.6.4
+2026-10-16T20:39:47.3784373Z [1m[92m   Compiling[0m unicode-width v0.1.14
+2026-10-16T20:39:47.4279387Z [1m[92m   Compiling[0m base64ct v1.8.3
+2026-10-16T20:39:47.5863743Z [1m[92m   Compiling[0m itertools v0.14.0
+2026-10-16T20:39:47.7088778Z [1m[92m   Compiling[0m pem-rfc7468 v0.7.0
+2026-10-16T20:39:47.9910082Z [1m[92m   Compiling[0m serde_with v3.21.0
+2026-10-16T20:39:48.4457545Z [1m[92m   Compiling[0m strum v0.28.0
+2026-10-16T20:39:49.1523696Z [1m[92m   Compiling[0m itertools v0.13.0
+2026-10-16T20:39:49.2125325Z [1m[92m   Compiling[0m futures-lite v2.6.1
+2026-10-16T20:39:49.9762784Z [1m[92m   Compiling[0m heck v0.4.1
+2026-10-16T20:39:50.1531953Z [1m[92m   Compiling[0m windows_x86_64_msvc v0.48.5
+2026-10-16T20:39:50.3478140Z [1m[92m   Compiling[0m rustix v1.1.4
+2026-10-16T20:39:50.4397870Z [1m[92m   Compiling[0m shell-words v1.1.1
+2026-10-16T20:39:50.5676857Z [1m[92m   Compiling[0m agent-client-protocol-schema v1.10.2
+2026-10-16T20:39:50.6944923Z [1m[92m   Compiling[0m prost-derive v0.14.4
+2026-10-16T20:39:50.7743473Z [1m[92m   Compiling[0m der v0.7.10
+2026-10-16T20:39:52.2420205Z [1m[92m   Compiling[0m rand_chacha v0.3.1
+2026-10-16T20:39:52.4633907Z [1m[92m   Compiling[0m event-listener-strategy v0.5.4
+2026-10-16T20:39:52.5483674Z [1m[92m   Compiling[0m webpki-roots v1.0.8
+2026-10-16T20:39:52.6337151Z [1m[92m   Compiling[0m errno v0.3.14
+2026-10-16T20:39:52.6700659Z [1m[92m   Compiling[0m schannel v0.1.29
+2026-10-16T20:39:52.7873151Z [1m[92m   Compiling[0m async-io v2.6.0
+2026-10-16T20:39:52.9544584Z [1m[92m   Compiling[0m crc-catalog v2.5.0
+2026-10-16T20:39:53.0343868Z [1m[92m   Compiling[0m windows-link v0.1.3
+2026-10-16T20:39:53.0756673Z [1m[92m   Compiling[0m tinyvec_macros v0.1.1
+2026-10-16T20:39:53.1183100Z [1m[92m   Compiling[0m tinyvec v1.12.0
+2026-10-16T20:39:53.2078015Z [1m[92m   Compiling[0m crc v3.4.0
+2026-10-16T20:39:53.4130882Z [1m[92m   Compiling[0m rustls-native-certs v0.8.4
+2026-10-16T20:39:53.7033247Z [1m[92m   Compiling[0m webpki-roots v0.26.11
+2026-10-16T20:39:53.7531411Z [1m[92m   Compiling[0m async-channel v2.5.0
+2026-10-16T20:39:53.9337039Z [1m[92m   Compiling[0m prost v0.14.4
+2026-10-16T20:39:54.2777480Z [1m[92m   Compiling[0m rand v0.8.7
+2026-10-16T20:39:54.3217539Z [1m[92m   Compiling[0m spki v0.7.3
+2026-10-16T20:39:54.5226158Z [1m[92m   Compiling[0m hashlink v0.10.0
+2026-10-16T20:39:54.8241727Z [1m[92m   Compiling[0m polling v3.11.0
+2026-10-16T20:39:54.9430396Z [1m[92m   Compiling[0m crossbeam-queue v0.3.13
+2026-10-16T20:39:55.0714362Z [1m[92m   Compiling[0m sha2 v0.10.9
+2026-10-16T20:39:55.4184780Z [1m[92m   Compiling[0m piper v0.2.5
+2026-10-16T20:39:55.4668826Z [1m[92m   Compiling[0m hyper-timeout v0.5.2
+2026-10-16T20:39:55.5754914Z [1m[92m   Compiling[0m opentelemetry v0.32.0
+2026-10-16T20:39:55.6311816Z [1m[92m   Compiling[0m futures-intrusive v0.5.0
+2026-10-16T20:39:56.0884601Z [1m[92m   Compiling[0m num-bigint-dig v0.8.6
+2026-10-16T20:39:56.2424805Z [1m[92m   Compiling[0m static_assertions v1.1.0
+2026-10-16T20:39:56.2919901Z [1m[92m   Compiling[0m async-task v4.7.1
+2026-10-16T20:39:56.4824794Z [1m[92m   Compiling[0m vcpkg v0.2.15
+2026-10-16T20:39:56.8036192Z [1m[92m   Compiling[0m blocking v1.6.2
+2026-10-16T20:39:57.1560247Z [1m[92m   Compiling[0m libsqlite3-sys v0.30.1
+2026-10-16T20:39:57.4860291Z [1m[92m   Compiling[0m windows-targets v0.48.5
+2026-10-16T20:39:57.5305013Z [1m[92m   Compiling[0m pkcs8 v0.10.2
+2026-10-16T20:39:57.7407937Z [1m[92m   Compiling[0m unicode-normalization v0.1.25
+2026-10-16T20:39:57.7529028Z [1m[92m   Compiling[0m strum_macros v0.26.4
+2026-10-16T20:39:58.2386699Z [1m[92m   Compiling[0m darling_core v0.24.0
+2026-10-16T20:39:59.7357494Z [1m[92m   Compiling[0m darling_core v0.20.11
+2026-10-16T20:40:01.9434979Z [1m[92m   Compiling[0m hmac v0.12.1
+2026-10-16T20:40:02.0393351Z [1m[92m   Compiling[0m atoi v2.0.0
+2026-10-16T20:40:02.1375792Z [1m[92m   Compiling[0m byteorder v1.5.0
+2026-10-16T20:40:02.3697983Z [1m[92m   Compiling[0m unicode-bidi v0.3.18
+2026-10-16T20:40:02.7005632Z [1m[92m   Compiling[0m fixedbitset v0.5.7
+2026-10-16T20:40:02.9225919Z [1m[92m   Compiling[0m similar v3.1.2
+2026-10-16T20:40:03.0191546Z [1m[92m   Compiling[0m unicode-properties v0.1.4
+2026-10-16T20:40:03.7162241Z [1m[92m   Compiling[0m stringprep v0.1.5
+2026-10-16T20:40:04.1292050Z [1m[92m   Compiling[0m futures-concurrency v7.7.1
+2026-10-16T20:40:04.4934486Z [1m[92m   Compiling[0m darling_macro v0.20.11
+2026-10-16T20:40:04.8845805Z [1m[92m   Compiling[0m hkdf v0.12.4
+2026-10-16T20:40:04.9949215Z [1m[92m   Compiling[0m darling_macro v0.24.0
+2026-10-16T20:40:05.3662888Z [1m[92m   Compiling[0m strum v0.26.3
+2026-10-16T20:40:05.4451818Z [1m[92m   Compiling[0m pkcs1 v0.7.5
+2026-10-16T20:40:05.7965391Z [1m[92m   Compiling[0m windows-sys v0.48.0
+2026-10-16T20:40:09.7130119Z [1m[92m   Compiling[0m async-process v2.5.0
+2026-10-16T20:40:10.4365266Z [1m[92m   Compiling[0m windows-result v0.3.4
+2026-10-16T20:40:10.6347022Z [1m[92m   Compiling[0m windows-strings v0.4.2
+2026-10-16T20:40:10.9258018Z [1m[92m   Compiling[0m signature v2.2.0
+2026-10-16T20:40:11.0323448Z [1m[92m   Compiling[0m md-5 v0.10.6
+2026-10-16T20:40:11.1438262Z [1m[92m   Compiling[0m agent-client-protocol-derive v3.3.0
+2026-10-16T20:40:11.2738070Z [1m[92m   Compiling[0m home v0.5.12
+2026-10-16T20:40:11.4064147Z [1m[92m   Compiling[0m vte v0.14.1
+2026-10-16T20:40:11.5821575Z [1m[92m   Compiling[0m bstr v1.13.1
+2026-10-16T20:40:11.6286582Z [1m[92m   Compiling[0m paste v1.0.15
+2026-10-16T20:40:11.9937878Z [1m[92m   Compiling[0m windows_x86_64_msvc v0.52.6
+2026-10-16T20:40:12.1414229Z [1m[92m   Compiling[0m whoami v1.6.1
+2026-10-16T20:40:12.3288412Z [1m[92m   Compiling[0m yansi v1.0.1
+2026-10-16T20:40:12.5501667Z [1m[92m   Compiling[0m instability v0.3.13
+2026-10-16T20:40:12.7067370Z [1m[92m   Compiling[0m dotenvy v0.15.7
+2026-10-16T20:40:12.7414830Z [1m[92m   Compiling[0m open v5.4.2
+2026-10-16T20:40:12.9199550Z [1m[92m   Compiling[0m rustc-hash v2.1.3
+2026-10-16T20:40:13.0043309Z [1m[92m   Compiling[0m agent-client-protocol v3.0.0
+2026-10-16T20:40:13.0655999Z [1m[92m   Compiling[0m agent-client-protocol-trace-viewer v3.3.0
+2026-10-16T20:40:15.4921628Z [1m[92m   Compiling[0m globset v0.4.19
+2026-10-16T20:40:16.3188179Z [1m[92m   Compiling[0m strip-ansi-escapes v0.2.1
+2026-10-16T20:40:16.4715945Z [1m[92m   Compiling[0m etcetera v0.8.0
+2026-10-16T20:40:16.6866337Z [1m[92m   Compiling[0m rsa v0.9.10
+2026-10-16T20:40:17.4477627Z [1m[92m   Compiling[0m windows-core v0.61.2
+2026-10-16T20:40:18.1474004Z [1m[92m   Compiling[0m darling v0.24.0
+2026-10-16T20:40:18.2036357Z [1m[92m   Compiling[0m darling v0.20.11
+2026-10-16T20:40:18.2656401Z [1m[92m   Compiling[0m opentelemetry_sdk v0.32.1
+2026-10-16T20:40:18.2844066Z [1m[92m   Compiling[0m prost-types v0.14.4
+2026-10-16T20:40:19.7522186Z [1m[92m   Compiling[0m castaway v0.2.4
+2026-10-16T20:40:19.8380257Z [1m[92m   Compiling[0m crossterm_winapi v0.9.1
+2026-10-16T20:40:20.1386978Z [1m[92m   Compiling[0m num-bigint v0.4.8
+2026-10-16T20:40:21.9343088Z [1m[92m   Compiling[0m flume v0.11.1
+2026-10-16T20:40:22.1595063Z [1m[92m   Compiling[0m proc-macro2-diagnostics v0.10.1
+2026-10-16T20:40:22.3758075Z [1m[92m   Compiling[0m typeid v1.0.3
+2026-10-16T20:40:22.6096859Z [1m[92m   Compiling[0m indoc v2.0.7
+2026-10-16T20:40:23.7098144Z [1m[92m   Compiling[0m num-rational v0.4.2
+2026-10-16T20:40:24.2508564Z [1m[92m   Compiling[0m crossterm v0.28.1
+2026-10-16T20:40:24.3785649Z [1m[92m   Compiling[0m compact_str v0.8.2
+2026-10-16T20:40:25.0181064Z [1m[92m   Compiling[0m agent-client-protocol-conductor v3.0.0
+2026-10-16T20:40:25.4842268Z [1m[92m   Compiling[0m sea-query-derive v0.4.3
+2026-10-16T20:40:26.4106358Z [1m[92m   Compiling[0m ignore v0.4.32
+2026-10-16T20:40:26.7602999Z [1m[92m   Compiling[0m unicode-truncate v1.1.0
+2026-10-16T20:40:26.8768159Z [1m[92m   Compiling[0m zstd-sys v2.1.1+zstd.1.5.7
+2026-10-16T20:40:27.2977273Z [1m[92m   Compiling[0m lru v0.12.5
+2026-10-16T20:40:27.4415563Z [1m[92m   Compiling[0m ordered-float v4.6.0
+2026-10-16T20:40:27.7552975Z [1m[92m   Compiling[0m num-complex v0.4.6
+2026-10-16T20:40:28.1610571Z [1m[92m   Compiling[0m inherent v1.0.13
+2026-10-16T20:40:28.2838917Z [1m[92m   Compiling[0m miette-derive v7.6.0
+2026-10-16T20:40:28.3559869Z [1m[92m   Compiling[0m proc-macro-error-attr2 v2.0.0
+2026-10-16T20:40:28.5919083Z [1m[92m   Compiling[0m hashbrown v0.14.5
+2026-10-16T20:40:28.6934045Z [1m[92m   Compiling[0m cassowary v0.3.0
+2026-10-16T20:40:29.1749982Z [1m[92m   Compiling[0m windows_x86_64_msvc v0.53.1
+2026-10-16T20:40:29.4363539Z [1m[92m   Compiling[0m erased-serde v0.4.10
+2026-10-16T20:40:29.4888734Z [1m[92m   Compiling[0m dashmap v6.2.1
+2026-10-16T20:40:29.6456648Z [1m[92m   Compiling[0m miette v7.6.0
+2026-10-16T20:40:29.6964713Z [1m[92m   Compiling[0m ratatui v0.29.0
+2026-10-16T20:40:29.9170374Z [1m[92m   Compiling[0m proc-macro-error2 v2.0.1
+2026-10-16T20:40:30.1788055Z [1m[92m   Compiling[0m sea-query v0.32.7
+2026-10-16T20:40:30.3540620Z [1m[92m   Compiling[0m num v0.4.3
+2026-10-16T20:40:32.8941915Z [1m[92m   Compiling[0m windows-targets v0.52.6
+2026-10-16T20:40:33.0527600Z [1m[92m   Compiling[0m tracing-opentelemetry v0.33.0
+2026-10-16T20:40:33.1631482Z [1m[92m   Compiling[0m windows-threading v0.1.0
+2026-10-16T20:40:33.2613421Z [1m[92m   Compiling[0m pxfm v0.1.30
+2026-10-16T20:40:34.2885520Z [1m[92m   Compiling[0m opentelemetry-semantic-conventions v0.32.1
+2026-10-16T20:40:34.3686211Z [1m[92m   Compiling[0m camino v1.2.4
+2026-10-16T20:40:34.6835927Z [1m[92m   Compiling[0m windows-future v0.2.1
+2026-10-16T20:40:34.9799304Z [1m[92m   Compiling[0m ouroboros_macro v0.18.5
+2026-10-16T20:40:36.2027055Z [1m[92m   Compiling[0m moxcms v0.8.1
+2026-10-16T20:40:36.5752728Z [1m[92m   Compiling[0m windows-sys v0.52.0
+2026-10-16T20:40:36.9310148Z [1m[92m   Compiling[0m ratatui-markdown v0.3.6
+2026-10-16T20:40:37.6878551Z [1m[92m   Compiling[0m sea-bae v0.2.1
+2026-10-16T20:40:38.3317615Z [1m[92m   Compiling[0m windows-numerics v0.2.0
+2026-10-16T20:40:38.4895785Z [1m[92m   Compiling[0m windows-collections v0.2.0
+2026-10-16T20:40:38.8599875Z [1m[92m   Compiling[0m email_address v0.2.9
+2026-10-16T20:40:39.0580382Z [1m[92m   Compiling[0m zstd-safe v7.3.0
+2026-10-16T20:40:39.2367239Z [1m[92m   Compiling[0m bit-vec v0.8.0
+2026-10-16T20:40:39.4591607Z [1m[92m   Compiling[0m aliasable v0.1.3
+2026-10-16T20:40:39.5953103Z [1m[92m   Compiling[0m borrow-or-share v0.2.4
+2026-10-16T20:40:40.3833479Z [1m[92m   Compiling[0m unicode-general-category v1.1.0
+2026-10-16T20:40:40.7879367Z [1m[92m   Compiling[0m bytemuck v1.25.1
+2026-10-16T20:40:40.8051720Z [1m[92m   Compiling[0m byteorder-lite v0.1.0
+2026-10-16T20:40:41.0389960Z [1m[92m   Compiling[0m image v0.25.10
+2026-10-16T20:40:42.6928953Z [1m[92m   Compiling[0m fluent-uri v0.4.1
+2026-10-16T20:40:43.4967236Z [1m[92m   Compiling[0m ouroboros v0.18.5
+2026-10-16T20:40:43.5609215Z [1m[92m   Compiling[0m bit-set v0.8.0
+2026-10-16T20:40:44.7031131Z [1m[92m   Compiling[0m windows v0.61.3
+2026-10-16T20:40:44.9718167Z [1m[92m   Compiling[0m windows-targets v0.53.5
+2026-10-16T20:40:45.0171715Z [1m[92m   Compiling[0m sea-orm-macros v1.1.20
+2026-10-16T20:40:46.1697129Z [1m[92m   Compiling[0m sea-schema-derive v0.3.0
+2026-10-16T20:40:46.5219889Z [1m[92m   Compiling[0m winnow v1.0.3
+2026-10-16T20:40:46.8929016Z [1m[92m   Compiling[0m time-core v0.1.9
+2026-10-16T20:40:47.0990098Z [1m[92m   Compiling[0m widestring v1.2.1
+2026-10-16T20:40:48.2833374Z [1m[92m   Compiling[0m typetag v0.2.22
+2026-10-16T20:40:48.3553035Z [1m[92m   Compiling[0m semver v1.0.28
+2026-10-16T20:40:48.4913203Z [1m[92m   Compiling[0m num-conv v0.2.2
+2026-10-16T20:40:48.6154506Z [1m[92m   Compiling[0m outref v0.5.2
+2026-10-16T20:40:48.6865945Z [1m[92m   Compiling[0m micromap v0.3.0
+2026-10-16T20:40:48.6967723Z [1m[92m   Compiling[0m vsimd v0.8.0
+2026-10-16T20:40:48.9635064Z [1m[92m   Compiling[0m cfg_aliases v0.1.1
+2026-10-16T20:40:49.0186784Z [1m[92m   Compiling[0m thiserror v1.0.69
+2026-10-16T20:40:49.1804549Z [1m[92m   Compiling[0m uuid-simd v0.8.0
+2026-10-16T20:40:49.2980148Z [1m[92m   Compiling[0m nix v0.28.0
+2026-10-16T20:40:49.5822894Z [1m[92m   Compiling[0m referencing v0.47.0
+2026-10-16T20:40:49.6831969Z [1m[92m   Compiling[0m time-macros v0.2.31
+2026-10-16T20:40:51.0789784Z [1m[92m   Compiling[0m axotag v0.3.0
+2026-10-16T20:40:51.2345290Z [1m[92m   Compiling[0m toml_parser v1.1.2+spec-1.1.0
+2026-10-16T20:40:51.4722991Z [1m[92m   Compiling[0m windows-sys v0.60.2
+2026-10-16T20:40:52.0522344Z [1m[92m   Compiling[0m bitrouter v1.0.0-alpha.33 (D:\a\bitrouter\bitrouter\apps\bitrouter)
+2026-10-16T20:40:52.7112064Z [1m[92m   Compiling[0m fancy-regex v0.18.0
+2026-10-16T20:40:53.4188836Z [1m[92m   Compiling[0m self-replace v1.5.0
+2026-10-16T20:40:53.6419572Z [1m[92m   Compiling[0m bitrouter-tui v1.0.0-alpha.33 (D:\a\bitrouter\bitrouter\crates\bitrouter-tui)
+2026-10-16T20:40:54.1650745Z [1m[92m   Compiling[0m fraction v0.15.4
+2026-10-16T20:40:54.7175239Z [1m[92m   Compiling[0m axoprocess v0.2.1
+2026-10-16T20:40:54.9044363Z [1m[92m   Compiling[0m jsonschema-regex v0.47.0
+2026-10-16T20:40:55.1366225Z [1m[92m   Compiling[0m cookie v0.18.1
+2026-10-16T20:40:55.3743062Z [1m[92m   Compiling[0m thiserror-impl v1.0.69
+2026-10-16T20:40:56.7177054Z [1m[92m   Compiling[0m typetag-impl v0.2.22
+2026-10-16T20:40:57.3166088Z [1m[92m   Compiling[0m enum-ordinalize-derive v4.4.1
+2026-10-16T20:40:57.9073671Z [1m[92m   Compiling[0m serde_spanned v1.1.1
+2026-10-16T20:40:58.0455710Z [1m[92m   Compiling[0m toml_datetime v1.1.1+spec-1.1.0
+2026-10-16T20:40:58.3208359Z [1m[92m   Compiling[0m powerfmt v0.2.0
+2026-10-16T20:40:58.5006062Z [1m[92m   Compiling[0m bytecount v0.6.9
+2026-10-16T20:40:58.6588813Z [1m[92m   Compiling[0m winreg v0.10.1
+2026-10-16T20:40:58.8512061Z [1m[92m   Compiling[0m num-cmp v0.1.0
+2026-10-16T20:40:58.9157386Z [1m[92m   Compiling[0m deranged v0.5.8
+2026-10-16T20:40:59.1501058Z [1m[92m   Compiling[0m inventory v0.3.24
+2026-10-16T20:40:59.2285628Z [1m[92m   Compiling[0m toml_writer v1.1.1+spec-1.1.0
+2026-10-16T20:40:59.4164448Z [1m[92m   Compiling[0m toml v1.1.2+spec-1.1.0
+2026-10-16T20:41:00.2044769Z [1m[92m   Compiling[0m time v0.3.53
+2026-10-16T20:41:01.4543151Z [1m[92m   Compiling[0m jsonschema v0.47.0
+2026-10-16T20:41:02.7930229Z [1m[92m   Compiling[0m homedir v0.3.6
+2026-10-16T20:41:03.0543986Z [1m[92m   Compiling[0m enum-ordinalize v4.4.1
+2026-10-16T20:41:03.3156347Z [1m[92m   Compiling[0m keyring v3.6.3
+2026-10-16T20:41:03.8222720Z [1m[92m   Compiling[0m zstd v0.13.3
+2026-10-16T20:41:04.1370361Z [1m[92m   Compiling[0m atomicwrites v0.4.4
+2026-10-16T20:41:04.3057192Z [1m[92m   Compiling[0m hmac v0.13.0
+2026-10-16T20:41:04.4330095Z [1m[92m   Compiling[0m rand_distr v0.6.0
+2026-10-16T20:41:05.0561311Z [1m[92m   Compiling[0m expect-json-macros v1.11.0
+2026-10-16T20:41:05.4449494Z [1m[92m   Compiling[0m vte_generate_state_changes v0.1.2
+2026-10-16T20:41:05.8170840Z [1m[92m   Compiling[0m diff v0.1.13
+2026-10-16T20:41:05.9707488Z [1m[92m   Compiling[0m arrayvec v0.7.8
+2026-10-16T20:41:06.0451521Z [1m[92m   Compiling[0m pretty_assertions v1.4.1
+2026-10-16T20:41:06.1628978Z [1m[92m   Compiling[0m vte v0.11.1
+2026-10-16T20:41:06.2521578Z [1m[92m   Compiling[0m expect-json v1.11.0
+2026-10-16T20:41:06.9055687Z [1m[92m   Compiling[0m filedescriptor v0.8.3
+2026-10-16T20:41:07.1040723Z [1m[92m   Compiling[0m educe v0.6.0
+2026-10-16T20:41:08.0605009Z [1m[92m   Compiling[0m rust-multipart-rfc7578_2 v0.9.0
+2026-10-16T20:41:08.1334115Z [1m[92m   Compiling[0m shared_library v0.1.9
+2026-10-16T20:41:08.2507092Z [1m[92m   Compiling[0m reserve-port v2.5.0
+2026-10-16T20:41:08.3130439Z [1m[92m   Compiling[0m serial2 v0.2.38
+2026-10-16T20:41:08.5116421Z [1m[92m   Compiling[0m downcast-rs v1.2.1
+2026-10-16T20:41:08.5787491Z [1m[92m   Compiling[0m bitflags v1.3.2
+2026-10-16T20:41:08.6307387Z [1m[92m   Compiling[0m bytesize v2.4.2
+2026-10-16T20:41:08.7132378Z [1m[92m   Compiling[0m portable-pty v0.9.0
+2026-10-16T20:41:08.8666712Z [1m[92m   Compiling[0m axum-test v21.0.0
+2026-10-16T20:41:09.5019531Z [1m[92m   Compiling[0m vt100 v0.15.2
+2026-10-16T20:41:10.1861109Z [1m[92m   Compiling[0m rayon-core v1.13.0
+2026-10-16T20:41:10.3617422Z [1m[92m   Compiling[0m half v2.7.1
+2026-10-16T20:41:10.6742600Z [1m[92m   Compiling[0m alloca v0.4.0
+2026-10-16T20:41:10.9469846Z [1m[92m   Compiling[0m ciborium-io v0.2.2
+2026-10-16T20:41:11.0116290Z [1m[92m   Compiling[0m plotters-backend v0.3.7
+2026-10-16T20:41:11.2666582Z [1m[92m   Compiling[0m plotters-svg v0.3.7
+2026-10-16T20:41:11.3830836Z [1m[92m   Compiling[0m ciborium-ll v0.2.2
+2026-10-16T20:41:11.5858756Z [1m[92m   Compiling[0m cast v0.3.0
+2026-10-16T20:41:11.7368040Z [1m[92m   Compiling[0m criterion-plot v0.8.2
+2026-10-16T20:41:12.1875782Z [1m[92m   Compiling[0m rayon v1.12.0
+2026-10-16T20:41:12.3464365Z [1m[92m   Compiling[0m ciborium v0.2.2
+2026-10-16T20:41:12.9885865Z [1m[92m   Compiling[0m plotters v0.3.7
+2026-10-16T20:41:13.3731459Z [1m[92m   Compiling[0m page_size v0.6.0
+2026-10-16T20:41:13.4791079Z [1m[92m   Compiling[0m tinytemplate v1.2.1
+2026-10-16T20:41:13.9097102Z [1m[92m   Compiling[0m oorandom v11.1.5
+2026-10-16T20:41:14.0011819Z [1m[92m   Compiling[0m anes v0.1.6
+2026-10-16T20:41:14.6127417Z [1m[92m   Compiling[0m criterion v0.8.2
+2026-10-16T20:41:21.3435093Z [1m[92m   Compiling[0m rustls-webpki v0.103.13
+2026-10-16T20:41:24.7463587Z [1m[92m   Compiling[0m tokio-rustls v0.26.4
+2026-10-16T20:41:24.7464210Z [1m[92m   Compiling[0m rustls-platform-verifier v0.7.0
+2026-10-16T20:41:24.7464927Z [1m[92m   Compiling[0m sqlx-core v0.8.6
+2026-10-16T20:41:25.0038074Z [1m[92m   Compiling[0m hyper-rustls v0.27.9
+2026-10-16T20:41:25.0274453Z [1m[92m   Compiling[0m tonic v0.14.6
+2026-10-16T20:41:25.2537999Z [1m[92m   Compiling[0m reqwest v0.13.4
+2026-10-16T20:41:27.6893414Z [1m[92m   Compiling[0m bitrouter-ai v1.0.0-alpha.33 (D:\a\bitrouter\bitrouter\crates\bitrouter-ai)
+2026-10-16T20:41:29.0592955Z [1m[92m   Compiling[0m tonic-prost v0.14.6
+2026-10-16T20:41:29.2125687Z [1m[92m   Compiling[0m opentelemetry-proto v0.32.0
+2026-10-16T20:41:29.6928996Z [1m[92m   Compiling[0m sqlx-postgres v0.8.6
+2026-10-16T20:41:30.6385048Z [1m[92m   Compiling[0m sqlx-sqlite v0.8.6
+2026-10-16T20:41:34.3450645Z [1m[92m   Compiling[0m sqlx-mysql v0.8.6
+2026-10-16T20:41:36.6809786Z [1m[92m   Compiling[0m tonic-types v0.14.6
+2026-10-16T20:41:37.5443476Z [1m[92m   Compiling[0m opentelemetry-http v0.32.0
+2026-10-16T20:41:37.6448764Z [1m[92m   Compiling[0m sqlx v0.8.6
+2026-10-16T20:41:37.7619547Z [1m[92m   Compiling[0m bitrouter-sdk v1.0.0-alpha.33 (D:\a\bitrouter\bitrouter\crates\bitrouter-sdk)
+2026-10-16T20:41:38.1425870Z [1m[92m   Compiling[0m opentelemetry-otlp v0.32.0
+2026-10-16T20:41:39.1483441Z [1m[92m   Compiling[0m sea-query-binder v0.7.0
+2026-10-16T20:41:39.8697647Z [1m[92m   Compiling[0m sea-schema v0.16.2
+2026-10-16T20:41:42.0891675Z [1m[92m   Compiling[0m sea-orm v1.1.20
+2026-10-16T20:41:43.4400346Z [1m[92m   Compiling[0m axoasset v2.0.1
+2026-10-16T20:41:43.9467734Z [1m[92m   Compiling[0m axoupdater v0.10.0
+2026-10-16T20:41:49.7969255Z [1m[92m   Compiling[0m sea-orm-migration v1.1.20
+2026-10-16T20:42:00.0674904Z [1m[92m   Compiling[0m bitrouter-orchestrator v1.0.0-alpha.33 (D:\a\bitrouter\bitrouter\crates\bitrouter-orchestrator)
+2026-10-16T20:42:00.6412970Z [1m[92m   Compiling[0m bitrouter-telemetry v1.0.0-alpha.33 (D:\a\bitrouter\bitrouter\crates\bitrouter-telemetry)
+2026-10-16T20:42:04.5781673Z [1m[92m   Compiling[0m bitrouter-guardrails v1.0.0-alpha.33 (D:\a\bitrouter\bitrouter\extensions\regex-checker\matcher)
+2026-10-16T20:42:40.7526538Z [1m[91merror[0m[1m[97m: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency[0m
+2026-10-16T20:42:40.7717481Z ##[error]  [1m[96m--> [0mcrates\bitrouter-orchestrator\src\service\tests\worker.rs:75:14
+2026-10-16T20:42:40.7731015Z    [1m[96m|[0m
+2026-10-16T20:42:40.7750335Z [1m[96m75[0m [1m[96m|[0m             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+2026-10-16T20:42:40.7862686Z    [1m[96m|[0m              [1m[91m^^^^^^^^^^^^[0m
+2026-10-16T20:42:40.8036751Z    [1m[96m|[0m
+2026-10-16T20:42:40.8066753Z    [1m[96m= [0m[1m[97mnote[0m: `-D deprecated` implied by `-D warnings`
+2026-10-16T20:42:40.8076252Z    [1m[96m= [0m[1m[97mhelp[0m: to override `-D warnings` add `#[allow(deprecated)]`
+2026-10-16T20:42:40.8198556Z [1m[96mhelp[0m: replace the use of the deprecated method
+2026-10-16T20:42:40.8718837Z    [1m[96m|[0m
+2026-10-16T20:42:40.8837395Z [1m[96m75[0m [91m- [0m            .[91mfetch_update[0m(Ordering::SeqCst, Ordering::SeqCst, |value| {
+2026-10-16T20:42:40.9037753Z [1m[96m75[0m [92m+ [0m            .[92mtry_update[0m(Ordering::SeqCst, Ordering::SeqCst, |value| {
+2026-10-16T20:42:40.9182430Z    [1m[96m|[0m
+2026-10-16T20:42:40.9292775Z 
+2026-10-16T20:43:00.7801565Z [1m[91merror[0m: could not compile `bitrouter-orchestrator` (lib test) due to 1 previous error
+2026-10-16T20:43:00.7865668Z [1m[93mwarning[0m: build failed, waiting for other jobs to finish...
+2026-10-16T20:44:27.4357603Z [31;1merror[0m: command `[1m'C:\Users\runneradmin\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\cargo.exe' '--color=always' test --no-run --message-format json-render-diagnostics --workspace --all-features[0m` exited with code [1m101[0m
+2026-10-16T20:44:27.5291580Z ##[error]Process completed with exit code 1.
+2026-10-16T20:44:27.5581743Z Post job cleanup.
+2026-10-16T20:44:27.5585904Z ##[start-action display=Setup Rust Caching;id=__31d9b9b0-1ad8-4886-a3bc-d795427170c3.__Swatinem_rust-cache]
+2026-10-16T20:44:27.5719734Z Post job cleanup.
+2026-10-16T20:44:27.8377388Z ##[group]Cache Configuration
+2026-10-16T20:44:27.8378100Z Cache Provider:
+2026-10-16T20:44:27.8378508Z     github
+2026-10-16T20:44:27.8378906Z Workspaces:
+2026-10-16T20:44:27.8379402Z     D:\a\bitrouter\bitrouter
+2026-10-16T20:44:27.8379711Z Cache Paths:
+2026-10-16T20:44:27.8379999Z     C:\Users\runneradmin\.cargo\bin
+2026-10-16T20:44:27.8380623Z     C:\Users\runneradmin\.cargo\.crates.toml
+2026-10-16T20:44:27.8380988Z     C:\Users\runneradmin\.cargo\.crates2.json
+2026-10-16T20:44:27.8381299Z     C:\Users\runneradmin\.cargo\registry
+2026-10-16T20:44:27.8381644Z     C:\Users\runneradmin\.cargo\git
+2026-10-16T20:44:27.8381961Z     D:\a\bitrouter\bitrouter\target
+2026-10-16T20:44:27.8382261Z Restore Key:
+2026-10-16T20:44:27.8382596Z     v0-rust-test-Windows_NT-x64-58461147
+2026-10-16T20:44:27.8383358Z Cache Key:
+2026-10-16T20:44:27.8383641Z     v0-rust-test-Windows_NT-x64-58461147-23f256e7
+2026-10-16T20:44:27.8383983Z .. Prefix:
+2026-10-16T20:44:27.8384235Z   - v0-rust-test-Windows_NT-x64
+2026-10-16T20:44:27.8384541Z .. Environment considered:
+2026-10-16T20:44:27.8384816Z   - Rust Versions:
+2026-10-16T20:44:27.8385194Z     - 1.99.1 x86_64-pc-windows-msvc 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-16T20:44:27.8385771Z     - 1.99.1 x86_64-pc-windows-msvc 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-16T20:44:27.8386207Z   - CARGO_INCREMENTAL
+2026-10-16T20:44:27.8386479Z   - CARGO_PROFILE_DEV_DEBUG
+2026-10-16T20:44:27.8386782Z   - CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-10-16T20:44:27.8387094Z   - CARGO_TERM_COLOR
+2026-10-16T20:44:27.8387367Z   - CARGO_UNSTABLE_SPARSE_REGISTRY
+2026-10-16T20:44:27.8387670Z   - RUST_BACKTRACE
+2026-10-16T20:44:27.8388345Z   - RUSTFLAGS
+2026-10-16T20:44:27.8388973Z .. Lockfiles considered:
+2026-10-16T20:44:27.8389568Z   - D:\a\bitrouter\bitrouter\apps\bitrouter\Cargo.toml
+2026-10-16T20:44:27.8390094Z   - D:\a\bitrouter\bitrouter\Cargo.lock
+2026-10-16T20:44:27.8390525Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-ai\Cargo.toml
+2026-10-16T20:44:27.8391073Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-orchestrator\Cargo.toml
+2026-10-16T20:44:27.8391601Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-sdk\Cargo.toml
+2026-10-16T20:44:27.8392197Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-telemetry\Cargo.toml
+2026-10-16T20:44:27.8392689Z   - D:\a\bitrouter\bitrouter\crates\bitrouter-tui\Cargo.toml
+2026-10-16T20:44:27.8393215Z   - D:\a\bitrouter\bitrouter\extensions\regex-checker\matcher\Cargo.toml
+2026-10-16T20:44:27.8393797Z   - D:\a\bitrouter\bitrouter\helpers\bitrouter-test-fixtures\Cargo.toml
+2026-10-16T20:44:27.8394333Z   - D:\a\bitrouter\bitrouter\helpers\dist-helper\Cargo.toml
+2026-10-16T20:44:27.8394964Z ##[endgroup]
+2026-10-16T20:44:27.8395101Z 
+2026-10-16T20:44:27.8410174Z (node:8088) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-16T20:44:27.8410722Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-16T20:44:38.1285234Z ... Cleaning D:\a\bitrouter\bitrouter\target ...
+2026-10-16T20:44:38.3738091Z ... Cleaning cargo registry (cache-all-crates: false) ...
+2026-10-16T20:44:49.7899019Z ... Cleaning cargo/bin ...
+2026-10-16T20:44:51.3563726Z ... Cleaning cargo git cache ...
+2026-10-16T20:44:51.3571483Z ... Saving cache ...
+2026-10-16T20:44:51.4316080Z [command]"C:\Program Files\Git\usr\bin\tar.exe" --posix -cf cache.tzst --exclude cache.tzst -P -C D:/a/bitrouter/bitrouter --files-from manifest.txt --force-local --use-compress-program "zstd -T0"
+2026-10-16T20:44:59.7014606Z Sent 0 of 590145414 (0.0%), 0.0 MBs/sec
+2026-10-16T20:45:00.7032240Z Sent 268435456 of 590145414 (45.5%), 127.9 MBs/sec
+2026-10-16T20:45:01.4131833Z Sent 590145414 of 590145414 (100.0%), 207.6 MBs/sec
+2026-10-16T20:45:01.7110142Z ##[end-action id=__31d9b9b0-1ad8-4886-a3bc-d795427170c3.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=34152]
+2026-10-16T20:45:01.7271770Z Post job cleanup.
+2026-10-16T20:45:01.8799313Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-10-16T20:45:01.9093679Z git version 2.56.0.windows.2
+2026-10-16T20:45:01.9160486Z Temporarily overriding HOME='D:\a\_temp\ba636a82-2645-4462-a528-7603ef3c2e95' before making global git config changes
+2026-10-16T20:45:01.9161598Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-16T20:45:01.9170386Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\bitrouter\bitrouter
+2026-10-16T20:45:01.9487720Z Removing SSH command configuration
+2026-10-16T20:45:01.9498090Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-10-16T20:45:01.9820887Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-10-16T20:45:02.4681050Z Removing HTTP extra header
+2026-10-16T20:45:02.4691164Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-16T20:45:02.5076976Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-10-16T20:45:03.0060425Z Removing includeIf entries pointing to credentials config files
+2026-10-16T20:45:03.0071058Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-16T20:45:03.0350188Z includeif.gitdir:D:/a/bitrouter/bitrouter/.git.path
+2026-10-16T20:45:03.0350594Z includeif.gitdir:D:/a/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-16T20:45:03.0350930Z includeif.gitdir:/github/workspace/.git.path
+2026-10-16T20:45:03.0351220Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-16T20:45:03.0387521Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/bitrouter/bitrouter/.git.path
+2026-10-16T20:45:03.0670063Z D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.0712508Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/bitrouter/bitrouter/.git.path D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.1037462Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-16T20:45:03.1322154Z D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.1369036Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/bitrouter/bitrouter/.git/worktrees/*.path D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.1700387Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-16T20:45:03.1985849Z /github/runner_temp/git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.2025101Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.2352465Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-16T20:45:03.2635276Z /github/runner_temp/git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.2675753Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config
+2026-10-16T20:45:03.3004386Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-10-16T20:45:03.7814730Z Removing credentials config 'D:\a\_temp\git-credentials-149f88ce-1c14-440c-9edd-6b9be28cea27.config'
+2026-10-16T20:45:03.7995042Z Cleaning up orphan processes
+2026-10-16T20:45:03.8193644Z Terminate orphan process: pid (1252) (vctip)

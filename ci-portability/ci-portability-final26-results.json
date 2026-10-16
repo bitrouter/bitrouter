@@ -1,0 +1,153 @@
+{
+  "source": "ci-portability-final26-source.json",
+  "scope": "Correct exact-head CI failures from 25cbd553: keep protocol wire material independent of optional ACP runtime; preserve original permission IDs and deny unoffered option; use MSRV-compatible CAS in concurrent budget test instead of newly deprecated fetch_update. Full post-fix regression, zero-LEAK qualification and source-drift audit. Prior CI and local final15 results retain their original source binding; no fixture/runtime limit changes.",
+  "startedAt": "2026-10-16T20:44:23.957Z",
+  "runs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "ci-portability-final26-native-features.log",
+      "startedAt": "2026-10-16T20:44:23.957Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:44:37.862Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "ci-portability-final26-acp-features.log",
+      "startedAt": "2026-10-16T20:44:37.862Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:44:48.140Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "ci-portability-final26-native-tree.log",
+      "startedAt": "2026-10-16T20:44:48.140Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:44:48.391Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "ci-portability-final26-msrv-native.log",
+      "startedAt": "2026-10-16T20:44:48.391Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:45:19.148Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-recovery",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session) | test(service::tests::worker::)"
+      ],
+      "log": "ci-portability-final26-acp-recovery.log",
+      "startedAt": "2026-10-16T20:45:19.148Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:46:41.502Z",
+      "summaries": [
+        "     Summary [   4.463s] 13 tests run: 13 passed, 3653 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
+      ],
+      "log": "ci-portability-final26-typed-startup.log",
+      "startedAt": "2026-10-16T20:46:41.502Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:46:42.730Z",
+      "summaries": [
+        "     Summary [   0.472s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "log": "ci-portability-final26-workspace.log",
+      "startedAt": "2026-10-16T20:46:42.730Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-16T20:53:14.067Z",
+      "summaries": [
+        "     Summary [ 283.186s] 782/4757 tests run: 781 passed, 1 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-16T20:53:14.301Z",
+  "changed": [],
+  "passed": false
+}

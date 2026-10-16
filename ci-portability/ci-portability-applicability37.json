@@ -1,0 +1,24 @@
+{
+  "evaluatedHead": "25cbd553a075056879dcf8b5a356a95ddf206dd6",
+  "run": "ci-portability-final36",
+  "sourceTarSha256": "b3e1b8d9f96807336eb0b9d5faf89895154da85db642ab043f249b2d439d0fe5",
+  "sourceTarFilesVerified": 7,
+  "nativeTreeContainsAcp": false,
+  "postTestMetadataDelta": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json"
+  ],
+  "finalFiles": {
+    "apps/bitrouter/src/goal_runtime/acp.rs": "80ca20c092fee9aabb9e4d03234548568394e8dc8e8893624b17045586354d3b",
+    "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs": "ea011b5c7f946d6158b814076848bfe381540f007036dcc91986a5dc5ba35e99",
+    "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs": "533efee578dcd3c48385a9ff3030c4f400f7002f51f040d0283576224a7fb283",
+    "crates/bitrouter-orchestrator/src/service/tests/worker.rs": "9328d14999332aa9b31e21e1a5de0d32abee5ab24049bd9425a4f53e5c32a9b6",
+    "crates/bitrouter-orchestrator/src/service/worker/acp.rs": "95621a6265a1305125fb35c93e182e7e2ed303ee59b11a189cfac7978f263e21",
+    "crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs": "4f63682940211b7fec2b3cab41ca355c8e56e216e49824ebd05132da0ffe3a83",
+    "crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs": "653b8df60edaec46366639d21d7efb18e787671ef0d45cf82a1bec5a48e76e86",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "a92ec0b22eafaae20f92e9cacc279fb062a55639bdc00968b18276f9b4ef9fe0",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md": "26807190f4e51dce5a7aa0b5746a1c098269b5229733ff8ab01f3d9ef3423319",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json": "5028af72f6e7b6dc6acc6c44babb0bd4faee28478c1e68488d06c7cd0a1fe628"
+  }
+}

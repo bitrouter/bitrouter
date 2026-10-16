@@ -1,0 +1,9 @@
+{
+  "createdAt": "2026-10-16T21:34:40.284Z",
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "featureSource": "59d0cc4dcf5ec6696cc875b944f06732c8fd4cf6",
+  "finalLocalRun": "ci-portability-final36",
+  "originalAddedFiles": 70,
+  "originalAddedBytes": 3534512,
+  "scope": "Later CI portability correction and full regression. Prior raw evidence is unchanged; new files retain original failures, interrupted final26 and complete final31. Vendor/provider live gate remains unpassed. Final hosted CI is separate in the PR comment."
+}

@@ -1,0 +1,13 @@
+{
+  "head": "25cbd553a075056879dcf8b5a356a95ddf206dd6",
+  "dirtyFiles": [
+    "apps/bitrouter/src/goal_runtime/acp.rs",
+    "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs",
+    "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs",
+    "crates/bitrouter-orchestrator/src/service/tests/worker.rs",
+    "crates/bitrouter-orchestrator/src/service/worker/acp.rs",
+    "crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs",
+    "crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs"
+  ],
+  "scope": "Dirty files supplement the exact committed HEAD."
+}
