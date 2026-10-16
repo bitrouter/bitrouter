@@ -107,6 +107,7 @@ sequenceDiagram
 | 从未接纳且原来源已撤销 | 锁内确认缺失后，允许既有业务重试规则下的新准备 |
 | 安全 native checkpoint、已停止 owner、效果和预算可核对 | 经既有恢复引擎继续原 Thread/Turn，不重新提交 prompt、不重放已确认读取 |
 | 原 owner 仍活跃、pending read、来源已暂停或迟到撤销 | 拒绝继续，保留恢复/阻塞事实 |
+| ACP Thread 仅有元数据、从未接纳 Turn | 原 owner 已确认停止且工作区与来源检查通过后，沿用原 Thread 和接纳 key 创建首个 session；不声称恢复私有 session |
 | ACP 私有会话冷恢复 | **尚未接通已确认同 session 的继续执行；保持 AcpSessionUnconfirmed** |
 | 旧 ACP run 的迟到停止/效果观察 | 保留原身份对账；不能直接覆盖新绑定或验证新要求 |
 
@@ -171,6 +172,7 @@ Goal 默认交付经过验证、可 review 的结果即完成；人工验收只�
 | Native 三节点 workflow | 实际接收区间重叠、隔离的冲突 scratch 写入、读取已检查依赖、根交付验证 |
 | Native 冷恢复矩阵 | 安全读取、活跃旧 owner、pending read、预先暂停与接纳期间迟到暂停；保留原 Thread/Turn 与累计核算 |
 | Managed ACP / 接替 | Rust 协议进程、共同控制拒绝通用接管、已知/未知停止与工具效果、独立分支保留、原 key 对账 |
+| ACP 元数据中断 | 实际 SQLite 关闭重开与 Rust peer；32 项共享恢复检查、11 项 Goal Thread 检查、3 次重复，以及活跃 owner / 已提交未知 prompt 拒绝；严格 Clippy 与 fmt |
 | 预算与输入 | release/pause/SDK admission drop、丢失 ACK、冻结 quote、未知 usage 保留、真实 SQLite 时钟与显式恢复 |
 | 当前 native 历史 checkpoint | 86 项 Goal runtime 检查、6 项证据检查、归档矩阵 3 次重复、严格全 workspace Clippy 与 fmt |
 | 前一预算 checkpoint | 735 项 SDK 检查、4 项 Goal PTY、编辑器 10 次重复、6 个 doctest（1 ignored）；源码适用性单独核对 |
@@ -203,4 +205,4 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
 | S5 | native/ACP 依赖与验收接入共同执行；完成剩余恢复场景和实际 harness 资格核对 |
 | S6 | 审计替代路径的消费者，只删除已被替代的逻辑；完成全量回归、证据发布和 PR 更新 |
 
-最终交付还需：合入已获取的 main 更新；逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。
+main 的目录更新已在本地合入；registry validate/build/check 通过，产物没有漂移。最终交付还需：逐项核对 RF01–RF12 / A01–A22；运行仓库要求的完整 nextest、Clippy、fmt 及相关检查；发布经脱敏的独立归档；更新 PR #981 正文与验收评论并核对远端提交和 CI。

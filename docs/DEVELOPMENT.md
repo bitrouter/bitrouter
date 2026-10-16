@@ -57,7 +57,8 @@ remains blocked. Native workers retain the same action and frozen quote while wa
 for current workers' provider reservations; settled unknown-cost holds remain blocked.
 Wait begin/end facts drive the read-only projection. SDK cancellation before executor
 dispatch reconciles the original admission without inventing actual serving evidence.
-Confirmed ACP continuation still needs closure.
+Never-started ACP metadata can retain its Thread after confirmed owner shutdown;
+its first session is still new. Accepted private-session continuation remains blocked.
 Managed ACP uses the same acceptance/control owner;
 the supervisor supplies protocol/process facts. Historical unbound runs retain
 their reconciliation path. Worker changes version the existing work and create
