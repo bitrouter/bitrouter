@@ -2,17 +2,17 @@
 
 use std::sync::Arc;
 
+use crate::tui::code::{Inspector, Selector, SelectorRow};
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_tui::code::{Inspector, Selector, SelectorRow};
 
 use crate::acp_trajectory::checkpoint::types::{
     AssessmentRevision, AssessmentSource, CriterionScore, EvidenceCitation,
 };
-use crate::evolution::operator::checkpoint::ReviewInput;
-use crate::evolution::rubric::{
+use crate::core::evolution::operator::checkpoint::ReviewInput;
+use crate::core::evolution::rubric::{
     Applicability, RUBRIC_VERSION, RubricEvaluation, RubricItem, library,
 };
-use crate::evolution::scoring::RubricSubmission;
+use crate::core::evolution::scoring::RubricSubmission;
 
 use super::Panel;
 
@@ -428,8 +428,8 @@ impl ReviewDraft {
             checkpoint_id: self.input.checkpoint.checkpoint_id.clone(),
             expected_revision: self.input.expected_revision.clone(),
             source: AssessmentSource::Human,
-            evaluator_id: crate::evolution::scoring::TUI_EVALUATOR_ID.into(),
-            evaluator_version: crate::evolution::scoring::TUI_EVALUATOR_VERSION.into(),
+            evaluator_id: crate::core::evolution::scoring::TUI_EVALUATOR_ID.into(),
+            evaluator_version: crate::core::evolution::scoring::TUI_EVALUATOR_VERSION.into(),
             evaluation: self.evaluation.clone(),
         })
     }

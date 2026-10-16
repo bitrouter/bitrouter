@@ -1,6 +1,42 @@
 # BitRouter CLI Reference
 
+MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
+Without `harness`, the daemon opens no local task or native ACP listener, and
+`agent_api.enabled` and `acp serve` report the missing capability before startup.
+Empty MCP configuration and disabled agent API settings remain readable.
+Local native headless execution requires both `core` and `harness`.
+Supervised sessions and ACP route-lease control also require `harness`; a
+gateway-only daemon leaves the supervisor ledger untouched. Request identity
+and existing session-attributed spend remain available.
+SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
+`db-mysql`; both are included in the default distribution. Reduced builds report
+an unavailable selected backend before connecting.
+Gateway server-side tools require `server-tools` (included by default and enabling
+`mcp`). Selecting MCP tools, advisor, subagent, Fusion, web search or web fetch
+without that feature fails at startup, reload and profile preflight. Saved loop
+tuning with no selected tool remains readable and does not activate execution.
+
+Evidence and learning commands require the application's `core` feature:
+`eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`
+and `evolve`, plus `acp evolution` and checkpoint `judge`, `judge-job` and
+`rubric` operations. Without core they report the requirement before opening
+inputs or stores. The TUI evolution panel also requires core. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` also requires core.
+`serve`, `start` and `restart` reject it before creating runtime files or stopping
+a resident daemon. Published-policy loading/enforcement, ordinary
+policy inspection/reload/rollback, request metering and trajectory inspection,
+replay and pruning remain available without the learning runtime.
+
 `bro <subcommand> [flags]`
+
+## Executable identity
+
+`bro build-info` reports the local executable's version, source revision (or
+`null` when unavailable), target platform, sorted effective features, distribution
+profile and handoff fingerprint. It reads no configuration or service storage.
+Use `--human` for a text view. The profile is `gateway` for no optional features,
+`full` for the manifest's default capability set, and `custom` for other sets.
+Aliases and transitive features are normalized at build time; `--all-features`
+is a custom selection, not the official full profile.
 
 ## Output format
 
@@ -422,12 +458,27 @@ Stops the running daemon (waiting up to 30s for in-flight requests to drain), th
 For a file SQLite database, restart first validates migration lineage and runs
 pending migrations on a private snapshot. It retains a recovery backup before
 stopping the daemon. The explicit restart may interrupt active agent runs.
+When both executables report different compiled distributions, restart instead
+requires verified launcher ownership and the atomic idle handoff gate before
+stopping anything. Unsupported configuration, active work or unknown idleness
+leaves the resident unchanged. The same-profile explicit restart retains its
+existing interruption behavior.
+
+A profile transition can also apply a saved control-socket change. Preflight
+checks the candidate endpoint before stopping the resident, and readiness,
+artifact identity and locator verification use that new endpoint.
 
 ### Local daemon after an update
 
 `bro status` reports the installed and running daemon versions when the daemon
 supports that metadata. Its JSON also includes `compatibility`, launcher
 ownership, and observed active-work counts when the daemon can report them.
+`installed_artifact` and `daemon_artifact` identify the corresponding compiled
+distributions. Missing legacy metadata remains unknown. A `profile_mismatch`
+allows common inspection but prevents automatic replacement by a different
+feature set or target; use a matching executable for execution or request an
+explicit profile transition. Control HTTP capabilities also report the server's
+artifact separately from the caller's authorized actions.
 These counts are a passive snapshot; the daemon checks them again behind its
 drain gate before stopping. A new `bro` probes the local daemon before supervised
 session commands. When the daemon has the handoff protocol, is idle, and its
@@ -438,10 +489,17 @@ it is idle; finish its work and run `bro restart` explicitly.
 Foreground `bro serve` remains under its external supervisor; the CLI does not
 take it over automatically.
 
-The standalone BRO runtime holds a daemon admission for its endpoint lifetime.
-Until native requests, queue runners and recovery participate in an atomic
-handoff, even an idle BRO daemon defers automatic replacement. Finish its work
-and use the explicit `bro restart` when changing binaries.
+Every `core` build holds daemon admission for its managed runtime's lifetime,
+including core-only sessions executed by an external harness. Channel work,
+pending checkpoint acknowledgements, native requests and queue runners do not
+yet participate in an atomic handoff, so even an apparently idle core resident
+defers automatic replacement. Gateway and harness-only builds retain tracked
+idle handoff. Finish managed work and use the explicit `bro restart` when
+changing binaries.
+That exception applies to the same compiled distribution. A cross-profile
+restart still requires atomic idle evidence and is refused by the managed
+lifetime guard; plan an explicit stop after finishing work before starting the
+other profile. No command silently removes that guard to change profiles.
 
 `bro update` attempts the same safe handoff after a self-managed installation.
 Package-manager installs still delegate the binary update; the next

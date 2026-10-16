@@ -1,581 +1,85 @@
-//! Crate-wide error type.
-//!
-//! Every fallible SDK call returns [`Result<T>`](Result) (an alias for
-//! `std::result::Result<T, BitrouterError>`). Variants carry an HTTP status so
-//! the server handlers can render OpenAI/Anthropic-style error envelopes
-//! without a separate mapping table. The type is `Clone` because the pipeline
-//! hands the same error to several consumers (observe hooks, settlement
-//! recorders, the caller).
-//!
-//! [`BitrouterError::to_envelope`] projects an error into the canonical,
-//! serializable [`ErrorEnvelope`] (`{"error": {"kind": …, "message": …}}`) —
-//! the stable typed shape the CLI prints on stdout. HTTP surfaces use their
-//! protocol-specific projections; provider bad requests preserve the selected
-//! upstream `error` object or string.
+//! Client transport failures and public service failures remain distinct.
 
-use std::fmt;
+use bitrouter_ai::gateway::GatewayErrorEnvelope;
+use reqwest::header::HeaderMap;
 
-use serde::{Deserialize, Serialize};
-
-/// Crate-wide result alias.
-pub type Result<T> = std::result::Result<T, BitrouterError>;
-
-/// The unified BitRouter error type.
+/// A service failure with its HTTP metadata and optional structured body.
 ///
-/// Variants carry an HTTP status so handlers can render OpenAI/Anthropic-style
-/// error envelopes without a separate mapping table. `Clone` because the
-/// pipeline hands the same error to several consumers (observe hooks,
-/// settlement recorders, the caller).
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum BitrouterError {
-    /// 400 before dispatch, or 502 when client output cannot be represented.
-    #[error("model conversion incompatible")]
-    Incompatible {
-        /// Content-free model diagnostics, preserved for trusted callers.
-        report: bitrouter_ai::conversion::ConversionReport,
-    },
-    /// 400 — malformed request (bad JSON, unknown enum variant, …).
-    #[error("bad request: {message}")]
-    BadRequest {
-        /// Human-readable detail.
-        message: String,
-    },
-
-    /// 401 — missing or invalid credentials.
-    #[error("unauthorized: {0}")]
-    Unauthorized(String),
-
-    /// 402 — payment required (MPP challenge / insufficient balance).
-    #[error("payment required: {0}")]
-    PaymentRequired(String),
-
-    /// 402 — an upstream provider account has insufficient credit.
-    #[error("upstream payment required")]
-    UpstreamPaymentRequired {
-        /// Bounded provider diagnostic retained for trusted observers. Public
-        /// protocol surfaces never expose this value.
-        detail: Option<String>,
-    },
-
-    /// 403 — policy violation.
-    #[error("forbidden: {0}")]
-    Forbidden(String),
-
-    /// 404 — no route found for the requested model.
-    #[error("not found: {0}")]
-    NotFound(String),
-
-    /// 429 — rate limited.
-    #[error("rate limited")]
-    RateLimited {
-        /// Seconds the caller should wait before retrying.
-        retry_after: Option<u64>,
-    },
-
-    /// 429 — every usable upstream route is temporarily rate limited.
-    #[error("upstream rate limited")]
-    UpstreamRateLimited {
-        /// Seconds the caller should wait before retrying the earliest route.
-        retry_after: Option<u64>,
-        /// Bounded provider diagnostic retained for trusted observers. Public
-        /// protocol surfaces never expose this value.
-        detail: Option<String>,
-    },
-
-    /// 400 — an upstream provider rejected the request parameters.
-    #[error("upstream bad request")]
-    UpstreamBadRequest {
-        /// Upstream-selected error payload. Executor-produced values are
-        /// always a JSON object or JSON string.
-        error: serde_json::Value,
-    },
-
-    /// 403 — an upstream provider declined the request under its content policy.
-    #[error("upstream policy violation: {message}")]
-    UpstreamPolicyViolation {
-        /// Internal provider diagnostic. Public protocol surfaces use a fixed,
-        /// safe message and never expose this value.
-        message: String,
-    },
-
-    /// 502 — upstream provider returned an error.
-    #[error("upstream error ({status}): {message}")]
-    Upstream {
-        /// Upstream HTTP status.
-        status: u16,
-        /// Upstream error body / detail.
-        message: String,
-    },
-
-    /// 502 — upstream returned a successful HTTP response that did not match
-    /// the selected protocol.
-    #[error("upstream returned an invalid response: {message}")]
-    UpstreamInvalidResponse {
-        /// Internal diagnostic detail. Public HTTP/SSE responses use a fixed
-        /// safe message and never expose this value.
-        message: String,
-        /// Available provider-reported usage from the failed successful response.
-        usage: Option<Box<bitrouter_ai::types::Usage>>,
-    },
-
-    /// 401 / 403 — upstream MCP server demanded authorization. Distinct from
-    /// [`Upstream`](Self::Upstream) (a generic 502) because the cloud needs the
-    /// real status, the `WWW-Authenticate` challenge, and the parsed required
-    /// scope to drive OAuth token refresh (401) and step-up (403).
-    #[error("upstream auth required ({status})")]
-    UpstreamAuth {
-        /// The upstream HTTP status — `401` or `403`.
-        status: u16,
-        /// The verbatim `WWW-Authenticate` header, when present.
-        www_authenticate: Option<String>,
-        /// The scope the upstream says is required (403 `insufficient_scope`
-        /// only); `None` when not named.
-        required_scope: Option<String>,
-    },
-
-    /// 504 — upstream timed out.
-    #[error("upstream timeout")]
-    UpstreamTimeout,
-
-    /// 503 — the upstream route set is temporarily unavailable.
-    #[error("upstream unavailable")]
-    UpstreamUnavailable,
-
-    /// Caller cancelled the request; represented as 499 at the gateway.
-    #[error("request cancelled")]
-    Cancelled,
-
-    /// 500 — internal error.
-    #[error("internal error: {0}")]
-    Internal(String),
+/// Callers may inspect authentication challenges and retry hints, but the SDK
+/// never retries a request automatically. Debug output excludes headers/body.
+pub struct ServiceFailure<Body = GatewayErrorEnvelope> {
+    pub status: u16,
+    pub headers: HeaderMap,
+    pub body: Option<Body>,
+    /// Reading or decoding the optional error body failed; HTTP metadata remains authoritative.
+    pub body_error: Option<Error>,
 }
 
-fn upstream_payload_text(error: &serde_json::Value) -> String {
-    match error {
-        serde_json::Value::String(message) => message.clone(),
-        other => other.to_string(),
+impl<Body> std::fmt::Debug for ServiceFailure<Body> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceFailure")
+            .field("status", &self.status)
+            .field("body_error", &self.body_error)
+            .finish_non_exhaustive()
     }
 }
 
-impl BitrouterError {
-    /// Select the safe public presentation before a model codec encodes SSE.
-    pub fn stream_error(&self) -> bitrouter_ai::stream::StreamError {
-        bitrouter_ai::stream::StreamError {
-            message: self.public_message(),
-            error_type: self.error_type().to_owned(),
-            code: self.error_code().to_owned(),
-            status: self.status(),
-        }
-    }
+/// An SDK failure. Transport failure after dispatch can leave execution unknown.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid client options: {0}")]
+    Options(&'static str),
+    #[error("invalid request: {0}")]
+    Request(&'static str),
+    #[error("service transport failed; execution may have started")]
+    Transport(#[source] reqwest::Error),
+    #[error("gateway returned HTTP status {}", .0.status)]
+    Service(Box<ServiceFailure>),
+    #[error("control service returned HTTP status {}", .0.status)]
+    Control(Box<ServiceFailure<bitrouter_ai::control::error::ErrorEnvelope>>),
+    #[error("evaluation service returned HTTP status {}", .0.status)]
+    Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
+    #[error("core service returned HTTP status {}", .0.status)]
+    Core(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
+    #[error("core reported a managed response stream failure; execution may still be running")]
+    CoreStream(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
+    #[error("harness returned HTTP status {}", .0.status)]
+    Harness(Box<ServiceFailure<bitrouter_ai::harness::api::ErrorResponse>>),
+    #[error("harness observation failed; execution may still be running")]
+    HarnessObservation(Box<ServiceFailure<bitrouter_ai::harness::api::ObservationError>>),
+    #[cfg(feature = "core")]
+    #[error("core channel failed: {0}; execution may still be running")]
+    CoreChannel(&'static str),
+    #[error(
+        "remote control protocol version {server} is incompatible with client version {client}"
+    )]
+    ControlProtocolVersion { server: u32, client: u32 },
+    #[error("remote BitRouter does not support or grant control action '{}'", .action.id())]
+    ControlActionUnavailable {
+        action: bitrouter_ai::control::action::Action,
+    },
+    #[error("remote server does not support or grant control resource '{resource}'")]
+    ControlResourceUnavailable { resource: &'static str },
+    #[error("reload outcome may be unknown; inspect operations show {} --instance {}; do not replay with a new request ID", .input.request_id, .input.expected_server_instance_id)]
+    ReloadUnknown {
+        input: bitrouter_ai::control::reload::ReloadInput,
+        #[source]
+        source: Box<Error>,
+    },
+    #[error("gateway reported a stream failure")]
+    Stream(Box<ServiceFailure>),
+    #[error("invalid service response: {0}")]
+    Response(&'static str),
+    #[error("service response exceeded the configured byte limit")]
+    Limit,
+    #[error("gateway stream ended without its terminal event; execution may still be running")]
+    IncompleteStream,
+}
 
-    /// The HTTP status code this error renders as.
-    pub fn status(&self) -> u16 {
-        match self {
-            Self::Incompatible { report } => {
-                if report.is_output_failure() {
-                    502
-                } else {
-                    400
-                }
-            }
-            Self::BadRequest { .. } => 400,
-            Self::Unauthorized(_) => 401,
-            Self::PaymentRequired(_) => 402,
-            Self::UpstreamPaymentRequired { .. } => 402,
-            Self::Forbidden(_) => 403,
-            Self::NotFound(_) => 404,
-            Self::RateLimited { .. } => 429,
-            Self::UpstreamRateLimited { .. } => 429,
-            Self::UpstreamBadRequest { .. } => 400,
-            Self::UpstreamPolicyViolation { .. } => 403,
-            Self::Upstream { .. } => 502,
-            Self::UpstreamInvalidResponse { .. } => 502,
-            Self::UpstreamAuth { status, .. } => *status,
-            Self::UpstreamTimeout => 504,
-            Self::UpstreamUnavailable => 503,
-            Self::Cancelled => 499,
-            Self::Internal(_) => 500,
-        }
-    }
-
-    /// The OpenAI-compatible `error.type` tag.
-    pub fn error_type(&self) -> &'static str {
-        match self {
-            Self::Incompatible { report } => {
-                if report.is_output_failure() {
-                    "upstream_error"
-                } else {
-                    "invalid_request_error"
-                }
-            }
-            Self::BadRequest { .. } => "invalid_request_error",
-            Self::Unauthorized(_) => "authentication_error",
-            Self::PaymentRequired(_) => "payment_required",
-            Self::UpstreamPaymentRequired { .. } => "payment_required",
-            Self::Forbidden(_) => "permission_error",
-            Self::NotFound(_) => "not_found_error",
-            Self::RateLimited { .. } => "rate_limit_error",
-            Self::UpstreamRateLimited { .. } => "rate_limit_error",
-            Self::UpstreamBadRequest { .. } => "invalid_request_error",
-            Self::UpstreamPolicyViolation { .. } => "permission_error",
-            Self::Upstream { .. }
-            | Self::UpstreamInvalidResponse { .. }
-            | Self::UpstreamTimeout => "upstream_error",
-            Self::UpstreamUnavailable => "upstream_error",
-            Self::UpstreamAuth { status: 403, .. } => "permission_error",
-            Self::UpstreamAuth { .. } => "authentication_error",
-            Self::Cancelled => "request_cancelled",
-            Self::Internal(_) => "internal_error",
-        }
-    }
-
-    /// Stable machine-readable code for OpenAI-compatible error envelopes.
-    pub fn error_code(&self) -> &'static str {
-        match self {
-            Self::Incompatible { .. } => "model_conversion_incompatible",
-            Self::BadRequest { .. } => "invalid_request",
-            Self::Unauthorized(_) => "authentication_error",
-            Self::PaymentRequired(_) => "payment_required",
-            Self::UpstreamPaymentRequired { .. } => "upstream_payment_required",
-            Self::Forbidden(_) => "permission_denied",
-            Self::NotFound(_) => "not_found",
-            Self::RateLimited { .. } => "rate_limit_exceeded",
-            Self::UpstreamRateLimited { .. } => "upstream_rate_limited",
-            Self::UpstreamBadRequest { .. } => "invalid_request",
-            Self::UpstreamPolicyViolation { .. } => "upstream_policy_violation",
-            Self::Upstream { .. } => "upstream_bad_gateway",
-            Self::UpstreamInvalidResponse { .. } => "upstream_invalid_response",
-            Self::UpstreamAuth { .. } => "upstream_auth_required",
-            Self::UpstreamTimeout => "upstream_timeout",
-            Self::UpstreamUnavailable => "upstream_unavailable",
-            Self::Cancelled => "request_cancelled",
-            Self::Internal(_) => "internal_error",
-        }
-    }
-
-    /// Convenience constructor for [`BitrouterError::BadRequest`].
-    pub fn bad_request(message: impl fmt::Display) -> Self {
-        Self::BadRequest {
-            message: message.to_string(),
-        }
-    }
-
-    /// Convenience constructor for [`BitrouterError::Internal`].
-    pub fn internal(message: impl fmt::Display) -> Self {
-        Self::Internal(message.to_string())
-    }
-
-    /// Provider diagnostic retained for trusted telemetry. HTTP/SSE protocol
-    /// renderers deliberately use [`Self::public_message`] instead.
-    pub fn upstream_detail(&self) -> Option<&str> {
-        match self {
-            Self::UpstreamPaymentRequired { detail } | Self::UpstreamRateLimited { detail, .. } => {
-                detail.as_deref()
-            }
-            Self::UpstreamPolicyViolation { message }
-            | Self::Upstream { message, .. }
-            | Self::UpstreamInvalidResponse { message, .. } => Some(message),
-            _ => None,
-        }
-    }
-
-    /// The machine-readable [`ErrorKind`] for this error.
-    pub fn kind(&self) -> ErrorKind {
-        match self {
-            Self::Incompatible { .. } => ErrorKind::Incompatible,
-            Self::BadRequest { .. } => ErrorKind::BadRequest,
-            Self::Unauthorized(_) => ErrorKind::Unauthorized,
-            Self::PaymentRequired(_) => ErrorKind::PaymentRequired,
-            Self::UpstreamPaymentRequired { .. } => ErrorKind::UpstreamPaymentRequired,
-            Self::Forbidden(_) => ErrorKind::Forbidden,
-            Self::NotFound(_) => ErrorKind::NotFound,
-            Self::RateLimited { .. } => ErrorKind::RateLimited,
-            Self::UpstreamRateLimited { .. } => ErrorKind::UpstreamRateLimited,
-            Self::UpstreamBadRequest { .. } => ErrorKind::BadRequest,
-            Self::UpstreamPolicyViolation { .. } => ErrorKind::Forbidden,
-            Self::Upstream { .. } => ErrorKind::Upstream,
-            Self::UpstreamInvalidResponse { .. } => ErrorKind::UpstreamInvalidResponse,
-            Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
-            Self::UpstreamTimeout => ErrorKind::UpstreamTimeout,
-            Self::UpstreamUnavailable => ErrorKind::UpstreamUnavailable,
-            Self::Cancelled => ErrorKind::Cancelled,
-            Self::Internal(_) => ErrorKind::Internal,
-        }
-    }
-
-    /// Project this error into the canonical serializable [`ErrorEnvelope`]
-    /// (kind + detail message). Callers that carry additional context layers or
-    /// a remediation hint populate [`ErrorBody::context`] / [`ErrorBody::hint`]
-    /// themselves — this base projection leaves them empty.
-    pub fn to_envelope(&self) -> ErrorEnvelope {
-        let message = match self {
-            Self::Incompatible { .. } => "model conversion incompatible".to_string(),
-            Self::BadRequest { message } => message.clone(),
-            Self::Unauthorized(m)
-            | Self::PaymentRequired(m)
-            | Self::Forbidden(m)
-            | Self::NotFound(m)
-            | Self::Internal(m) => m.clone(),
-            Self::RateLimited { .. } => "rate limited".to_string(),
-            Self::UpstreamPaymentRequired { .. } => "upstream payment required".to_string(),
-            Self::UpstreamRateLimited { .. } => "upstream rate limited".to_string(),
-            Self::UpstreamBadRequest { error } => upstream_payload_text(error),
-            Self::UpstreamPolicyViolation { .. } => "upstream content policy violation".to_string(),
-            Self::Upstream { status, message } => {
-                format!("upstream error ({status}): {message}")
-            }
-            Self::UpstreamInvalidResponse { message, .. } => {
-                format!("upstream returned an invalid response: {message}")
-            }
-            Self::UpstreamAuth { status, .. } => {
-                format!("upstream auth required ({status})")
-            }
-            Self::UpstreamTimeout => "upstream timeout".to_string(),
-            Self::UpstreamUnavailable => "upstream unavailable".to_string(),
-            Self::Cancelled => "request cancelled".to_string(),
-        };
-        ErrorEnvelope {
-            error: ErrorBody {
-                kind: self.kind(),
-                message,
-                context: Vec::new(),
-                hint: None,
-            },
-        }
-    }
-
-    /// A message safe to return to an untrusted HTTP/SSE client.
-    ///
-    /// Provider bad-request payloads are intentionally preserved so callers can
-    /// correct rejected parameters. Other upstream diagnostics may contain
-    /// echoed prompts, credentials, provider stack traces, or account details,
-    /// so they expose only a stable summary at the public boundary.
-    pub fn public_message(&self) -> String {
-        match self {
-            Self::UpstreamBadRequest { error } => upstream_payload_text(error),
-            Self::UpstreamPolicyViolation { .. } => "upstream content policy violation".to_string(),
-            Self::Upstream { .. } => "upstream request failed".to_string(),
-            Self::UpstreamInvalidResponse { .. } => {
-                "upstream returned an invalid response".to_string()
-            }
-            _ => self.to_string(),
-        }
+impl Error {
+    pub(crate) fn transport(error: reqwest::Error) -> Self {
+        Self::Transport(error.without_url())
     }
 }
 
-/// A machine-readable error category — the stable taxonomy shared across typed
-/// error consumers. This is a many-to-one projection of [`BitrouterError`];
-/// for example, provider and local bad requests both map to [`Self::BadRequest`].
-/// Serialized in `snake_case`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorKind {
-    /// Conversion admission or output representation was refused.
-    Incompatible,
-    /// 400 — malformed request.
-    BadRequest,
-    /// 401 — missing/invalid credentials.
-    Unauthorized,
-    /// 402 — payment required.
-    PaymentRequired,
-    /// 402 — insufficient credit at every usable upstream route.
-    UpstreamPaymentRequired,
-    /// 403 — policy violation.
-    Forbidden,
-    /// 404 — no route / resource not found.
-    NotFound,
-    /// 429 — rate limited.
-    RateLimited,
-    /// 429 — all usable upstream routes are rate limited.
-    UpstreamRateLimited,
-    /// 502 — upstream provider error.
-    Upstream,
-    /// 502 — malformed success response from an upstream protocol.
-    UpstreamInvalidResponse,
-    /// 401/403 — upstream demanded authorization.
-    UpstreamAuth,
-    /// 504 — upstream timed out.
-    UpstreamTimeout,
-    /// 503 — the upstream route set is temporarily unavailable.
-    UpstreamUnavailable,
-    /// Caller cancelled the request.
-    Cancelled,
-    /// 500 — internal error.
-    Internal,
-}
-
-/// The canonical, serializable error body: a stable [`ErrorKind`], a
-/// human-readable `message`, optional `context` layers (outermost → innermost),
-/// and an optional remediation `hint`. Empty `context` and an absent `hint` are
-/// omitted from the JSON.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorBody {
-    /// Machine-readable category.
-    pub kind: ErrorKind,
-    /// Human-readable root-cause detail.
-    pub message: String,
-    /// Context layers, outermost first. Omitted when empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context: Vec<String>,
-    /// Remediation hint, when one is recognised. Omitted when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-}
-
-/// The top-level typed error envelope emitted on stdout by the CLI. Wraps a
-/// single [`ErrorBody`] under an `error` key:
-/// `{"error": {"kind": …, "message": …}}`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorEnvelope {
-    /// The error detail.
-    pub error: ErrorBody,
-}
-
-impl From<bitrouter_ai::error::ModelError> for BitrouterError {
-    fn from(error: bitrouter_ai::error::ModelError) -> Self {
-        use bitrouter_ai::error::ModelError;
-        match error {
-            ModelError::Incompatible { report } => Self::Incompatible { report },
-            ModelError::InvalidRequest { message } => Self::bad_request(message),
-            ModelError::InvalidResponse { message, usage } => {
-                Self::UpstreamInvalidResponse { message, usage }
-            }
-            ModelError::DecisionResponse { failure } => Self::UpstreamInvalidResponse {
-                message: failure.message,
-                usage: failure.usage,
-            },
-            ModelError::Provider { status, message } => Self::Upstream { status, message },
-            ModelError::PolicyViolation { message } => Self::UpstreamPolicyViolation { message },
-            ModelError::InvalidCredential { message } | ModelError::Configuration { message } => {
-                Self::internal(message)
-            }
-            ModelError::Transport { message } | ModelError::Decode { message } => Self::Upstream {
-                status: 502,
-                message,
-            },
-            ModelError::CredentialStorage { failure } => Self::internal(failure.to_string()),
-            ModelError::Timeout => Self::UpstreamTimeout,
-            ModelError::Cancelled => Self::Cancelled,
-            ModelError::HttpResponse {
-                status,
-                body,
-                retry_after,
-            } => {
-                crate::language_model::executor::classify_upstream_error(status, &body, retry_after)
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn upstream_bad_request_error_contract() {
-        let error = BitrouterError::UpstreamBadRequest {
-            error: serde_json::json!("provider secret"),
-        };
-
-        assert_eq!(error.status(), 400);
-        assert_eq!(error.error_type(), "invalid_request_error");
-        assert_eq!(error.error_code(), "invalid_request");
-        assert_eq!(error.kind(), ErrorKind::BadRequest);
-        assert_eq!(
-            serde_json::to_value(error.kind()).unwrap(),
-            serde_json::json!("bad_request")
-        );
-        assert_eq!(error.public_message(), "provider secret");
-        assert!(
-            error
-                .to_envelope()
-                .error
-                .message
-                .contains("provider secret")
-        );
-    }
-
-    #[test]
-    fn upstream_payment_and_rate_details_stay_private() {
-        let payment = BitrouterError::UpstreamPaymentRequired {
-            detail: Some("account balance exhausted".into()),
-        };
-        assert_eq!(payment.upstream_detail(), Some("account balance exhausted"));
-        assert_eq!(payment.public_message(), "upstream payment required");
-        assert_eq!(
-            payment.to_envelope().error.message,
-            "upstream payment required"
-        );
-
-        let rate_limited = BitrouterError::UpstreamRateLimited {
-            retry_after: Some(30),
-            detail: Some("provider quota for tenant-123".into()),
-        };
-        assert_eq!(
-            rate_limited.upstream_detail(),
-            Some("provider quota for tenant-123")
-        );
-        assert_eq!(rate_limited.public_message(), "upstream rate limited");
-        assert_eq!(
-            rate_limited.to_envelope().error.message,
-            "upstream rate limited"
-        );
-    }
-
-    #[test]
-    fn upstream_auth_status_and_type() {
-        let unauth = BitrouterError::UpstreamAuth {
-            status: 401,
-            www_authenticate: Some("Bearer resource_metadata=\"https://x/.well-known\"".into()),
-            required_scope: None,
-        };
-        assert_eq!(unauth.status(), 401);
-        assert_eq!(unauth.error_type(), "authentication_error");
-
-        let insufficient = BitrouterError::UpstreamAuth {
-            status: 403,
-            www_authenticate: Some(
-                "Bearer error=\"insufficient_scope\", scope=\"read:files\"".into(),
-            ),
-            required_scope: Some("read:files".into()),
-        };
-        assert_eq!(insufficient.status(), 403);
-        assert_eq!(insufficient.error_type(), "permission_error");
-    }
-
-    #[test]
-    fn maps_to_envelope_kind_and_message() {
-        let e = BitrouterError::NotFound("route gpt-9".into());
-        let env = e.to_envelope();
-        assert_eq!(env.error.kind, ErrorKind::NotFound);
-        assert_eq!(env.error.message, "route gpt-9");
-        assert!(env.error.context.is_empty());
-        assert_eq!(env.error.hint, None);
-        let v = serde_json::to_value(&env).unwrap();
-        assert_eq!(
-            v,
-            serde_json::json!({"error": {"kind": "not_found", "message": "route gpt-9"}})
-        );
-    }
-
-    #[test]
-    fn envelope_message_strips_status_prefix_for_payload_variants() {
-        assert_eq!(
-            BitrouterError::bad_request("nope")
-                .to_envelope()
-                .error
-                .message,
-            "nope"
-        );
-        assert_eq!(
-            BitrouterError::Upstream {
-                status: 502,
-                message: "boom".into()
-            }
-            .to_envelope()
-            .error
-            .message,
-            "upstream error (502): boom"
-        );
-    }
-}
+pub type Result<T> = std::result::Result<T, Error>;

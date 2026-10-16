@@ -1,0 +1,127 @@
+
+> Inspect and update the configuration.
+
+plan · 3 steps
+  ✓ Inspect the configuration (high)
+  ✓ Apply the edit
+  · Review optional cleanup (low)
+· Checking the current settings before editing. 中文 notes stay separate from
+· the final answer.
+● Inspect configuration
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ sed -n '1,4p' config.rs                                                      │
+└──────────────────────────────────────────────────────────────────────────────┘
+  setting_01=old
+  setting_02=old
+● Choose the smallest edit
+· Use two small changes.
+· 
+· • Keep other settings
+· • Explain the diff
+● Edit config.rs
+  /transcript-fixture/project/config.rs
+  … 11 unchanged lines
+   setting_12=old
+   setting_13=old
+   setting_14=old
+  -setting_15=old
+  +setting_15=new
+   setting_16=old
+   setting_17=old
+   setting_18=old
+  … 23 unchanged lines
+   setting_42=old
+   setting_43=old
+   setting_44=old
+  -setting_45=old
+  +setting_45=新值
+   setting_46=old
+   setting_47=old
+   setting_48=old
+  … 12 unchanged lines
+● Run checks
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ printf '%s\n' '**literal**'; check-config --all                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+  check 01: ok
+  literal output: unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-unwrapped-
+  check 03: ok
+  check 04: ok
+  check 05: ok
+  check 06: ok
+  check 07: ok
+  check 08: ok
+  check 09: ok
+  check 10: ok
+  check 11: ok
+  check 12: ok
+  check 13: ok
+  check 14: ok
+  check 15: ok
+  check 16: ok
+  check 17: ok
+  check 18: ok
+  check 19: ok
+  check 20: ok
+  check 21: ok
+  check 22: ok
+  check 23: ok
+  check 24: ok
+  check 25: ok
+  check 26: ok
+  check 27: ok
+  check 28: ok
+  check 29: ok
+  check 30: ok
+  check 31: ok
+  check 32: ok
+  check 33: ok
+  check 34: ok
+  check 35: ok
+  check 36: ok
+  check 37: ok
+  check 38: ok
+  check 39: ok
+  check 40: ok
+  … 3 more lines
+The two settings are updated; all 43 checks passed.
+
+> Create the report and inspect the attachments.
+
+● Create report.txt
+  /transcript-fixture/project/report.txt
+  +generated_01
+  +generated_02
+  +generated_03
+  +generated_04
+  +generated_05
+  +generated_06
+  +generated_07
+  +generated_08
+  +generated_09
+  +generated_10
+  +generated_11
+  +generated_12
+  +generated_13
+  +generated_14
+  +generated_15
+  +generated_16
+  +generated_17
+  +generated_18
+  +generated_19
+  +generated_20
+  +generated_21
+  +generated_22
+  … 13 more lines
+● Verify unchanged note
+  /transcript-fixture/project/note.txt
+  … 1 unchanged lines
+● Inspect attachments
+  [image image/png 3 B]
+  [audio audio/wav 3 B]
+  [resource: file:///transcript-fixture/project/report.txt]
+  [resource: file:///transcript-fixture/project/note.txt]
+✗ search:failed
+  missing optional index
+  retry later
+The report is ready. The optional search failed.

@@ -1,20 +1,22 @@
 //! The managed core exercised through the shipped App and its production hooks.
 
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bitrouter_ai::types::Role;
-use bitrouter_orchestrator::core::checkpoint::{
-    CheckpointAck, CheckpointBatch, DurableHead, sha256,
-};
-use bitrouter_orchestrator::core::protocol::{
+use bitrouter::core::session::{CoreSession, HarnessPort};
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::storage::checkpoint::sha256;
+use bitrouter::storage::checkpoint::snapshot::RunStatus;
+use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
+use bitrouter_ai::core::protocol::{
     Bind, Capabilities, ContextMode, CoreError, DiscardableHistory, ErrorCode, HarnessManifest,
     Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate, TaskInput,
 };
-use bitrouter_orchestrator::core::session::{CoreSession, HarnessPort, RunStatus};
-use bitrouter_sdk::caller::CallerContext;
+use bitrouter_ai::types::Role;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
@@ -47,7 +49,7 @@ struct Harness {
 impl HarnessPort for Harness {
     async fn read_artifact(
         &self,
-        _reference: &bitrouter_orchestrator::core::protocol::ArtifactRef,
+        _reference: &bitrouter_ai::core::protocol::ArtifactRef,
         _offset: u64,
         _max_bytes: u64,
     ) -> std::result::Result<Vec<u8>, CoreError> {
@@ -139,7 +141,7 @@ async fn assembled_app_revalidates_rebuilt_context_before_fresh_count_and_execut
                     "output_tokens_details":{"reasoning_tokens":2}}
             }))
         }).mount(&upstream).await;
-    let config = bitrouter_sdk::config::parse_with(
+    let config = bitrouter::config::parse_with(
         &format!(
             r#"
 inherit_defaults: false
@@ -374,7 +376,7 @@ models:
             "SELECT estimated_charge_micro_usd, charge_status, charge_evidence_json FROM requests",
         ))
         .await?;
-    let bitrouter_sdk::language_model::native_accounting::NativeTokenCost::ConfiguredEstimate {
+    let bitrouter_ai::core::evidence::NativeTokenCost::ConfiguredEstimate {
         pricing_version,
         normalized_usage,
         ..
@@ -395,10 +397,10 @@ models:
 
 #[tokio::test]
 async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<()> {
-    use bitrouter::eval::types::EvalScope;
     use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
-    use bitrouter_orchestrator::core::context_router::FEATURE;
-    use bitrouter_orchestrator::core::protocol::ModelMode;
+    use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
+    use bitrouter_ai::core::protocol::ModelMode;
+    use bitrouter_ai::eval::EvalScope;
     let home = tempfile::tempdir()?;
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/chat/completions"))
@@ -421,7 +423,7 @@ async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<
         home.path().join("policy-lock.yaml"),
         bitrouter::policy_lock::deterministic_yaml(&lock)?,
     )?;
-    let mut config = bitrouter_sdk::config::parse_with(
+    let mut config = bitrouter::config::parse_with(
         &format!(
             r#"
 inherit_defaults: false
@@ -452,7 +454,7 @@ policy:
     .await?;
     let assembled =
         bitrouter::build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml"))).await?;
-    let store = bitrouter::eval::store::EvalStore::new(assembled.db.clone());
+    let store = bitrouter::core::eval::store::EvalStore::new(assembled.db.clone());
     let publisher = assembled
         .trajectory_outbox_publisher
         .clone()
@@ -588,7 +590,7 @@ policy:
         .context("Core selected plan")?;
     assert_eq!(
         selected.digest,
-        bitrouter::eval::types::canonical_digest(core_plan)?
+        bitrouter::storage::evaluation::canonical_digest(core_plan)?
     );
     assert_eq!(
         selected.attributes.get("model").map(String::as_str),

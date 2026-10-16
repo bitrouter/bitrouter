@@ -8,7 +8,7 @@
 //! - `crate::auth::AuthHook` (binary module: `brvk_` validation)
 //! - `crate::policy::PolicyHook` (binary module: model + tool + spend)
 //! - the named-router compiled request-check runtime (input allow/deny)
-//! - `bitrouter_telemetry::otel::OtelObserveHook` (SDK `otel` feature: per-request
+//! - `bitrouter::telemetry::exporter::OtelObserveHook` (SDK `otel` feature: per-request
 //!   OTLP trace + metric export)
 //! - `crate::metering::MeteringRecorder` (binary module: SettlementRecorder)
 //!
@@ -21,9 +21,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum_test::TestServer;
-use bitrouter_sdk::config;
-use bitrouter_sdk::extension::request_check::Decision;
-use bitrouter_sdk::server::{AppState, build_router};
+use bitrouter::config;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
+use bitrouter_ai::extension::request_check::Decision;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -86,6 +87,7 @@ async fn assemble_full_stack() -> FullStack {
 /// trace bodies: trace and metric OTLP messages share the same top-level
 /// proto framing, so a metric body would otherwise decode as a degenerate
 /// trace request and muddy the assertions.
+#[cfg(feature = "otel-http")]
 async fn assemble_full_stack_traces_only() -> FullStack {
     assemble_full_stack_inner(false).await
 }
@@ -141,10 +143,14 @@ async fn assemble_full_stack_inner(metrics_enabled: bool) -> FullStack {
     // Use a short explicit trace interval so this test checks export behavior
     // without racing the production default. Indentation matches the 4-space
     // depth under `bitrouter-telemetry:`.
-    let observe_block = format!(
-        "    otel:\n      endpoint: \"{otlp}\"\n      traces:\n        batch:\n          flush_ms: 100\n      metrics:\n        enabled: {metrics_enabled}",
-        otlp = otlp_collector.uri()
-    );
+    let observe_block = if cfg!(feature = "otel-http") {
+        format!(
+            "    otel:\n      endpoint: \"{otlp}\"\n      traces:\n        batch:\n          flush_ms: 100\n      metrics:\n        enabled: {metrics_enabled}",
+            otlp = otlp_collector.uri()
+        )
+    } else {
+        "    telemetry: { enabled: false }".to_owned()
+    };
 
     // ── config wiring every plugin + module ──
     let yaml = format!(
@@ -310,7 +316,7 @@ fn clean_body(stream: bool) -> serde_json::Value {
 // ===== Test 1 — full happy path =====
 
 #[tokio::test]
-async fn e2e_full_stack_streaming_preserves_output_and_meters() {
+async fn e2e_full_stack_streaming_preserves_output_and_meters() -> anyhow::Result<()> {
     let fs = assemble_full_stack().await;
 
     // The HTTP call goes auth → policy → request checker → executor →
@@ -369,9 +375,21 @@ async fn e2e_full_stack_streaming_preserves_output_and_meters() {
 
     // ── OtlpExportHook ran at least once. The exporter batches with a
     //    short interval; wait briefly for the collector to see it. ──
+    #[cfg(feature = "otel-http")]
     wait_for_otlp(&fs.otlp_collector).await;
+    #[cfg(not(feature = "otel-http"))]
+    {
+        assert!(!fs.observe.status().exporter_wired);
+        let exports = fs
+            .otlp_collector
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("collector request recording unavailable"))?;
+        assert!(exports.is_empty());
+    }
 
     fs.teardown().await;
+    Ok(())
 }
 
 // ===== Test 2 — compiled input checker denial =====
@@ -495,6 +513,7 @@ async fn wait_for_metering_row(db: &DatabaseConnection, api_key_id: &str) {
 }
 
 /// Poll the OTLP collector until it has seen at least one `/v1/traces` POST.
+#[cfg(feature = "otel-http")]
 async fn wait_for_otlp(collector: &MockServer) {
     for _ in 0..(ASYNC_WAIT_BUDGET_MS / POLL_INTERVAL_MS) {
         let n = collector
@@ -524,6 +543,7 @@ async fn wait_for_otlp(collector: &MockServer) {
 // `HttpExecutor` merges them — is actually wired through to the upstream
 // HTTP request in a real assembled binary.
 
+#[cfg(feature = "otel-http")]
 #[tokio::test]
 async fn e2e_full_stack_outbound_traceparent_propagation() {
     let fs = assemble_full_stack().await;
@@ -598,6 +618,7 @@ async fn e2e_full_stack_outbound_traceparent_propagation() {
 /// entirely.)
 ///
 /// Spec / wire shape: <https://opentelemetry.io/docs/specs/otlp/>.
+#[cfg(feature = "otel-http")]
 async fn collect_exported_trace_spans(
     collector: &MockServer,
 ) -> Vec<opentelemetry_proto::tonic::trace::v1::Span> {
@@ -619,6 +640,7 @@ async fn collect_exported_trace_spans(
 
 /// Look up a string-valued attribute on an OTLP span. Returns `None` for
 /// missing keys and for non-string values.
+#[cfg(feature = "otel-http")]
 fn span_str_attr<'a>(
     span: &'a opentelemetry_proto::tonic::trace::v1::Span,
     key: &str,
@@ -632,6 +654,7 @@ fn span_str_attr<'a>(
     }
 }
 
+#[cfg(feature = "otel-http")]
 #[tokio::test]
 async fn e2e_full_stack_otel_span_hierarchy() {
     // Metric export off so the collector only ever sees trace bodies —

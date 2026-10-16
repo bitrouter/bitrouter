@@ -11,23 +11,26 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::gateway::http::AppState;
+use crate::gateway::http::build_router;
 use anyhow::ensure;
-use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
     matchers::{method, path},
 };
 
+use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::CriterionScore;
-use crate::acp_trajectory::{CanonicalStore, SessionIdentity};
-use crate::evolution::control::{BlockDefinition, BlockRule, EvolutionMode};
-use crate::evolution::evidence::{EvidenceKind, EvidencePacket};
-use crate::evolution::rubric::{
+use crate::commands::agent_options::{RoutingOptions, SessionSelection};
+use crate::core::evolution::evidence::{EvidenceKind, EvidencePacket};
+use crate::core::evolution::rubric::{
     Applicability, RUBRIC_VERSION, RubricEvaluation, RubricItem, library,
 };
-use crate::evolution::runtime::EvolutionRuntime;
-use crate::evolution::scheduler::EvolutionScheduler;
+use crate::core::evolution::runtime::EvolutionRuntime;
+use crate::core::evolution::scheduler::EvolutionScheduler;
+use crate::gateway::routing::blocks::control::{BlockDefinition, BlockRule, EvolutionMode};
+use crate::storage::session_identity::SessionIdentity;
 
 mod publication;
 
@@ -37,7 +40,7 @@ struct Fixture {
     canonical: CanonicalStore,
     config: Config,
     source: ConfigSource,
-    pipeline: Arc<bitrouter_sdk::language_model::Pipeline>,
+    pipeline: Arc<crate::gateway::pipeline::execution::Pipeline>,
     ingress: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     upstream: MockServer,
@@ -177,7 +180,7 @@ async fn fixture_with_response(
         .context("adapter package path missing")?
         .join("package.json");
     let package: Value = serde_json::from_slice(&std::fs::read(package_file)?)?;
-    let harness = crate::harness::by_id(agent).context("unknown harness")?;
+    let harness = crate::harness::catalog::by_id(agent).context("unknown harness")?;
     let (name, version) = harness
         .maintained_adapter_identity()
         .context("adapter is not pinned")?;
@@ -209,7 +212,7 @@ async fn fixture_with_response(
         .await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let listen = listener.local_addr()?.to_string();
-    let mut config: Config = bitrouter_sdk::config::parse_with(
+    let mut config: Config = crate::config::parse_with(
         &format!(
             r#"
 server:
@@ -283,7 +286,7 @@ models:
     );
     config.agents.insert(
         agent.into(),
-        bitrouter_sdk::config::agent::AcpAgentConfig {
+        crate::config::agent::AcpAgentConfig {
             name: agent.into(),
             transport: AcpTransport::Stdio {
                 command: wrapper.display().to_string(),
@@ -361,9 +364,10 @@ models:
                 Arc::new(crate::daemon::NoopReloader),
                 Arc::new(crate::daemon::NoopObserveStatus { compiled_in: false }),
                 crate::daemon::AcpControlPlane {
+                    #[cfg(feature = "harness")]
                     runtime: assembled.acp_runtime,
                     metering: crate::metering::MeteringStore::new(assembled.db),
-                    inventory: Some(runtime.inventory()),
+                    inventory: Some(assembled.gateway_requests.inventory()),
                     evolution: Some(runtime),
                 },
             )
@@ -408,13 +412,13 @@ async fn configure(fixture: &Fixture, agent: &str) -> Result<()> {
                 }],
                 independence_rationale: "One fixture block".into(),
                 dependencies: BTreeMap::new(),
-                measurement_contract: crate::evolution::scoring::measurement_contract(
+                measurement_contract: crate::core::evolution::scoring::measurement_contract(
                     crate::acp_trajectory::checkpoint::types::AssessmentSource::Agentic,
                     "checkpoint-judge:judge",
-                    crate::evolution::judge::JUDGE_VERSION,
+                    crate::core::evolution::judge::JUDGE_VERSION,
                 )?,
                 batch_sessions: 4,
-                bandit: crate::evolution::bandit::BanditConfig {
+                bandit: crate::gateway::routing::blocks::allocation::BanditConfig {
                     initial_exposure_ppm: 500_000,
                     ..Default::default()
                 },
@@ -472,8 +476,8 @@ async fn run(agent: &str, adapter_variable: &str, worker_variable: &str) -> Resu
 async fn verify_judge_costs(
     fixture: &Fixture,
     minimum_calls: usize,
-) -> Result<crate::evolution::costs::report::CostSummary> {
-    use crate::evolution::operator::{EvolutionOperation, EvolutionReport};
+) -> Result<crate::core::evolution::costs::report::CostSummary> {
+    use crate::core::evolution::operator::{EvolutionOperation, EvolutionReport};
     let EvolutionReport::Status(status) = fixture
         .runtime
         .operate("local", EvolutionOperation::Status)

@@ -1,10 +1,19 @@
 //! Opt-in privileged HTTP adapter over the same BRO Thread service used by the
 //! owner-restricted local socket. It never executes a model or tool itself.
 
+use crate::harness::agent::AgentConfigExt;
 use std::future::IntoFuture;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
+use crate::config::AgentApiConfig;
+use crate::gateway::caller::CallerContext;
+use crate::harness::service::ServiceError;
+use crate::harness::service::ThreadService;
+use crate::harness::thread::ThreadHistoryRequest;
+use crate::harness::thread::ThreadRequest;
+use crate::harness::thread::ThreadTarget;
+use crate::harness::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest};
 use anyhow::{Result, ensure};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -12,19 +21,15 @@ use axum::response::sse::Event;
 use axum::response::{IntoResponse, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_orchestrator::agent::AgentConfig;
-use bitrouter_orchestrator::service::{ErrorCode, ServiceError, ThreadService};
-use bitrouter_orchestrator::thread::{
-    PermissionProfile, ThreadHistoryRequest, ThreadRequest, ThreadTarget,
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::api::{
+    self, CancelMode, CancelRequest, CapabilitiesResponse, CreateThreadRequest, ErrorResponse,
+    HistoryQuery, HistoryResponse, InputRequest, ObservationError, ObserveQuery, PROTOCOL_VERSION,
+    SteeringReceiptResponse, ThreadResponse, ThreadViewResponse, TurnMode, TurnReceiptResponse,
+    TurnResponse,
 };
-use bitrouter_orchestrator::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest,
-};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::AgentApiConfig;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::PermissionProfile;
 use subtle::ConstantTimeEq;
 
 #[derive(Clone)]
@@ -36,6 +41,12 @@ struct ApiState {
 }
 
 impl ApiState {
+    fn native_execution(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        authenticated(headers, &self.token)?;
+        instance(headers, &self.service)?;
+        ThreadService::require_native_execution().map_err(runtime_error)
+    }
+
     fn workspace(&self, workspace: &std::path::Path) -> Result<(), ApiError> {
         if self.workspaces.iter().any(|allowed| allowed == workspace) {
             Ok(())
@@ -76,77 +87,12 @@ pub struct BoundAgentApi {
     state: ApiState,
 }
 
-#[derive(Deserialize)]
-struct CreateBody {
-    workspace: PathBuf,
-    model: String,
-    #[serde(default)]
-    model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
-    effort: Option<ReasoningEffort>,
-    #[serde(default)]
-    max_output_tokens: Option<u32>,
-    #[serde(default)]
-    read_only: bool,
-    verification_command: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct EventsQuery {
-    #[serde(default)]
-    after: u64,
-    cutoff: Option<u64>,
-    #[serde(default = "page_limit")]
-    limit: usize,
-}
-fn page_limit() -> usize {
-    128
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TurnMode {
-    Start,
-    Enqueue,
-}
-#[derive(Deserialize)]
-struct TurnBody {
-    prompt: String,
-    mode: TurnMode,
-}
-#[derive(Deserialize)]
-struct InputBody {
-    turn_id: String,
-    request_id: String,
-    approved: bool,
-}
-#[derive(Deserialize)]
-struct SteeringBody {
-    expected_turn_id: String,
-    text: String,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum CancelMode {
-    Active,
-    Queued,
-}
-#[derive(Deserialize)]
-struct CancelBody {
-    mode: CancelMode,
-}
-
-#[derive(Serialize)]
-struct ErrorBody {
-    error: String,
-    code: ErrorCode,
-}
-
-type ApiError = (StatusCode, Json<ErrorBody>);
+type ApiError = (StatusCode, Json<ErrorResponse>);
 
 fn error(status: StatusCode, message: impl Into<String>) -> ApiError {
     (
         status,
-        Json(ErrorBody {
+        Json(ErrorResponse {
             error: message.into(),
             code: ErrorCode::InvalidRequest,
         }),
@@ -165,10 +111,11 @@ fn runtime_error(failure: ServiceError) -> ApiError {
             StatusCode::SERVICE_UNAVAILABLE
         }
         ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+        ErrorCode::UnsupportedCapability => StatusCode::NOT_IMPLEMENTED,
     };
     (
         status,
-        Json(ErrorBody {
+        Json(ErrorResponse {
             error: failure.message,
             code: failure.code,
         }),
@@ -323,19 +270,41 @@ fn acceptance_key(headers: &HeaderMap) -> Result<String, ApiError> {
 async fn capabilities(
     State(state): State<ApiState>,
     headers: HeaderMap,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<CapabilitiesResponse>, ApiError> {
     authenticated(&headers, &state.token)?;
-    Ok(Json(
-        json!({"version": 2, "runtime": state.service.capabilities(), "operations": ["create_thread", "start_turn", "enqueue_turn", "steer", "cancel_turn", "input", "resume_queue", "read_thread", "read_turn", "history", "observe"]}),
-    ))
+    let runtime = state.service.capabilities();
+    let operations: &[&str] = if runtime.native_execution {
+        &[
+            "create_thread",
+            "start_turn",
+            "enqueue_turn",
+            "steer",
+            "cancel_turn",
+            "input",
+            "resume_queue",
+            "read_thread",
+            "read_turn",
+            "history",
+            "observe",
+        ]
+    } else {
+        &["read_thread", "read_turn", "history", "observe"]
+    };
+    Ok(Json(CapabilitiesResponse {
+        version: PROTOCOL_VERSION,
+        runtime,
+        operations: operations
+            .iter()
+            .map(|operation| (*operation).to_owned())
+            .collect(),
+    }))
 }
 async fn create(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<CreateBody>,
+    Json(body): Json<CreateThreadRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    authenticated(&headers, &state.token)?;
-    instance(&headers, &state.service)?;
+    state.native_execution(&headers)?;
     let workspace = body
         .workspace
         .canonicalize()
@@ -371,28 +340,35 @@ async fn create(
         .map_err(runtime_error)?;
     Ok((
         StatusCode::CREATED,
-        Json(json!({"version": 2, "thread": snapshot})),
+        Json(ThreadResponse {
+            version: PROTOCOL_VERSION,
+            thread: snapshot,
+        }),
     ))
 }
 async fn read(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<ThreadViewResponse>, ApiError> {
     let target = state.thread(&headers, id, false).await?;
     let view = state
         .service
         .read_stored_thread_view(&target, &api_caller())
         .await
         .map_err(runtime_error)?;
-    Ok(Json(json!({"version":2, "view":view})))
+    Ok(Json(ThreadViewResponse {
+        version: PROTOCOL_VERSION,
+        view,
+    }))
 }
 async fn turn(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(body): Json<TurnBody>,
+    Json(body): Json<api::TurnRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let request = TurnRequest {
         prompt: body.prompt,
@@ -415,28 +391,34 @@ async fn turn(
     .map_err(runtime_error)?;
     Ok((
         StatusCode::ACCEPTED,
-        Json(json!({"version":2, "receipt":receipt})),
+        Json(TurnReceiptResponse {
+            version: PROTOCOL_VERSION,
+            receipt,
+        }),
     ))
 }
 async fn read_turn(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path((id, turn_id)): Path<(String, String)>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<TurnResponse>, ApiError> {
     let target = state.thread(&headers, id, false).await?;
     let snapshot = state
         .service
         .read_stored_turn(&target, &api_caller(), &turn_id)
         .await
         .map_err(runtime_error)?;
-    Ok(Json(json!({"version":2, "turn":snapshot})))
+    Ok(Json(TurnResponse {
+        version: PROTOCOL_VERSION,
+        turn: snapshot,
+    }))
 }
 async fn events(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Query(query): Query<EventsQuery>,
-) -> Result<Json<Value>, ApiError> {
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<HistoryResponse>, ApiError> {
     let target = state.thread(&headers, id, false).await?;
     let page = state
         .service
@@ -451,14 +433,18 @@ async fn events(
         )
         .await
         .map_err(runtime_error)?;
-    Ok(Json(json!({"version":2, "history":page})))
+    Ok(Json(HistoryResponse {
+        version: PROTOCOL_VERSION,
+        history: page,
+    }))
 }
 async fn input(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(body): Json<InputBody>,
-) -> Result<Json<Value>, ApiError> {
+    Json(body): Json<InputRequest>,
+) -> Result<Json<TurnReceiptResponse>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let receipt = state
         .service
@@ -474,14 +460,18 @@ async fn input(
         )
         .await
         .map_err(runtime_error)?;
-    Ok(Json(json!({"version":2,"receipt":receipt})))
+    Ok(Json(TurnReceiptResponse {
+        version: PROTOCOL_VERSION,
+        receipt,
+    }))
 }
 async fn cancel(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path((id, turn_id)): Path<(String, String)>,
-    Json(body): Json<CancelBody>,
-) -> Result<Json<Value>, ApiError> {
+    Json(body): Json<CancelRequest>,
+) -> Result<Json<TurnReceiptResponse>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let key = acceptance_key(&headers)?;
     let receipt = if matches!(body.mode, CancelMode::Queued) {
@@ -503,14 +493,18 @@ async fn cancel(
             .await
     }
     .map_err(runtime_error)?;
-    Ok(Json(json!({"version":2,"receipt":receipt})))
+    Ok(Json(TurnReceiptResponse {
+        version: PROTOCOL_VERSION,
+        receipt,
+    }))
 }
 async fn steer(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(body): Json<SteeringBody>,
-) -> Result<Json<Value>, ApiError> {
+    Json(body): Json<api::SteeringRequest>,
+) -> Result<Json<SteeringReceiptResponse>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let receipt = state
         .service
@@ -525,24 +519,27 @@ async fn steer(
         )
         .await
         .map_err(runtime_error)?;
-    Ok(Json(json!({"version":2,"receipt":receipt})))
+    Ok(Json(SteeringReceiptResponse {
+        version: PROTOCOL_VERSION,
+        receipt,
+    }))
 }
 async fn resume(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<ThreadResponse>, ApiError> {
+    state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
     let snapshot = state
         .service
         .resume_queue(&target, &api_caller(), acceptance_key(&headers)?)
         .await
         .map_err(runtime_error)?;
-    Ok(Json(json!({"version":2,"thread":snapshot})))
-}
-#[derive(Deserialize)]
-struct ObserveQuery {
-    after: Option<u64>,
+    Ok(Json(ThreadResponse {
+        version: PROTOCOL_VERSION,
+        thread: snapshot,
+    }))
 }
 async fn observe(
     State(state): State<ApiState>,
@@ -562,8 +559,17 @@ async fn observe(
                 Some((Event::default().json_data(observation), Some(subscription)))
             }
             Ok(None) => None,
-            Err(error) => Some((Event::default().event("error").json_data(error), None)),
+            Err(error) => Some((
+                Event::default().event("error").json_data(ObservationError {
+                    code: error.code,
+                    message: error.message,
+                }),
+                None,
+            )),
         }
     });
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
+
+#[cfg(all(test, not(feature = "core")))]
+mod core_disabled_tests;

@@ -4,10 +4,10 @@
 use super::*;
 use std::collections::BTreeSet;
 
-use crate::evolution::bandit::Arm;
-use crate::evolution::control::BlockStatus;
-use crate::evolution::learning::LearningReport;
-use crate::evolution::service::SessionEnrollment;
+use crate::core::evolution::learning::LearningReport;
+use crate::gateway::routing::blocks::allocation::Arm;
+use crate::gateway::routing::blocks::control::BlockStatus;
+use crate::gateway::routing::blocks::store::SessionEnrollment;
 
 const GOOD: &str = "Reply exactly ACP_ACCEPTANCE_OK. Do not use tools, run tests, request a review or create a PR.";
 const BAD: &str = "Reply exactly ACP_ACCEPTANCE_OK. Do not use tools, run tests, request a review or create a PR. Controlled feedback marker: ACP_ACCEPTANCE_REJECTED.";
@@ -324,7 +324,7 @@ async fn run_publication(agent: &str, adapter: &str, worker: &str) -> Result<()>
             ensure!(
                 learning.monitoring.severe_sessions == 0
                     && learning.monitoring.recent_quality.observed_families
-                        >= crate::evolution::bandit::BanditConfig::default()
+                        >= crate::gateway::routing::blocks::allocation::BanditConfig::default()
                             .recent_guard_minimum_families,
                 "quality rollback bypassed its default independent-family requirement"
             );

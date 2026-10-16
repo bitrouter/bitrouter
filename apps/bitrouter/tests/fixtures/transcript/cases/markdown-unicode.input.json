@@ -1,0 +1,130 @@
+{
+  "format_version": 1,
+  "id": "markdown-unicode",
+  "coverage": [
+    "Three settled turns, repeated empty reads, keyed and unkeyed chunks",
+    "Literal multiline user text and trailing spaces",
+    "Prose, emphasis, links, nested/task lists, blockquote, horizontal rule",
+    "Fitting table and oversized-table labeled fallback",
+    "CJK, composed/decomposed accents, ZWJ emoji, tabs, framed long code",
+    "Unclosed code fence at settlement and inline formatting completed across chunks"
+  ],
+  "steps": [
+    {
+      "op": "checkpoint",
+      "id": "empty",
+      "reason": "Read an empty transcript before the first turn"
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Review **literal input**.  \nKeep the second line."
+        },
+        "messageId": "chat:prompt:1"
+      }
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "## Work"
+        },
+        "messageId": "answer:1"
+      }
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "space review\n\n**Parser** and *writer* share `config.rs`. Read [the guide](https://example.invalid/guide) before changing settings; this deliberately long sentence crosses the eighty-column boundary with 中文, café, é, and 👩‍💻 intact in the recorded baseline.\n\n- Inspect files\n- Preserve output\n  - Keep nested notes\n- [x] Read config\n- [ ] Review changes\n\n> A quoted observation with **emphasis**.\n\n| Repository | Role |\n|---|---|\n| [bitrouter](/transcript-fixture/README.md) | Routes requests |\n| writer | Writes output |\n\n---\n\n```sh\n\techo '**literal** 你好👩‍💻'\n  printf '%s\\n' 'a literal command whose whitespace, quotes, and very long argument must survive wrapping unchanged'\n  echo '中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻中文👩‍💻'\n```\n"
+        }
+      }
+    },
+    {
+      "op": "checkpoint",
+      "id": "turn-1",
+      "reason": "First prompt settled after all chunks arrived"
+    },
+    {
+      "op": "checkpoint",
+      "id": "turn-1-repeat",
+      "reason": "No updates since the previous read"
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Show the long table and an unfinished command."
+        },
+        "messageId": "chat:prompt:2"
+      }
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "| Repository | Detail |\n|---|---|\n| [bitrouter](/transcript-fixture/README.md) | oversized-table-token-oversized-table-token-oversized-table-token-oversized-table-token-oversized-table-token-oversized-table-token- |\n| writer | Keep **every** field |\n\n```sh\nprintf '**unfinished** 你好'"
+        },
+        "messageId": "answer:2"
+      }
+    },
+    {
+      "op": "checkpoint",
+      "id": "turn-2",
+      "reason": "Second prompt settled with an unclosed code fence"
+    },
+    {
+      "op": "checkpoint",
+      "id": "turn-2-repeat",
+      "reason": "No updates since the previous read"
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Finish the review."
+        },
+        "messageId": "chat:prompt:3"
+      }
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "**All"
+        },
+        "messageId": "answer:3"
+      }
+    },
+    {
+      "op": "update",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " done**.\n\nNothing else changed.\n"
+        }
+      }
+    },
+    {
+      "op": "checkpoint",
+      "id": "turn-3",
+      "reason": "Third prompt settled after completing inline emphasis"
+    }
+  ]
+}

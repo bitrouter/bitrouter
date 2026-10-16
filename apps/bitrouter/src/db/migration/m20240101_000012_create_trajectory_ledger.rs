@@ -64,17 +64,6 @@ impl MigrationTrait for Migration {
                     .to_owned(),
             )
             .await?;
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_trajectory_episodes_owner_correlation")
-                    .table(TrajectoryEpisodes::Table)
-                    .col(TrajectoryEpisodes::OwnerUserId)
-                    .col(TrajectoryEpisodes::CorrelationDigest)
-                    .to_owned(),
-            )
-            .await?;
 
         manager
             .create_table(
@@ -119,18 +108,6 @@ impl MigrationTrait for Migration {
                             .string()
                             .not_null(),
                     )
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_trajectory_events_episode_sequence")
-                    .table(TrajectoryEvents::Table)
-                    .col(TrajectoryEvents::EpisodeId)
-                    .col(TrajectoryEvents::Sequence)
-                    .unique()
                     .to_owned(),
             )
             .await?;
@@ -183,20 +160,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
-            .create_index(trajectory_requests_owner_full_input_digest_index())
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_trajectory_requests_owner_episode")
-                    .table(TrajectoryRequests::Table)
-                    .col(TrajectoryRequests::OwnerUserId)
-                    .col(TrajectoryRequests::EpisodeId)
-                    .to_owned(),
-            )
-            .await?;
-        manager
             .create_table(trajectory_prefix_index_table())
             .await?;
         manager
@@ -241,23 +204,90 @@ impl MigrationTrait for Migration {
                     .to_owned(),
             )
             .await?;
-        manager
-            .create_index(
+        let mut pending = Index::create();
+        pending
+            .if_not_exists()
+            .table(TrajectoryOutbox::Table)
+            .col(TrajectoryOutbox::OwnerUserId);
+        if manager.get_database_backend() == sea_orm::DatabaseBackend::MySql {
+            // Four utf8mb4 VARCHAR(255) keys exceed InnoDB's 3072-byte limit.
+            // Prefix only the timestamp keys in this nonunique index: stored
+            // timestamps and full owner/outbox identities remain unchanged.
+            // https://dev.mysql.com/doc/refman/8.4/en/innodb-limits.html
+            // https://dev.mysql.com/doc/refman/8.4/en/column-indexes.html
+            pending
+                .col((TrajectoryOutbox::DeliveredAt, 64))
+                .col(TrajectoryOutbox::Attempts)
+                .col((TrajectoryOutbox::CreatedAt, 64));
+        } else {
+            pending
+                .col(TrajectoryOutbox::DeliveredAt)
+                .col(TrajectoryOutbox::Attempts)
+                .col(TrajectoryOutbox::CreatedAt);
+        }
+        pending.col(TrajectoryOutbox::OutboxId);
+
+        for (table, name, mut index) in [
+            (
+                "trajectory_episodes",
+                "idx_trajectory_episodes_owner_correlation",
                 Index::create()
                     .if_not_exists()
-                    .name("idx_trajectory_outbox_pending")
-                    .table(TrajectoryOutbox::Table)
-                    .col(TrajectoryOutbox::OwnerUserId)
-                    .col(TrajectoryOutbox::DeliveredAt)
-                    .col(TrajectoryOutbox::Attempts)
-                    .col(TrajectoryOutbox::CreatedAt)
-                    .col(TrajectoryOutbox::OutboxId)
+                    .table(TrajectoryEpisodes::Table)
+                    .col(TrajectoryEpisodes::OwnerUserId)
+                    .col(TrajectoryEpisodes::CorrelationDigest)
                     .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(trajectory_outbox_delivery_order_index())
-            .await?;
+            ),
+            (
+                "trajectory_events",
+                "idx_trajectory_events_episode_sequence",
+                Index::create()
+                    .if_not_exists()
+                    .table(TrajectoryEvents::Table)
+                    .col(TrajectoryEvents::EpisodeId)
+                    .col(TrajectoryEvents::Sequence)
+                    .unique()
+                    .to_owned(),
+            ),
+            (
+                "trajectory_requests",
+                "idx_trajectory_requests_owner_full_input_digest",
+                trajectory_requests_owner_full_input_digest_index(),
+            ),
+            (
+                "trajectory_requests",
+                "idx_trajectory_requests_owner_episode",
+                Index::create()
+                    .if_not_exists()
+                    .table(TrajectoryRequests::Table)
+                    .col(TrajectoryRequests::OwnerUserId)
+                    .col(TrajectoryRequests::EpisodeId)
+                    .to_owned(),
+            ),
+            (
+                "trajectory_outbox",
+                "idx_trajectory_outbox_pending",
+                pending,
+            ),
+            (
+                "trajectory_outbox",
+                "idx_trajectory_outbox_delivery_order",
+                trajectory_outbox_delivery_order_index(),
+            ),
+        ] {
+            // MySQL commits DDL statements individually and lacks CREATE INDEX
+            // IF NOT EXISTS. Resume an interrupted migration without dropping
+            // its existing tables, rows or unique indexes.
+            // https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html
+            // https://dev.mysql.com/doc/refman/8.4/en/create-index.html
+            if manager.get_database_backend() == sea_orm::DatabaseBackend::MySql
+                && manager.has_index(table, name).await?
+            {
+                continue;
+            }
+            index.name(name);
+            manager.create_index(index).await?;
+        }
         Ok(())
     }
 

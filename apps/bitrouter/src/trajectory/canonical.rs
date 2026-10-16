@@ -563,7 +563,7 @@ impl From<serde_json::Value> for CanonicalJson {
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_ai::protocol::inbound_adapter_for;
+    use crate::gateway::model::protocol::inbound_adapter_for;
     use bitrouter_ai::types::{ApiProtocol, Content, Prompt, ToolResultOutput};
 
     use super::{

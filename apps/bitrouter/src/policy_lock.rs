@@ -4,43 +4,48 @@
 //! ledger can compile a candidate, but only explicit publication replaces this
 //! file. Serving never reads learned database rows for semantic selection.
 
+use crate::actions::administration::PolicyReportRuntime;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 
+use crate::commands::invocation;
+use crate::config::{
+    AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
+    TrajectoryConfig, validate_policy_table_config,
+};
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::RouteHook;
+use crate::gateway::pipeline::routing::ModelSelector;
+use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result};
+use bitrouter_ai::routing::PolicyModelTarget;
 #[cfg(test)]
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_sdk::config::{
-    AdequacyConfig, Config, PolicyKeyStrategy, PolicyModelTarget, PolicyRuntimeMode,
-    PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
-};
-use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
-use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
-#[cfg(test)]
-use crate::optimization::exploration::RouteRejection;
-use crate::optimization::exploration::{
-    OptimizationGate, PolicyOptimizationState, RouteExploration,
-};
-use crate::optimization::identity::{
+use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};
+use crate::gateway::routing::experiment_identity::{
     HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, experiment_id, explore_compiler_config_digest,
     retreat_compiler_config_digest, treatment_context_digest,
+};
+#[cfg(test)]
+use crate::gateway::routing::exploration::RouteRejection;
+use crate::gateway::routing::exploration::{
+    OptimizationGate, PolicyOptimizationState, RouteExploration,
+};
+use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
+use crate::gateway::routing::workflow::ir::RouteProjection;
+use crate::gateway::routing::workflow::predictive::{
+    PredictiveRouteProjection, PredictorContract, compiled_predictor_contract,
 };
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
 use crate::trajectory::store::GuardedRouteInput;
-use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-use crate::workflow_state::ir::RouteProjection;
-use crate::workflow_state::predictive::{
-    PredictiveRouteProjection, PredictorContract, compiled_predictor_contract,
-};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const DEFAULT_NATIVE_MODEL: &str = "bitrouter/auto";
@@ -59,8 +64,8 @@ pub fn apply_defaults(config: &mut Config, config_path: Option<&Path>) {
     {
         config.routers.insert(
             "auto".into(),
-            bitrouter_sdk::config::router::RouterConfig {
-                selection: bitrouter_sdk::config::router::RouterSelection::Policy {
+            crate::config::router::RouterConfig {
+                selection: crate::config::router::RouterSelection::Policy {
                     policy: "auto".into(),
                     base_model: "openai-codex:gpt-5.6-sol".into(),
                     routing: Default::default(),
@@ -92,11 +97,11 @@ pub fn native_default_model(config: &Config) -> Option<&str> {
 pub fn native_model_mode(
     config: &Config,
     model: &str,
-) -> Result<bitrouter_orchestrator::core::protocol::ModelMode> {
+) -> Result<bitrouter_ai::core::protocol::ModelMode> {
     Ok(if config.resolve_router(model)?.policy.is_some() {
-        bitrouter_orchestrator::core::protocol::ModelMode::Policy
+        bitrouter_ai::core::protocol::ModelMode::Policy
     } else {
-        bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+        bitrouter_ai::core::protocol::ModelMode::Fixed
     })
 }
 pub const POLICY_LOCKFILE_VERSION: u32 = 4;
@@ -466,8 +471,7 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
             if model.model().trim().is_empty() {
                 anyhow::bail!("policy '{name}' tier '{tier}' must use a non-empty model id");
             }
-            if model.model().starts_with('@')
-                || bitrouter_sdk::config::presets::is_reserved(model.model())
+            if model.model().starts_with('@') || crate::config::presets::is_reserved(model.model())
             {
                 anyhow::bail!(
                     "policy '{name}' tier target '{}' cannot reference another preset",
@@ -1484,11 +1488,11 @@ pub fn edit_config_policy(
 
 /// Change only the policy runtime mode in `bitrouter.yaml`.
 pub fn edit_config_mode(raw: &str, mode: PolicyRuntimeMode) -> Result<String> {
-    bitrouter_sdk::config::parse(raw).context("parsing bitrouter.yaml")?;
+    crate::config::parse(raw).context("parsing bitrouter.yaml")?;
     let mut lines = source_lines(raw);
     set_policy_mode(&mut lines, mode)?;
     let edited = render_source_lines(lines, raw.ends_with('\n'));
-    bitrouter_sdk::config::parse(&edited).context("validating edited bitrouter.yaml")?;
+    crate::config::parse(&edited).context("validating edited bitrouter.yaml")?;
     Ok(edited)
 }
 
@@ -1496,10 +1500,9 @@ pub fn edit_config_mode(raw: &str, mode: PolicyRuntimeMode) -> Result<String> {
 /// adding empty registry-backed provider stubs without reserializing the
 /// operator's config. Existing provider bodies and comments are untouched.
 pub fn edit_config_provider_stubs(raw: &str, providers: &[String]) -> Result<String> {
-    let parsed = bitrouter_sdk::config::parse_with(raw, |_| {
-        Some("bitrouter-provider-stub-validation".into())
-    })
-    .context("parsing bitrouter.yaml")?;
+    let parsed =
+        crate::config::parse_with(raw, |_| Some("bitrouter-provider-stub-validation".into()))
+            .context("parsing bitrouter.yaml")?;
     let mut missing = providers
         .iter()
         .filter(|provider| !parsed.providers.contains_key(provider.as_str()))
@@ -1542,7 +1545,7 @@ pub fn edit_config_provider_stubs(raw: &str, providers: &[String]) -> Result<Str
         }
     }
     let edited = render_source_lines(lines, raw.ends_with('\n'));
-    let checked = bitrouter_sdk::config::parse_with(&edited, |_| {
+    let checked = crate::config::parse_with(&edited, |_| {
         Some("bitrouter-provider-stub-validation".into())
     })
     .context("validating provider stubs in bitrouter.yaml")?;
@@ -1566,7 +1569,7 @@ pub fn edit_config_policy_with_model(
 ) -> Result<String> {
     validate_name(preset).context("validating preset name")?;
     validate_name(policy)?;
-    let parsed = bitrouter_sdk::config::parse(raw).context("parsing bitrouter.yaml")?;
+    let parsed = crate::config::parse(raw).context("parsing bitrouter.yaml")?;
     if let Some(existing) = parsed
         .presets
         .get(preset)
@@ -1583,8 +1586,7 @@ pub fn edit_config_policy_with_model(
     set_policy_mode(&mut lines, mode)?;
     bind_preset(&mut lines, preset, policy, model)?;
     let edited = render_source_lines(lines, raw.ends_with('\n'));
-    let checked =
-        bitrouter_sdk::config::parse(&edited).context("validating edited bitrouter.yaml")?;
+    let checked = crate::config::parse(&edited).context("validating edited bitrouter.yaml")?;
     if checked
         .presets
         .get(preset)
@@ -1607,7 +1609,7 @@ pub fn edit_config_router_policy_with_model(
 ) -> Result<String> {
     validate_router_name(router)?;
     validate_name(policy)?;
-    let parsed = bitrouter_sdk::config::parse(raw).context("parsing bitrouter.yaml")?;
+    let parsed = crate::config::parse(raw).context("parsing bitrouter.yaml")?;
     if parsed.presets.contains_key(router) {
         anyhow::bail!(
             "cannot initialize router '{router}' because legacy preset '@{router}' already exists; run `{} config migrate-routers --candidate routers.candidate.yaml` to convert it without changing policy mode",
@@ -1616,7 +1618,7 @@ pub fn edit_config_router_policy_with_model(
     }
     if let Some(existing) = parsed.routers.get(router) {
         match &existing.selection {
-            bitrouter_sdk::config::router::RouterSelection::Policy {
+            crate::config::router::RouterSelection::Policy {
                 policy: existing_policy,
                 base_model,
                 ..
@@ -1635,7 +1637,7 @@ pub fn edit_config_router_policy_with_model(
                 }
                 return Ok(raw.to_string());
             }
-            bitrouter_sdk::config::router::RouterSelection::Model {
+            crate::config::router::RouterSelection::Model {
                 model: existing_model,
                 ..
             } => {
@@ -1652,13 +1654,12 @@ pub fn edit_config_router_policy_with_model(
     let mut lines = source_lines(raw);
     bind_router(&mut lines, router, policy, model)?;
     let edited = render_source_lines(lines, raw.ends_with('\n'));
-    let checked =
-        bitrouter_sdk::config::parse(&edited).context("validating edited bitrouter.yaml")?;
+    let checked = crate::config::parse(&edited).context("validating edited bitrouter.yaml")?;
     let Some(created) = checked.routers.get(router) else {
         anyhow::bail!("edited config did not create router '{router}'");
     };
     match &created.selection {
-        bitrouter_sdk::config::router::RouterSelection::Policy {
+        crate::config::router::RouterSelection::Policy {
             policy: checked_policy,
             base_model,
             ..
@@ -1951,7 +1952,7 @@ async fn initialize_target_files_with_efforts(
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let config = crate::config::parse(&raw).context("parsing bitrouter.yaml")?;
     let lock_path = resolve_path(&config, Some(config_path))
         .ok_or_else(|| anyhow::anyhow!("cannot resolve policy lock path"))?;
     let _policy_lock = acquire_publication_lock(&lock_path)?;
@@ -2010,7 +2011,7 @@ where
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let config = crate::config::parse(&raw).context("parsing bitrouter.yaml")?;
     let strong_model = match binding {
         PolicyInitBinding::LegacyPreset(preset_name) => strong_model
             .map(ToString::to_string)
@@ -2034,7 +2035,7 @@ where
             }
             match config.routers.get(router_name) {
                 Some(router) => match &router.selection {
-                    bitrouter_sdk::config::router::RouterSelection::Policy {
+                    crate::config::router::RouterSelection::Policy {
                         policy: existing_policy,
                         base_model,
                         ..
@@ -2053,7 +2054,7 @@ where
                         }
                         base_model.clone()
                     }
-                    bitrouter_sdk::config::router::RouterSelection::Model {
+                    crate::config::router::RouterSelection::Model {
                         model: existing_model,
                         ..
                     } => {
@@ -2180,7 +2181,7 @@ where
         )?,
     };
     let candidate_config =
-        bitrouter_sdk::config::parse(&edited_config).context("validating candidate config")?;
+        crate::config::parse(&edited_config).context("validating candidate config")?;
     validate_for_config(&candidate_config, &document)?;
 
     let digest = if policy_changed {
@@ -2238,7 +2239,7 @@ where
 }
 
 fn route_supports_capability(
-    config: &bitrouter_sdk::config::Config,
+    config: &crate::config::Config,
     route: &str,
     capability: bitrouter_ai::types::Capability,
 ) -> bool {
@@ -2295,294 +2296,6 @@ fn embedded_catalog_supports_capability(
         })
 }
 
-/// Compile a candidate from a caller-frozen database snapshot time.
-pub async fn compile_files(
-    config_path: &Path,
-    snapshot_time_unix_ms: i64,
-) -> Result<PolicyFileUpdate> {
-    compile_files_with_eval(config_path, snapshot_time_unix_ms, None).await
-}
-
-/// Compile against an explicit immutable eval snapshot. Omitting the root
-/// compiles from the frozen adequacy snapshot alone.
-pub async fn compile_files_with_eval(
-    config_path: &Path,
-    snapshot_time_unix_ms: i64,
-    eval_evidence_root: Option<&str>,
-) -> Result<PolicyFileUpdate> {
-    let raw = tokio::fs::read_to_string(config_path)
-        .await
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
-    let loaded = load_for_config(&config, Some(config_path))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-    let database_url = readonly_database_url(&config.database.url, config_path)?;
-    let db = crate::db::connect(&database_url)
-        .await
-        .map_err(anyhow::Error::from)?;
-    let eval = match eval_evidence_root {
-        Some(root) => Some(
-            crate::eval::compiler::EvalEvidenceSnapshot::load(
-                &crate::eval::store::EvalStore::new(db),
-                root,
-            )
-            .await?,
-        ),
-        None => None,
-    };
-    let compiled = crate::policy_compile::compile_candidate(crate::policy_compile::CompileInput {
-        current: &loaded.document,
-        parent_digest: Some(&loaded.digest),
-        snapshot_time_unix_ms,
-        eval: eval.as_ref(),
-        proposed_progress_guards: None,
-    })?;
-    let digest = semantic_digest(&compiled.document)?;
-    let changes = compiled
-        .changes
-        .iter()
-        .map(|change| {
-            let previous = change.previous_tier.as_deref().unwrap_or("default");
-            format!(
-                "{}: {} {} -> {}",
-                change.policy, change.request_key, previous, change.selected_tier
-            )
-        })
-        .collect();
-    let conflicts = compiled
-        .conflicts
-        .iter()
-        .map(|conflict| {
-            format!(
-                "{}: {} keeps operator tier {} (compiler recommended {}): {}",
-                conflict.policy,
-                conflict.request_key,
-                conflict.operator_tier,
-                conflict.recommended_tier,
-                conflict.reason
-            )
-        })
-        .collect();
-    Ok(PolicyFileUpdate {
-        path: loaded.file_path()?.to_path_buf(),
-        digest,
-        document: compiled.document,
-        changes,
-        conflicts,
-    })
-}
-
-/// Validate and publish one exact precompiled candidate. The candidate's
-/// parent digest is the compare-and-swap token, so a stale compiler can never
-/// overwrite a newer active lock.
-pub async fn publish_candidate_file(
-    config_path: &Path,
-    candidate_path: &Path,
-) -> Result<PolicyFileUpdate> {
-    publish_candidate_file_inner(config_path, candidate_path, false).await
-}
-
-/// Publish a candidate while the caller holds the active policy publication lock.
-pub async fn publish_candidate_file_unlocked(
-    config_path: &Path,
-    candidate_path: &Path,
-) -> Result<PolicyFileUpdate> {
-    publish_candidate_file_inner(config_path, candidate_path, true).await
-}
-
-async fn publish_candidate_file_inner(
-    config_path: &Path,
-    candidate_path: &Path,
-    lock_held: bool,
-) -> Result<PolicyFileUpdate> {
-    let raw = tokio::fs::read_to_string(config_path)
-        .await
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
-    if config.policy.mode == PolicyRuntimeMode::Frozen {
-        anyhow::bail!(
-            "policy runtime mode is frozen; set `policy.mode: adaptive` before publishing"
-        );
-    }
-    let active = load_for_config(&config, Some(config_path))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-    let candidate = load(candidate_path).await?;
-    validate_for_config(&config, &candidate.document)?;
-    let artifact = candidate
-        .document
-        .artifact
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("policy publish requires a compiled candidate"))?;
-    let parent_digest = artifact
-        .parent_digest
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("compiled candidate has no parent digest"))?;
-    if parent_digest != active.digest {
-        anyhow::bail!(
-            "candidate parent digest {parent_digest} does not match active policy digest {}; recompile against the current lock",
-            active.digest
-        );
-    }
-    if candidate
-        .document
-        .certificates
-        .values()
-        .flat_map(BTreeMap::values)
-        .any(|certificate| certificate.verdict == PromotionVerdict::Blocked)
-    {
-        anyhow::bail!("compiled candidate contains blocked route conflicts");
-    }
-    let differences = diff_explanations(&active.document, &candidate.document);
-    let history_dir = default_history_dir(active.file_path()?);
-    let record = if lock_held {
-        publish_candidate_unlocked(
-            active.file_path()?,
-            parent_digest,
-            &candidate.document,
-            &history_dir,
-        )?
-    } else {
-        publish_candidate(
-            active.file_path()?,
-            parent_digest,
-            &candidate.document,
-            &history_dir,
-        )?
-    };
-    Ok(PolicyFileUpdate {
-        path: active.file_path()?.to_path_buf(),
-        digest: record.child_digest,
-        document: candidate.document,
-        changes: differences,
-        conflicts: Vec::new(),
-    })
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EvidenceVerification {
-    pub policy_digest: String,
-    pub evidence_root: String,
-    pub eval_snapshot_root: Option<String>,
-    pub eval_results: usize,
-}
-
-/// Reconstruct the artifact-level evidence root from the local append-only
-/// ledger and content-addressed eval snapshot. This never changes the lock.
-pub async fn verify_evidence_files(config_path: &Path) -> Result<EvidenceVerification> {
-    let raw = tokio::fs::read_to_string(config_path)
-        .await
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
-    let loaded = load_for_config(&config, Some(config_path))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-    verify_document_evidence_with_config(config_path, &config, &loaded.document, loaded.digest)
-        .await
-}
-
-/// Reconstruct evidence for a reviewed candidate before it becomes active.
-pub async fn verify_document_evidence(
-    config_path: &Path,
-    document: &PolicyLock,
-) -> Result<EvidenceVerification> {
-    validate_for_config(
-        &bitrouter_sdk::config::parse(
-            &tokio::fs::read_to_string(config_path)
-                .await
-                .with_context(|| format!("reading {}", config_path.display()))?,
-        )
-        .context("parsing bitrouter.yaml")?,
-        document,
-    )?;
-    let raw = tokio::fs::read_to_string(config_path)
-        .await
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
-    verify_document_evidence_with_config(config_path, &config, document, semantic_digest(document)?)
-        .await
-}
-
-async fn verify_document_evidence_with_config(
-    config_path: &Path,
-    config: &Config,
-    document: &PolicyLock,
-    policy_digest: String,
-) -> Result<EvidenceVerification> {
-    let artifact = document
-        .artifact
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("policy lock v1 has no verifiable evidence artifact"))?;
-    let database_url = readonly_database_url(&config.database.url, config_path)?;
-    let db = crate::db::connect(&database_url)
-        .await
-        .map_err(anyhow::Error::from)?;
-    let eval = match artifact.eval_snapshot_root.as_deref() {
-        Some(root) => Some(
-            crate::eval::compiler::EvalEvidenceSnapshot::load(
-                &crate::eval::store::EvalStore::new(db),
-                root,
-            )
-            .await?,
-        ),
-        None => None,
-    };
-    let reconstructed = eval
-        .as_ref()
-        .map(|eval| eval.evidence_root.clone())
-        .unwrap_or(crate::eval::types::canonical_digest(&(
-            "policy-evidence-v4",
-            "empty",
-        ))?);
-    if reconstructed != artifact.evidence_root {
-        anyhow::bail!("policy artifact evidence_root does not match local evidence");
-    }
-    Ok(EvidenceVerification {
-        policy_digest,
-        evidence_root: reconstructed,
-        eval_snapshot_root: eval.as_ref().map(|snapshot| snapshot.evidence_root.clone()),
-        eval_results: eval.map_or(0, |snapshot| snapshot.records.len()),
-    })
-}
-
-/// Read adequacy evidence and project it into a candidate policy lock. Dry-run
-/// is the default. Applying is permitted only in adaptive process mode.
-pub async fn evolve_files(config_path: &Path, apply: bool) -> Result<PolicyFileUpdate> {
-    let raw = tokio::fs::read_to_string(config_path)
-        .await
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
-    if apply && config.policy.mode == PolicyRuntimeMode::Frozen {
-        anyhow::bail!(
-            "policy runtime mode is frozen; set `policy.mode: adaptive` before `policy evolve --apply`"
-        );
-    }
-    let update = compile_files(config_path, chrono::Utc::now().timestamp_millis()).await?;
-    if apply {
-        if !update.conflicts.is_empty() {
-            anyhow::bail!(
-                "compiled policy has unresolved conflicts; inspect `{} policy compile` before \
-                 applying",
-                invocation::name()
-            );
-        }
-        let loaded = load_for_config(&config, Some(config_path))
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-        if loaded.digest != update.digest {
-            let history_dir = default_history_dir(loaded.file_path()?);
-            publish_candidate(
-                loaded.file_path()?,
-                &loaded.digest,
-                &update.document,
-                &history_dir,
-            )?;
-        }
-    }
-    Ok(update)
-}
-
 pub fn default_history_dir(active_path: &Path) -> PathBuf {
     active_path
         .parent()
@@ -2599,46 +2312,7 @@ pub async fn set_mode_file(config_path: &Path, mode: PolicyRuntimeMode) -> Resul
     write_text_atomic(config_path, &raw, &edited)
 }
 
-fn readonly_database_url(url: &str, config_path: &Path) -> Result<String> {
-    let Some(after_scheme) = url
-        .strip_prefix("sqlite://")
-        .or_else(|| url.strip_prefix("sqlite:"))
-    else {
-        return Ok(url.to_string());
-    };
-    let (path_part, query) = after_scheme
-        .split_once('?')
-        .map_or((after_scheme, None), |(path, query)| (path, Some(query)));
-    if path_part.is_empty() || path_part == ":memory:" {
-        anyhow::bail!("policy evolution requires a persistent adequacy database");
-    }
-    let path = Path::new(path_part.strip_prefix("./").unwrap_or(path_part));
-    let home = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        home.join(path)
-    };
-    if !absolute.is_file() {
-        anyhow::bail!("adequacy database '{}' does not exist", absolute.display());
-    }
-    let mut params = query
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    if !params.split('&').any(|part| part.starts_with("mode=")) {
-        if !params.is_empty() {
-            params.push('&');
-        }
-        params.push_str("mode=ro");
-    }
-    Ok(format!("sqlite://{}?{params}", absolute.display()))
-}
-
-pub async fn validate_routable_model(
-    source: &bitrouter_sdk::config::Config,
-    route: &str,
-) -> Result<()> {
+pub async fn validate_routable_model(source: &crate::config::Config, route: &str) -> Result<()> {
     let (provider, model) = route
         .split_once(':')
         .ok_or_else(|| anyhow::anyhow!("policy tier route '{route}' must be provider-qualified"))?;
@@ -2658,17 +2332,17 @@ pub async fn validate_routable_model(
             "policy provider '{provider}' is not active and routable; configure its credential or provider entry first"
         );
     }
-    bitrouter_sdk::config::routing_table::resolve_route_chain(
+    crate::config::routing_table::resolve_route_chain(
         &resolved,
         route,
-        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+        &crate::gateway::pipeline::routing::RoutingPrefs::default(),
     )
     .with_context(|| format!("resolving policy tier route '{route}'"))?;
     Ok(())
 }
 
 pub async fn validate_routable_effort(
-    source: &bitrouter_sdk::config::Config,
+    source: &crate::config::Config,
     route: &str,
     effort: Option<bitrouter_ai::types::ReasoningEffort>,
 ) -> Result<()> {
@@ -2678,10 +2352,10 @@ pub async fn validate_routable_effort(
     let mut resolved = source.clone();
     crate::merge_registry_into(&mut resolved).await;
     crate::providers::apply::apply_builtin_defaults(&mut resolved);
-    let chain = bitrouter_sdk::config::routing_table::resolve_route_chain(
+    let chain = crate::config::routing_table::resolve_route_chain(
         &resolved,
         route,
-        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+        &crate::gateway::pipeline::routing::RoutingPrefs::default(),
     )
     .with_context(|| format!("resolving policy tier route '{route}'"))?;
     if !chain.iter().any(|target| {
@@ -2700,7 +2374,7 @@ pub async fn validate_routable_effort(
 fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
     if model.trim().is_empty()
         || model.starts_with('@')
-        || bitrouter_sdk::config::presets::is_reserved(model)
+        || crate::config::presets::is_reserved(model)
     {
         anyhow::bail!("{tier} model must be a non-empty model id, not a preset");
     }
@@ -2972,7 +2646,7 @@ struct PolicySnapshot {
     path: Option<PathBuf>,
     digest: Option<String>,
     routers: BTreeMap<String, Arc<PolicyTableRouter>>,
-    administration: Option<crate::actions::administration::PolicyReport>,
+    administration: Option<bitrouter_ai::control::administration::PolicyReport>,
     document: Option<PolicyLock>,
 }
 
@@ -2997,7 +2671,7 @@ pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     eval_decisions: PendingEvalDecisionStore,
-    continuation_config: bitrouter_sdk::config::ContinuationConfig,
+    continuation_config: crate::config::ContinuationConfig,
     trajectory_config: TrajectoryConfig,
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
@@ -3018,9 +2692,9 @@ impl RouteHook for PredictiveSingleTargetRouteHook {
         &self,
         chain: &[RoutingTarget],
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         if ctx.extension::<PredictiveSingleTargetDispatch>().is_some() && chain.len() != 1 {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(crate::gateway::error::BitrouterError::bad_request(
                 "predictive dispatch lost its single-target binding",
             ));
         }
@@ -3031,7 +2705,7 @@ impl RouteHook for PredictiveSingleTargetRouteHook {
         &self,
         chain: &mut Vec<RoutingTarget>,
         ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         if ctx.extension::<PredictiveSingleTargetDispatch>().is_some() {
             chain.truncate(1);
         }
@@ -3156,11 +2830,13 @@ impl PolicyRuntime {
             digest: loaded.as_ref().map(|lock| lock.digest.clone()),
             document: loaded.as_ref().map(|lock| lock.document.clone()),
             routers,
-            administration: Some(crate::actions::administration::PolicyReport::from_loaded(
-                config,
-                loaded.as_ref(),
-                crate::actions::administration::PolicyView::Active,
-            )),
+            administration: Some(
+                bitrouter_ai::control::administration::PolicyReport::from_loaded(
+                    config,
+                    loaded.as_ref(),
+                    bitrouter_ai::control::administration::PolicyView::Active,
+                ),
+            ),
         })))
     }
 
@@ -3185,16 +2861,16 @@ impl PolicyRuntime {
     }
 
     /// Inspection data captured with the same policy version used for routing.
-    pub fn administration_snapshot(&self) -> crate::actions::administration::PolicyReport {
+    pub fn administration_snapshot(&self) -> bitrouter_ai::control::administration::PolicyReport {
         let snapshot = match self.snapshot.read() {
             Ok(snapshot) => snapshot.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         snapshot.administration.clone().unwrap_or_else(|| {
-            crate::actions::administration::PolicyReport::from_loaded(
+            bitrouter_ai::control::administration::PolicyReport::from_loaded(
                 &Config::default(),
                 None,
-                crate::actions::administration::PolicyView::Active,
+                bitrouter_ai::control::administration::PolicyView::Active,
             )
         })
     }
@@ -3221,7 +2897,7 @@ impl ModelSelector for PolicyRuntime {
         policy: &str,
         variant: Option<&str>,
         ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let snapshot = self.routing_snapshot();
         let variant_policy = variant.map(|variant| format!("{policy}:{variant}"));
         if !variant_policy
@@ -3229,7 +2905,7 @@ impl ModelSelector for PolicyRuntime {
             .is_some_and(|name| snapshot.0.routers.contains_key(name))
             && !snapshot.0.routers.contains_key(policy)
         {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(format!(
+            return Err(crate::gateway::error::BitrouterError::bad_request(format!(
                 "router references unavailable policy '{policy}'"
             )));
         }
@@ -3242,7 +2918,7 @@ impl ModelSelector for PolicyRuntime {
         policy: &str,
         variant: Option<&str>,
         ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let snapshot = ctx
             .extension::<PolicyRoutingSnapshot>()
             .map(|snapshot| snapshot.0.clone())
@@ -3253,7 +2929,7 @@ impl ModelSelector for PolicyRuntime {
             .and_then(|name| snapshot.routers.get(name))
             .or_else(|| snapshot.routers.get(policy))
             .ok_or_else(|| {
-                bitrouter_sdk::BitrouterError::bad_request(format!(
+                crate::gateway::error::BitrouterError::bad_request(format!(
                     "preset references unavailable policy '{policy}'"
                 ))
             })?;
@@ -3264,7 +2940,7 @@ impl ModelSelector for PolicyRuntime {
             ctx.emit(invocation.as_ref().clone());
         }
         ctx.insert_extension(invocation.clone());
-        let prepared = ctx.extension::<bitrouter_sdk::routing::preparation::Prepared>();
+        let prepared = ctx.extension::<crate::gateway::routing::preparation::Prepared>();
         let assessment = prepared
             .as_ref()
             .and_then(|prepared| prepared.receipt.as_ref())
@@ -3272,7 +2948,7 @@ impl ModelSelector for PolicyRuntime {
         let guard = router.progress_guard();
         if let (Some(trajectory), Some(guard)) = (&self.trajectory, guard) {
             if ctx.caller().is_anonymous() {
-                return Err(bitrouter_sdk::BitrouterError::Unauthorized(
+                return Err(crate::gateway::error::BitrouterError::Unauthorized(
                     "trajectory correlation requires an authenticated caller".into(),
                 ));
             }
@@ -3283,7 +2959,7 @@ impl ModelSelector for PolicyRuntime {
                 .inbound_protocol()
                 .unwrap_or_else(|| bitrouter_ai::types::ApiProtocol::Custom("canonical".into()));
             let captured_at = trajectory_request_started_at(ctx).map_err(|error| {
-                bitrouter_sdk::BitrouterError::internal(format!(
+                crate::gateway::error::BitrouterError::internal(format!(
                     "trajectory request timestamp failed: {error}"
                 ))
             })?;
@@ -3297,17 +2973,17 @@ impl ModelSelector for PolicyRuntime {
             );
             let projection = RouteProjection::parse_key(&decision.observed_route_projection)
                 .ok_or_else(|| {
-                    bitrouter_sdk::BitrouterError::internal(
+                    crate::gateway::error::BitrouterError::internal(
                         "named policy produced an invalid observed route projection",
                     )
                 })?;
             let policy_digest = snapshot.digest.as_deref().ok_or_else(|| {
-                bitrouter_sdk::BitrouterError::internal(
+                crate::gateway::error::BitrouterError::internal(
                     "guarded named policy has no active lock digest",
                 )
             })?;
             let policy_name = router.eval_policy_name().ok_or_else(|| {
-                bitrouter_sdk::BitrouterError::internal(
+                crate::gateway::error::BitrouterError::internal(
                     "guarded named policy has no persisted evaluation identity",
                 )
             })?;
@@ -3321,7 +2997,7 @@ impl ModelSelector for PolicyRuntime {
             let trajectory_request_id = trajectory
                 .request_identity(owner, ctx.request_id())
                 .map_err(|error| {
-                    bitrouter_sdk::BitrouterError::internal(format!(
+                    crate::gateway::error::BitrouterError::internal(format!(
                         "trajectory request identity failed: {error}"
                     ))
                 })?;
@@ -3361,9 +3037,9 @@ impl ModelSelector for PolicyRuntime {
                         )
                         .is_some()
                     {
-                        bitrouter_sdk::BitrouterError::bad_request(error.to_string())
+                        crate::gateway::error::BitrouterError::bad_request(error.to_string())
                     } else {
-                        bitrouter_sdk::BitrouterError::internal(format!(
+                        crate::gateway::error::BitrouterError::internal(format!(
                             "trajectory correlation failed: {error}"
                         ))
                     }
@@ -3510,11 +3186,11 @@ mod tests {
         assert_eq!(native_default_model(&config), Some(DEFAULT_NATIVE_MODEL));
         assert_eq!(
             native_model_mode(&config, DEFAULT_NATIVE_MODEL)?,
-            bitrouter_orchestrator::core::protocol::ModelMode::Policy
+            bitrouter_ai::core::protocol::ModelMode::Policy
         );
         assert_eq!(
             native_model_mode(&config, "provider:model")?,
-            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+            bitrouter_ai::core::protocol::ModelMode::Fixed
         );
         let loaded = load_for_config(&config, None)
             .await?
@@ -3539,14 +3215,13 @@ mod tests {
 
     #[test]
     fn native_default_preserves_fixed_auto_and_explicit_external_model() -> Result<()> {
-        let mut config =
-            bitrouter_sdk::config::parse("presets:\n  auto:\n    model: fixture:model\n")?;
+        let mut config = crate::config::parse("presets:\n  auto:\n    model: fixture:model\n")?;
         apply_defaults(&mut config, None);
         assert!(config.chat.model.is_none());
         assert_eq!(native_default_model(&config), Some("@auto"));
         assert_eq!(
             native_model_mode(&config, "@auto")?,
-            bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+            bitrouter_ai::core::protocol::ModelMode::Fixed
         );
         config.chat.model = Some("external-default".into());
         apply_defaults(&mut config, None);
@@ -4234,9 +3909,8 @@ mod tests {
         });
         assert!(validate_document(&unprotected_floor).is_err());
 
-        let legacy_global = bitrouter_sdk::config::parse(
-            "policy_table:\n  progress_guard:\n    escalation_tier: strong\n",
-        );
+        let legacy_global =
+            crate::config::parse("policy_table:\n  progress_guard:\n    escalation_tier: strong\n");
         assert!(legacy_global.is_err());
         Ok(())
     }
@@ -4380,9 +4054,9 @@ mod tests {
 
     #[tokio::test]
     async fn frozen_and_adaptive_modes_route_identically_from_the_lock() -> anyhow::Result<()> {
+        use crate::gateway::caller::CallerContext;
+        use crate::gateway::pipeline::types::PipelineRequest;
         use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
-        use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
 
         fn context() -> PipelineContext {
             let prompt = Prompt {
@@ -4429,7 +4103,7 @@ presets:
         };
         write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
 
-        let mut config = bitrouter_sdk::config::load(&config_path).await?;
+        let mut config = crate::config::load(&config_path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let runtime = PolicyRuntime::new(
@@ -4475,9 +4149,9 @@ presets:
 
     #[tokio::test]
     async fn policy_runtime_prefers_exact_variant_then_falls_back() -> anyhow::Result<()> {
+        use crate::gateway::caller::CallerContext;
+        use crate::gateway::pipeline::types::PipelineRequest;
         use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
-        use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
 
         fn context() -> PipelineContext {
             PipelineContext::new(PipelineRequest::new(
@@ -4513,7 +4187,7 @@ presets:
             certificates: BTreeMap::new(),
         };
         write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
-        let config = bitrouter_sdk::config::load(&config_path).await?;
+        let config = crate::config::load(&config_path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let runtime = PolicyRuntime::new(
@@ -4541,9 +4215,9 @@ presets:
     #[tokio::test]
     async fn policy_runtime_trajectory_is_optional_and_metadata_is_noncausal() -> anyhow::Result<()>
     {
+        use crate::gateway::caller::CallerContext;
+        use crate::gateway::pipeline::types::PipelineRequest;
         use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-        use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
         use http::HeaderValue;
         use sea_orm::ConnectionTrait;
 
@@ -4614,7 +4288,7 @@ presets:
             certificates: BTreeMap::new(),
         };
         write_atomic(&old_dir.path().join("policy-lock.yaml"), None, &old_lock)?;
-        let old_config = bitrouter_sdk::config::load(&old_config_path).await?;
+        let old_config = crate::config::load(&old_config_path).await?;
         let old_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&old_db).await?;
         let old_runtime = PolicyRuntime::new(
@@ -4663,7 +4337,7 @@ presets:
         let mut lock = PolicyLock::default();
         lock.policies.insert("coding".into(), guarded_definition);
         write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
-        let config = bitrouter_sdk::config::load(&config_path).await?;
+        let config = crate::config::load(&config_path).await?;
 
         let disabled_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&disabled_db).await?;
@@ -4724,7 +4398,9 @@ presets:
             .extension::<CorrelatedRequest>()
             .ok_or_else(|| anyhow::anyhow!("missing baseline correlation"))?;
         let records =
-            crate::workflow_state::decision::PolicyDecisionRecord::load_jsonl(&decision_path)?;
+            crate::gateway::routing::workflow::decision::PolicyDecisionRecord::load_jsonl(
+                &decision_path,
+            )?;
         let guarded_record = records
             .last()
             .ok_or_else(|| anyhow::anyhow!("missing guarded decision record"))?;
@@ -4763,8 +4439,10 @@ presets:
         assert_eq!(
             guarded_record.ingress_request_id_sha256.as_deref(),
             Some(
-                crate::workflow_state::decision::ingress_request_id_sha256("request-stable")
-                    .as_str()
+                crate::gateway::routing::workflow::decision::ingress_request_id_sha256(
+                    "request-stable"
+                )
+                .as_str()
             )
         );
         assert!(!serde_json::to_string(guarded_record)?.contains("request-stable"));
@@ -5021,9 +4699,8 @@ policies:
     fn auto_router_template_lock_is_bound_and_canonical() -> anyhow::Result<()> {
         let directory =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates/auto-router");
-        let config = bitrouter_sdk::config::parse(&std::fs::read_to_string(
-            directory.join("bitrouter.yaml"),
-        )?)?;
+        let config =
+            crate::config::parse(&std::fs::read_to_string(directory.join("bitrouter.yaml"))?)?;
         let lock: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(
             directory.join("policy-lock.yaml"),
         )?)?;
@@ -5039,7 +4716,7 @@ policies:
             policy
                 .tiers
                 .values()
-                .all(|target| target.context == bitrouter_sdk::routing::ContextStrategy::Evidence)
+                .all(|target| target.context == bitrouter_ai::routing::ContextStrategy::Evidence)
         );
         let rendered = deterministic_yaml(&lock)?;
         assert_eq!(
@@ -5084,7 +4761,7 @@ policies:
         assert!(
             mismatch_error
                 .to_string()
-                .contains(&bitrouter_sdk::routing::assessment::contract_digest())
+                .contains(&crate::gateway::routing::assessment::contract_digest())
         );
         Ok(())
     }
@@ -5282,7 +4959,7 @@ policies:
         let mut config = Config::default();
         config.presets.insert(
             "coding".into(),
-            bitrouter_sdk::config::PresetConfig {
+            crate::config::PresetConfig {
                 policy: Some("coding".into()),
                 ..Default::default()
             },
@@ -5304,7 +4981,7 @@ policies:
 
         config.presets.insert(
             "coding".into(),
-            bitrouter_sdk::config::PresetConfig {
+            crate::config::PresetConfig {
                 model: Some("vendor:strong".into()),
                 policy: Some("coding".into()),
                 ..Default::default()
@@ -5368,7 +5045,7 @@ presets:
         assert!(edited.contains("# keep this operator note"));
         assert!(edited.contains("    policy: terminal-bench"));
         assert!(edited.contains("policy:\n  mode: frozen"));
-        let parsed = bitrouter_sdk::config::parse(&edited).unwrap();
+        let parsed = crate::config::parse(&edited).unwrap();
         assert_eq!(
             parsed.presets["coding"].policy.as_deref(),
             Some("terminal-bench")
@@ -5388,7 +5065,7 @@ inherit_defaults: true
             raw,
             &["openai-codex".into(), "bitrouter".into(), "openai".into()],
         )?;
-        let parsed = bitrouter_sdk::config::parse_with(&edited, |_| Some("test".into()))?;
+        let parsed = crate::config::parse_with(&edited, |_| Some("test".into()))?;
 
         assert!(edited.contains("# operator-owned config"));
         assert!(edited.contains("    api_key: ${OPENAI_API_KEY}"));
@@ -5433,7 +5110,7 @@ routers:
 
         let edited =
             edit_config_router_policy_with_model(raw, "coding", "coding", Some("fixture:strong"))?;
-        let parsed = bitrouter_sdk::config::parse(&edited)?;
+        let parsed = crate::config::parse(&edited)?;
 
         assert!(edited.contains("# operator-owned"));
         assert!(edited.contains("  agent: codex-acp\n  model: fixture:chat"));
@@ -5442,12 +5119,12 @@ routers:
         assert_eq!(parsed.policy.mode, PolicyRuntimeMode::Frozen);
         assert!(matches!(
             &parsed.routers["review"].selection,
-            bitrouter_sdk::config::router::RouterSelection::Model { model, .. }
+            crate::config::router::RouterSelection::Model { model, .. }
                 if model == "fixture:review"
         ));
         assert!(matches!(
             &parsed.routers["coding"].selection,
-            bitrouter_sdk::config::router::RouterSelection::Policy {
+            crate::config::router::RouterSelection::Policy {
                 policy,
                 base_model,
                 ..
@@ -5503,13 +5180,13 @@ routers:
             "coding:variant",
             Some("fixture:model # literal"),
         )?;
-        let parsed = bitrouter_sdk::config::parse(&edited)?;
+        let parsed = crate::config::parse(&edited)?;
 
         assert!(edited.contains("policy: \"coding:variant\""));
         assert!(edited.contains("base_model: \"fixture:model # literal\""));
         assert!(matches!(
             &parsed.routers["coding"].selection,
-            bitrouter_sdk::config::router::RouterSelection::Policy {
+            crate::config::router::RouterSelection::Policy {
                 policy,
                 base_model,
                 ..
@@ -5587,7 +5264,7 @@ policy:
         assert_eq!(second.digest, first.digest);
         assert_eq!(tokio::fs::read(&config_path).await?, first_config);
         assert_eq!(tokio::fs::read(&first.path).await?, first_lock);
-        let config = bitrouter_sdk::config::load(&config_path).await?;
+        let config = crate::config::load(&config_path).await?;
         assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
         assert_eq!(config.chat.agent.as_deref(), Some("codex-acp"));
         assert_eq!(config.chat.model.as_deref(), Some("fixture:chat"));
@@ -5703,7 +5380,7 @@ presets:
         assert_eq!(update.path, dir.path().join("policy-lock.yaml"));
         let config_raw = tokio::fs::read_to_string(&config_path).await.unwrap();
         assert!(config_raw.contains("# owned by the routing team"));
-        let config = bitrouter_sdk::config::parse(&config_raw).unwrap();
+        let config = crate::config::parse(&config_raw).unwrap();
         assert_eq!(config.policy.mode, PolicyRuntimeMode::Adaptive);
         assert_eq!(
             config.presets["coding"].policy.as_deref(),
@@ -5845,94 +5522,10 @@ presets:
     }
 
     #[tokio::test]
-    async fn frozen_config_refuses_evolution_apply() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("bitrouter.yaml");
-        tokio::fs::write(
-            &config_path,
-            r#"database:
-  url: sqlite://./bitrouter.db
-presets:
-  coding:
-    model: anthropic/claude-opus-4.8
-"#,
-        )
-        .await
-        .unwrap();
-        initialize_files(
-            &config_path,
-            "terminal-bench",
-            "coding",
-            None,
-            "moonshotai/kimi-k2.7-code",
-        )
-        .await
-        .unwrap();
-        let initialized = tokio::fs::read_to_string(&config_path).await.unwrap();
-        tokio::fs::write(
-            &config_path,
-            initialized.replace("mode: adaptive", "mode: frozen"),
-        )
-        .await
-        .unwrap();
-
-        let error = evolve_files(&config_path, true).await.unwrap_err();
-
-        assert!(error.to_string().contains("runtime mode is frozen"));
-        assert!(!dir.path().join("bitrouter.db").exists());
-    }
-
-    #[tokio::test]
-    async fn frozen_config_can_export_without_mutating_active_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("bitrouter.yaml");
-        tokio::fs::write(
-            &config_path,
-            r#"database:
-  url: sqlite://./bitrouter.db
-presets:
-  coding:
-    model: anthropic/claude-opus-4.8
-"#,
-        )
-        .await
-        .unwrap();
-        let initialized = initialize_files(
-            &config_path,
-            "terminal-bench",
-            "coding",
-            None,
-            "moonshotai/kimi-k2.7-code",
-        )
-        .await
-        .unwrap();
-        let db_path = dir.path().join("bitrouter.db");
-        let db = crate::db::connect(&format!("sqlite://{}", db_path.display()))
-            .await
-            .unwrap();
-        crate::db::run_migrations(&db).await.unwrap();
-        db.close().await.unwrap();
-        let before_config = tokio::fs::read(&config_path).await.unwrap();
-        let before_lock = tokio::fs::read(&initialized.path).await.unwrap();
-        let candidate_path = dir.path().join("candidate.yaml");
-
-        let update = evolve_files(&config_path, false).await.unwrap();
-        export_candidate_file(&update.path, &candidate_path, &update.document).unwrap();
-
-        assert_eq!(tokio::fs::read(&config_path).await.unwrap(), before_config);
-        assert_eq!(
-            tokio::fs::read(&initialized.path).await.unwrap(),
-            before_lock
-        );
-        let candidate = load(&candidate_path).await.unwrap();
-        assert_eq!(candidate.document, update.document);
-    }
-
-    #[tokio::test]
     async fn reload_swaps_valid_policy_and_keeps_last_known_good_on_error() {
+        use crate::gateway::caller::CallerContext;
+        use crate::gateway::pipeline::types::PipelineRequest;
         use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
-        use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::language_model::PipelineRequest;
 
         fn context(model: &str) -> PipelineContext {
             let prompt = Prompt {
@@ -5961,7 +5554,7 @@ presets:
         )
         .await
         .unwrap();
-        let config = bitrouter_sdk::config::load(&config_path).await.unwrap();
+        let config = crate::config::load(&config_path).await.unwrap();
         let lock_path = dir.path().join("policy-lock.yaml");
         let route_key = "semantic_route/v1|unknown|unknown|guarded";
         let mut lock = task_aware_lock(BTreeMap::from([(
@@ -6025,61 +5618,5 @@ presets:
             .await
             .unwrap();
         assert_eq!(last_known_good.model(), "vendor:economy");
-    }
-
-    #[tokio::test]
-    async fn legacy_adequacy_rows_do_not_create_semantic_routes() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let config_path = dir.path().join("bitrouter.yaml");
-        tokio::fs::write(
-            &config_path,
-            r#"database:
-  url: sqlite://./bitrouter.db
-presets:
-  coding:
-    model: anthropic/claude-opus-4.8
-"#,
-        )
-        .await?;
-        initialize_files(
-            &config_path,
-            "coding",
-            "coding",
-            None,
-            "moonshotai/kimi-k2.7-code",
-        )
-        .await?;
-        set_mode_file(&config_path, PolicyRuntimeMode::Adaptive).await?;
-        let db_path = dir.path().join("bitrouter.db");
-        let db = crate::db::connect(&format!("sqlite://{}", db_path.display())).await?;
-        crate::db::run_migrations(&db).await?;
-        let store = crate::adequacy::store::AdequacyStore::new(db);
-        let request_key = "semantic_route/v1|unknown|implement|normal";
-        let ledger_key = format!("coding\0{request_key}");
-        store.upsert_exploration(&ledger_key, 4, 3, true).await?;
-        store
-            .record_semantic_success(&ledger_key, "terminal-bench/task-a")
-            .await?;
-
-        let added = evolve_files(&config_path, true).await?;
-
-        assert!(added.changes.is_empty());
-        assert!(
-            load(&added.path).await?.document.policies["coding"]
-                .routes
-                .is_empty()
-        );
-
-        store.upsert_exploration(&ledger_key, 5, 0, false).await?;
-        store.clear_semantic_successes(&ledger_key).await?;
-        let unchanged = evolve_files(&config_path, true).await?;
-
-        assert!(unchanged.changes.is_empty());
-        assert!(
-            load(&unchanged.path).await?.document.policies["coding"]
-                .routes
-                .is_empty()
-        );
-        Ok(())
     }
 }

@@ -10,19 +10,15 @@ mod authority_tests;
 
 use std::sync::Arc;
 
+use crate::core::session::CoreSession;
+use crate::storage::checkpoint::snapshot::responses::{ResponseExchange, ResponseToolResult};
 use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use bitrouter_orchestrator::core::protocol::{
-    ArtifactRef, BETA, CoreError, DiscardableHistory, ErrorCode, Limits, RoutingSettings,
-    TaskInput, ToolOutcome, ToolResult, VERSION, Verification,
-};
-use bitrouter_orchestrator::core::session::CoreSession;
-use bitrouter_orchestrator::core::session::responses::{ResponseExchange, ResponseToolResult};
+use bitrouter_ai::core::protocol::{BETA, CoreError, ErrorCode, TaskInput, ToolResult, VERSION};
+use bitrouter_ai::core::responses::{CreateRequest as Create, FunctionOutput};
 use http::Method;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::sync::watch;
 
 use super::{ApiError, ManagedCoreApi, auth::Principal};
@@ -39,72 +35,6 @@ pub(super) struct Job {
     progress: watch::Receiver<Progress>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct MultiAgent {
-    enabled: bool,
-    max_concurrent_subagents: Option<u32>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Reasoning {
-    effort: String,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Extension {
-    version: u32,
-    execution: String,
-    session_id: String,
-    execution_epoch: u64,
-    operation_id: String,
-    expected_state_revision: Option<u64>,
-    routing: Option<RoutingSettings>,
-    limits: Option<Limits>,
-    #[serde(default)]
-    acceptance_criteria: Vec<String>,
-    #[serde(default)]
-    required_materials: Vec<String>,
-    verification: Option<Verification>,
-    discardable_history: Option<DiscardableHistory>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Create {
-    model: String,
-    input: Value,
-    previous_response_id: Option<String>,
-    #[serde(default)]
-    stream: bool,
-    multi_agent: MultiAgent,
-    bitrouter: Extension,
-    reasoning: Option<Reasoning>,
-    max_output_tokens: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResultMetadata {
-    operation_id: String,
-    status: ToolOutcome,
-    #[serde(default)]
-    evidence: Vec<ArtifactRef>,
-    workspace_revision: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FunctionOutput {
-    #[serde(rename = "type")]
-    kind: String,
-    call_id: String,
-    output: String,
-    bitrouter: ResultMetadata,
-}
-
 pub(super) async fn intercept(
     State(api): State<ManagedCoreApi>,
     request: Request,
@@ -117,38 +47,13 @@ pub(super) async fn intercept(
     if !parts.headers.contains_key("bitrouter-beta") {
         // The ordinary route retains its existing body/SDK contract. Inspection
         // has a separate host bound and cannot consume managed output slots.
-        let inspection = match api.shared.inspections.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                return ApiError::core(ErrorCode::Busy, "response inspection capacity reached")
-                    .into_response();
-            }
-        };
-        let bytes = match tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            to_bytes(body, 16 * 1024 * 1024),
-        )
-        .await
-        {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(_)) => {
-                return ApiError::core(
-                    ErrorCode::LimitExceeded,
-                    "request body exceeds inference limit",
-                )
-                .into_response();
-            }
-            Err(_) => {
-                return ApiError::core(
-                    ErrorCode::LimitExceeded,
-                    "response inspection body timed out",
-                )
-                .into_response();
-            }
-        };
-        let managed = serde_json::from_slice::<Value>(&bytes).is_ok_and(|body| {
-            body.get("bitrouter").is_some() || body["multi_agent"]["enabled"] == true
-        });
+        let (bytes, managed) =
+            match crate::gateway::http::managed_profile::inspect(body, &api.shared.inspections)
+                .await
+            {
+                Ok(inspected) => inspected,
+                Err(error) => return ApiError::from(error).into_response(),
+            };
         if managed {
             return ApiError::core(
                 ErrorCode::UnsupportedVersion,
@@ -156,7 +61,6 @@ pub(super) async fn intercept(
             )
             .into_response();
         }
-        drop(inspection);
         return next
             .run(Request::from_parts(parts, Body::from(bytes)))
             .await;
@@ -271,14 +175,13 @@ async fn start(
     mut create: Create,
 ) -> Result<watch::Receiver<Progress>, ApiError> {
     create.stream = false;
-    let fingerprint = bitrouter_orchestrator::core::checkpoint::sha256(
-        &serde_json::to_vec(&create).map_err(|_| {
+    let fingerprint =
+        crate::storage::checkpoint::sha256(&serde_json::to_vec(&create).map_err(|_| {
             ApiError::core(
                 ErrorCode::UnsupportedCapability,
                 "cannot encode managed request",
             )
-        })?,
-    );
+        })?);
     let mut sessions = api.shared.sessions.lock().await;
     let entry = sessions
         .get_mut(&ManagedCoreApi::key(
@@ -494,8 +397,8 @@ async fn wait(mut progress: watch::Receiver<Progress>) -> Result<Arc<ResponseExc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::assembly::App;
     use axum::{Router, routing::post};
-    use bitrouter_sdk::App;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tower::ServiceExt;
 

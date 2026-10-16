@@ -23,11 +23,12 @@
 //! per-protocol endpoints), class, and env-resolved credential directly from
 //! the fetched-or-cached registry data.
 
-use bitrouter_ai::types::ProtocolList;
-use bitrouter_sdk::config::{
-    Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
-    ProviderModel, RateLimit, env_lookup, substitute_with,
+use crate::config::pattern::{Pattern, PatternMap};
+use crate::config::{
+    Config, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig, ProviderModel,
+    RateLimit, env_lookup, substitute_with,
 };
+use bitrouter_ai::types::ProtocolList;
 
 use bitrouter_ai::catalog::types::{
     Billing, RegistryData, RegistryKind, RegistryPricing, RegistryProvider, RegistryRateLimits,

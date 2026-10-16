@@ -1,5 +1,5 @@
+use crate::gateway::model::protocol::responses::decode_gateway_continuation_id;
 use anyhow::Result;
-use bitrouter_ai::protocol::responses::decode_gateway_continuation_id;
 use bitrouter_ai::types::{ApiProtocol, Prompt};
 use sha2::{Digest, Sha256};
 
@@ -714,7 +714,9 @@ mod tests {
         let runtime_a = runtime_with_key(&db, CorrelationKey::from_bytes([21; 32])?);
         let runtime_b = runtime_with_key(&db, CorrelationKey::from_bytes([22; 32])?);
         let public_continuation_id =
-            bitrouter_ai::protocol::responses::encode_gateway_continuation_id("request-root")?;
+            crate::gateway::model::protocol::responses::encode_gateway_continuation_id(
+                "request-root",
+            )?;
 
         let root = runtime_a
             .begin_request(

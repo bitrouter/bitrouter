@@ -23,7 +23,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::{Subcommand, ValueEnum};
 
-use bitrouter_ai::providers::hosted::credentials::{CredentialKind, StoredCredential};
+use crate::gateway::providers::hosted::credentials::{CredentialKind, StoredCredential};
 
 use crate::cloud::account::manager::CredentialManager;
 
@@ -690,7 +690,7 @@ async fn whoami(manager: Arc<CredentialManager>) -> std::result::Result<(), SdkE
         } else {
             out.push_str(&format!(
                 "\n(not signed in — run `{} cloud login`)",
-                bitrouter_sdk::invocation::name()
+                crate::commands::invocation::name()
             ));
         }
         out
@@ -727,7 +727,7 @@ async fn run_namespace(
                 Some(id) => id.to_owned(),
                 None => format!(
                     "(no namespace — run `{} cloud login`)",
-                    bitrouter_sdk::invocation::name()
+                    crate::commands::invocation::name()
                 ),
             })
         }
@@ -1400,7 +1400,7 @@ async fn print_error_hint(err: &SdkError, manager: &CredentialManager) {
         SdkError::NotSignedIn => {
             eprintln!();
             eprintln!("  Sign in first:");
-            eprintln!("    {} cloud login", bitrouter_sdk::invocation::name());
+            eprintln!("    {} cloud login", crate::commands::invocation::name());
         }
         SdkError::Forbidden {
             missing_scope: Some(scope),
@@ -1420,7 +1420,7 @@ fn missing_scope_hint(missing: &str, credential: Option<&StoredCredential>) -> S
         return format!(
             "Mint or select an API key with the `{missing}` scope, then run \
              `{cli} cloud login --api-key \"$BITROUTER_API_KEY\"`.",
-            cli = bitrouter_sdk::invocation::name()
+            cli = crate::commands::invocation::name()
         );
     }
 
@@ -1432,7 +1432,7 @@ fn missing_scope_hint(missing: &str, credential: Option<&StoredCredential>) -> S
     };
     format!(
         "Re-run `{cli} cloud login --scope \"{extended}\"` to add it.",
-        cli = bitrouter_sdk::invocation::name()
+        cli = crate::commands::invocation::name()
     )
 }
 

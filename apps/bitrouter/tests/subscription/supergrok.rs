@@ -1,7 +1,7 @@
-use bitrouter_ai::auth::file::backend::FileCredentialStore;
-use bitrouter_ai::auth::oauth::{REFRESH_WINDOW, RefreshGrant};
-use bitrouter_ai::auth::store::OAuthSession;
-use bitrouter_ai::providers::supergrok::{
+use bitrouter::gateway::providers::auth::file::backend::FileCredentialStore;
+use bitrouter::gateway::providers::auth::oauth::{REFRESH_WINDOW, RefreshGrant};
+use bitrouter::gateway::providers::auth::store::OAuthSession;
+use bitrouter::gateway::providers::supergrok::{
     CLIENT_ID, PROVIDER_ID, SuperGrokAuthApplier, TOKEN_ENDPOINT,
 };
 use std::sync::Arc;
@@ -27,12 +27,12 @@ use std::path::PathBuf;
 use bitrouter_ai::types::ApiProtocol;
 use wiremock::MockServer;
 
-use bitrouter_ai::auth::AuthApplier;
-use bitrouter_ai::auth::credentials::{Credential, OAuthToken};
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
-use bitrouter_ai::error::ModelError;
-use bitrouter_ai::target::ModelTarget;
+use bitrouter::gateway::model::error::ModelError;
+use bitrouter::gateway::model::target::ModelTarget;
+use bitrouter::gateway::providers::auth::AuthApplier;
+use bitrouter::gateway::providers::auth::credentials::{Credential, OAuthToken};
+use bitrouter::gateway::providers::auth::file::snapshot::CredentialStore;
+use bitrouter::gateway::providers::auth::store::DEFAULT_ACCOUNT;
 
 fn tmp_store_path() -> TestResult<PathBuf> {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -192,7 +192,7 @@ async fn fresh_calls_observe_selected_slot_replacement_and_do_not_fallback_after
     let applier = supergrok_applier(&path)?;
     let mut target = supergrok_target(Some("selected"));
     target.api_key = "fallback".into();
-    target.credential_priority = bitrouter_ai::target::CredentialPriority::Fallback;
+    target.credential_priority = bitrouter::gateway::model::target::CredentialPriority::Fallback;
     let request = || {
         reqwest::Client::new()
             .post("https://example.invalid")

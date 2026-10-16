@@ -4,32 +4,37 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::tui::code::{
+    CodeAction, CodeEffect, CodeHotkey, CodeState, CodeStatus, CodeView, Command, CommandOwner,
+    CommandTarget, Inspector, Selector, TurnOutcome,
+};
 use agent_client_protocol::schema::v1::{
     ConfigOptionUpdate, CurrentModeUpdate, SessionConfigOption, SessionUpdate, StopReason,
 };
 use anyhow::{Context, Result, ensure};
-use bitrouter_tui::code::{
-    CodeAction, CodeEffect, CodeHotkey, CodeState, CodeStatus, CodeView, Command, CommandOwner,
-    CommandTarget, Inspector, Selector, TurnOutcome,
-};
 use crossterm::event::EventStream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
-use crate::acp_cli::SessionSelection;
+#[cfg(feature = "core")]
 use crate::actions::code::evolution::candidate::CandidateDraft;
+#[cfg(feature = "core")]
 use crate::actions::code::evolution::manual::ReviewDraft;
+#[cfg(feature = "core")]
 use crate::actions::code::evolution::{Panel, SessionRef};
 use crate::actions::code::{CodeServices, OpenedSession};
 use crate::actions::supervised::SupervisedHandle;
 use crate::agent_sessions::{AgentResult, BackgroundClient};
+use crate::commands::agent_options::SessionSelection;
+use crate::commands::agents::AgentEffect;
 use crate::dashboard::SessionRequest;
-use bitrouter_tui::agents::{AgentEffect, NewAgentRunTarget};
+use crate::presentation::agents::NewAgentRunTarget;
 
 use super::code_controls::{picker, row};
 use super::code_wire::{CodeWire, WireEvent};
 
 enum JobResult {
+    #[cfg(feature = "core")]
     Evolution(Box<Panel>),
     Opened(Box<OpenedSession>),
     Selected {
@@ -58,7 +63,7 @@ struct Runtime {
     session_job_cancel: Option<CancellationToken>,
     job_blocks_prompt: bool,
     effects: VecDeque<CodeEffect>,
-    templates: Vec<bitrouter_tui::machine::PromptCommand>,
+    templates: Vec<crate::commands::chat::PromptCommand>,
     selectors: Vec<Selector>,
     editing: bool,
     exit: bool,
@@ -73,7 +78,9 @@ struct Runtime {
     route_probe: Option<LocalBoxFuture<'static, Result<String>>>,
     disconnected_details: Option<String>,
     mutation_selector: Option<String>,
+    #[cfg(feature = "core")]
     evolution_review: Option<ReviewDraft>,
+    #[cfg(feature = "core")]
     evolution_candidate: Option<CandidateDraft>,
     last_launch: Option<SessionRequest>,
 }
@@ -132,7 +139,9 @@ pub(crate) async fn run(
         route_probe: None,
         disconnected_details: None,
         mutation_selector: None,
+        #[cfg(feature = "core")]
         evolution_review: None,
+        #[cfg(feature = "core")]
         evolution_candidate: None,
         last_launch: None,
     };
@@ -404,7 +413,7 @@ impl Runtime {
                     let streamed = matches!(&event, WireEvent::Update(_));
                     self.wire_event(event);
                     if streamed {
-                        paint_due.get_or_insert(tokio::time::Instant::now() + bitrouter_tui::writer::Schedule::INTERVAL);
+                        paint_due.get_or_insert(tokio::time::Instant::now() + std::time::Duration::from_millis(30));
                     } else { dirty = true; }
                 }
                 result = next_job(&mut self.job) => {
@@ -759,6 +768,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     fn evolution_action(&mut self, selector: &str, choice: String) -> Result<()> {
         if selector == "evolution:checkpoint" && choice.starts_with("freeze:") {
             self.idle()?;
@@ -785,9 +795,17 @@ impl Runtime {
         Ok(())
     }
 
+    #[cfg(not(feature = "core"))]
+    fn evolution_action(&mut self, _selector: &str, _choice: String) -> Result<()> {
+        anyhow::bail!("checkpoint evolution requires the core feature")
+    }
+
     fn clear_evolution_drafts(&mut self) {
-        self.evolution_review = None;
-        self.evolution_candidate = None;
+        #[cfg(feature = "core")]
+        {
+            self.evolution_review = None;
+            self.evolution_candidate = None;
+        }
         self.selectors
             .retain(|selector| !selector.id.starts_with("evolution:"));
         self.state.set_selectors(self.selectors.clone());
@@ -991,6 +1009,7 @@ impl Runtime {
     fn job_result(&mut self, result: JobResult) {
         let settings_changed = matches!(&result, JobResult::Config(_) | JobResult::Mode(_));
         match result {
+            #[cfg(feature = "core")]
             JobResult::Evolution(panel) => {
                 if panel.clear_drafts {
                     self.clear_evolution_drafts();
@@ -1130,7 +1149,7 @@ impl Runtime {
             }
             WireEvent::Permission(permission) => {
                 let context = permission.tool_call;
-                let prompt = bitrouter_tui::permission::Prompt::new(
+                let prompt = crate::harness::permission::Prompt::new(
                     permission.permission_id,
                     context.fields.title.clone(),
                     context.tool_call_id.to_string(),
@@ -1388,6 +1407,7 @@ impl Runtime {
             }
             commands.push(command);
         }
+        #[cfg(feature = "core")]
         if self.services.evolution_available() {
             commands.push(Command::new(
                 "/evolution",
@@ -1505,7 +1525,7 @@ async fn next_route(probe: &mut Option<LocalBoxFuture<'static, Result<String>>>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp_cli::RoutingOptions;
+    use crate::commands::agent_options::RoutingOptions;
 
     #[test]
     fn fresh_session_retains_same_agent_launch_settings_without_replaying_native_history() {

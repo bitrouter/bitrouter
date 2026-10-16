@@ -22,7 +22,7 @@ pub enum Error {
     /// `bro cloud login`.
     #[error(
         "not signed in — run `{} cloud login` first",
-        bitrouter_sdk::invocation::name()
+        crate::commands::invocation::name()
     )]
     NotSignedIn,
 
@@ -34,7 +34,7 @@ pub enum Error {
     #[error(
         "credential is not scoped to a namespace — run `{} cloud login` to get a \
          namespace-scoped credential",
-        bitrouter_sdk::invocation::name()
+        crate::commands::invocation::name()
     )]
     NoNamespace,
 

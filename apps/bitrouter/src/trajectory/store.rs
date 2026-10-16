@@ -19,8 +19,8 @@ use super::types::{
     TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
-use crate::eval::types::{EvalExperimentRef, RouteDecisionMeasurement};
-use crate::workflow_state::ir::RouteProjection;
+use crate::gateway::routing::workflow::ir::RouteProjection;
+use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
 
 mod episode_entity {
     use sea_orm::entity::prelude::*;
@@ -165,6 +165,7 @@ pub(crate) struct CorrelateAndBeginResult {
     pub guarded_route: Option<GuardedRouteResult>,
 }
 
+#[cfg(feature = "core")]
 pub(crate) struct OutboxBatchItem {
     pub outbox_id: String,
     pub owner_user_id: String,
@@ -248,8 +249,7 @@ enum PrefixResolution {
 const MAX_SEQUENCE_RESERVATION_ATTEMPTS: usize = 32;
 const MAX_LEDGER_MUTATION_ATTEMPTS: usize = 32;
 const MAX_AUDIT_READ_ATTEMPTS: usize = 32;
-pub(crate) const MAX_OUTBOX_BATCH_SIZE: usize =
-    bitrouter_sdk::config::MAX_TRAJECTORY_OUTBOX_BATCH_SIZE;
+pub(crate) const MAX_OUTBOX_BATCH_SIZE: usize = crate::config::MAX_TRAJECTORY_OUTBOX_BATCH_SIZE;
 
 #[cfg(test)]
 #[derive(Clone, Default)]
@@ -1058,6 +1058,7 @@ impl TrajectoryStore {
             .collect()
     }
 
+    #[cfg(feature = "core")]
     pub(crate) async fn pending_outbox_batch(&self, limit: usize) -> Result<Vec<OutboxBatchItem>> {
         if limit == 0 || limit > MAX_OUTBOX_BATCH_SIZE {
             anyhow::bail!(
@@ -1075,6 +1076,7 @@ impl TrajectoryStore {
         Ok(rows.into_iter().map(stored_outbox_batch_item).collect())
     }
 
+    #[cfg(feature = "core")]
     pub(crate) async fn pending_outbox_count(&self) -> Result<u64> {
         outbox_entity::Entity::find()
             .filter(outbox_entity::Column::DeliveredAt.is_null())
@@ -1083,6 +1085,7 @@ impl TrajectoryStore {
             .map_err(Into::into)
     }
 
+    #[cfg(feature = "core")]
     pub(crate) async fn record_outbox_attempt(
         &self,
         owner_user_id: &str,
@@ -2248,16 +2251,16 @@ fn build_guarded_route_batch(
         categorical.insert(
             "route.experiment_arm".to_owned(),
             match experiment.arm {
-                crate::eval::types::ExperimentArm::Control => "control",
-                crate::eval::types::ExperimentArm::Challenger => "challenger",
+                bitrouter_ai::eval::ExperimentArm::Control => "control",
+                bitrouter_ai::eval::ExperimentArm::Challenger => "challenger",
             }
             .to_owned(),
         );
         categorical.insert(
             "route.experiment_assignment_unit".to_owned(),
             match experiment.assignment_unit {
-                crate::eval::types::ExperimentAssignmentUnit::Task => "task",
-                crate::eval::types::ExperimentAssignmentUnit::Episode => "episode",
+                bitrouter_ai::eval::ExperimentAssignmentUnit::Task => "task",
+                bitrouter_ai::eval::ExperimentAssignmentUnit::Episode => "episode",
             }
             .to_owned(),
         );
@@ -2495,9 +2498,12 @@ fn classify_database_error(error: &anyhow::Error) -> DatabaseErrorClassification
         classification.unique_violation |= db_error.is_unique_violation();
         let code = db_error.code();
         let code = code.as_deref();
+        #[cfg(feature = "db-mysql")]
         let mysql_number = db_error
             .try_downcast_ref::<sea_orm::SqlxMySqlError>()
             .map(sea_orm::SqlxMySqlError::number);
+        #[cfg(not(feature = "db-mysql"))]
+        let mysql_number = None;
         classification.retryable_contention |= retryable_database_code(code, mysql_number);
     }
     classification
@@ -3066,6 +3072,7 @@ fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> {
     })
 }
 
+#[cfg(feature = "core")]
 fn stored_outbox_batch_item(row: outbox_entity::Model) -> OutboxBatchItem {
     let payload = serde_json::from_str::<super::types::OutboxPayload>(&row.payload_json)
         .ok()
@@ -3153,12 +3160,16 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryTrait, RuntimeErr, Statement};
 
     use super::*;
-    use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
+    use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+    #[cfg(feature = "core")]
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
-    use crate::workflow_state::ir::RouteProjection;
+    use {
+        bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
+        bitrouter_ai::eval::ExperimentAssignmentUnit,
+    };
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -3822,6 +3833,7 @@ mod tests {
             committed.intent.trajectory_snapshot_digest,
             factual_prefix.evidence_digest
         );
+        #[cfg(feature = "core")]
         assert_eq!(
             replay_episode(
                 &store,
@@ -3925,14 +3937,22 @@ mod tests {
         store.begin_request("owner-a", unmatched).await?;
 
         let protected_tiers = BTreeSet::new();
-        let incomplete =
-            replay_episode(&store, "owner-a", "episode-incomplete", &protected_tiers).await?;
+        let incomplete = reduce(
+            &store
+                .events_for_episode("owner-a", "episode-incomplete")
+                .await?,
+            &protected_tiers,
+        )?;
         assert_eq!(
             incomplete.health.completeness,
             HistoryCompleteness::Incomplete
         );
-        let unmatched =
-            replay_episode(&store, "owner-a", "episode-unmatched", &protected_tiers).await?;
+        let unmatched = reduce(
+            &store
+                .events_for_episode("owner-a", "episode-unmatched")
+                .await?,
+            &protected_tiers,
+        )?;
         assert_eq!(unmatched.health.completeness, HistoryCompleteness::Unknown);
         Ok(())
     }

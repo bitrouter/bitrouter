@@ -346,10 +346,10 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
                     json!({"stale":effective.stale,"reasons":effective.reasons,"revision":effective.current_revision,"resource":effective.resource})
                 );
             }
-            if let bitrouter::evolution::operator::EvolutionReport::Status(status) = runtime
-                .block_on(service.evolution.operate(
+            if let bitrouter::core::evolution::operator::EvolutionReport::Status(status) =
+                runtime.block_on(service.evolution.operate(
                     "local",
-                    bitrouter::evolution::operator::EvolutionOperation::Status,
+                    bitrouter::core::evolution::operator::EvolutionOperation::Status,
                 ))?
             {
                 eprintln!(

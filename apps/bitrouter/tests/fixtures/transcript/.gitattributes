@@ -1,0 +1,4 @@
+# Every captured and provenance file is hashed as bytes, including on Windows.
+* -text
+# These bytes intentionally include trailing spaces, CRLF, and empty final rows.
+cases/*.expected.txt whitespace=-blank-at-eol,-blank-at-eof,-cr-at-eol

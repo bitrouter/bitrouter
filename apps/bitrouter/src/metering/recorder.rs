@@ -15,10 +15,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::gateway::error::Result;
+use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{FinishReason, UsageOrigin};
-use bitrouter_sdk::Result;
-use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 use serde::Serialize;
 
 use crate::auth::events::ApiPrincipalEstablished;
@@ -85,10 +85,10 @@ impl MeteringRecorder {
 
     fn normalize_zero_usage_rejection(ctx: &mut SettlementContext) {
         let error_code = match ctx.error {
-            Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation { .. }) => {
+            Some(crate::gateway::error::BitrouterError::UpstreamPolicyViolation { .. }) => {
                 Some("upstream_policy_violation")
             }
-            Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited { .. }) => {
+            Some(crate::gateway::error::BitrouterError::UpstreamRateLimited { .. }) => {
                 Some("upstream_rate_limited")
             }
             _ => None,
@@ -130,8 +130,8 @@ fn route_scope(ctx: &SettlementContext) -> String {
 #[async_trait]
 impl SettlementRecorder for MeteringRecorder {
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
-        if ctx.has_event::<crate::evolution::runtime::CanonicalRequestReplayRejected>()
-            || ctx.has_event::<crate::evolution::costs::JudgeAttemptReplayRejected>()
+        if ctx.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>()
+            || ctx.has_event::<crate::gateway::metering::replay::JudgeAttemptReplayRejected>()
         {
             return Ok(());
         }
@@ -152,7 +152,7 @@ impl SettlementRecorder for MeteringRecorder {
             .charge_micro_usd
             .map(|value| {
                 u64::try_from(value).map_err(|_| {
-                    bitrouter_sdk::BitrouterError::internal(
+                    crate::gateway::error::BitrouterError::internal(
                         "metering computed a negative request charge",
                     )
                 })
@@ -165,7 +165,7 @@ impl SettlementRecorder for MeteringRecorder {
                 ctx.prompt_tokens
                     .checked_add(ctx.completion_tokens)
                     .ok_or_else(|| {
-                        bitrouter_sdk::BitrouterError::internal(
+                        crate::gateway::error::BitrouterError::internal(
                             "metering settlement token total overflow",
                         )
                     })?,
@@ -196,11 +196,11 @@ impl SettlementRecorder for MeteringRecorder {
             })
             .map(|event| {
                 let serialized = serde_json::to_string(event).map_err(|error| {
-                    bitrouter_sdk::BitrouterError::internal(format!(
+                    crate::gateway::error::BitrouterError::internal(format!(
                         "serialize normalized session identity: {error}"
                     ))
                 })?;
-                Ok::<MeteringSessionIdentity, bitrouter_sdk::BitrouterError>(
+                Ok::<MeteringSessionIdentity, crate::gateway::error::BitrouterError>(
                     MeteringSessionIdentity {
                         route_scope_id: route_scope(ctx),
                         agent_harness: event.harness.clone(),
@@ -217,10 +217,10 @@ impl SettlementRecorder for MeteringRecorder {
             })
             .transpose()?;
         let router = ctx
-            .get_event::<bitrouter_sdk::language_model::routing::RouterRequestIdentity>()
+            .get_event::<bitrouter_ai::routing::RouterRequestIdentity>()
             .cloned();
         if let Some(event) = &session_event {
-            ctx.emit(bitrouter_sdk::observe::SpanAttributes(
+            ctx.emit(bitrouter_ai::observe::span_attributes::SpanAttributes(
                 session_span_attributes(event),
             ));
         }

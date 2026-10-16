@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
 use anyhow::Context;
-use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
 
 use crate::cloud::account::manager::CredentialManager;
 use chrono::{Duration, Utc};

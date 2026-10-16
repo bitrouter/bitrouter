@@ -2,17 +2,16 @@
 
 use std::collections::BTreeMap;
 
+use crate::gateway::pipeline::settlement::SettlementContext;
 use anyhow::{Context, Result};
-use bitrouter_sdk::language_model::SettlementContext;
 use chrono::{DateTime, SecondsFormat, TimeDelta};
 
-use crate::eval::settlement::PredictionObservationSnapshot;
+use crate::gateway::observability::decision::PredictionObservationSnapshot;
 use crate::metering::MeteringSettlementEvent;
 
 use super::{
     canonical::CorrelationKey,
     evaluation::{TRAJECTORY_EVAL_TOPIC, build_operational_evaluation},
-    publisher::TrajectoryOutboxPublisher,
     store::TrajectoryStore,
     types::{
         OutboxPayload, OutboxWrite, RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION,
@@ -23,7 +22,7 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct TrajectorySettlementRecorder {
     store: TrajectoryStore,
-    publisher: TrajectoryOutboxPublisher,
+    notify_outbox: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     identity_key: CorrelationKey,
 }
 
@@ -38,13 +37,19 @@ pub(crate) enum TrajectorySettlementDisposition {
 impl TrajectorySettlementRecorder {
     pub(crate) fn new(
         store: TrajectoryStore,
-        publisher: TrajectoryOutboxPublisher,
+        notify_outbox: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
         identity_key: CorrelationKey,
     ) -> Self {
         Self {
             store,
-            publisher,
+            notify_outbox,
             identity_key,
+        }
+    }
+
+    fn notify_outbox(&self) {
+        if let Some(notify) = &self.notify_outbox {
+            notify();
         }
     }
 
@@ -67,7 +72,7 @@ impl TrajectorySettlementRecorder {
             self.store
                 .validate_reusable_terminal_settlement(owner_user_id, &request_id)
                 .await?;
-            self.publisher.kick();
+            self.notify_outbox();
             return Ok(TrajectorySettlementDisposition::AlreadyTerminal);
         }
         let Some(metering) = context.get_event::<MeteringSettlementEvent>().cloned() else {
@@ -76,7 +81,7 @@ impl TrajectorySettlementRecorder {
         if metering.request_id != context.request_id {
             anyhow::bail!("metering settlement identity does not match trajectory request")
         }
-        let routing = crate::eval::settlement::routing_evidence(context)?;
+        let routing = crate::gateway::observability::decision::routing_evidence(context)?;
         let owner = owner_user_id.to_owned();
         let settlement = self
             .store
@@ -96,13 +101,13 @@ impl TrajectorySettlementRecorder {
                 self.store
                     .validate_reusable_terminal_settlement(owner_user_id, &request_id)
                     .await?;
-                self.publisher.kick();
+                self.notify_outbox();
                 return Ok(TrajectorySettlementDisposition::AlreadyTerminal);
             } else {
                 return Err(error);
             }
         }
-        self.publisher.kick();
+        self.notify_outbox();
         Ok(TrajectorySettlementDisposition::Persisted)
     }
 }
@@ -114,7 +119,7 @@ fn build_settlement(
     sequence: u64,
     metering: &MeteringSettlementEvent,
     prediction: Option<&PredictionObservationSnapshot>,
-    routing: &[crate::eval::types::EvidenceItem],
+    routing: &[bitrouter_ai::eval::EvidenceItem],
 ) -> Result<Settlement> {
     let captured_at = settlement_timestamp(request, events, metering.duration_ms)?;
     let mut structural =
@@ -257,39 +262,52 @@ fn digest_hex(digest: &str) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    #[cfg(feature = "core")]
+    use std::sync::Arc;
 
+    #[cfg(feature = "core")]
+    use crate::config::EvalConfig;
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::observability::event::EventBus;
+    use crate::gateway::pipeline::settlement::SettlementContext;
+    #[cfg(feature = "core")]
+    use crate::gateway::pipeline::settlement::SettlementRecorder;
     use bitrouter_ai::types::{
         ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role, UsageOrigin,
     };
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::config::EvalConfig;
-    use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{
         TrajectorySettlementDisposition, TrajectorySettlementRecorder,
         build_operational_evaluation, build_settlement,
     };
-    use crate::eval::{
-        EvalService,
-        admission::SubmissionPrincipal,
-        settlement::{
-            EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
-        },
+    #[cfg(feature = "core")]
+    use crate::core::eval::publisher::TrajectoryOutboxPublisher;
+    #[cfg(feature = "core")]
+    use crate::core::eval::{
+        EvalService, admission::SubmissionPrincipal, settlement::EvalSettlementRecorder,
         store::EvalStore,
     };
+    use crate::gateway::observability::decision::PendingEvalDecision;
+    #[cfg(feature = "core")]
+    use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};
+    use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
+    #[cfg(feature = "core")]
+    use crate::gateway::observability::settlement::PolicySettlementRecorder;
+    use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::metering::MeteringSettlementEvent;
     use crate::output::reports::trajectory::{inspect_report, replay_report};
     use crate::output::{Format, Output};
     use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
     use crate::trajectory::correlation::TrajectoryRuntime;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
-    use crate::trajectory::publisher::TrajectoryOutboxPublisher;
     use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
     use crate::trajectory::types::{KeyedDigest, RequestStatus, canonical_digest};
-    use crate::workflow_state::ir::RouteProjection;
-    use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
+
+    #[cfg(feature = "core")]
+    fn notify(publisher: TrajectoryOutboxPublisher) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        Some(Arc::new(move || publisher.kick()))
+    }
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -297,16 +315,9 @@ mod tests {
     #[tokio::test]
     async fn recorder_reports_closed_dispositions_and_persists_prediction_observation()
     -> anyhow::Result<()> {
-        let (db, store) = store().await?;
+        let (_db, store) = store().await?;
         let identity_key = CorrelationKey::from_bytes([41; 32])?;
-        let publisher = TrajectoryOutboxPublisher::new(
-            store.clone(),
-            EvalStore::new(db),
-            EvalConfig::default(),
-            10,
-        )?;
-        let recorder =
-            TrajectorySettlementRecorder::new(store.clone(), publisher, identity_key.clone());
+        let recorder = TrajectorySettlementRecorder::new(store.clone(), None, identity_key.clone());
         assert_eq!(
             recorder
                 .record_if_tracked(&context("untracked"), None)
@@ -382,6 +393,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn eval_recorder_uses_exactly_one_owner_and_preserves_pending_on_storage_failure()
     -> anyhow::Result<()> {
@@ -396,13 +408,22 @@ mod tests {
             EvalConfig::default(),
             10,
         )?;
-        let trajectory =
-            TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
+        let trajectory = TrajectorySettlementRecorder::new(
+            store.clone(),
+            notify(publisher.clone()),
+            identity_key,
+        );
         let pending = PendingEvalDecisionStore::default();
         let invocation = EvalInvocation::new("owner-a");
         pending.insert(&invocation, pending_decision("external-request"));
-        let recorder = EvalSettlementRecorder::new(eval_store.clone(), pending.clone())
-            .with_trajectory(trajectory);
+        let recorder = PolicySettlementRecorder::new(
+            pending.clone(),
+            Some(trajectory),
+            Some(Arc::new(EvalSettlementRecorder::new(
+                eval_store.clone(),
+                pending.clone(),
+            ))),
+        );
         let mut missing_metering = context("external-request");
         missing_metering.emit(invocation.clone());
 
@@ -454,7 +475,7 @@ mod tests {
         assert!(pending.peek(&invocation, "owner-a").is_none());
         let subjects = eval_store.list_subjects_for_owner("owner-a").await?;
         assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].scope, crate::eval::types::EvalScope::Episode);
+        assert_eq!(subjects[0].scope, bitrouter_ai::eval::EvalScope::Episode);
         assert!(
             eval_store
                 .subject("request:external-request")
@@ -464,6 +485,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn settlement_and_typed_outbox_survive_restart_and_publish() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -515,6 +537,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn publisher_records_the_successful_admission_time_not_outbox_creation_time()
     -> anyhow::Result<()> {
@@ -622,25 +645,29 @@ mod tests {
         crate::db::run_migrations(&db).await?;
         let store = TrajectoryStore::new(db.clone());
         begin_guarded(&store, &request_id, "episode-1").await?;
+        #[cfg(feature = "core")]
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             EvalStore::new(db.clone()),
             EvalConfig::default(),
             10,
         )?;
-        let recorder = TrajectorySettlementRecorder::new(
-            store.clone(),
-            publisher.clone(),
-            identity_key.clone(),
-        );
+        #[cfg(feature = "core")]
+        let outbox_notify = notify(publisher.clone());
+        #[cfg(not(feature = "core"))]
+        let outbox_notify = None;
+        let recorder =
+            TrajectorySettlementRecorder::new(store.clone(), outbox_notify, identity_key.clone());
         let mut first = context("external-request-1");
         first.emit(routing_failure_metering("external-request-1", 100));
         assert_eq!(
             recorder.record_if_tracked(&first, None).await?,
             TrajectorySettlementDisposition::Persisted
         );
+        #[cfg(feature = "core")]
         publisher.wait_for_idle().await;
         drop(recorder);
+        #[cfg(feature = "core")]
         drop(publisher);
         drop(store);
         drop(db);
@@ -648,15 +675,20 @@ mod tests {
         let restarted_db = crate::db::connect(&database_url).await?;
         crate::db::run_migrations(&restarted_db).await?;
         let restarted_store = TrajectoryStore::new(restarted_db.clone());
+        #[cfg(feature = "core")]
         let restarted_publisher = TrajectoryOutboxPublisher::new(
             restarted_store.clone(),
             EvalStore::new(restarted_db.clone()),
             EvalConfig::default(),
             10,
         )?;
+        #[cfg(feature = "core")]
+        let restarted_notify = notify(restarted_publisher);
+        #[cfg(not(feature = "core"))]
+        let restarted_notify = None;
         let restarted_recorder = TrajectorySettlementRecorder::new(
             restarted_store.clone(),
-            restarted_publisher,
+            restarted_notify,
             identity_key,
         );
         let mut retry = context("external-request-1");
@@ -845,58 +877,64 @@ mod tests {
         ))
         .await?;
 
+        #[cfg(feature = "core")]
         let eval_store = EvalStore::new(db);
+        #[cfg(feature = "core")]
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             eval_store.clone(),
             EvalConfig::default(),
             10,
         )?;
-        let recorder = TrajectorySettlementRecorder::new(store, publisher.clone(), identity_key);
+        #[cfg(feature = "core")]
+        let outbox_notify = notify(publisher.clone());
+        #[cfg(not(feature = "core"))]
+        let outbox_notify = None;
+        let recorder = TrajectorySettlementRecorder::new(store, outbox_notify, identity_key);
         let mut retry = context("external-request-current");
         retry.emit(routing_failure_metering("external-request-current", 175));
+        #[cfg(feature = "core")]
         let baseline_subjects = eval_store.list_subjects_for_owner("owner-a").await?.len();
+        #[cfg(feature = "core")]
         let baseline_admissions = eval_store
             .latest_admissions_for_owner("owner-a")
             .await?
             .len();
 
         let result = recorder.record_if_tracked(&retry, None).await;
+        #[cfg(feature = "core")]
         publisher.wait_for_idle().await;
 
         assert!(
             result.is_err(),
             "terminal retry must reject another episode's valid evaluation envelope"
         );
-        assert_eq!(
-            eval_store.list_subjects_for_owner("owner-a").await?.len(),
-            baseline_subjects,
-            "rejected reuse must not publish a foreign Eval subject"
-        );
-        assert_eq!(
-            eval_store
-                .latest_admissions_for_owner("owner-a")
-                .await?
-                .len(),
-            baseline_admissions,
-            "rejected reuse must not publish a foreign Eval result"
-        );
+        #[cfg(feature = "core")]
+        {
+            assert_eq!(
+                eval_store.list_subjects_for_owner("owner-a").await?.len(),
+                baseline_subjects,
+                "rejected reuse must not publish a foreign Eval subject"
+            );
+            assert_eq!(
+                eval_store
+                    .latest_admissions_for_owner("owner-a")
+                    .await?
+                    .len(),
+                baseline_admissions,
+                "rejected reuse must not publish a foreign Eval result"
+            );
+        }
         Ok(())
     }
 
     #[tokio::test]
     async fn tracked_request_without_metering_proof_remains_unsettled() -> anyhow::Result<()> {
-        let (db, store) = store().await?;
+        let (_db, store) = store().await?;
         let identity_key = CorrelationKey::from_bytes([41; 32])?;
         let request_id = identity_key.request_identity("owner-a", "request-1")?;
         begin_guarded(&store, &request_id, "episode-1").await?;
-        let publisher = TrajectoryOutboxPublisher::new(
-            store.clone(),
-            EvalStore::new(db),
-            EvalConfig::default(),
-            10,
-        )?;
-        let recorder = TrajectorySettlementRecorder::new(store.clone(), publisher, identity_key);
+        let recorder = TrajectorySettlementRecorder::new(store.clone(), None, identity_key);
 
         assert_eq!(
             recorder
@@ -1094,15 +1132,21 @@ mod tests {
             correlated.evidence.native_parent_id.as_deref(),
             Some(first.request_id.as_str())
         );
+        #[cfg(feature = "core")]
         let eval_store = EvalStore::new(db.clone());
+        #[cfg(feature = "core")]
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             eval_store.clone(),
             EvalConfig::default(),
             10,
         )?;
+        #[cfg(feature = "core")]
+        let outbox_notify = notify(publisher.clone());
+        #[cfg(not(feature = "core"))]
+        let outbox_notify = None;
         let recorder =
-            TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
+            TrajectorySettlementRecorder::new(store.clone(), outbox_notify, identity_key);
         let mut settlement_context = context(SENTINELS[7]);
         settlement_context.emit(metering(SENTINELS[7]));
         assert_eq!(
@@ -1111,6 +1155,7 @@ mod tests {
                 .await?,
             TrajectorySettlementDisposition::Persisted
         );
+        #[cfg(feature = "core")]
         publisher.wait_for_idle().await;
 
         let mut surfaces = Vec::new();
@@ -1164,24 +1209,26 @@ mod tests {
             )?);
         }
 
-        assert!(publisher.drain_pending().await?.failed == 0);
-        surfaces.extend(
-            raw_json_column(
-                &db,
-                "SELECT subject_json FROM eval_subjects ORDER BY eval_id",
-                "subject_json",
-            )
-            .await?,
-        );
-        surfaces.extend(
-            raw_json_column(
-                &db,
-                "SELECT result_json FROM eval_results ORDER BY result_id",
-                "result_json",
-            )
-            .await?,
-        );
-
+        #[cfg(feature = "core")]
+        {
+            assert!(publisher.drain_pending().await?.failed == 0);
+            surfaces.extend(
+                raw_json_column(
+                    &db,
+                    "SELECT subject_json FROM eval_subjects ORDER BY eval_id",
+                    "subject_json",
+                )
+                .await?,
+            );
+            surfaces.extend(
+                raw_json_column(
+                    &db,
+                    "SELECT result_json FROM eval_results ORDER BY result_id",
+                    "result_json",
+                )
+                .await?,
+            );
+        }
         assert!(!surfaces.is_empty());
         for surface in &surfaces {
             for sentinel in SENTINELS {
@@ -1194,6 +1241,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn poison_outbox_does_not_block_later_item_or_shutdown_drain() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -1266,6 +1314,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn retry_after_admission_before_mark_is_idempotent() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -1312,6 +1361,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn publisher_batch_is_bounded() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -1336,6 +1386,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn burst_kicks_use_one_single_flight_worker_and_converge() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -1387,13 +1438,7 @@ mod tests {
         let identity_key = CorrelationKey::from_bytes([41; 32])?;
         let request_id = identity_key.request_identity("owner-a", "external-request-1")?;
         begin_guarded(&store, &request_id, "episode-1").await?;
-        let publisher = TrajectoryOutboxPublisher::new(
-            store.clone(),
-            EvalStore::new(db.clone()),
-            EvalConfig::default(),
-            10,
-        )?;
-        let recorder = TrajectorySettlementRecorder::new(store, publisher, identity_key);
+        let recorder = TrajectorySettlementRecorder::new(store, None, identity_key);
         let mut first = context("external-request-1");
         first.emit(routing_failure_metering("external-request-1", 100));
         assert_eq!(

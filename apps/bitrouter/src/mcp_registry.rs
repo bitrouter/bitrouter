@@ -1,7 +1,7 @@
 //! MCP registry client — discovery over the official MCP Registry
 //! (<https://registry.modelcontextprotocol.io>, unauthenticated v0.1 REST API).
 //!
-//! Mirrors the ACP integration ([`crate::agent_registry`]): a thin client that
+//! Mirrors the ACP integration (`crate::agent_registry`, when harness is enabled): a thin client that
 //! classifies install support and emits config stubs, while `mcp_servers:` in
 //! `bitrouter.yaml` remains the sole source of truth for what can launch.
 //!
@@ -27,8 +27,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::commands::invocation;
 use anyhow::{Context, Result};
-use bitrouter_sdk::invocation;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
@@ -602,7 +602,7 @@ pub fn stub_id(name: &str) -> String {
 }
 
 fn render_stub(id: &str, comment: &str, source: &str, invocation: &Invocation) -> String {
-    use crate::agents::yaml_scalar;
+    use crate::config::yaml::yaml_scalar;
     let mut out = String::new();
     out.push_str(&format!(
         "# {comment} — paste under `mcp_servers:` in bitrouter.yaml.\n"
@@ -1396,16 +1396,14 @@ mod tests {
         assert!(stub.yaml.contains("remote-filesystem:"));
         assert!(stub.yaml.contains("command: npx"));
         assert!(stub.yaml.contains("remote-filesystem-mcp-server@0.1.5"));
-        let body: std::collections::HashMap<
-            String,
-            bitrouter_sdk::mcp::transport::McpServerConfig,
-        > = serde_saphyr::from_str(&stub.yaml)
-            .expect("stub must deserialise into the config schema");
+        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
+            serde_saphyr::from_str(&stub.yaml)
+                .expect("stub must deserialise into the config schema");
         let entry = body.get("remote-filesystem").expect("key present");
         assert_eq!(entry.name, "remote-filesystem");
         entry.validate().expect("stub must pass config validation");
         match &entry.transport {
-            bitrouter_sdk::mcp::transport::McpTransport::Stdio { command, args, env } => {
+            crate::config::mcp::McpTransport::Stdio { command, args, env } => {
                 assert_eq!(command, "npx");
                 assert_eq!(args[0], "-y");
                 assert!(env.contains_key("GCS_BUCKET"));
@@ -1430,15 +1428,13 @@ mod tests {
             .expect("entry");
         let stub = add_stub(remote).expect("stub");
         assert_eq!(stub.id, "context7fork");
-        let body: std::collections::HashMap<
-            String,
-            bitrouter_sdk::mcp::transport::McpServerConfig,
-        > = serde_saphyr::from_str(&stub.yaml)
-            .expect("stub must deserialise into the config schema");
+        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
+            serde_saphyr::from_str(&stub.yaml)
+                .expect("stub must deserialise into the config schema");
         let entry = body.get("context7fork").expect("key present");
         entry.validate().expect("stub must pass config validation");
         match &entry.transport {
-            bitrouter_sdk::mcp::transport::McpTransport::Http { url, headers } => {
+            crate::config::mcp::McpTransport::Http { url, headers } => {
                 assert_eq!(url, "https://server.smithery.ai/@x/context7fork/mcp");
                 assert_eq!(
                     headers.get("Authorization").map(String::as_str),
@@ -1457,10 +1453,8 @@ mod tests {
         assert!(stub.yaml.contains("command: uvx"));
         assert!(stub.yaml.contains("# required, secret — API key."));
         assert!(stub.yaml.contains("SUBSTACK_API_KEY: \"\""));
-        let body: std::collections::HashMap<
-            String,
-            bitrouter_sdk::mcp::transport::McpServerConfig,
-        > = serde_saphyr::from_str(&stub.yaml).expect("schema round-trip");
+        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
+            serde_saphyr::from_str(&stub.yaml).expect("schema round-trip");
         body.get("substack-ops")
             .expect("key")
             .validate()

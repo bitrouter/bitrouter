@@ -5,6 +5,20 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [Service refactor source inventory](BITROUTER_SERVICE_REFACTOR_INVENTORY.md) —
+  revision-scoped reconciliation of baseline modules with actual destinations;
+  coverage and remaining gaps are explicit, separate from acceptance results.
+
+- [`DISTRIBUTION.md`](DISTRIBUTION.md) — full and gateway profiles, archive
+  identity/checksums, profile-preserving updates and packaged SDK acceptance.
+- [`BITROUTER_SERVICE_REFACTOR_PLAN.md`](BITROUTER_SERVICE_REFACTOR_PLAN.md) —
+  **accepted direction; P0 implementation in progress.** Complete package/module
+  migration inventory, lightweight AI contracts, HTTP SDK, application-owned
+  telemetry, feature dependencies, P0 single-instance delivery and acceptance,
+  capability-aware daemon compatibility, profile-preserving updates, and the
+  separate P1 gateway multi-instance milestone.
+- [`BITROUTER_SERVICE_REFACTOR_PROGRESS.md`](BITROUTER_SERVICE_REFACTOR_PROGRESS.md)
+  — P0 baseline, implementation stages, review evidence and acceptance ledger.
 - [`ORCHESTRATOR_CORE_SPEC.md`](ORCHESTRATOR_CORE_SPEC.md) — **v1.0, frozen
   implementation contract; implementation in progress.** Core-owned model/context routing
   and agent scheduling, harness-owned tools and durable state, managed
@@ -13,10 +27,11 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   Stage plan, independent review findings, validation evidence and remaining gates.
 - [`ORCHESTRATOR_CORE_ACCEPTANCE.md`](ORCHESTRATOR_CORE_ACCEPTANCE.md) —
   A01–A23 source/test evidence and remaining core/harness integration exit criteria.
-- [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **design
-  baseline; phased implementation started.** Recorded Core native integration, conversion admission,
-  catalog/auth boundaries, data-driven ACP relocation and alpha API migration;
-  implementation contracts, acceptance criteria and remaining review items.
+- [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **historical
+  extraction baseline; target ownership superseded by the service refactor plan.**
+  Recorded Core native integration, conversion admission, catalog/auth boundaries,
+  data-driven ACP relocation and alpha API migration. Behavioral/fidelity
+  requirements remain applicable.
 - [`MODEL_HISTORY_COMPATIBILITY_AUDIT.md`](MODEL_HISTORY_COMPATIBILITY_AUDIT.md) —
   Baseline model-history replay, conversion, omission and synthesis rules;
   evidence and boundaries for the proposed `bitrouter-ai` extraction.

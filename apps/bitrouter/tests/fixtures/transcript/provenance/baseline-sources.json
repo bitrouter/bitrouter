@@ -1,0 +1,176 @@
+[
+  {
+    "path": "Cargo.lock",
+    "bytes": 168026,
+    "sha256": "20539aa9a685a3a4864cbd3936c73808f0b188fe83e3fc3375017b3456cc6c18",
+    "git_blob": "466872c4bc3df0a01f5f02dc1a2f6bde235461f8"
+  },
+  {
+    "path": "Cargo.toml",
+    "bytes": 9848,
+    "sha256": "f627c6d835e2c86f974da813e8fb355bda0c486f70a06a64aaac378539448299",
+    "git_blob": "41e6a5339433f2e0e221e7da195c47bea1de7630"
+  },
+  {
+    "path": "apps/bitrouter/src/acp_cli.rs",
+    "bytes": 158980,
+    "sha256": "83e51aadee6f63bdbd15ebc5e7dfcafea02212a9dfa04294914e6c7244b0eeeb",
+    "git_blob": "e1d06684d1bd9dbb6b8f56f59240eae40b0322df"
+  },
+  {
+    "path": "apps/bitrouter/src/chat/session.rs",
+    "bytes": 10076,
+    "sha256": "1c0c6cc98311cdc06c68c5d1a0db982086538de440e512fbf078bc0ddb95b8fe",
+    "git_blob": "59bbfebe7fd27b9a026260d065017961f8a816d1"
+  },
+  {
+    "path": "crates/bitrouter-tui/Cargo.toml",
+    "bytes": 823,
+    "sha256": "b44bb50525e91a4853a75bd35bf294822d8e06b7ee6e93967514d8c04ff8878f",
+    "git_blob": "91c6c40828e0e876324875613599ddb7ca3f94c3"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/agents.rs",
+    "bytes": 172758,
+    "sha256": "f19088f88231a9497f333d0fe37b2a59dda4acfc54298b3c642e43e0e8e23a25",
+    "git_blob": "a8da5306259d84928ce95667ec27fe5321fe5dee"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/agents_menu.rs",
+    "bytes": 20562,
+    "sha256": "8d7d7211f2dec902bc674320ae570da185cc3591aa4e0c7fbd4e5cd36c860475",
+    "git_blob": "0793e608ff6f4bbab1b87e617e971b71641dddf6"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/code.rs",
+    "bytes": 277407,
+    "sha256": "41d7aa1880d96b589f4b6ac2653039cd08eb6d9dd351602d6871843a7f573a98",
+    "git_blob": "99a6dc7f775383130c48632c3af6a20f2e9f58e3"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/composer.rs",
+    "bytes": 4462,
+    "sha256": "968aec33f2216aaccb5721fca4b09476da48649c8893364b88be91ef131adee1",
+    "git_blob": "8d307dbbc21d80f50eb9215d8f06a9fe0e71e6ba"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/cost.rs",
+    "bytes": 8797,
+    "sha256": "98f8415ab7075dffa29e05392e2b222154ae050c153c6486976c6279beacc2ba",
+    "git_blob": "db9cf4aff384157f6fcf7f7fcf89c78cce45dd6c"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/editor.rs",
+    "bytes": 27463,
+    "sha256": "15683b4bcb370b5ad8675ae3cb92ac22d608a29586d6671d6b2e7fbbc090b42b",
+    "git_blob": "cc8df3a8ee22b0757bc45966c58333bc985dcdba"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/journal.rs",
+    "bytes": 34707,
+    "sha256": "279aa514186dd331fbb885c0993e9cf106340056f34137757a7e679468ef282e",
+    "git_blob": "6d20c51e23d0cb5db9c0fb95d988e7140eb86159"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/lib.rs",
+    "bytes": 3065,
+    "sha256": "cf1753c805d32252755514420eb150671a3cc972247db1ee3765b089a1b9cb28",
+    "git_blob": "416a4252a31925d655520529df836020cc504eee"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/lifecycle.rs",
+    "bytes": 5197,
+    "sha256": "bf4a30b9bbf2296062fa6d3586cfdd16465fdfc89e0c38c107c46ce8ebedd0c4",
+    "git_blob": "e2c4394d282b030d36a284c0359cfa48ef28ab77"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/log_tail.rs",
+    "bytes": 4874,
+    "sha256": "ed35c372c9e0b67abd56197df80c0acb5341304f9f70f0cf2c3c5620e42f237e",
+    "git_blob": "1660fcb37033dcd2c516bb279b2b537b09637ac0"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/machine.rs",
+    "bytes": 71528,
+    "sha256": "5e2a2b77f1374f8e607895e7d26fe93b18c6e888e00b6cdd15a592484624a1c9",
+    "git_blob": "afe3af7f11f68fa3290260ccfcb825c138094dc6"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/native_agent.rs",
+    "bytes": 27674,
+    "sha256": "32c687226174f35c115bcd2120c7107342edcb9daee47053f25afb64837a21a1",
+    "git_blob": "f47f93d3e6ae2c3edfb45303ef524209f6a36b23"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/permission.rs",
+    "bytes": 23677,
+    "sha256": "3a9c27b337922ba83022e888021a6a4c66ecf18064a177d3d663d4b324154777",
+    "git_blob": "b4e5f0ea8269393ad9915958606f5277e9eebaa4"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/picker.rs",
+    "bytes": 13154,
+    "sha256": "623b42b4cd700180762adf827bb09b28b31590acd8335f6ddb65f5f3ba1fbb89",
+    "git_blob": "1e7b2c50d3687f6545645ade97ee9a8cb3fd995f"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/plain.rs",
+    "bytes": 5440,
+    "sha256": "b4b93ffbd028c2099752d1c6b58e404ec9ce3f80aa7301c0200f897c260a24d8",
+    "git_blob": "f71262dda6b93e78a13d2a6a35bab380eac71af2"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/render/content.rs",
+    "bytes": 9621,
+    "sha256": "ce2298273c456ab3b4d67c705d7569f9fe222885343c8376a0a445e2064830c9",
+    "git_blob": "8b8e00217c016152a9f4869303ca5a847062db56"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/render/diff.rs",
+    "bytes": 11371,
+    "sha256": "a1ed1595045742da98327b9faa4a45908d23ead9cfb89f691ee527898fb62200",
+    "git_blob": "ab071b3b5dfcabcf86a7bc44b0625f6121b629f9"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/render/markdown.rs",
+    "bytes": 12763,
+    "sha256": "d5d5397f9c5a594f4de3bdcd3ebba2543eab66524dbcbcba4f0e099fa4cdb9f7",
+    "git_blob": "cba4df9e5a3cf0784ab60d1f58f995e142c495e7"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/render/mod.rs",
+    "bytes": 24879,
+    "sha256": "b7aeff87321e67bbb2fa0e416ac5c317cc1a964b0f67e3c1fccbb605feb04b58",
+    "git_blob": "c7029130796d9a0a7689b808812d53d4968c695f"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/render/session.rs",
+    "bytes": 16443,
+    "sha256": "a6d33cbec69670887d129b37da81e66ecede22ee2a733cd02aecc5185037d499",
+    "git_blob": "014384bd7d868824a563cd30aa9fa8ee71ffb910"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/select.rs",
+    "bytes": 13054,
+    "sha256": "83f09f179478d8b0cc55a518f4c8cfdd91ab62bda36c80c1a083a75c26d4bf53",
+    "git_blob": "822927dec05c309ef9a33fd2a587eea0364d4d02"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/view.rs",
+    "bytes": 10761,
+    "sha256": "ccd95e108d94fea31c162dfab382252ed6bb178848f9acd3fb3b3b28a9de1a6a",
+    "git_blob": "5bab2cb8e0663b91baafe669d0d235b0c34d898a"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/wrap.rs",
+    "bytes": 17832,
+    "sha256": "a549d573b949095857f49dc24c0b2798103a50e6b5b2a89e5267642321a6ff9f",
+    "git_blob": "86cdb7f585d67c0b2ef3c85fafa11c56672a4baa"
+  },
+  {
+    "path": "crates/bitrouter-tui/src/writer.rs",
+    "bytes": 57016,
+    "sha256": "a124af8771c8a052da42c835f9f9a85ac1ac07d04b44744f7c14db96e8fd5075",
+    "git_blob": "5cf128f55afbb9836fc2d23606b7a3aa989eb00f"
+  }
+]

@@ -6,16 +6,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use async_trait::async_trait;
-use bitrouter_ai::auth::credentials::Credential;
-use bitrouter_ai::auth::store::{
+use crate::gateway::providers::auth::credentials::Credential;
+use crate::gateway::providers::auth::store::{
     CredentialKey, CredentialStore, CredentialTransaction, Durability, StoreError,
 };
+use async_trait::async_trait;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
+use crate::gateway::providers::auth::file::backend::FileCredentialStore;
+use crate::gateway::providers::auth::file::snapshot::CredentialStore as FileStore;
 use crate::providers::import::claude_code::{ClaudeCodeStore, LiveCredential};
-use bitrouter_ai::auth::file::backend::FileCredentialStore;
-use bitrouter_ai::auth::file::snapshot::CredentialStore as FileStore;
 
 type LiveStores = HashMap<(Option<&'static str>, PathBuf), Arc<AsyncMutex<LiveState>>>;
 static LIVE_STORES: OnceLock<Mutex<LiveStores>> = OnceLock::new();
@@ -148,7 +148,7 @@ impl CredentialTransaction for LiveTransaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::auth::credentials::OAuthToken;
+    use crate::gateway::providers::auth::credentials::OAuthToken;
     type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
     fn key(account: &str) -> CredentialKey {
         CredentialKey {

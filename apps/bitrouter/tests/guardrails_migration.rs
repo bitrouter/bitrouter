@@ -1,10 +1,11 @@
 //! Removed default-host guardrails must fail activation, never become ignored.
 
 use anyhow::{Context, Result, ensure};
+use bitrouter::config;
 use bitrouter::daemon::DaemonReloader;
 use bitrouter::paths::ConfigSource;
-use bitrouter::reload::{AppReloader, ReloadParticipant, ReloadParticipantOutcome, ReloadSource};
-use bitrouter_sdk::config;
+use bitrouter::reload::{AppReloader, ReloadSource};
+use bitrouter_ai::control::reload::{ReloadParticipant, ReloadParticipantOutcome};
 use serde_json::{Value, json};
 use std::process::Command;
 

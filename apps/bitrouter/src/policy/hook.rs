@@ -11,9 +11,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use bitrouter_sdk::PluginId;
-use bitrouter_sdk::Result;
-use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
+use crate::gateway::error::Result;
+use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::DenyReason;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
 
 use crate::metering::{MeteringStore, TimeWindow};
 use crate::policy::store::PolicyStore;
@@ -139,12 +142,12 @@ impl PreRequestHook for PolicyHook {
 
     async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
         let binding = ctx.extension::<FrozenPolicyBinding>().ok_or_else(|| {
-            bitrouter_sdk::BitrouterError::bad_request(
+            crate::gateway::error::BitrouterError::bad_request(
                 "policy revalidation lost its ingress binding",
             )
         })?;
         if binding.policy_id != Self::policy_id(ctx) {
-            return Err(bitrouter_sdk::BitrouterError::bad_request(
+            return Err(crate::gateway::error::BitrouterError::bad_request(
                 "policy binding changed after admission",
             ));
         }

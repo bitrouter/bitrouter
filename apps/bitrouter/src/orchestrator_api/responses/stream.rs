@@ -96,13 +96,10 @@ impl Writer {
         Ok(())
     }
 
-    fn failure(
-        &mut self,
-        error: bitrouter_orchestrator::core::protocol::CoreError,
-    ) -> io::Result<()> {
+    fn failure(&mut self, error: bitrouter_ai::core::protocol::CoreError) -> io::Result<()> {
         #[derive(Serialize)]
         struct Failure {
-            error: bitrouter_orchestrator::core::protocol::CoreError,
+            error: bitrouter_ai::core::protocol::CoreError,
         }
         self.event("error", &Failure { error })
     }
@@ -189,7 +186,7 @@ fn body(
 }
 
 pub(super) fn json(
-    exchange: Arc<bitrouter_orchestrator::core::session::responses::ResponseExchange>,
+    exchange: Arc<crate::storage::checkpoint::snapshot::responses::ResponseExchange>,
     scope: Arc<Scope>,
     permit: OwnedSemaphorePermit,
 ) -> Response {
@@ -376,7 +373,7 @@ pub(super) fn sse(
                             #[derive(Serialize)]
                             struct Retained<'a> {
                                 agent: Agent<'a>,
-                                event: &'a bitrouter_orchestrator::core::checkpoint::DurableEvent,
+                                event: &'a bitrouter_ai::core::checkpoint::DurableEvent,
                             }
                             writer.event(
                                 &format!("bitrouter.{}", retained.event.kind),
@@ -530,8 +527,8 @@ mod tests {
     #[tokio::test]
     async fn unsupported_retained_output_ends_with_a_typed_sse_error()
     -> Result<(), Box<dyn std::error::Error>> {
+        use crate::storage::checkpoint::snapshot::responses::{ResponseExchange, ResponseOutput};
         use bitrouter_ai::types::{Content, DataContent, Message, Role};
-        use bitrouter_orchestrator::core::session::responses::{ResponseExchange, ResponseOutput};
         let mut exchange: ResponseExchange = serde_json::from_value(serde_json::json!({
             "response_id":"response", "operation_id":"operation", "run_id":"run", "created_at":1,
             "previous_response_id":null, "created_state_revision":1, "completed_state_revision":2,

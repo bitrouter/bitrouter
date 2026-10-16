@@ -1,0 +1,76 @@
+diff --git a/crates/bitrouter-orchestrator/src/service/recovery_tests.rs b/crates/bitrouter-orchestrator/src/service/recovery_tests.rs
+index 8fa98d0..98c3cf2 100644
+--- a/crates/bitrouter-orchestrator/src/service/recovery_tests.rs
++++ b/crates/bitrouter-orchestrator/src/service/recovery_tests.rs
+@@ -2404,3 +2404,71 @@ async fn steering_retries_use_bounded_receipt_pages() -> Result<(), Box<dyn std:
+     service.shutdown().await;
+     Ok(())
+ }
++
++// Fixture capture only: the historical production writer and format constant
++// remain unchanged. This uses that revision's existing scripted model helper.
++#[tokio::test]
++#[ignore = "writes an explicitly selected historical compatibility fixture"]
++async fn write_p0_historical_runtime_fixture() -> Result<(), Box<dyn std::error::Error>> {
++    let output = std::env::var_os("BITROUTER_HISTORICAL_FIXTURE")
++        .ok_or("BITROUTER_HISTORICAL_FIXTURE must name a new output file")?;
++    let workspace = TempDir::new()?;
++    std::fs::write(
++        workspace.path().join("evidence"),
++        "historical writer evidence\n",
++    )?;
++    let store = Arc::new(MemoryExecutionStore::default());
++    let service = ThreadService::with_store(
++        app(vec![
++            turn(vec![tool_call(
++                "historical-read",
++                "read",
++                serde_json::json!({"path":"evidence"}),
++            )]),
++            final_turn(),
++        ])?,
++        &[workspace.path().to_path_buf()],
++        store.clone(),
++    )?;
++    let created = service
++        .create_thread(
++            &service.inner.instance_id,
++            thread_request(&workspace, "historical-create"),
++        )
++        .await?;
++    let receipt = service
++        .start_turn(
++            &target(&created),
++            &CallerContext::local(),
++            input("Read the evidence file", "historical-turn"),
++        )
++        .await?;
++    let completed = wait_for(&service, &receipt.turn_id, TurnStatus::Completed).await?;
++    service.shutdown().await;
++    assert_eq!(completed.status, TurnStatus::Completed);
++    let stored = store
++        .load(&created.thread_id)
++        .await?
++        .ok_or("historical root missing")?;
++    assert_eq!(stored.format_version, crate::store::RUNTIME_FORMAT_VERSION);
++    assert_eq!(stored.version, u64::try_from(stored.records.len())?);
++    let mut calls = 0;
++    let mut results = 0;
++    for record in &stored.records {
++        if let ExecutionRecord::TurnRecord { fact, .. } = record {
++            match fact.as_ref() {
++                ExecutionRecord::ModelResponse { .. } => calls += 1,
++                ExecutionRecord::ToolResult { .. } => results += 1,
++                _ => {}
++            }
++        }
++    }
++    assert_eq!(calls, 2);
++    assert_eq!(results, 1);
++    let file = std::fs::OpenOptions::new()
++        .write(true)
++        .create_new(true)
++        .open(output)?;
++    serde_json::to_writer(file, &stored)?;
++    Ok(())
++}

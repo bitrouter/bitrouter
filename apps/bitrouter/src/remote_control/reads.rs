@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use crate::actions::models::ModelsReport;
-use crate::actions::route::{RouteInput, RouteReport};
-use crate::actions::status::StatusReport;
+use bitrouter_ai::control::models::ModelsReport;
+use bitrouter_ai::control::status::StatusReport;
+use {bitrouter_ai::control::route::RouteInput, bitrouter_ai::control::route::RouteReport};
 
 use crate::paths::ConfigSource;
 
@@ -33,7 +33,7 @@ impl ReadPorts {
     }
 
     pub async fn route_report(&self, input: RouteInput) -> anyhow::Result<RouteReport> {
-        crate::actions::administration::validate_identifier(&input.model)?;
+        bitrouter_ai::control::administration::validate_identifier(&input.model)?;
         crate::actions::route::RouteAction::new(self.source.clone(), Some(self.socket.clone()))
             .report(input)
             .await

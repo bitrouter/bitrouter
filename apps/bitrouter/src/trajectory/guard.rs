@@ -4,8 +4,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::types::{HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
-use crate::eval::types::EvalExperimentRef;
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
+use crate::gateway::routing::workflow::ir::{RouteProjection, WorkflowStateKind};
+use bitrouter_ai::eval::EvalExperimentRef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

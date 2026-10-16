@@ -379,13 +379,13 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{inspect_report, replay_from_audit, replay_report};
+    use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::output::{Format, Output};
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::store::{
         CorrelateAndBegin, EpisodeAudit, GuardedRouteInput, TrajectoryStore,
     };
     use crate::trajectory::types::{HistoryCompleteness, StoredEpisode};
-    use crate::workflow_state::ir::RouteProjection;
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

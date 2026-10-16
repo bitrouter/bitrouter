@@ -1,5 +1,13 @@
 # BitRouter AI refactor specification
 
+**Target ownership update, 2026-10-15:** the
+[service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
+supersedes this spec's standalone model-integration library target. AI will own
+lightweight public contracts; codecs, conversion, authentication, catalog runtime
+and model invocation will move into the application. The implementation below
+remains the source baseline, and its behavioral/fidelity requirements still
+apply. The new ownership has not yet been implemented.
+
 **Status: design baseline; phased implementation started locally.**
 
 Updated on 2026-10-04 to record the design discussion for

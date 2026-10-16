@@ -1,12 +1,13 @@
 //! CLI inspection and scaffolding for installed Agent Skills.
 //!
-//! The shared format parser and discovery rules are owned by
-//! `bitrouter_orchestrator::harness::skills`. This module selects CLI roots and
-//! renders reports; installing skills remains the ecosystem's responsibility.
+//! This module owns the shared format parser and offline discovery rules,
+//! selects CLI roots and renders reports. Installing skills remains the
+//! ecosystem's responsibility.
 //! The managed harness publishes metadata and returns versioned materials to
 //! Core. Ordinary `bro skills list` does not activate a skill or execute scripts.
 
 pub mod cli;
+pub mod format;
 pub mod root;
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
@@ -27,8 +28,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Validate with the same rules used by the production harness.
 pub fn validate_skill_name(name: &str) -> Result<()> {
-    bitrouter_orchestrator::harness::skills::validate_skill_name(name)
-        .map_err(|_| Error::InvalidSkillName(name.to_string()))
+    format::validate_skill_name(name).map_err(|_| Error::InvalidSkillName(name.to_string()))
 }
 
 #[cfg(test)]

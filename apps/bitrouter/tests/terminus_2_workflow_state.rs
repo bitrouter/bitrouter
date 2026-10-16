@@ -1,14 +1,14 @@
-use bitrouter::workflow_state::extractors::{ExtractorInput, extract_workflow_state};
-use bitrouter::workflow_state::ir::{
+use bitrouter::gateway::routing::workflow::extractors::{ExtractorInput, extract_workflow_state};
+use bitrouter::gateway::routing::workflow::ir::{
     AgentRole, ContextTransition, HarnessId, ProtocolKind, RequirementLevel, SessionConfidence,
     ToolDensity, WorkflowStateKind,
 };
-use bitrouter::workflow_state::online::OnlineWorkflowState;
-use bitrouter::workflow_state::session::{
+use bitrouter::gateway::routing::workflow::online::OnlineWorkflowState;
+use bitrouter::gateway::routing::workflow::session::{
     WorkflowIdentityTracker, resolve_session_signal, resolve_workflow_identity,
 };
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
-use bitrouter_sdk::HeaderMap;
+use http::HeaderMap;
 
 const TERMINUS_OPENING: &str = "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with analysis, plan, commands, and task_complete.";
 
@@ -50,7 +50,7 @@ fn json_action(commands: &[&str], task_complete: bool) -> String {
     .to_string()
 }
 
-fn extract(prompt: &Prompt) -> bitrouter::workflow_state::ir::WorkflowStateIR {
+fn extract(prompt: &Prompt) -> bitrouter::gateway::routing::workflow::ir::WorkflowStateIR {
     let headers = HeaderMap::new();
     let raw_body = serde_json::json!({});
     extract_workflow_state(&ExtractorInput {
@@ -273,7 +273,7 @@ fn identity_for(
     tracker: &WorkflowIdentityTracker,
     prompt: &Prompt,
     trial_id: &str,
-) -> bitrouter::workflow_state::ir::WorkflowIdentity {
+) -> bitrouter::gateway::routing::workflow::ir::WorkflowIdentity {
     let mut native_prompt = prompt.clone();
     native_prompt.system = Some(TERMINUS_OPENING.to_string());
     let mut headers = HeaderMap::new();
@@ -300,7 +300,7 @@ fn identity_for_session(
     tracker: &WorkflowIdentityTracker,
     session_id: &str,
     prompt: &Prompt,
-) -> bitrouter::workflow_state::ir::WorkflowIdentity {
+) -> bitrouter::gateway::routing::workflow::ir::WorkflowIdentity {
     let mut native_prompt = prompt.clone();
     native_prompt.system = Some(TERMINUS_OPENING.to_string());
     let mut headers = HeaderMap::new();

@@ -29,9 +29,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::commands::invocation;
 use anyhow::{Context, Result};
 use base64::Engine;
-use bitrouter_sdk::invocation;
 use rand::Rng;
 
 use crate::trajectory::canonical::CorrelationKey;
@@ -196,7 +196,7 @@ pub fn resolve_config_with(
     Ok(ConfigSource::Default { home })
 }
 
-/// Load a [`bitrouter_sdk::config::Config`] from a [`ConfigSource`].
+/// Load a [`crate::config::Config`] from a [`ConfigSource`].
 /// `ConfigSource::File` reads from disk via the SDK's loader;
 /// `ConfigSource::Default` builds the zero-config in-memory default
 /// from [`crate::providers::apply::zero_config`].
@@ -204,9 +204,9 @@ pub fn resolve_config_with(
 /// This is the one place `serve` / `start` / `models` / `route` etc.
 /// reach for a `Config` — every call site goes through here so the
 /// zero-config story is wired in uniformly.
-pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config::Config> {
+pub async fn load_config(source: &ConfigSource) -> Result<crate::config::Config> {
     let mut config = match source {
-        ConfigSource::File(path) => bitrouter_sdk::config::load(path)
+        ConfigSource::File(path) => crate::config::load(path)
             .await
             .with_context(|| format!("loading {}", path.display())),
         ConfigSource::Default { .. } => {

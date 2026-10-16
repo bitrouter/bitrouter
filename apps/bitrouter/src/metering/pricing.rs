@@ -185,8 +185,8 @@ impl ModelPricing {
     }
 }
 
-impl From<&bitrouter_sdk::config::PricingConfig> for ModelPricing {
-    fn from(pricing: &bitrouter_sdk::config::PricingConfig) -> Self {
+impl From<&crate::config::PricingConfig> for ModelPricing {
+    fn from(pricing: &crate::config::PricingConfig) -> Self {
         Self {
             endpoint_profile: pricing.endpoint_profile,
             input_micro_usd_per_token: pricing.input_micro_usd_per_token,

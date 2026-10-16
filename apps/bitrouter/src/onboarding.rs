@@ -10,19 +10,18 @@ use std::sync::Arc;
 
 use crate::cloud::account::credentials::default_credentials_path;
 use crate::cloud::account::manager::CredentialManager;
+use crate::commands::invocation;
+use crate::gateway::providers::auth::file::snapshot::CredentialStore;
+use crate::gateway::providers::hosted::PROVIDER_ID;
 use anyhow::{Context, Result};
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::providers::hosted::PROVIDER_ID;
-use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
 
 use crate::cloud::auth::{LoginInputs, login as cloud_login};
 use crate::commands::{ProviderLoginOptions, login_provider_with_options};
-use crate::output::CliReport;
-use crate::output::Output;
 use crate::output::human::Human;
-use crate::spawn::SpawnAgent;
+use crate::output::{CliReport, Output};
+use crate::providers::cli_install::SpawnAgent;
 
 // =====================================================================
 // §5 — network-free credential probe
@@ -285,6 +284,7 @@ pub struct OnboardingStatusReport {
 }
 
 impl OnboardingStatusReport {
+    #[cfg(any(feature = "tui", test))]
     fn from_signals(signals: &ProbeSignals) -> Self {
         let mut parts = Vec::new();
         if signals.cloud_session {
@@ -345,21 +345,24 @@ pub async fn entry(output: &Output) -> Result<()> {
         }
     }
     if std::io::stdin().is_terminal() {
-        let manager = crate::cloud::default_manager()?;
-        run_interactive(
-            OnboardingFlags {
-                config: Some(path),
-                ..Default::default()
-            },
-            &probe(),
-            output,
-            manager,
-        )
-        .await
-    } else {
-        print_hint();
-        emit(output, &empty_report())
+        validate_tui_availability(false, None)?;
+        #[cfg(feature = "tui")]
+        {
+            let manager = crate::cloud::default_manager()?;
+            return run_interactive(
+                OnboardingFlags {
+                    config: Some(path),
+                    ..Default::default()
+                },
+                &probe(),
+                output,
+                manager,
+            )
+            .await;
+        }
     }
+    print_hint();
+    emit(output, &empty_report())
 }
 
 /// Find the onboarding destination without requiring a config to exist yet.
@@ -376,15 +379,16 @@ fn config_path(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
     )?)
 }
 
+#[cfg(feature = "harness")]
 async fn start_default_chat(
     source: &crate::paths::ConfigSource,
-    config: bitrouter_sdk::config::Config,
+    config: crate::config::Config,
 ) -> Result<()> {
     let agent =
         config.chat.agent.clone().with_context(|| {
             format!("no default ACP harness; run `{} init`", invocation::name())
         })?;
-    let routing = crate::acp_cli::RoutingOptions {
+    let routing = crate::commands::agent_options::RoutingOptions {
         model: config.chat.model.clone(),
         ..Default::default()
     };
@@ -400,22 +404,39 @@ async fn start_default_chat(
         })
         .await;
     }
-    let config_path = match source {
-        crate::paths::ConfigSource::File(path) => Some(path.as_path()),
-        crate::paths::ConfigSource::Default { .. } => None,
-    };
-    crate::dashboard::run(
-        None,
-        config_path,
-        None,
-        Some(crate::dashboard::SessionRequest {
-            agent,
-            selection: crate::acp_cli::SessionSelection::New,
-            turn_timeout: None,
-            routing,
-        }),
-    )
-    .await
+    #[cfg(feature = "tui")]
+    {
+        let config_path = match source {
+            crate::paths::ConfigSource::File(path) => Some(path.as_path()),
+            crate::paths::ConfigSource::Default { .. } => None,
+        };
+        crate::dashboard::run(
+            None,
+            config_path,
+            None,
+            Some(crate::dashboard::SessionRequest {
+                agent,
+                selection: crate::commands::agent_options::SessionSelection::New,
+                turn_timeout: None,
+                routing,
+            }),
+        )
+        .await
+    }
+    #[cfg(not(feature = "tui"))]
+    anyhow::bail!("interactive default chat requires the tui feature")
+}
+
+#[cfg(not(feature = "harness"))]
+async fn start_default_chat(
+    _source: &crate::paths::ConfigSource,
+    _config: crate::config::Config,
+) -> Result<()> {
+    anyhow::ensure!(
+        !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal(),
+        "interactive default chat requires the tui feature"
+    );
+    anyhow::bail!("default agent chat requires the harness feature")
 }
 
 /// Persist onboarding atomically; an interrupted wizard never marks itself complete.
@@ -464,7 +485,7 @@ fn save_config(
     }
     let serialized = serde_saphyr::to_string(&value)?;
     // Reject invalid edits before replacing a working configuration.
-    let _: bitrouter_sdk::config::Config = serde_saphyr::from_str(&serialized)?;
+    let _: crate::config::Config = serde_saphyr::from_str(&serialized)?;
     let parent = path.parent().context("configuration path has no parent")?;
     if !parent.exists() {
         crate::paths::ensure_home_directory(parent)?;
@@ -488,22 +509,36 @@ fn acp_id(agent: SpawnAgent) -> &'static str {
     }
 }
 
+/// Reject unavailable onboarding UI before logging, credentials or config writes.
+/// Explicit launch requires TUI even when the setup itself is noninteractive.
+pub fn validate_tui_availability(yes: bool, after: Option<AfterAction>) -> Result<()> {
+    if !cfg!(feature = "tui") {
+        if after == Some(AfterAction::Launch) {
+            anyhow::bail!("onboarding --after launch requires the tui feature");
+        }
+        if !yes && std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "interactive onboarding requires the tui feature; use init --yes for noninteractive setup"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// `bro init [flags]`. Runs the wizard interactively, or headlessly when
-/// `--yes` is set (or no TTY is attached). `--reset` clears credentials first.
+/// `--yes` is set (or no TTY is attached). Capability checks precede `--reset`.
 pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
+    validate_tui_availability(flags.yes, flags.after)?;
     let manager = crate::cloud::default_manager()?;
     if flags.reset {
         reset_credentials(flags.yes, std::io::stdin().is_terminal()).await?;
     }
-    if flags.yes {
-        return run_headless(flags, output, manager).await;
-    }
-    if std::io::stdin().is_terminal() {
+    #[cfg(feature = "tui")]
+    if !flags.yes && std::io::stdin().is_terminal() {
         let signals = probe();
-        run_interactive(flags, &signals, output, manager).await
-    } else {
-        run_headless(flags, output, manager).await
+        return run_interactive(flags, &signals, output, manager).await;
     }
+    run_headless(flags, output, manager).await
 }
 
 fn empty_report() -> OnboardingReport {
@@ -539,7 +574,7 @@ async fn run_headless(
     // Catalog ACP adapters are built in. No native CLI installation is required.
     let path = config_path(flags.config.as_deref())?;
     let existing_agent = if path.is_file() && !flags.force {
-        let config: bitrouter_sdk::config::Config =
+        let config: crate::config::Config =
             serde_saphyr::from_str(&std::fs::read_to_string(&path)?)?;
         config.chat.agent
     } else {
@@ -626,7 +661,7 @@ async fn apply_flag_credentials(
             None if headless => skipped.push(provider.clone()),
             None => match login_provider_with_options(
                 provider,
-                bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
+                crate::gateway::providers::auth::store::DEFAULT_ACCOUNT,
                 ProviderLoginOptions::default(),
             )
             .await
@@ -670,7 +705,7 @@ async fn seed_cloud_api_key(key: &str, manager: Arc<CredentialManager>) -> Resul
 async fn seed_provider_api_key(provider: &str, key: &str) -> Result<()> {
     login_provider_with_options(
         provider,
-        bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
+        crate::gateway::providers::auth::store::DEFAULT_ACCOUNT,
         ProviderLoginOptions {
             import_existing: false,
             no_browser: true,
@@ -685,6 +720,7 @@ async fn seed_provider_api_key(provider: &str, key: &str) -> Result<()> {
 // Interactive wizard
 // =====================================================================
 
+#[cfg(feature = "tui")]
 async fn run_interactive(
     flags: OnboardingFlags,
     signals: &ProbeSignals,
@@ -753,6 +789,7 @@ async fn run_interactive(
 }
 
 /// Providers offered by the OSS registry, with no special placement for Cloud.
+#[cfg(feature = "tui")]
 fn provider_choices(
     data: &bitrouter_ai::catalog::types::RegistryData,
 ) -> Vec<&bitrouter_ai::catalog::types::RegistryProvider> {
@@ -774,28 +811,28 @@ fn provider_choices(
     providers
 }
 
+#[cfg(feature = "tui")]
 async fn interactive_credentials(
     flags: &OnboardingFlags,
     configured: &mut BTreeSet<String>,
     skipped: &mut Vec<String>,
     manager: Arc<CredentialManager>,
 ) -> Result<()> {
-    use bitrouter_tui::select::Item;
+    use crate::presentation::selection::Item;
 
     let path = config_path(flags.config.as_deref())?;
     let registry = if path.is_file() && !flags.force {
-        serde_saphyr::from_str::<bitrouter_sdk::config::Config>(&std::fs::read_to_string(path)?)?
-            .registry
+        serde_saphyr::from_str::<crate::config::Config>(&std::fs::read_to_string(path)?)?.registry
     } else {
-        bitrouter_sdk::config::RegistryConfig::default()
+        crate::config::RegistryConfig::default()
     };
     note("loading providers from the registry…");
-    let data = crate::bundled_registry::load(&registry).await;
+    let data = crate::gateway::catalog::bundled::load(&registry).await;
     let providers = data.as_ref().map(provider_choices).unwrap_or_default();
     for provider in &providers {
         if provider
             .env_credential_var()
-            .is_some_and(|var| crate::spawn::nonempty_env(&var).is_some())
+            .is_some_and(|var| crate::client::local_gateway::nonempty_env(&var).is_some())
         {
             configured.insert(provider.name.clone());
         }
@@ -907,6 +944,7 @@ async fn seed_cloud_interactive(manager: Arc<CredentialManager>) -> Result<()> {
     .context("BitRouter Cloud sign-in")
 }
 
+#[cfg(feature = "tui")]
 async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     eprintln!();
     eprintln!("Step 2/3 — Default ACP harness");
@@ -920,13 +958,15 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
             .map(String::from)
             .collect());
     }
-    let harnesses = crate::harness::CATALOG;
+    let harnesses = crate::harness::catalog::CATALOG;
     let selected = crate::prompt::select(
         "Step 2/3 — Default ACP harness",
         "BitRouter provides the TUI. Choose the agent it runs.",
         harnesses
             .iter()
-            .map(|harness| bitrouter_tui::select::Item::new(harness.id, harness.description))
+            .map(|harness| {
+                crate::presentation::selection::Item::new(harness.id, harness.description)
+            })
             .collect(),
         harnesses
             .iter()
@@ -943,8 +983,9 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     ])
 }
 
+#[cfg(feature = "tui")]
 async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
-    use bitrouter_tui::select::Item;
+    use crate::presentation::selection::Item;
     if let Some(after) = flags.after {
         return Ok(after);
     }
@@ -1000,7 +1041,7 @@ async fn finish_serve(
 ) -> Result<()> {
     let source = crate::paths::resolve_config(Some(path))?;
     let cfg = crate::paths::load_config(&source).await?;
-    crate::spawn::ensure_local_daemon(&source, &cfg, false).await;
+    crate::client::local_gateway::ensure_local_daemon(&source, &cfg, false).await;
     report.snippet = Some(build_snippet(&cfg.server.listen));
     emit(output, &report)
 }
@@ -1009,9 +1050,11 @@ async fn finish_serve(
 /// auth mode: a real exported `BITROUTER_API_KEY` (`brk_`) when present, else
 /// the local `skip_auth` placeholder. The Codex example opens Code.
 fn build_snippet(listen: &str) -> Snippet {
-    let base_url = crate::spawn::derive_base_url(listen);
-    let token = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV)
-        .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    let base_url = crate::client::local_gateway::derive_base_url(listen);
+    let token = crate::client::local_gateway::nonempty_env(
+        crate::client::local_gateway::BITROUTER_API_KEY_ENV,
+    )
+    .unwrap_or_else(|| crate::client::local_gateway::PLACEHOLDER_API_KEY.to_string());
     let v1 = {
         let trimmed = base_url.trim_end_matches('/');
         if trimmed.ends_with("/v1") {
@@ -1138,8 +1181,8 @@ async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
         prompt,
         "Choose whether to continue",
         vec![
-            bitrouter_tui::select::Item::new("Yes", ""),
-            bitrouter_tui::select::Item::new("No", ""),
+            crate::presentation::selection::Item::new("Yes", ""),
+            crate::presentation::selection::Item::new("No", ""),
         ],
         usize::from(!default_yes),
     )
@@ -1151,6 +1194,7 @@ async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
 /// chain of the former `print_onboarding_hint`.
 fn print_hint() {
     let p = crate::style::Palette::for_stderr();
+    #[cfg(feature = "tui")]
     eprintln!(
         "{cyan}{bold}info:{reset} setup is not complete. Run `{cli}` in a terminal or `{cli} init --yes`:",
         cyan = p.cyan,
@@ -1158,7 +1202,16 @@ fn print_hint() {
         reset = p.reset,
         cli = invocation::name(),
     );
+    #[cfg(not(feature = "tui"))]
+    eprintln!(
+        "{cyan}{bold}info:{reset} setup is not complete. Run `{cli} init --yes`:",
+        cyan = p.cyan,
+        bold = p.bold,
+        reset = p.reset,
+        cli = invocation::name(),
+    );
     eprintln!();
+    #[cfg(feature = "tui")]
     eprintln!(
         "  {cli} init                 # guided setup wizard (interactive)",
         cli = invocation::name()
@@ -1179,6 +1232,31 @@ fn print_hint() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn noninteractive_exit_and_serve_do_not_require_tui() -> Result<()> {
+        for after in [None, Some(AfterAction::Exit), Some(AfterAction::Serve)] {
+            validate_tui_availability(true, after)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "tui"))]
+    #[test]
+    fn explicit_launch_requires_tui_even_with_yes() -> Result<()> {
+        for yes in [false, true] {
+            let error = validate_tui_availability(yes, Some(AfterAction::Launch))
+                .err()
+                .context("explicit launch must require tui")?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("--after launch requires the tui feature")
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "tui")]
     #[test]
     fn provider_menu_contains_every_public_active_entry_in_display_order() -> Result<()> {
         let data: bitrouter_ai::catalog::types::RegistryData =
@@ -1364,7 +1442,11 @@ mod tests {
         // With no BITROUTER_API_KEY exported, the local `skip_auth` placeholder
         // is templated into all three shapes.
         // (This test process does not set BITROUTER_API_KEY.)
-        if crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV).is_some() {
+        if crate::client::local_gateway::nonempty_env(
+            crate::client::local_gateway::BITROUTER_API_KEY_ENV,
+        )
+        .is_some()
+        {
             return; // environment is non-hermetic; skip rather than false-fail
         }
         let snippet = build_snippet("127.0.0.1:4356");
@@ -1376,7 +1458,7 @@ mod tests {
         );
         assert!(snippet.anthropic.contains(&format!(
             "ANTHROPIC_AUTH_TOKEN={}",
-            crate::harness::PLACEHOLDER_API_KEY
+            crate::client::local_gateway::PLACEHOLDER_API_KEY
         )));
         // OpenAI shape carries the /v1 suffix.
         assert!(
@@ -1401,14 +1483,14 @@ mod tests {
             .set(
                 "claude-code",
                 "default",
-                bitrouter_ai::auth::credentials::Credential::ClaudeCodeCli,
+                crate::gateway::providers::auth::credentials::Credential::ClaudeCodeCli,
             )
             .unwrap();
         store
             .set(
                 "openai",
                 "default",
-                bitrouter_ai::auth::credentials::Credential::api_key("sk-x"),
+                crate::gateway::providers::auth::credentials::Credential::api_key("sk-x"),
             )
             .unwrap();
 

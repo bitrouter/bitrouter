@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use bitrouter_ai::auth::store::{Durability, StoreError};
+use crate::gateway::providers::auth::store::{Durability, StoreError};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use super::credentials::{CredentialsStore, resolved_path};
-use bitrouter_ai::providers::hosted::credentials::StoredCredential;
+use crate::gateway::providers::hosted::credentials::StoredCredential;
 
 type Accounts = HashMap<PathBuf, Arc<AsyncMutex<AccountState>>>;
 static ACCOUNTS: OnceLock<Mutex<Accounts>> = OnceLock::new();
@@ -112,16 +112,16 @@ impl FileHostedStore {
 }
 
 #[async_trait::async_trait]
-impl bitrouter_ai::providers::hosted::session::HostedCredentialStore for FileHostedStore {
+impl crate::gateway::providers::hosted::session::HostedCredentialStore for FileHostedStore {
     async fn begin(
         &self,
-        key: &bitrouter_ai::auth::store::CredentialKey,
+        key: &crate::gateway::providers::auth::store::CredentialKey,
     ) -> Result<
-        Box<dyn bitrouter_ai::providers::hosted::session::HostedCredentialTransaction>,
+        Box<dyn crate::gateway::providers::hosted::session::HostedCredentialTransaction>,
         StoreError,
     > {
-        if key.provider != bitrouter_ai::providers::hosted::PROVIDER_ID
-            || key.account != bitrouter_ai::auth::store::DEFAULT_ACCOUNT
+        if key.provider != crate::gateway::providers::hosted::PROVIDER_ID
+            || key.account != crate::gateway::providers::auth::store::DEFAULT_ACCOUNT
         {
             return Err(StoreError::Unavailable);
         }
@@ -130,7 +130,9 @@ impl bitrouter_ai::providers::hosted::session::HostedCredentialStore for FileHos
 }
 
 #[async_trait::async_trait]
-impl bitrouter_ai::providers::hosted::session::HostedCredentialTransaction for AccountTransaction {
+impl crate::gateway::providers::hosted::session::HostedCredentialTransaction
+    for AccountTransaction
+{
     fn credential(&self) -> Option<&StoredCredential> {
         AccountTransaction::credential(self)
     }

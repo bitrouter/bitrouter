@@ -1,73 +1,35 @@
 //! Bounded, boot-local reload ownership and recovery after HTTP disconnects.
 
+#[cfg(test)]
+use crate::reload::ReloadReportRuntime;
+#[cfg(test)]
+use bitrouter_ai::control::reload::ReloadReport;
+use bitrouter_ai::control::reload::{OperationReport, OperationStatus, ReloadInput};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::daemon::DaemonReloader;
-use crate::reload::{ReloadAdmissionError, ReloadOutcome, ReloadReport};
+use crate::reload::ReloadAdmissionError;
+use bitrouter_ai::control::reload::ReloadOutcome;
 
 pub const MAX_OPERATIONS: usize = 1_024;
 pub const RETENTION_SECONDS: u64 = 24 * 60 * 60;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReloadInput {
-    pub request_id: String,
-    pub expected_server_instance_id: String,
-    pub expected_generation: u64,
-}
-
-impl ReloadInput {
-    fn validate(&mut self) -> Result<(), OperationError> {
-        if self.request_id.len() > 256 || self.expected_server_instance_id.len() > 256 {
-            return Err(OperationError::InvalidRequest);
-        }
-        self.request_id = uuid::Uuid::parse_str(&self.request_id)
-            .map_err(|_| OperationError::InvalidRequest)?
-            .to_string();
-        self.expected_server_instance_id = uuid::Uuid::parse_str(&self.expected_server_instance_id)
-            .map_err(|_| OperationError::InvalidRequest)?
-            .to_string();
-        Ok(())
+fn validate_reload_input(input: &mut ReloadInput) -> Result<(), OperationError> {
+    if input.request_id.len() > 256 || input.expected_server_instance_id.len() > 256 {
+        return Err(OperationError::InvalidRequest);
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum OperationStatus {
-    Running,
-    Succeeded,
-    Failed,
-    PartiallyApplied,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct OperationReport {
-    pub request_id: String,
-    pub server_instance_id: String,
-    pub generation_before: u64,
-    pub status: OperationStatus,
-    pub accepted_at_unix_ms: i64,
-    pub completed_at_unix_ms: Option<i64>,
-    pub retain_until_unix_ms: Option<i64>,
-    pub lookup_url: String,
-    pub result: Option<ReloadReport>,
-}
-
-impl OperationReport {
-    pub fn is_running(&self) -> bool {
-        self.status == OperationStatus::Running
-    }
-    pub fn succeeded(&self) -> bool {
-        self.status == OperationStatus::Succeeded
-    }
+    input.request_id = uuid::Uuid::parse_str(&input.request_id)
+        .map_err(|_| OperationError::InvalidRequest)?
+        .to_string();
+    input.expected_server_instance_id = uuid::Uuid::parse_str(&input.expected_server_instance_id)
+        .map_err(|_| OperationError::InvalidRequest)?
+        .to_string();
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +111,7 @@ impl OperationService {
         }
     }
 
-    pub fn state(&self) -> Result<crate::reload::ReloadState, OperationError> {
+    pub fn state(&self) -> Result<bitrouter_ai::control::reload::ReloadState, OperationError> {
         self.reloader
             .reload_state()
             .ok_or(OperationError::Unsupported)
@@ -158,7 +120,9 @@ impl OperationService {
     /// Read saved/running configuration evidence from the daemon that owns
     /// this operation service. Remote handlers must not substitute a config
     /// path from the inspecting client.
-    pub async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+    pub async fn configuration_state(
+        &self,
+    ) -> Option<bitrouter_ai::control::reload::ConfigurationState> {
         self.reloader.configuration_state().await
     }
 
@@ -167,7 +131,7 @@ impl OperationService {
         credential_id: &str,
         mut input: ReloadInput,
     ) -> Result<OperationReport, OperationError> {
-        input.validate()?;
+        validate_reload_input(&mut input)?;
         let key = (credential_id.to_owned(), input.request_id.clone());
         let mut registry = self.registry.lock().await;
         if let Some(existing) = registry.get(&key) {
@@ -293,7 +257,8 @@ impl OperationService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reload::{ReloadCoordinator, ReloadReservation, ReloadState};
+    use crate::reload::{ReloadCoordinator, ReloadReservation};
+    use bitrouter_ai::control::reload::ReloadState;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct TestReloader {

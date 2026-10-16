@@ -1,22 +1,10 @@
-use anyhow::Context;
-use std::path::PathBuf;
-use std::time::Duration;
-
-use agent_client_protocol::schema::v1::{
-    AgentCapabilities, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-    StopReason,
-};
-use agent_client_protocol::{Agent, Client, ConnectTo, UntypedMessage};
-use bitrouter_orchestrator::acp::capture::{
-    CaptureDirection, CaptureEvent, CaptureKind, CapturePort,
-};
-use bitrouter_orchestrator::acp::client::{AcpClient, ClientOptions};
-use bitrouter_orchestrator::acp::controller::{Controller, ControllerConfig, ControllerIdentity};
+use sea_orm::sea_query::Expr;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::json;
 
-use super::{CanonicalStore, RecordingScope, SessionIdentity, connections, events};
+use super::fixtures::{FixtureScope, PersistedHistory};
+use super::{CanonicalStore, SessionIdentity};
+use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind, sessions};
 
 pub(super) fn identity(id: &str) -> SessionIdentity {
     SessionIdentity {
@@ -26,8 +14,8 @@ pub(super) fn identity(id: &str) -> SessionIdentity {
     }
 }
 
-pub(super) fn scope() -> RecordingScope {
-    RecordingScope {
+pub(super) fn scope() -> FixtureScope {
+    FixtureScope {
         owner: "local".into(),
         source: "test-agent".into(),
         controller_instance_id: Some("controller".into()),
@@ -56,322 +44,29 @@ pub(super) fn event(
     }
 }
 
-pub(super) async fn new_session(recorder: &dyn CapturePort, session: &str) -> anyhow::Result<()> {
+pub(super) async fn new_session(recorder: &PersistedHistory, session: &str) -> anyhow::Result<()> {
     recorder
-        .record(event(
-            CaptureKind::Request,
-            Some(1),
-            "session/new",
-            json!({"cwd":"/workspace"}),
-        ))
-        .await?;
-    recorder
-        .record(event(
-            CaptureKind::Response,
-            Some(1),
-            "session/new",
-            json!({"result":{"sessionId":session}}),
-        ))
-        .await?;
-    Ok(())
-}
-
-struct CaptureAgent;
-
-impl ConnectTo<Client> for CaptureAgent {
-    async fn connect_to(
-        self,
-        client: impl ConnectTo<Agent>,
-    ) -> Result<(), agent_client_protocol::Error> {
-        Agent.builder().name("capture-fixture")
-            .on_receive_request(async |request: InitializeRequest, responder, _connection| {
-                responder.respond(InitializeResponse::new(request.protocol_version)
-                    .agent_capabilities(AgentCapabilities::new().load_session(true)))
-            }, agent_client_protocol::on_receive_request!())
-            .on_receive_request(async |_request: NewSessionRequest, responder, connection| {
-                // Notifications may arrive before the native new-session result.
-                connection.send_notification(UntypedMessage::new("session/update", json!({
-                    "sessionId":"native", "update":{"sessionUpdate":"agent_message_chunk", "content":{"type":"text","text":"ready"}}
-                }))?)?;
-                responder.respond(NewSessionResponse::new("native"))
-            }, agent_client_protocol::on_receive_request!())
-            .on_receive_request(async |request: PromptRequest, responder, connection| {
-                for i in 0..300 {
-                    connection.send_notification(UntypedMessage::new("session/update", json!({
-                        "sessionId":request.session_id, "update":{"sessionUpdate":"agent_message_chunk", "content":{"type":"text","text":format!("chunk-{i}")}}
-                    }))?)?;
-                }
-                connection.send_notification(UntypedMessage::new("session/update", json!({
-                    "sessionId":request.session_id, "update":{"sessionUpdate":"tool_call", "toolCallId":"test", "title":"Run tests", "status":"in_progress", "rawInput":{"command":"cargo test"}}
-                }))?)?;
-                connection.send_notification(UntypedMessage::new("session/update", json!({
-                    "sessionId":request.session_id, "update":{"sessionUpdate":"tool_call_update", "toolCallId":"test", "status":"completed", "rawOutput":{"exitCode":0,"stdout":"passed"}}
-                }))?)?;
-                responder.respond(PromptResponse::new(StopReason::EndTurn))
-            }, agent_client_protocol::on_receive_request!())
-            .on_receive_request(async |request: LoadSessionRequest, responder, connection| {
-                connection.send_notification(UntypedMessage::new("session/update", json!({
-                    "sessionId":request.session_id, "update":{"sessionUpdate":"agent_message_chunk", "content":{"type":"text","text":"ready"}}
-                }))?)?;
-                responder.respond(LoadSessionResponse::new())
-            }, agent_client_protocol::on_receive_request!())
-            .connect_to(client).await
-    }
-}
-
-async fn connect(
-    store: &CanonicalStore,
-) -> anyhow::Result<(
-    AcpClient,
-    tokio::task::JoinHandle<Result<(), agent_client_protocol::Error>>,
-)> {
-    let recorder = store.recorder(scope()).await?;
-    let controller = Controller::new(
-        CaptureAgent,
-        ControllerConfig::new(ControllerIdentity::new("fixture", "fixture", "1")),
-    )
-    .capture(recorder);
-    let (manager, server) = agent_client_protocol::Channel::duplex();
-    let task = tokio::spawn(async move { controller.run(server).await });
-    let client = AcpClient::connect(
-        manager,
-        ClientOptions {
-            turn_timeout: Some(Duration::from_secs(10)),
-            terminal_auth: false,
-        },
-    )
-    .await?;
-    Ok((client, task))
-}
-
-#[tokio::test]
-async fn controller_durably_records_before_lossy_ui_and_keeps_replay_separate() -> anyhow::Result<()>
-{
-    tokio::time::timeout(Duration::from_secs(30), async {
-        let store = store().await?;
-        let (client, task) = connect(&store).await?;
-        let ids = client
-            .new_session(PathBuf::from("/workspace"), vec![])
-            .await?;
-        // Deliberately never subscribe to the lossy broadcast streams.
-        client.prompt(&ids.acp_session_id, "repeat").await?;
-        client.prompt(&ids.acp_session_id, "repeat").await?;
-        client.shutdown().await?;
-        task.await??;
-        let first = store.transcript(&identity("native")).await?;
-        assert_eq!(first.session.history_origin, "new");
-        assert_eq!(first.setup_evidence.len(), 1);
-        assert_eq!(
-            first.setup_evidence[0].event.payload.get("cwd"),
-            Some(&json!("/workspace"))
-        );
-        assert!(
-            first.setup_evidence[0]
-                .event
-                .payload
-                .get("mcpServers")
-                .is_none()
-        );
-        assert!(
-            first
-                .events
-                .iter()
-                .any(|node| node.node_id == first.setup_evidence[0].response_node_id)
-        );
-        assert!(first.gaps.is_empty(), "{:?}", first.gaps);
-        assert_eq!(
-            first
-                .events
-                .iter()
-                .filter(|node| node.event.method == "session/prompt"
-                    && node.event.kind == CaptureKind::Request)
-                .count(),
-            2
-        );
-        assert_eq!(
-            first
-                .events
-                .iter()
-                .filter(|node| node
-                    .event
-                    .payload
-                    .pointer("/update/content/text")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|text| text.starts_with("chunk-")))
-                .count(),
-            600
-        );
-        assert!(first.events.iter().any(|node| {
-            node.event.payload.pointer("/update/rawOutput/exitCode") == Some(&json!(0))
-        }));
-        let first_ids: Vec<_> = first
-            .events
-            .iter()
-            .map(|node| node.node_id.clone())
-            .collect();
-        let (client, task) = connect(&store).await?;
-        client
-            .load_session("native", PathBuf::from("/workspace"), vec![])
-            .await?;
-        client.shutdown().await?;
-        task.await??;
-        let second = store.transcript(&identity("native")).await?;
-        assert_eq!(second.replay_events.len(), 1);
-        assert_eq!(second.events.len(), first.events.len() + 2);
-        assert_eq!(
-            second
-                .events
-                .iter()
-                .take(first_ids.len())
-                .map(|node| node.node_id.clone())
-                .collect::<Vec<_>>(),
-            first_ids
-        );
-        assert!(second.gaps.iter().any(|gap| gap.contains("load_or_resume")));
-        assert_eq!(store.list("local", "test-agent").await?.len(), 1);
-        anyhow::Ok(())
-    })
-    .await??;
-    Ok(())
-}
-
-#[tokio::test]
-async fn append_failure_latches_incomplete_and_does_not_advance_watermark() -> anyhow::Result<()> {
-    let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
-    let old = store.transcript(&identity("s")).await?.session.head;
-    // A schema/storage failure after successful capture, without a model call.
-    use sea_orm_migration::prelude::{Alias, Table};
-    use sea_orm_migration::{MigrationTrait, SchemaManager};
-    SchemaManager::new(&store.db)
-        .drop_table(
-            Table::drop()
-                .table(Alias::new("acp_capture_events"))
-                .to_owned(),
+        .append(
+            session,
+            event(
+                CaptureKind::Request,
+                Some(1),
+                "session/new",
+                json!({"cwd":"/workspace"}),
+            ),
         )
         .await?;
-    let failed = recorder
-        .record(event(
-            CaptureKind::Notification,
-            None,
-            "session/update",
-            json!({"sessionId":"s"}),
-        ))
-        .await;
-    assert!(failed.is_err());
-    crate::db::migration::m20240101_000018_create_acp_capture::Migration
-        .up(&SchemaManager::new(&store.db))
-        .await?;
-    assert!(
-        recorder
-            .record(event(
-                CaptureKind::Disconnected,
-                None,
-                "controller/disconnect",
-                json!({"clean":true})
-            ))
-            .await
-            .is_err()
-    );
-    assert!(old > 0);
-    assert!(
-        store
-            .transcript(&identity("s"))
-            .await?
-            .gaps
-            .iter()
-            .any(|gap| gap == "canonical_sequence_gap")
-    );
-    assert!(
-        connections::Entity::find()
-            .all(&store.db)
-            .await?
-            .iter()
-            .all(|row| row.state == "interrupted")
-    );
-    assert_eq!(
-        super::sessions::Entity::find_by_id(identity("s").key()?)
-            .one(&store.db)
-            .await?
-            .context("session missing")?
-            .head,
-        old
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn fork_boundary_and_owner_source_isolation_are_preserved() -> anyhow::Result<()> {
-    let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "parent").await?;
-    let boundary = store.transcript(&identity("parent")).await?.session.head;
     recorder
-        .record(event(
-            CaptureKind::Request,
-            Some(2),
-            "session/fork",
-            json!({"sessionId":"parent"}),
-        ))
-        .await?;
-    recorder
-        .record(event(
-            CaptureKind::Response,
-            Some(2),
-            "session/fork",
-            json!({"result":{"sessionId":"child"}}),
-        ))
-        .await?;
-    let child = store.transcript(&identity("child")).await?;
-    assert_eq!(child.session.parent_key, Some(identity("parent").key()?));
-    assert_eq!(child.session.parent_watermark, Some(boundary));
-    for (owner, source) in [("other", "test-agent"), ("local", "other")] {
-        let mut other = scope();
-        other.owner = owner.into();
-        other.source = source.into();
-        let recorder = store.recorder(other).await?;
-        new_session(recorder.as_ref(), "parent").await?;
-        assert_eq!(store.list(owner, source).await?.len(), 1);
-    }
-    assert_eq!(store.list("local", "test-agent").await?.len(), 2);
-    Ok(())
-}
-
-#[tokio::test]
-async fn delete_removes_content_and_fences_an_active_recorder() -> anyhow::Result<()> {
-    let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
-    recorder
-        .record(event(
-            CaptureKind::Request,
-            Some(2),
-            "session/prompt",
-            json!({"sessionId":"s","prompt":[{"type":"text","text":"private text"}]}),
-        ))
-        .await?;
-    store.delete(&identity("s")).await?;
-    assert!(store.transcript(&identity("s")).await.is_err());
-    assert!(
-        recorder
-            .record(event(
+        .append(
+            session,
+            event(
                 CaptureKind::Response,
-                Some(2),
-                "session/prompt",
-                json!({"result":{"stopReason":"end_turn"}})
-            ))
-            .await
-            .is_err()
-    );
-    assert!(
-        events::Entity::find()
-            .filter(events::Column::SessionKey.eq(identity("s").key()?))
-            .all(&store.db)
-            .await?
-            .is_empty()
-    );
-    assert!(store.list("local", "test-agent").await?.is_empty());
+                Some(1),
+                "session/new",
+                json!({"result":{"sessionId":session}}),
+            ),
+        )
+        .await?;
     Ok(())
 }
 
@@ -439,25 +134,40 @@ async fn request_union_preserves_unknown_cost_and_principal_scope() -> anyhow::R
     // Multiple capture connections with the same metering namespace must not
     // count settled requests more than once.
     for _ in 0..2 {
-        let recorder = store.recorder(scope()).await?;
+        let recorder = store.fixture_history(scope()).await?;
         new_session(recorder.as_ref(), "parent").await?;
         recorder
-            .record(event(
-                CaptureKind::Request,
-                Some(2),
-                "session/load",
-                json!({"sessionId":"child"}),
-            ))
+            .append(
+                "child",
+                event(
+                    CaptureKind::Request,
+                    Some(2),
+                    "session/load",
+                    json!({"sessionId":"child"}),
+                ),
+            )
             .await?;
         recorder
-            .record(event(
-                CaptureKind::Response,
-                Some(2),
-                "session/load",
-                json!({"result":{}}),
-            ))
+            .append(
+                "child",
+                event(
+                    CaptureKind::Response,
+                    Some(2),
+                    "session/load",
+                    json!({"result":{}}),
+                ),
+            )
             .await?;
     }
+    // Both stored connections reported the same native new-session identity.
+    sessions::Entity::update_many()
+        .col_expr(
+            sessions::Column::HistoryOrigin,
+            Expr::value("native_id_reused"),
+        )
+        .filter(sessions::Column::SessionKey.eq(identity("parent").key()?))
+        .exec(&store.db)
+        .await?;
     seed_request(&store, "root", "principal", "parent", 5, "computed").await?;
     seed_request(&store, "child", "principal", "child", 7, "computed").await?;
     seed_request(&store, "unknown", "principal", "parent", 0, "unknown").await?;
@@ -499,55 +209,182 @@ async fn request_union_preserves_unknown_cost_and_principal_scope() -> anyhow::R
     Ok(())
 }
 
+/// Persist an explicit fork boundary; no controller call state is involved.
+pub(crate) async fn fork(
+    store: &CanonicalStore,
+    history: &PersistedHistory,
+    parent: &str,
+    child: &str,
+    call: u64,
+) -> anyhow::Result<()> {
+    let parent_key = identity(parent).key()?;
+    let boundary = sessions::Entity::find_by_id(&parent_key)
+        .one(&store.db)
+        .await?
+        .map(|row| row.head);
+    let reused = sessions::Entity::find_by_id(identity(child).key()?)
+        .one(&store.db)
+        .await?
+        .is_some();
+    history
+        .append(
+            parent,
+            event(
+                CaptureKind::Request,
+                Some(call),
+                "session/fork",
+                json!({"sessionId":parent}),
+            ),
+        )
+        .await?;
+    history
+        .append(
+            child,
+            event(
+                CaptureKind::Response,
+                Some(call),
+                "session/fork",
+                json!({"result":{"sessionId":child}}),
+            ),
+        )
+        .await?;
+    sessions::Entity::update_many()
+        .col_expr(
+            sessions::Column::HistoryOrigin,
+            Expr::value(if reused {
+                "native_id_reused"
+            } else {
+                "partial"
+            }),
+        )
+        .col_expr(sessions::Column::ParentKey, Expr::value(parent_key))
+        .col_expr(sessions::Column::ParentWatermark, Expr::value(boundary))
+        .filter(sessions::Column::SessionKey.eq(identity(child).key()?))
+        .exec(&store.db)
+        .await?;
+    Ok(())
+}
+
 #[tokio::test]
-async fn concurrent_connections_assign_one_canonical_order() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let url = format!("sqlite://{}", directory.path().join("capture.db").display());
-    let db = crate::db::connect(&url).await?;
-    crate::db::run_migrations(&db).await?;
-    let store = CanonicalStore::new(db);
-    let initial = store.recorder(scope()).await?;
-    new_session(initial.as_ref(), "s").await?;
-    let mut tasks = Vec::new();
-    for worker in 0..4 {
-        let recorder = store.recorder(scope()).await?;
-        tasks.push(tokio::spawn(async move {
-            for item in 0..20 {
-                recorder
-                    .record(event(
-                        CaptureKind::Notification,
-                        None,
-                        "session/update",
-                        json!({"sessionId":"s", "update":{"worker":worker,"item":item}}),
-                    ))
-                    .await?;
-            }
-            anyhow::Ok(())
-        }));
-    }
-    for task in tasks {
-        task.await??;
-    }
-    let transcript = store.transcript(&identity("s")).await?;
-    assert_eq!(transcript.session.head, 81);
-    assert_eq!(transcript.events.len(), 81);
-    assert!(
-        !transcript
-            .gaps
-            .iter()
-            .any(|gap| gap == "canonical_sequence_gap")
+async fn persisted_projection_keeps_setup_replay_and_scoped_deletion() -> anyhow::Result<()> {
+    use crate::storage::capture::{connections, events};
+    use sea_orm::{ActiveModelTrait, Set, TransactionTrait};
+
+    let store = store().await?;
+    let history = store.fixture_history(scope()).await?;
+    new_session(&history, "s").await?;
+    history
+        .append(
+            "s",
+            event(
+                CaptureKind::Request,
+                Some(2),
+                "session/load",
+                json!({"sessionId":"s"}),
+            ),
+        )
+        .await?;
+    // This is an already persisted replay record: it has a connection cursor,
+    // but no canonical session cursor. Offline readers must keep it separate.
+    let replay = event(
+        CaptureKind::Notification,
+        None,
+        "session/update",
+        json!({"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk",
+            "content":{"type":"text","text":"replayed"}}}),
     );
-    // A new-session response reusing a previously observed native ID must not
-    // relabel that mixed history as a complete fresh session.
-    let reused = store.recorder(scope()).await?;
-    new_session(reused.as_ref(), "s").await?;
-    assert!(
-        store
-            .transcript(&identity("s"))
-            .await?
-            .gaps
+    let tx = store.db.begin().await?;
+    connections::Entity::update_many()
+        .col_expr(connections::Column::Head, Expr::value(4_i64))
+        .filter(connections::Column::ConnectionId.eq(history.connection_id()))
+        .exec(&tx)
+        .await?;
+    events::ActiveModel {
+        connection_id: Set(history.connection_id().into()),
+        sequence: Set(4),
+        session_key: Set(Some(identity("s").key()?)),
+        session_sequence: Set(None),
+        replay: Set(true),
+        event_json: Set(serde_json::to_string(&replay)?),
+        captured_at: Set(chrono::Utc::now().to_rfc3339()),
+    }
+    .insert(&tx)
+    .await?;
+    tx.commit().await?;
+    history
+        .append(
+            "s",
+            event(
+                CaptureKind::Response,
+                Some(2),
+                "session/load",
+                json!({"result":{}}),
+            ),
+        )
+        .await?;
+    history
+        .append(
+            "s",
+            event(
+                CaptureKind::Disconnected,
+                None,
+                "controller/disconnect",
+                json!({"clean":true}),
+            ),
+        )
+        .await?;
+
+    let transcript = store.transcript(&identity("s")).await?;
+    assert_eq!(transcript.session.head, 3);
+    assert_eq!(
+        transcript
+            .events
             .iter()
-            .any(|gap| gap == "native_session_id_reused_for_new_session")
+            .map(|row| row.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(transcript.setup_evidence.len(), 1);
+    assert_eq!(
+        transcript.setup_evidence[0].response_node_id,
+        transcript.events[0].node_id
+    );
+    assert_eq!(
+        transcript.setup_evidence[0].event.payload,
+        json!({"cwd":"/workspace"})
+    );
+    assert_eq!(transcript.replay_events.len(), 1);
+    assert_eq!(
+        transcript.replay_events[0].event_json,
+        serde_json::to_string(&replay)?
+    );
+    assert_eq!(transcript.connections[0].state, "complete");
+    assert_eq!(
+        transcript.gaps,
+        vec!["history_across_load_or_resume_is_not_verified"]
+    );
+
+    let mut other_scope = scope();
+    other_scope.owner = "other".into();
+    let other = store.fixture_history(other_scope).await?;
+    new_session(&other, "s").await?;
+    seed_request(&store, "retained", "principal", "s", 5, "computed").await?;
+    store.delete(&identity("s")).await?;
+    assert!(store.transcript(&identity("s")).await.is_err());
+    assert!(store.list("local", "test-agent").await?.is_empty());
+    assert_eq!(store.list("other", "test-agent").await?.len(), 1);
+    assert!(
+        events::Entity::find()
+            .filter(events::Column::SessionKey.eq(identity("s").key()?))
+            .all(&store.db)
+            .await?
+            .is_empty()
+    );
+    assert!(
+        crate::metering::entities::requests::Entity::find_by_id("retained")
+            .one(&store.db)
+            .await?
+            .is_some()
     );
     Ok(())
 }

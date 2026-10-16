@@ -1,0 +1,211 @@
+use crate::harness::agent::AgentConfigExt;
+use std::path::PathBuf;
+
+use super::*;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadStatus;
+
+mod historical;
+
+#[test]
+#[cfg(unix)] // The retained instruction snapshot was written with a Unix cwd.
+fn baseline_v7_thread_reconstruction_preserves_completed_turn()
+-> Result<(), Box<dyn std::error::Error>> {
+    let compressed = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/baseline-runtime-v7/journal.json.zst"
+    ));
+    let journal = zstd::stream::decode_all(compressed.as_slice())?;
+    let records: Vec<ExecutionRecord> = serde_json::from_slice(&journal)?;
+    let limits = crate::harness::service::default_runtime_limits();
+    let mut rebuild = Rebuild::new(
+        records.first().ok_or("baseline header missing")?,
+        "1149fbda-eb06-43b7-8d0e-108e857d9c2d",
+        limits.clone(),
+    )?;
+    rebuild.authorize(&CallerContext::local())?;
+    // Rebuild is the offline decoder, not the workspace/ownership admission
+    // path. Original paths, model calls and checkpoint bytes remain untouched.
+    for page in records.chunks(17) {
+        rebuild.consume_page(page.to_vec())?;
+    }
+    assert_eq!(rebuild.sequence, 284);
+    let (thread, _) = rebuild.finish("candidate-offline-reader", &limits)?;
+    let view = thread.presentation.view;
+    assert_eq!(view.thread.cursor, 284);
+    assert_eq!(view.thread.context_version, 5);
+    let recovery = view.recovery.ok_or("missing recovery report")?;
+    assert!(recovery.context_valid && recovery.terminal_checkpoint);
+    assert_eq!(recovery.stored_status, ThreadStatus::Idle);
+    assert!(
+        recovery
+            .blockers
+            .iter()
+            .all(|blocker| matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed))
+    );
+    let turn = view.latest_turn.ok_or("completed turn missing")?;
+    assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(
+        turn.final_answer.as_deref(),
+        Some("The evidence says baseline persisted payload.")
+    );
+    assert!(!turn.unknown_effect);
+    assert!(thread.queued.is_empty());
+    Ok(())
+}
+
+#[test]
+fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_epoch()
+-> Result<(), Box<dyn std::error::Error>> {
+    let limits = RuntimeLimits {
+        context_bytes_per_thread: 4096,
+        ..crate::harness::service::default_runtime_limits()
+    };
+    let snapshot = bitrouter_ai::harness::thread::ThreadSnapshot {
+        server_instance_id: "first-writer".into(),
+        thread_id: "thread".into(),
+        status: ThreadStatus::Idle,
+        workspace: PathBuf::from("/workspace"),
+        model: "model".into(),
+        permission_profile: PermissionProfile::ReadOnly,
+        context_version: 0,
+        cursor: 0,
+        active_turn_id: None,
+        queued: Vec::new(),
+        pause_reason: None,
+        waiting_for_capacity: false,
+    };
+    let header = ExecutionRecord::ThreadCreated {
+        caller: CallerContext::local(),
+        snapshot,
+        config: Box::new(AgentConfig::fixed("model", None).read_only()),
+        verification_command: None,
+    };
+    let mut audit = StartupAudit::new(&header, "thread", limits.clone())?;
+    audit.consume(vec![
+        header,
+        ExecutionRecord::TurnQueued {
+            turn_id: "turn".into(),
+            user_item_id: "user".into(),
+            prompt: "input".into(),
+            queue_order: 1,
+        },
+        ExecutionRecord::TurnActivated {
+            turn_id: "turn".into(),
+            context_version: 0,
+        },
+    ])?;
+    let mut records = Vec::new();
+    for index in 0..1000 {
+        records.push(ExecutionRecord::TurnRecord {
+            turn_id: "turn".into(),
+            fact: Box::new(ExecutionRecord::ModelRequest {
+                step_id: format!("step-{index}"),
+                item_id: format!("assistant-{index}"),
+                context_version: 0,
+                prompt: Box::new(bitrouter_ai::types::Prompt {
+                    model: "model".into(),
+                    system: None,
+                    system_provider_metadata: Default::default(),
+                    messages: vec![Message::text(Role::User, "input")],
+                    tools: Vec::new(),
+                    params: Default::default(),
+                    response_format: None,
+                    tool_choice: None,
+                    stream: true,
+                }),
+            }),
+        });
+    }
+    records.push(ExecutionRecord::ThreadEvent {
+        event: bitrouter_ai::harness::thread::ThreadEvent {
+            server_instance_id: "later-writer".into(),
+            thread_id: "thread".into(),
+            seq: 1004,
+            timestamp_ms: 0,
+            changes: Vec::new(),
+        },
+    });
+    audit.consume(records)?;
+    assert!(!audit.valid);
+    let active = audit
+        .rebuild
+        .active
+        .as_ref()
+        .ok_or("active recovery state missing")?;
+    assert!(serde_json::to_vec(active)?.len() < limits.context_bytes_per_thread * 3);
+    assert_eq!(audit.epoch(), "later-writer");
+    assert!(
+        !audit.known_clean(Some(&bitrouter_ai::harness::runtime::ExecutionOwner {
+            server_instance_id: "later-writer".into(),
+            generation: 2,
+            stopped_at_ms: Some(1),
+        }))
+    );
+    Ok(())
+}
+
+#[test]
+fn settlement_charges_native_fallback_attempts_and_legacy_requests()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (native, plans, attempts, reported, accepted) in [
+        (true, 2, 1, 1, true),
+        (true, 1, 0, 0, true),
+        (true, 1, 2, 2, true),
+        (true, 1, 2, 1, false),
+        (false, 2, 0, 1, false),
+        (false, 2, 0, 2, true),
+    ] {
+        let mut active = Active {
+            native,
+            native_runs: std::collections::BTreeMap::from([("run".into(), (attempts, 0))]),
+            native_unknown_usage: Default::default(),
+            native_unpriced_decisions: Default::default(),
+            resources: None,
+            turn_id: "turn".into(),
+            user_item_id: "user".into(),
+            messages: Vec::new(),
+            version: 0,
+            steps: (0..plans)
+                .map(|index| {
+                    (
+                        format!("step-{index}"),
+                        Step {
+                            item_id: format!("item-{index}"),
+                            context_version: 0,
+                            complete: true,
+                            interrupted: false,
+                            usage_known: true,
+                        },
+                    )
+                })
+                .collect(),
+            calls: Vec::new(),
+            group: Vec::new(),
+            steering: Vec::new(),
+            cancel_requested: false,
+            budget: Default::default(),
+            exact_budget: false,
+            settled: false,
+            checkpointed: false,
+            outcome: None,
+            confirmed_verification: None,
+        };
+        let result = active.consume(&ExecutionRecord::Settled {
+            outcome: None,
+            messages: Vec::new(),
+            context_version: 0,
+            model_steps: reported,
+            tool_calls: 0,
+            estimated_spend_microusd: 0,
+            active_duration_ms: 0,
+        });
+        assert_eq!(
+            result.is_ok(),
+            accepted,
+            "native={native}, plans={plans}, attempts={attempts}, reported={reported}: {result:?}"
+        );
+    }
+    Ok(())
+}

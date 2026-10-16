@@ -1,0 +1,58 @@
+{
+  "version": 2,
+  "runtime": {
+    "native_execution": false,
+    "startup_discovery": {
+      "complete": true,
+      "writer_fenced": false,
+      "index_cutoff": 4,
+      "inspected_roots": 2,
+      "blocked_workspaces": 1,
+      "scanned_records": 4,
+      "error": "recovery_required"
+    },
+    "server_instance_id": "current",
+    "limits": {
+      "startup_roots": 1,
+      "startup_records": 2,
+      "startup_metadata_bytes": 3,
+      "recovery_readers": 4,
+      "recovery_page_records": 5,
+      "recovery_page_bytes": 6,
+      "recovery_records_per_thread": 7,
+      "history_page_bytes": 8,
+      "events_per_thread": 9,
+      "event_bytes_per_thread": 10,
+      "subscribers_per_thread": 11,
+      "subscriber_bytes_per_thread": 12,
+      "steering_inputs_per_turn": 13,
+      "steering_bytes_per_turn": 14,
+      "hot_threads": 15,
+      "queued_turns_per_thread": 16,
+      "context_bytes_per_thread": 17,
+      "hot_context_bytes": 18,
+      "tools_per_turn": 19,
+      "global_tools": 20,
+      "active_turns": 21,
+      "retained_turns": 22,
+      "retained_bytes": 23,
+      "retention_seconds": 24,
+      "subscriber_queue": 25,
+      "request_bytes": 26
+    },
+    "execution_ownership": {
+      "state": "blocked",
+      "owner": {
+        "server_instance_id": "previous",
+        "generation": 1,
+        "stopped_at_ms": null
+      }
+    }
+  },
+  "operations": [
+    "read_thread",
+    "read_turn",
+    "history",
+    "observe"
+  ]
+}

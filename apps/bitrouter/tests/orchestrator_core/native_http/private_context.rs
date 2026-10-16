@@ -5,14 +5,17 @@
 //! https://developers.openai.com/api/docs/guides/reasoning
 
 use super::*;
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 #[path = "private_context/continuation.rs"]
 mod continuation;
 #[path = "private_context/stream_bridge.rs"]
 mod stream_bridge;
-use bitrouter_ai::types::{Content, ToolResultOutput};
-use bitrouter_sdk::language_model::native_context::{
-    ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextEvidence, is_private, metadata_mut,
+use bitrouter::gateway::pipeline::native_context::{
+    ORIGIN_FIELD, ORIGIN_NAMESPACE, is_private, metadata_mut,
 };
+use bitrouter_ai::core::evidence::PrivateContextEvidence;
+use bitrouter_ai::types::{Content, ToolResultOutput};
 
 struct PrivateFixture {
     app: bitrouter::assemble::Assembled,
@@ -126,7 +129,7 @@ async fn assemble(
 ) -> Result<bitrouter::assemble::Assembled> {
     let config_path = home.path().join("bitrouter.yaml");
     std::fs::write(&config_path, source)?;
-    let config = bitrouter_sdk::config::parse_with(source, |_| None)?;
+    let config = bitrouter::config::parse_with(source, |_| None)?;
     bitrouter::assemble::build_app_with_extensions(&config, Some(&config_path), |api| {
         api.request_check(
             "private",
@@ -662,7 +665,7 @@ async fn private_history_redirect_is_not_followed_or_claimed_as_success() -> Res
 
 #[tokio::test]
 async fn private_history_core_changes_model_only_after_authorized_context_rebuild() -> Result<()> {
-    use bitrouter_orchestrator::core::protocol::DiscardableHistory;
+    use bitrouter_ai::core::protocol::DiscardableHistory;
     for protocol in ["messages", "responses"] {
         for (discard, portable) in [(false, false), (true, false), (false, true)] {
             let rebuild = discard || (portable && protocol == "responses");
@@ -699,9 +702,8 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
                 max_artifact_chunk_bytes: 8192,
                 required_features: if portable {
                     vec![
-                        bitrouter_orchestrator::core::context_router::FEATURE.into(),
-                        bitrouter_orchestrator::core::context_router::PORTABLE_RESPONSES_REASONING
-                            .into(),
+                        bitrouter::storage::checkpoint::snapshot::context::FEATURE.into(),
+                        bitrouter::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING.into(),
                     ]
                 } else {
                     Vec::new()
@@ -890,11 +892,11 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
                 session.disconnect().await;
                 let store = harness.store.lock().await;
                 let checkpoint = store.batches.last().context("recovery checkpoint")?.clone();
-                let restored: bitrouter_orchestrator::core::session::SessionSnapshot =
+                let restored: bitrouter::storage::checkpoint::snapshot::SessionSnapshot =
                     serde_json::from_value(
                         checkpoint.decode(&Limits::default())?.checkpoint.state,
                     )?;
-                let request = bitrouter_orchestrator::core::protocol::Restore {
+                let request = bitrouter_ai::core::protocol::Restore {
                     binding: Bind {
                         grant: harness.grant.clone(),
                         durable_head: store.head.clone(),
@@ -948,7 +950,8 @@ async fn private_history_core_changes_model_only_after_authorized_context_rebuil
 
 #[tokio::test]
 async fn private_history_seal_failure_retains_real_output_usage_and_settlement() -> Result<()> {
-    use bitrouter_sdk::language_model::native_context::{PrivateContextFailure, metadata};
+    use bitrouter::gateway::pipeline::native_context::metadata;
+    use bitrouter_ai::core::evidence::PrivateContextFailure;
     let fixture = PrivateFixture::new("messages").await?;
     std::fs::write(fixture.home.path().join("continuation.key"), "invalid-key")?;
     let capture = Arc::new(Capture::default());

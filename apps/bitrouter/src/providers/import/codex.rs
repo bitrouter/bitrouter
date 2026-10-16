@@ -18,9 +18,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::gateway::providers::auth::credentials::OAuthToken;
+use crate::gateway::providers::codex::jwt;
 use crate::providers::import::{ImportError, ImportSource, Imported, home_dir, keychain};
-use bitrouter_ai::auth::credentials::OAuthToken;
-use bitrouter_ai::providers::codex::jwt;
 
 /// macOS Keychain generic-password service Codex stores its token under.
 const KEYCHAIN_SERVICE: &str = "Codex Auth";

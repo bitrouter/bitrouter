@@ -1257,9 +1257,9 @@ Before Phases 0–2, the relay had these limitations:
   one-session TUI but has the wrong protocol meaning and process-level scope
   for a native-session controller.
 - The legacy
-  [Claude extractor](../apps/bitrouter/src/workflow_state/extractors/claude_code.rs)
+  [Claude extractor](../apps/bitrouter/src/gateway/routing/workflow/extractors/claude_code.rs)
   does not consume `x-claude-code-*` identity headers, and the
-  [Codex extractor](../apps/bitrouter/src/workflow_state/extractors/codex.rs)
+  [Codex extractor](../apps/bitrouter/src/gateway/routing/workflow/extractors/codex.rs)
   does not consume current `session-id`, `thread-id`, or Codex turn metadata.
 - The legacy workflow resolver gives
   `x-bitrouter-workflow-session` precedence over adapter hints and then falls
@@ -1296,7 +1296,7 @@ The implementation is divided along these boundaries:
 |---|---|---|
 | Controller lifecycle and capabilities | `crates/bitrouter-orchestrator/src/acp/controller.rs` | Implemented: manager-first stable-v1 controller, native-ID lifecycle forwarding, stable auth/elicitation/filesystem/terminal callbacks, and lifecycle-gated cleanup on schema 1.7.0 |
 | Harness configuration | `apps/bitrouter/src/harness.rs`, `acp_cli.rs` | Implemented: maintained Claude/Codex pins and one provider/fallback endpoint plan using the normal API key or `skip_auth` local principal |
-| Route extensions | `crates/bitrouter-orchestrator/src/acp/controller.rs`, `apps/bitrouter/src/acp_cli.rs`, `daemon.rs`, `acp_runtime.rs` | Implemented locally: typed `_bitrouter/route/*`, daemon-confirmed mutations, and independent leases keyed by `(api_principal, controller claim, session claim)` |
+| Route extensions | `crates/bitrouter-orchestrator/src/acp/controller.rs`, `apps/bitrouter/src/acp_cli.rs`, `daemon.rs`, `harness/acp/runtime.rs` | Implemented locally: typed `_bitrouter/route/*`, daemon-confirmed mutations, and independent leases keyed by `(api_principal, controller claim, session claim)` |
 | Request session normalization | `apps/bitrouter/src/session_identity.rs`, hook assembly | Implemented after auth; legacy pure API projection remains separate and unchanged |
 | Session observability | `session_identity.rs`, `workflow_state/real_trace.rs`, `metering`, OTel exporter | Implemented: reviewed headers, typed event, span attributes, nullable metering correlation, no identifier metric labels |
 | Hosted route control | Core HTTP control surface plus an app-owned `RouteControl` backend | Not implemented: explicit remote `--base-url` routes model traffic but has no normal-API-authenticated session-route surface |

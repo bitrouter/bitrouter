@@ -1,0 +1,79 @@
+   Compiling libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling socket2 v0.6.4
+   Compiling mio v1.2.1
+   Compiling slab v0.4.12
+   Compiling futures-util v0.3.32
+   Compiling tokio v1.52.3
+   Compiling serde v1.0.228
+   Compiling hashbrown v0.17.1
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.0
+   Compiling tokio-util v0.7.18
+   Compiling fnv v1.0.7
+   Compiling h2 v0.4.15
+   Compiling hyper v1.10.1
+   Compiling serde_json v1.0.150
+   Compiling autocfg v1.5.1
+   Compiling num-traits v0.2.19
+   Compiling hyper-util v0.1.20
+   Compiling core-foundation v0.10.1
+   Compiling security-framework-sys v2.17.0
+   Compiling futures-executor v0.3.32
+   Compiling cfg_aliases v0.2.1
+   Compiling nix v0.31.3
+   Compiling tower v0.5.3
+   Compiling futures v0.3.32
+   Compiling security-framework v3.7.0
+   Compiling tokio-rustls v0.26.4
+   Compiling zerocopy v0.8.54
+   Compiling getrandom v0.3.4
+   Compiling version_check v0.9.5
+   Compiling ahash v0.8.12
+   Compiling serde_urlencoded v0.7.1
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling tower-http v0.6.11
+   Compiling getrandom v0.4.3
+   Compiling reqwest v0.13.4
+   Compiling encoding_rs v0.8.35
+   Compiling cpufeatures v0.3.0
+   Compiling num_cpus v1.17.0
+   Compiling syn v3.0.3
+   Compiling lazy_static v1.5.0
+   Compiling deadpool-runtime v0.1.4
+   Compiling arraydeque v0.5.1
+   Compiling unicode-width v0.2.0
+   Compiling anstyle v1.0.14
+   Compiling rmcp v3.3.0
+   Compiling schemars v1.2.1
+   Compiling annotate-snippets v0.12.5
+   Compiling granit-parser v0.0.7
+   Compiling deadpool v0.12.3
+   Compiling async-trait v0.1.92
+   Compiling sha2 v0.11.0
+   Compiling encoding_rs_io v0.1.7
+   Compiling process-wrap v10.0.0
+   Compiling rustix v1.1.4
+   Compiling uuid v1.23.4
+   Compiling chrono v0.4.45
+   Compiling sse-stream v0.2.4
+   Compiling assert-json-diff v2.0.2
+   Compiling tokio-stream v0.1.18
+   Compiling nohash-hasher v0.2.0
+   Compiling base64 v0.23.0
+   Compiling serde-saphyr v0.0.29
+   Compiling tempfile v3.27.0
+   Compiling wiremock v0.6.5
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (<historical-worktree>/crates/bitrouter-sdk)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (<historical-worktree>/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 38.15s
+     Running unittests src/lib.rs (<capture-target>/debug/deps/bitrouter_orchestrator-56d87e998c918bfc)
+
+running 1 test
+test service::tests::support::write_p0_historical_runtime_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.06s
+

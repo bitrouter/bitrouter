@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::acp_cli::{RoutingOptions, SessionSelection};
+use crate::commands::agent_options::{RoutingOptions, SessionSelection};
 use crate::contexts::RemoteContext;
 
 /// An optional ACP session to open when Code starts.
@@ -18,6 +18,7 @@ pub struct SessionRequest {
 
 /// Open the shared conversation surface for a local coding session or an
 /// operations-only local/remote target.
+#[cfg(feature = "tui")]
 pub async fn run(
     remote: Option<(String, RemoteContext)>,
     config: Option<&Path>,
@@ -26,4 +27,15 @@ pub async fn run(
 ) -> Result<()> {
     let services = crate::actions::code::CodeServices::open(remote, config, socket).await?;
     crate::chat::code::run(services, initial_session).await
+}
+
+/// Reject an unavailable interactive surface before opening its services.
+#[cfg(not(feature = "tui"))]
+pub async fn run(
+    _remote: Option<(String, RemoteContext)>,
+    _config: Option<&Path>,
+    _socket: Option<&Path>,
+    _initial_session: Option<SessionRequest>,
+) -> Result<()> {
+    anyhow::bail!("interactive Code requires the tui feature; use run for headless work")
 }

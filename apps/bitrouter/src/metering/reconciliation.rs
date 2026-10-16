@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 
 use super::{MeteringStore, ReconciliationStatus, UsagePriceOverride};
 use crate::cloud::settlement::{SettlementClient, SettlementState};

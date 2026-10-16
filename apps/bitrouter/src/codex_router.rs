@@ -4,17 +4,15 @@
 
 use std::sync::Arc;
 
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::gateway::assembly::PromptTransform;
 use bitrouter_ai::types::Prompt;
-use bitrouter_sdk::config::ConfigRoutingTable;
-use bitrouter_sdk::{HeaderMap, PromptTransform};
+use http::HeaderMap;
 
 const PROVIDER: &str = "openai-codex";
 
 /// Apply the same native-model mapping at ingress and launcher preflight.
-pub(crate) fn subscription_route(
-    config: &bitrouter_sdk::config::Config,
-    model: &str,
-) -> Option<String> {
+pub(crate) fn subscription_route(config: &crate::config::Config, model: &str) -> Option<String> {
     if model.contains([':', '/', '@']) || config.models.contains_key(model) {
         return None;
     }
@@ -41,7 +39,7 @@ impl PromptTransform for CodexRouter {
         &self,
         _original: &Prompt,
         _rebuilt: &Prompt,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         // Keep the already selected model without repeating ingress classification.
         Ok(())
     }
@@ -74,13 +72,13 @@ impl PromptTransform for CodexRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::config::routing_table::resolve_route_chain;
+    use crate::gateway::pipeline::routing::RoutingPrefs;
     use anyhow::{Context, Result};
-    use bitrouter_sdk::config::Config;
-    use bitrouter_sdk::config::routing_table::resolve_route_chain;
-    use bitrouter_sdk::language_model::routing::RoutingPrefs;
 
     fn config() -> Result<Config> {
-        Ok(bitrouter_sdk::config::parse_with(
+        Ok(crate::config::parse_with(
             r#"
 inherit_defaults: false
 database:

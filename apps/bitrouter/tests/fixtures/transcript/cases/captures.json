@@ -1,0 +1,356 @@
+{
+  "format_version": 1,
+  "baseline_commit": "9956a427bd5d4316b3bf2359f88e293b158781d5",
+  "piped_extent": {
+    "width": 80,
+    "height": 24
+  },
+  "encoding": "UTF-8; LF added by plain::write; no trimming or normalization",
+  "ranges": "Zero-based byte offsets, inclusive start and exclusive end, into each complete expected file",
+  "replay": "New Transcript per sequence. Apply update steps; call unwritten exactly at checkpoint steps and serialize using plain::write. Compare every slice, including empty ones. No finish_stream, implicit checkpoint, footer or outer wrap.",
+  "captures": [
+    {
+      "id": "markdown-unicode",
+      "driver": "plain_transcript",
+      "input": "markdown-unicode.input.json",
+      "expected": "markdown-unicode.expected.txt",
+      "checkpoints": [
+        {
+          "id": "empty",
+          "reason": "Read an empty transcript before the first turn",
+          "step_index": 0,
+          "byte_start": 0,
+          "byte_end": 0,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "turn-1",
+          "reason": "First prompt settled after all chunks arrived",
+          "step_index": 4,
+          "byte_start": 0,
+          "byte_end": 3054,
+          "rows": 37,
+          "sha256": "8beed7f54a273085f004290a59951f2c26e8f22430943d17509e06867e8341ee"
+        },
+        {
+          "id": "turn-1-repeat",
+          "reason": "No updates since the previous read",
+          "step_index": 5,
+          "byte_start": 3054,
+          "byte_end": 3054,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "turn-2",
+          "reason": "Second prompt settled with an unclosed code fence",
+          "step_index": 8,
+          "byte_start": 3054,
+          "byte_end": 3885,
+          "rows": 15,
+          "sha256": "aa88aa20c4730c1cfcab711acd9dbee733b43c8d6f7ec003d0c243940d37c71c"
+        },
+        {
+          "id": "turn-2-repeat",
+          "reason": "No updates since the previous read",
+          "step_index": 9,
+          "byte_start": 3885,
+          "byte_end": 3885,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "turn-3",
+          "reason": "Third prompt settled after completing inline emphasis",
+          "step_index": 13,
+          "byte_start": 3885,
+          "byte_end": 3941,
+          "rows": 6,
+          "sha256": "647a458389d0de9e7a2b4b8d685dc331d260729cf0a148916d23810d811a1e35"
+        }
+      ]
+    },
+    {
+      "id": "tools-diffs-reasoning",
+      "driver": "plain_transcript",
+      "input": "tools-diffs-reasoning.input.json",
+      "expected": "tools-diffs-reasoning.expected.txt",
+      "checkpoints": [
+        {
+          "id": "turn-1",
+          "reason": "All tool and plan patches settled before the first emission",
+          "step_index": 15,
+          "byte_start": 0,
+          "byte_end": 2794,
+          "rows": 87,
+          "sha256": "afc580bfa2f9e0f1f60f2f5be58b7ae847c2a4bc670765a75193ae5befe8a941"
+        },
+        {
+          "id": "turn-1-repeat",
+          "reason": "No updates; completed cards must not be duplicated",
+          "step_index": 16,
+          "byte_start": 2794,
+          "byte_end": 2794,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "turn-2",
+          "reason": "Second turn settled, including the failed tool",
+          "step_index": 24,
+          "byte_start": 2794,
+          "byte_end": 3665,
+          "rows": 40,
+          "sha256": "9d70b8fa5019b83efd799f6058d46057c46e1a3fbd23fd1abfae8e3a7966fc7e"
+        },
+        {
+          "id": "turn-2-repeat",
+          "reason": "No new rows after settlement",
+          "step_index": 25,
+          "byte_start": 3665,
+          "byte_end": 3665,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "id": "cost-omission",
+      "driver": "plain_transcript",
+      "input": "cost-omission.input.json",
+      "expected": "cost-omission.expected.txt",
+      "checkpoints": [
+        {
+          "id": "absent-before-turn",
+          "reason": "Usage has no document entry",
+          "step_index": 1,
+          "byte_start": 0,
+          "byte_end": 0,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "turn-1-harness-cost",
+          "reason": "Settled turn with agent-reported cost; no footer",
+          "step_index": 5,
+          "byte_start": 0,
+          "byte_end": 51,
+          "rows": 4,
+          "sha256": "6ec71a7901ee7eee8cc94069a646c261cc1c2a0b7f6472439c4e68f4c264a739"
+        },
+        {
+          "id": "router-cost-only",
+          "reason": "Only the cumulative attributed cost changed",
+          "step_index": 7,
+          "byte_start": 51,
+          "byte_end": 51,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "unknown-cost-only",
+          "reason": "Unknown cost provenance must add no document rows",
+          "step_index": 9,
+          "byte_start": 51,
+          "byte_end": 51,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "malformed-cost-only",
+          "reason": "Non-string provenance must add no document rows",
+          "step_index": 11,
+          "byte_start": 51,
+          "byte_end": 51,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "missing-figure-only",
+          "reason": "Marker without a figure must add no document rows",
+          "step_index": 13,
+          "byte_start": 51,
+          "byte_end": 51,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "turn-2-zero-cost",
+          "reason": "Settled turn with explicitly measured zero; still no footer",
+          "step_index": 17,
+          "byte_start": 51,
+          "byte_end": 108,
+          "rows": 4,
+          "sha256": "9e2a7934297ba19be134ce192bc48004af05963ce95882dfbff67b68534f54c5"
+        },
+        {
+          "id": "turn-2-repeat",
+          "reason": "Repeated read after the last turn is empty",
+          "step_index": 18,
+          "byte_start": 108,
+          "byte_end": 108,
+          "rows": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "id": "failure-tails",
+      "driver": "log_tail_then_plain_write",
+      "input": "failure-tails.input.json",
+      "expected": "failure-tails.expected.txt",
+      "captures": [
+        {
+          "id": "long",
+          "byte_start": 0,
+          "byte_end": 794,
+          "rows": 22,
+          "sha256": "e2b3beeb8d27302b0b494209f05d81f7679ff1dfc755352dd3fa4a5a12a604f4"
+        },
+        {
+          "id": "short",
+          "byte_start": 794,
+          "byte_end": 886,
+          "rows": 3,
+          "sha256": "62b620b4713d6465796d7162817fa787cba24be7184059ff64f7f0f5f4f7102c"
+        },
+        {
+          "id": "empty",
+          "byte_start": 886,
+          "byte_end": 934,
+          "rows": 1,
+          "sha256": "935186f69de195ea7eb57151f744acc547de42120e5163d84463e8d19a09dc94"
+        }
+      ]
+    },
+    {
+      "id": "line-constructors",
+      "driver": "line_constructors_then_plain_write",
+      "input": "line-constructors.input.json",
+      "expected": "line-constructors.expected.txt",
+      "captures": [
+        {
+          "id": "line-raw-mixed",
+          "byte_start": 0,
+          "byte_end": 48,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "a925d94cfde1ab8396272eac4d2ce3641c7f1ecad55d7324751a4287136c5ec7"
+        },
+        {
+          "id": "line-raw-empty",
+          "byte_start": 48,
+          "byte_end": 49,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "line-raw-newlines",
+          "byte_start": 49,
+          "byte_end": 50,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "line-from-string-mixed",
+          "byte_start": 50,
+          "byte_end": 98,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "a925d94cfde1ab8396272eac4d2ce3641c7f1ecad55d7324751a4287136c5ec7"
+        },
+        {
+          "id": "line-from-string-empty",
+          "byte_start": 98,
+          "byte_end": 99,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "line-from-string-newlines",
+          "byte_start": 99,
+          "byte_end": 100,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "line-from-str-mixed",
+          "byte_start": 100,
+          "byte_end": 148,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "a925d94cfde1ab8396272eac4d2ce3641c7f1ecad55d7324751a4287136c5ec7"
+        },
+        {
+          "id": "line-from-str-empty",
+          "byte_start": 148,
+          "byte_end": 149,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "line-from-str-newlines",
+          "byte_start": 149,
+          "byte_end": 150,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "span-raw-mixed",
+          "byte_start": 150,
+          "byte_end": 203,
+          "rows": 1,
+          "lf_bytes": 5,
+          "sha256": "2de29332359f9bfb7654535a7f245f05760010ef12c3e15e4ba78fd7a2bec571"
+        },
+        {
+          "id": "span-raw-empty",
+          "byte_start": 203,
+          "byte_end": 204,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "span-raw-newlines",
+          "byte_start": 204,
+          "byte_end": 209,
+          "rows": 1,
+          "lf_bytes": 4,
+          "sha256": "a5883a5c3f4eb003d4006741228ac9f836193ba3c0c8bb2d2af9cc093ce7f9d6"
+        },
+        {
+          "id": "span-styled-mixed",
+          "byte_start": 209,
+          "byte_end": 262,
+          "rows": 1,
+          "lf_bytes": 5,
+          "sha256": "2de29332359f9bfb7654535a7f245f05760010ef12c3e15e4ba78fd7a2bec571"
+        },
+        {
+          "id": "span-styled-empty",
+          "byte_start": 262,
+          "byte_end": 263,
+          "rows": 1,
+          "lf_bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "id": "span-styled-newlines",
+          "byte_start": 263,
+          "byte_end": 268,
+          "rows": 1,
+          "lf_bytes": 4,
+          "sha256": "a5883a5c3f4eb003d4006741228ac9f836193ba3c0c8bb2d2af9cc093ce7f9d6"
+        }
+      ]
+    }
+  ]
+}

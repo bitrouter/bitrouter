@@ -239,7 +239,7 @@ providers:
 "#,
             upstream.uri()
         );
-        let config = bitrouter_sdk::config::parse_with(&source, |_| None)?;
+        let config = bitrouter::config::parse_with(&source, |_| None)?;
         let runtime_home = tempfile::tempdir()?;
         let config_path = runtime_home.path().join("bitrouter.yaml");
         std::fs::write(&config_path, source)?;

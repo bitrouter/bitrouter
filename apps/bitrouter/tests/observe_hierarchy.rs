@@ -31,8 +31,10 @@
 use std::time::Duration;
 
 use axum_test::TestServer;
-use bitrouter_sdk::config;
-use bitrouter_sdk::server::{AppState, RouterOptions, build_router_with_options};
+use bitrouter::config;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::RouterOptions;
+use bitrouter::gateway::http::build_router_with_options;
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -257,9 +259,8 @@ plugins:
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
         prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
-    let options = RouterOptions::default().with_router_wrapper(
-        bitrouter_telemetry::otel::http_layer::router_wrapper(exporter),
-    );
+    let options = RouterOptions::default()
+        .with_router_wrapper(bitrouter::telemetry::http_layer::router_wrapper(exporter));
     let router = build_router_with_options(state, options);
     let server = TestServer::new(router);
 

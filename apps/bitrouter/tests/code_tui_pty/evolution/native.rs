@@ -3,11 +3,12 @@
 
 use super::*;
 use bitrouter::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use bitrouter::evolution::evidence::{EvidenceKind, EvidencePacket};
-use bitrouter::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
-use bitrouter::evolution::runtime::EvolutionRuntime;
-use bitrouter::evolution::scheduler::EvolutionScheduler;
-use bitrouter_sdk::server::{AppState, build_router};
+use bitrouter::core::evolution::evidence::{EvidenceKind, EvidencePacket};
+use bitrouter::core::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
+use bitrouter::core::evolution::runtime::EvolutionRuntime;
+use bitrouter::core::evolution::scheduler::EvolutionScheduler;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers};
 
@@ -116,7 +117,8 @@ async fn setup_with_reply(
     worker_env: &str,
     responder: fn(&Request) -> Result<ResponseTemplate>,
 ) -> Result<NativeService> {
-    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
+    use bitrouter::config::agent::AcpAgentConfig;
+    use bitrouter::config::agent::AcpTransport;
     use std::collections::HashMap;
     use std::os::unix::fs::PermissionsExt;
 
@@ -131,7 +133,7 @@ async fn setup_with_reply(
             .context("adapter package directory missing")?
             .join("package.json"),
     )?)?;
-    let harness = bitrouter::harness::by_id(agent).context("unknown harness")?;
+    let harness = bitrouter::harness::catalog::by_id(agent).context("unknown harness")?;
     let (name, version) = harness
         .maintained_adapter_identity()
         .context("adapter is not pinned")?;
@@ -238,7 +240,7 @@ models:
         serde_json::to_string(&HashMap::from([(agent, agent_config)]))?
     ));
     std::fs::write(&mock.config_path, &config_text)?;
-    let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+    let config = bitrouter::config::parse_with(&config_text, |_| None)?;
     let assembled =
         bitrouter::assemble::build_app_with_path(&config, Some(&mock.config_path)).await?;
     let evolution = assembled.evolution.clone();
@@ -274,9 +276,10 @@ models:
             Arc::new(NoopReloader),
             Arc::new(NoopObserveStatus { compiled_in: false }),
             AcpControlPlane {
+                #[cfg(feature = "harness")]
                 runtime: assembled.acp_runtime,
                 metering: bitrouter::metering::MeteringStore::new(assembled.db),
-                inventory: Some(evolution.inventory()),
+                inventory: Some(assembled.gateway_requests.inventory()),
                 evolution: Some(evolution.clone()),
             },
             Some(administration),

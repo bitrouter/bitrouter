@@ -3,7 +3,8 @@
 
 use anyhow::{Context, Result};
 use axum_test::TestServer;
-use bitrouter_sdk::server::{AppState, build_router};
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -54,7 +55,7 @@ models:
         let home = tempfile::tempdir()?;
         let config_path = home.path().join("bitrouter.yaml");
         std::fs::write(&config_path, &source)?;
-        let config = bitrouter_sdk::config::parse_with(&source, |_| None)?;
+        let config = bitrouter::config::parse_with(&source, |_| None)?;
         let assembled =
             bitrouter::assemble::build_app_with_path(&config, Some(&config_path)).await?;
         let gateway = TestServer::builder()
