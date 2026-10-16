@@ -276,7 +276,7 @@ pub async fn run(
             }
             signal = shutdown.recv() => match signal {
                 crate::chat::signals::TerminalSignal::Shutdown => break,
-                crate::chat::signals::TerminalSignal::Suspend => { drop(events.take()); if !editing { view.suspend()?; } crate::chat::signals::suspend_current_process()?; if !editing { view.resume()?; events = Some(EventStream::new()); } }
+                crate::chat::signals::TerminalSignal::Suspend => { drop(events.take()); if !editing { view.suspend()?; } crate::chat::signals::suspend_current_process().await?; if !editing { view.resume()?; events = Some(EventStream::new()); } }
             },
             event = async { match events.as_mut() { Some(events) => events.next().await, None => std::future::pending().await } } => {
                 let Some(event) = event else { break; }; let event = event?;

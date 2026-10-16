@@ -285,7 +285,7 @@ pub async fn run(
                 crate::chat::signals::TerminalSignal::Shutdown => break,
                 crate::chat::signals::TerminalSignal::Suspend => {
                     drop(events.take()); view.suspend()?;
-                    crate::chat::signals::suspend_current_process()?;
+                    crate::chat::signals::suspend_current_process().await?;
                     view.resume()?; events = Some(EventStream::new());
                 }
             },
