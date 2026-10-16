@@ -11,6 +11,7 @@ pub(super) struct Setup {
     pub backend: MockServer,
     config_text: String,
     socket: Option<PathBuf>,
+    retain_failures: bool,
 }
 
 pub(super) struct Fixture {
@@ -43,7 +44,17 @@ impl Setup {
     }
 
     async fn build(with_harness: bool) -> Result<Self> {
-        let temporary = tempfile::tempdir()?;
+        let mut temporary = tempfile::tempdir()?;
+        let retain_failures = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
+        if retain_failures {
+            // Assertions can unwind before finish receives a Result. Keep the
+            // filesystem then too; a memory database is not captured by Drop.
+            temporary.disable_cleanup(true);
+            eprintln!(
+                "Failure-retention Goal fixture: {}",
+                temporary.path().display()
+            );
+        }
         let home = temporary.path();
         let workspace = home.join("original");
         let controls = home.join("controls");
@@ -106,6 +117,7 @@ impl Setup {
             backend,
             config_text,
             socket,
+            retain_failures,
         };
         Ok(setup)
     }
@@ -499,8 +511,8 @@ impl Fixture {
         )
     }
 
-    pub async fn finish(self, result: Result<()>) -> Result<()> {
-        let keep = result.is_err() && std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
+    pub async fn finish(mut self, result: Result<()>) -> Result<()> {
+        let keep = result.is_err() && self.setup.retain_failures;
         let file_database = !self
             .setup
             .config_text
@@ -553,8 +565,12 @@ impl Fixture {
             .await;
             eprintln!(
                 "Retained failed Goal fixture: {}",
-                self.setup.temporary.keep().display()
+                self.setup.temporary.path().display()
             );
+        } else {
+            // Normal success restores ordinary cleanup only after every
+            // shutdown step; a panic during those steps still retains files.
+            self.setup.temporary.disable_cleanup(false);
         }
         result
     }
