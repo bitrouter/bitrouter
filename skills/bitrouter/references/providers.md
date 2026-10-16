@@ -291,6 +291,57 @@ mcp_servers:
 
 Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect one server or all of them with `bro mcp check [name]`; it reports transport, reachability, latency, capability negotiation, and advertised tool names.
 
+### Parallel web search and page fetching
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+provides free web search and page excerpts without a Parallel account or API key.
+Anonymous search uses Fast mode and is rate limited. Save the following as a
+standalone `parallel.yaml` for a local gateway. Parallel uses legacy MCP
+initialization, selected with `mcp.upstream_protocol: latest`. That setting
+applies to every MCP upstream in the file; a separate configuration keeps
+your existing upstream settings intact:
+
+```yaml
+server:
+  listen: 127.0.0.1:4356
+  skip_auth: true
+  control_socket: ./parallel.sock
+mcp:
+  upstream_protocol: latest
+mcp_servers:
+  parallel:
+    name: parallel
+    transport:
+      type: http
+      url: https://search.parallel.ai/mcp
+      headers:
+        User-Agent: "BitRouter (https://github.com/bitrouter/bitrouter)"
+```
+
+Run `bro serve --config ./parallel.yaml` in the foreground on an available
+local port. In another terminal, check the connection with
+`bro mcp check parallel --config ./parallel.yaml`;
+it should advertise `web_search` and `web_fetch`.
+
+The following calls use the loopback listener in this example. If you adapt
+it for an authenticated daemon, add its configured bearer credential. Generate one session id
+and reuse it for related search and fetch calls:
+
+```bash
+SESSION_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+curl --fail-with-body http://127.0.0.1:4356/mcp/parallel \
+  -H 'Content-Type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"web_search\",\"arguments\":{\"objective\":\"Find BitRouter MCP configuration guidance\",\"search_queries\":[\"BitRouter MCP server configuration\"],\"session_id\":\"$SESSION_ID\"}}}"
+
+curl --fail-with-body http://127.0.0.1:4356/mcp/parallel \
+  -H 'Content-Type: application/json' \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"web_fetch\",\"arguments\":{\"urls\":[\"https://github.com/bitrouter/bitrouter\"],\"objective\":\"Read the BitRouter introduction\",\"session_id\":\"$SESSION_ID\"}}}"
+```
+
+The responses contain source URLs and excerpts. The direct endpoint uses the
+upstream tool names; the aggregate gateway uses `parallel__web_search` and
+`parallel__web_fetch`. This entry is opt-in and does not change model routing.
+
 ## Server tools (router-executed)
 
 Attach an MCP server's tools to LLM requests: BitRouter advertises them to the model, executes the model's calls to them itself, and loops until the model stops calling them — all inside one client response. The named servers must also be declared under `mcp_servers:` above.
