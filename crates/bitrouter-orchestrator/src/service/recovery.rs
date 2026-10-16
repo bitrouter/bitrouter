@@ -1547,7 +1547,11 @@ impl Rebuild {
         if matches!(
             self.view.config,
             crate::thread::executor::Config::Acp { .. }
-        ) {
+        ) && self.next_order != 0
+        {
+            // Before any Turn was accepted, this is only idle metadata: no
+            // harness session could have been started by this Thread. Its
+            // ordinary owner/workspace recovery still requires stopped proof.
             context_valid = false;
             self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
         }
