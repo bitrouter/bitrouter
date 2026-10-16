@@ -1577,6 +1577,8 @@ providers:
     }
 }
 
+/// Shared agent CLI options and negotiated capability data.
+pub mod agent_options;
 /// Shared agent action vocabulary.
 pub mod agents;
 /// Shared chat command resolution.

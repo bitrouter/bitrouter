@@ -198,7 +198,7 @@ fn interactive_chat_child() -> Result<()> {
             config,
             agent_id: "unconfigured-agent",
             options: bitrouter::acp_cli::LaunchOptions::default(),
-            routing: bitrouter::acp_cli::RoutingOptions::default(),
+            routing: bitrouter::commands::agent_options::RoutingOptions::default(),
         }))
         .err()
         .context("interactive chat accepted unavailable export")?;

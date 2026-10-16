@@ -61,6 +61,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Keeping the build input inside the crate is required by `cargo package`,
     // whose verification build cannot read files outside the packaged crate.
     let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?).join("registry-dist");
+    let dest = PathBuf::from(std::env::var("OUT_DIR")?);
+    if std::env::var_os("CARGO_FEATURE_HARNESS").is_some() {
+        write_harness_catalog(&root, &dest)?;
+    }
+    let providers_path = root.join("providers.json");
+    let models_path = root.join("models.json");
+    println!("cargo::rerun-if-changed={}", providers_path.display());
+    println!("cargo::rerun-if-changed={}", models_path.display());
+    let providers = read_data(&providers_path)?;
+    let canonical = read_data(&models_path)?;
+    let bundled = serde_json::json!({"providers": providers, "canonical": canonical});
+    std::fs::write(
+        dest.join("provider_registry.json"),
+        serde_json::to_vec(&bundled)?,
+    )?;
+    Ok(())
+}
+
+fn write_harness_catalog(root: &Path, dest: &Path) -> Result<(), Box<dyn Error>> {
     let agents_path = root.join("agents.json");
     let runtimes_path = root.join("runtimes.json");
     println!("cargo::rerun-if-changed={}", agents_path.display());
@@ -94,19 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     writeln!(out, "];")?;
 
-    let dest = PathBuf::from(std::env::var("OUT_DIR")?).join("catalog_generated.rs");
-    std::fs::write(&dest, out)?;
-    let providers_path = root.join("providers.json");
-    let models_path = root.join("models.json");
-    println!("cargo::rerun-if-changed={}", providers_path.display());
-    println!("cargo::rerun-if-changed={}", models_path.display());
-    let providers = read_data(&providers_path)?;
-    let canonical = read_data(&models_path)?;
-    let bundled = serde_json::json!({"providers": providers, "canonical": canonical});
-    std::fs::write(
-        dest.with_file_name("provider_registry.json"),
-        serde_json::to_vec(&bundled)?,
-    )?;
+    std::fs::write(dest.join("catalog_generated.rs"), out)?;
     Ok(())
 }
 

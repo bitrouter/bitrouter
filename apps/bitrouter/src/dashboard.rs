@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::acp_cli::{RoutingOptions, SessionSelection};
+use crate::commands::agent_options::{RoutingOptions, SessionSelection};
 use crate::contexts::RemoteContext;
 
 /// An optional ACP session to open when Code starts.

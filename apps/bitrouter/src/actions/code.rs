@@ -11,9 +11,10 @@ use anyhow::{Context, Result, bail, ensure};
 use bitrouter_ai::control::route::RouteInput;
 use tokio_util::sync::CancellationToken;
 
-use crate::acp_cli::{SessionSelection, SpawnContext, lifecycle_cancelled};
+use crate::acp_cli::{SpawnContext, lifecycle_cancelled};
 use crate::actions::supervised::SupervisedHandle;
 use crate::administration_target::{InspectionTarget, ReloadSubmission};
+use crate::commands::agent_options::{CapabilitySnapshot, RoutingOptions, SessionSelection};
 use crate::contexts::RemoteContext;
 use crate::dashboard::SessionRequest;
 use crate::output::{CliReport, Format, Output};
@@ -40,7 +41,7 @@ pub(crate) struct AgentChoice {
 struct InitialLaunch {
     agent_id: String,
     selection: SessionSelection,
-    routing: crate::acp_cli::RoutingOptions,
+    routing: RoutingOptions,
     config: crate::config::Config,
     options: crate::acp_cli::LaunchOptions,
 }
@@ -101,7 +102,7 @@ impl CodeServices {
 
     pub fn commands(
         &self,
-        capabilities: Option<&crate::acp_cli::CapabilitySnapshot>,
+        capabilities: Option<&CapabilitySnapshot>,
     ) -> Vec<crate::commands::chat::Command> {
         if let Some(capabilities) = capabilities {
             return super::session::offered_route_commands(
@@ -271,10 +272,7 @@ impl CodeServices {
             _ = cancel.cancelled() => return Err(lifecycle_cancelled()),
             result = super::supervised::ensure_daemon(source, &config, routing.no_start) => result?,
         };
-        let resumed = matches!(
-            request.selection,
-            crate::acp_cli::SessionSelection::Resume(_)
-        );
+        let resumed = matches!(request.selection, SessionSelection::Resume(_));
         if cancel.is_cancelled() {
             return Err(lifecycle_cancelled());
         }
@@ -474,7 +472,8 @@ mod tests {
     use super::{
         CodeServices, agent_is_selectable, conversation_label, operation_command_supported,
     };
-    use crate::acp_cli::{LaunchOptions, RoutingOptions, SessionSelection, SpawnContext};
+    use crate::acp_cli::{LaunchOptions, SpawnContext};
+    use crate::commands::agent_options::{RoutingOptions, SessionSelection};
     use crate::dashboard::SessionRequest;
     use crate::paths::ConfigSource;
 

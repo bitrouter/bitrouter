@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::acp_cli::{
-    SessionHandle, SessionHost, SessionSelection, SpawnContext, is_lifecycle_cancelled,
+    SessionHandle, SessionHost, SpawnContext, is_lifecycle_cancelled,
     is_lifecycle_teardown_unconfirmed,
 };
 use crate::client::sessions::wire::{
@@ -32,6 +32,7 @@ use crate::client::sessions::wire::{
     SessionMutation, SessionRequest, SessionResponse, SessionScope, StartRunRequest, TurnResult,
     TurnState,
 };
+use crate::commands::agent_options::SessionSelection;
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
 use crate::paths::ConfigSource;

@@ -15,7 +15,8 @@ use agent_client_protocol::schema::v1::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::acp_cli::{CapabilitySnapshot, LaunchOptions, RoutingOptions, SessionSelection};
+use crate::acp_cli::LaunchOptions;
+use crate::commands::agent_options::{CapabilitySnapshot, RoutingOptions, SessionSelection};
 use crate::harness::acp::client::SessionInitialSettings;
 
 /// Version of the local session-control JSON contract.

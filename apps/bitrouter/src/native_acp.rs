@@ -29,7 +29,7 @@ pub fn socket_path(control: &Path) -> PathBuf {
 pub async fn bridge(
     source: &crate::paths::ConfigSource,
     config: &crate::config::Config,
-    routing: &crate::acp_cli::RoutingOptions,
+    routing: &crate::commands::agent_options::RoutingOptions,
     read_only: bool,
     turn_timeout: Option<u64>,
 ) -> Result<()> {

@@ -26,11 +26,17 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use bitrouter::administration_target::{InspectionTarget, ReloadSubmission};
 use bitrouter::commands;
+#[cfg(any(feature = "harness", test))]
+use bitrouter::commands::agent_options::PromptFormat;
+#[cfg(feature = "harness")]
+use bitrouter::commands::agent_options::SessionSelection;
+use bitrouter::commands::agent_options::{HeadlessOptions, RoutingOptions};
 use bitrouter::config;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, process_is_alive};
 use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
+#[cfg(feature = "harness")]
 use bitrouter::output::reports::agents::{
     AgentCheckRow, AgentConformanceReport, AgentConformanceTier, AgentInstallReport,
     AgentRegistryRow, AgentRow, AgentSessionMutationReport, AgentSessionsReport, AgentsCheckReport,
@@ -151,7 +157,7 @@ struct CodeArgs {
     #[arg(long, value_name = "SECS")]
     turn_timeout: Option<u64>,
     #[command(flatten)]
-    routing: bitrouter::acp_cli::RoutingOptions,
+    routing: RoutingOptions,
     /// Path to `bitrouter.yaml` for a local Code session.
     #[arg(short, long)]
     config: Option<PathBuf>,
@@ -567,7 +573,7 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         cwd: Option<PathBuf>,
         #[command(flatten)]
-        routing: bitrouter::acp_cli::RoutingOptions,
+        routing: RoutingOptions,
         /// Per-turn deadline in seconds.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
@@ -587,7 +593,7 @@ enum Command {
         #[arg(long, value_name = "JSON|@PATH", conflicts_with = "no_wait")]
         result_schema: Option<String>,
         #[command(flatten)]
-        headless: bitrouter::acp_cli::HeadlessOptions,
+        headless: HeadlessOptions,
         /// Path to `bitrouter.yaml`.
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -650,7 +656,7 @@ enum Command {
         /// (with `-p`) How permission requests are answered, and what is
         /// printed.
         #[command(flatten)]
-        headless: bitrouter::acp_cli::HeadlessOptions,
+        headless: HeadlessOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted.
         #[arg(short, long)]
@@ -712,6 +718,14 @@ enum Command {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+    /// Internal update continuation executed by the replacement binary.
+    #[command(name = "__daemon-handoff", hide = true)]
+    DaemonHandoff {
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        socket: PathBuf,
+    },
     /// ACP client integration over stdio, plus compatibility commands.
     ///
     /// `serve` exposes an ACP-compatible adapter process over protocol-pure stdio.
@@ -750,7 +764,7 @@ enum Command {
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
         #[command(flatten)]
-        routing: bitrouter::acp_cli::RoutingOptions,
+        routing: RoutingOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1099,7 +1113,7 @@ enum AgentsAction {
         /// ACP agent id or friendly alias.
         agent: String,
         #[command(flatten)]
-        routing: bitrouter::acp_cli::RoutingOptions,
+        routing: RoutingOptions,
         /// How long to wait for the advertised command list.
         #[arg(long, value_name = "MS", default_value_t = 2000)]
         wait_ms: u64,
@@ -1115,7 +1129,7 @@ enum AgentsAction {
         /// ACP agent id or friendly alias; omit to check configured agents.
         agent: Option<String>,
         #[command(flatten)]
-        routing: bitrouter::acp_cli::RoutingOptions,
+        routing: RoutingOptions,
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
@@ -1693,7 +1707,7 @@ enum AcpCmd {
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
         #[command(flatten)]
-        routing: bitrouter::acp_cli::RoutingOptions,
+        routing: RoutingOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1723,9 +1737,9 @@ enum AcpCmd {
         #[arg(long)]
         no_wait: bool,
         #[command(flatten)]
-        routing: bitrouter::acp_cli::RoutingOptions,
+        routing: RoutingOptions,
         #[command(flatten)]
-        headless: bitrouter::acp_cli::HeadlessOptions,
+        headless: HeadlessOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1747,7 +1761,7 @@ enum AcpCmd {
         #[arg(long)]
         agent: String,
         #[command(flatten)]
-        routing: bitrouter::acp_cli::RoutingOptions,
+        routing: RoutingOptions,
         /// How long to wait for the agent's command list, in milliseconds.
         ///
         /// An agent that has not answered by then is reported as not having
@@ -1778,6 +1792,7 @@ enum CommandSourceArg {
     Agent,
 }
 
+#[cfg(feature = "harness")]
 impl From<CommandSourceArg> for bitrouter::actions::commands::CommandSource {
     fn from(arg: CommandSourceArg) -> Self {
         match arg {
@@ -1912,13 +1927,48 @@ async fn async_main() {
             // sibling mode (`spawn --check` still gets its JSON report).
             if raw_cloud_api || raw_agent_stream {
                 eprintln!("error: {e:#}");
-            } else if let Some(routing) = e.downcast_ref::<bitrouter::acp_cli::RoutingError>() {
-                eprintln!("error: {routing}");
             } else {
-                let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
+                emit_command_error(&e, &output);
             }
             std::process::exit(1);
         }
+    }
+}
+
+fn emit_command_error(error: &anyhow::Error, output: &Output) {
+    #[cfg(feature = "harness")]
+    if let Some(routing) = error.downcast_ref::<bitrouter::acp_cli::RoutingError>() {
+        eprintln!("error: {routing}");
+        return;
+    }
+    let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(error));
+}
+
+#[cfg(not(feature = "harness"))]
+const HARNESS_REQUIRED: &str = "agent commands require the harness feature";
+
+/// Reject unavailable execution before logs, target resolution, or input reads.
+#[cfg(not(feature = "harness"))]
+fn validate_harness_availability(command: Option<&Command>) -> Result<()> {
+    match command {
+        // The accepted catalog is a control read, including on a remote daemon.
+        Some(Command::Agents {
+            action: Some(AgentsAction::List { remote: false, .. }),
+        }) => Ok(()),
+        Some(
+            Command::Run { .. }
+            | Command::Spawn { .. }
+            | Command::Launch { .. }
+            | Command::Claude { .. }
+            | Command::ClaudeCode { .. }
+            | Command::Codex { .. }
+            | Command::Chat { .. }
+            | Command::Agents { .. }
+            | Command::Acp {
+                cmd: AcpCmd::Serve { .. } | AcpCmd::Prompt { .. } | AcpCmd::Commands { .. },
+            },
+        ) => anyhow::bail!(HARNESS_REQUIRED),
+        _ => Ok(()),
     }
 }
 
@@ -1944,6 +1994,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             "interactive commands require the tui feature; use run for headless work"
         );
     }
+    #[cfg(not(feature = "harness"))]
+    validate_harness_availability(cli.command.as_ref())?;
     if let Some(Command::Init { yes, after, .. }) = &cli.command {
         bitrouter::onboarding::validate_tui_availability(*yes, *after)?;
     }
@@ -1962,15 +2014,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         )
     ) {
         anyhow::bail!("MCP diagnostics require the mcp feature");
-    }
-    #[cfg(not(feature = "harness"))]
-    if matches!(
-        &cli.command,
-        Some(Command::Acp {
-            cmd: AcpCmd::Serve { .. }
-        })
-    ) {
-        anyhow::bail!("ACP serving requires the harness feature");
     }
     #[cfg(not(feature = "core"))]
     if matches!(
@@ -2041,7 +2084,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     );
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
-    } else if is_acp {
+    } else if is_acp && (cfg!(feature = "harness") || cli.command.is_some()) {
         // Any `acp` subcommand: stderr so stdout stays pristine, plus a
         // per-session file so the substrate's log and the agent child's
         // captured stderr can be read back interleaved.
@@ -2050,6 +2093,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             // Remembered so a session that dies badly can show the end of it
             // and say where the rest is. Set once, at init, because that is
             // the only place the path exists.
+            #[cfg(feature = "harness")]
             bitrouter::chat::session::remember_session_log(path);
         }
     } else {
@@ -2089,6 +2133,19 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     validate_remote_invocation(&command, remote_context.is_some())?;
 
     match command {
+        #[cfg(not(feature = "harness"))]
+        Command::Run { .. }
+        | Command::Spawn { .. }
+        | Command::Launch { .. }
+        | Command::Claude { .. }
+        | Command::ClaudeCode { .. }
+        | Command::Codex { .. }
+        | Command::Chat { .. } => anyhow::bail!(HARNESS_REQUIRED),
+        #[cfg(not(all(feature = "core", feature = "harness")))]
+        Command::Task { .. } => {
+            anyhow::bail!("native task execution requires the core feature and harness feature")
+        }
+        #[cfg(all(feature = "core", feature = "harness"))]
         Command::Task { action } => match action {
             TaskAction::Run(args) => run_native_task(args, remote_context.is_some()).await,
             TaskAction::Managed(args) => {
@@ -2350,6 +2407,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .await
         }
+        #[cfg(feature = "harness")]
         Command::Launch {
             agent,
             agent_compat,
@@ -2370,10 +2428,13 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             })?;
             run_native_launch(&agent, options, output).await
         }
+        #[cfg(feature = "harness")]
         Command::Claude { options } | Command::ClaudeCode { options } => {
             run_native_launch("claude", options, output).await
         }
+        #[cfg(feature = "harness")]
         Command::Codex { options } => run_native_launch("codex", options, output).await,
+        #[cfg(feature = "harness")]
         Command::Run {
             agent,
             prompt,
@@ -2401,9 +2462,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             let cfg = bitrouter::paths::load_config(&source).await?;
             let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
             let session = match (load, resume) {
-                (Some(id), None) => bitrouter::acp_cli::SessionSelection::Load(id),
-                (None, Some(id)) => bitrouter::acp_cli::SessionSelection::Resume(id),
-                (None, None) => bitrouter::acp_cli::SessionSelection::New,
+                (Some(id), None) => SessionSelection::Load(id),
+                (None, Some(id)) => SessionSelection::Resume(id),
+                (None, None) => SessionSelection::New,
                 (Some(_), Some(_)) => {
                     return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                         "--load and --resume cannot be combined",
@@ -2412,7 +2473,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 }
             };
             if background {
-                if headless.format != bitrouter::acp_cli::PromptFormat::Ndjson {
+                if headless.format != PromptFormat::Ndjson {
                     return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                         "`--format text|quiet` is unavailable with `--background`; the command returns a structured run report",
                     )
@@ -2478,6 +2539,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .await
         }
+        #[cfg(feature = "harness")]
         Command::Spawn {
             agent,
             prompt,
@@ -2540,7 +2602,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
-            let routing = bitrouter::acp_cli::RoutingOptions {
+            let routing = RoutingOptions {
                 direct,
                 base_url,
                 model,
@@ -2549,7 +2611,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             // A flattened struct cannot say `requires = "prompt"` for itself,
             // so the modes that hand permissions to someone else refuse the
             // flags that would answer them here.
-            if prompt.is_none() && headless != bitrouter::acp_cli::HeadlessOptions::default() {
+            if prompt.is_none() && headless != HeadlessOptions::default() {
                 anyhow::bail!(
                     "spawn: `--approve-all`, `--approve-reads`, `--deny-all`, \
                      `--permission-policy`, and `--format` apply to `-p` only; \
@@ -2597,7 +2659,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                         no_wait,
                         result_schema: result_schema.as_deref(),
                         headless,
-                        session: bitrouter::acp_cli::SessionSelection::New,
+                        session: SessionSelection::New,
                         cwd: None,
                     },
                 )
@@ -2624,6 +2686,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             );
             run_code(options, remote_context, cli.context.as_deref()).await
         }
+        #[cfg(feature = "harness")]
         Command::Chat {
             agent,
             turn_timeout,
@@ -2673,6 +2736,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .await
         }
+        Command::DaemonHandoff { config, socket } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            bitrouter::upgrade::ensure_compatible(&source, &socket, false).await
+        }
         Command::Update {
             check,
             tag,
@@ -2696,13 +2763,17 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     _ => None,
                 };
                 // The binary on disk now contains the new migrator. Run its
-                // normal daemon-dependent path so the old in-memory binary
-                // cannot preflight with a stale migration list.
+                // harness-independent handoff path so the old in-memory
+                // binary cannot preflight with a stale migration list.
                 let candidate = std::env::current_exe()?;
-                let attempt = tokio::process::Command::new(candidate)
-                    .args(["--json", "agents", "sessions"])
-                    .output()
-                    .await;
+                let mut handoff = tokio::process::Command::new(candidate);
+                handoff
+                    .args(["--json", "__daemon-handoff", "--socket"])
+                    .arg(&socket);
+                if let bitrouter::paths::ConfigSource::File(path) = &source {
+                    handoff.arg("--config").arg(path);
+                }
+                let attempt = handoff.output().await;
                 let (completed, reason) = match attempt {
                     Ok(result) if result.status.success() => {
                         let hello =
@@ -2773,6 +2844,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     }
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     use bitrouter::agent_local::{Operation, ReplyResult};
     use bitrouter::harness::turn::TurnStatus;
@@ -2937,6 +3009,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     }
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 fn emit_task_event(event: &bitrouter::harness::thread::ThreadEvent) -> Result<()> {
     // Private execution fences still advance the durable cursor. The client
     // applies them locally, but NDJSON consumers only need public changes.
@@ -2946,6 +3019,7 @@ fn emit_task_event(event: &bitrouter::harness::thread::ThreadEvent) -> Result<()
     Ok(())
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 fn emit_task_json(value: serde_json::Value) -> Result<()> {
     use std::io::Write;
     let mut stdout = std::io::stdout().lock();
@@ -3740,6 +3814,7 @@ async fn resolve_client_socket_from(
 }
 
 /// Session verbs need the new daemon protocol before sending `sessions`.
+#[cfg(feature = "harness")]
 async fn resolve_supervisor_socket(
     config: Option<&Path>,
     socket: Option<&Path>,
@@ -4386,6 +4461,9 @@ async fn administration_agents(
     context_name: Option<&str>,
 ) -> Result<()> {
     match action {
+        #[cfg(not(feature = "harness"))]
+        None => anyhow::bail!(HARNESS_REQUIRED),
+        #[cfg(feature = "harness")]
         None => {
             if remote_context.is_some() {
                 return Err(bitrouter::gateway::error::BitrouterError::bad_request(
@@ -4410,6 +4488,9 @@ async fn administration_agents(
             output.emit(&target.agents().await?)?;
             Ok(())
         }
+        #[cfg(not(feature = "harness"))]
+        Some(_) => anyhow::bail!(HARNESS_REQUIRED),
+        #[cfg(feature = "harness")]
         Some(action) => {
             if remote_context.is_some() {
                 return Err(bitrouter::gateway::error::BitrouterError::bad_request(
@@ -5793,6 +5874,7 @@ async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
     }
 }
 
+#[cfg(feature = "harness")]
 async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
@@ -5919,7 +6001,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                 output.emit(&report)?;
                 return exit_with(code);
             }
-            if routing != bitrouter::acp_cli::RoutingOptions::default() {
+            if routing != RoutingOptions::default() {
                 return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "routing flags on `agents check` require a specific agent",
                 )
@@ -6030,6 +6112,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     }
 }
 
+#[cfg(feature = "harness")]
 async fn scaffold_agent(id: &str, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
@@ -6072,6 +6155,7 @@ async fn scaffold_agent(id: &str, output: &Output) -> Result<()> {
 /// Shared body for `bro launch` and the deprecated `spawn --agent`
 /// alias: resolve config, then either preflight (`--check`) or exec the
 /// interactive harness with its traffic routed through the daemon.
+#[cfg(feature = "harness")]
 async fn run_launch(
     config: Option<&std::path::Path>,
     opts: bitrouter::spawn::SpawnOptions,
@@ -6092,6 +6176,7 @@ async fn run_launch(
     }
 }
 
+#[cfg(feature = "harness")]
 async fn run_native_launch(
     agent: &str,
     options: NativeLaunchArgs,
@@ -6206,9 +6291,9 @@ async fn run_code(
             .into());
         }
         let selection = match (load, resume) {
-            (Some(session_id), None) => bitrouter::acp_cli::SessionSelection::Load(session_id),
-            (None, Some(session_id)) => bitrouter::acp_cli::SessionSelection::Resume(session_id),
-            (None, None) => bitrouter::acp_cli::SessionSelection::New,
+            (Some(session_id), None) => SessionSelection::Load(session_id),
+            (None, Some(session_id)) => SessionSelection::Resume(session_id),
+            (None, None) => SessionSelection::New,
             (Some(_), Some(_)) => {
                 return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                     "--load and --resume are mutually exclusive",
@@ -6223,7 +6308,7 @@ async fn run_code(
             routing,
         })
     } else {
-        if turn_timeout.is_some() || routing != bitrouter::acp_cli::RoutingOptions::default() {
+        if turn_timeout.is_some() || routing != RoutingOptions::default() {
             return Err(bitrouter::gateway::error::BitrouterError::bad_request(
                 "--turn-timeout, --direct, --base-url, --model, and --no-start apply to \
                  `code <agent>`, not the agent-selection screen",
@@ -6245,6 +6330,7 @@ async fn run_code(
     .await
 }
 
+#[cfg(feature = "harness")]
 async fn resolve_prompt_input(
     prompt: Option<String>,
     prompt_file: Option<&Path>,
@@ -6279,6 +6365,10 @@ async fn resolve_prompt_input(
 
 async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     match cmd {
+        #[cfg(not(feature = "harness"))]
+        AcpCmd::Serve { .. } | AcpCmd::Prompt { .. } | AcpCmd::Commands { .. } => {
+            anyhow::bail!(HARNESS_REQUIRED)
+        }
         #[cfg(not(feature = "core"))]
         AcpCmd::Evolution { .. } => {
             anyhow::bail!("checkpoint evolution requires the core feature")
@@ -6503,6 +6593,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             }
             Ok(())
         }
+        #[cfg(feature = "harness")]
         AcpCmd::Serve {
             agent,
             agent_compat,
@@ -6515,9 +6606,6 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let Some(agent) = agent else {
-                #[cfg(not(feature = "harness"))]
-                anyhow::bail!("native ACP serving requires the harness feature");
-                #[cfg(feature = "harness")]
                 return bitrouter::native_acp::bridge(
                     &source,
                     &cfg,
@@ -6541,6 +6629,7 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             };
             bitrouter::acp_cli::serve(ctx).await
         }
+        #[cfg(feature = "harness")]
         AcpCmd::Prompt {
             agent,
             turn_timeout,
@@ -6569,12 +6658,13 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
                     no_wait,
                     result_schema: None,
                     headless,
-                    session: bitrouter::acp_cli::SessionSelection::New,
+                    session: SessionSelection::New,
                     cwd: None,
                 },
             )
             .await
         }
+        #[cfg(feature = "harness")]
         AcpCmd::Commands {
             agent,
             routing,
@@ -6608,17 +6698,19 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     }
 }
 
+#[cfg(feature = "harness")]
 struct AgentPromptRequest<'a> {
     prompt: &'a str,
-    routing: bitrouter::acp_cli::RoutingOptions,
+    routing: RoutingOptions,
     turn_timeout: Option<u64>,
     no_wait: bool,
     result_schema: Option<&'a str>,
-    headless: bitrouter::acp_cli::HeadlessOptions,
-    session: bitrouter::acp_cli::SessionSelection,
+    headless: HeadlessOptions,
+    session: SessionSelection,
     cwd: Option<PathBuf>,
 }
 
+#[cfg(feature = "harness")]
 async fn run_agent_prompt(
     source: &bitrouter::paths::ConfigSource,
     config: bitrouter::config::Config,
@@ -6654,6 +6746,7 @@ async fn run_agent_prompt(
 /// Leave with a status a successful command chose for itself — `spawn
 /// --check`'s report and a headless prompt's permission tally both do — or
 /// return normally for zero.
+#[cfg(any(feature = "harness", feature = "mcp"))]
 fn exit_with(code: i32) -> Result<()> {
     if code == 0 {
         Ok(())
@@ -6696,9 +6789,138 @@ mod tests {
             }) => {
                 assert_eq!(agent, "claude-acp");
                 assert_eq!(prompt.as_deref(), Some("summarize this repository"));
-                assert_eq!(headless.format, bitrouter::acp_cli::PromptFormat::Quiet);
+                assert_eq!(headless.format, PromptFormat::Quiet);
             }
             _ => anyhow::bail!("run did not parse as the headless agent command"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn run_retains_input_routing_and_permission_options_in_every_profile() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from([
+            "bro",
+            "run",
+            "codex",
+            "--prompt-file",
+            "prompt.txt",
+            "--load",
+            "native-session",
+            "--cwd",
+            "workspace",
+            "--direct",
+            "--base-url",
+            "http://127.0.0.1:4356/v1",
+            "--model",
+            "provider/model",
+            "--no-start",
+            "--turn-timeout",
+            "60",
+            "--permission-policy",
+            "@permissions.json",
+            "--result-schema",
+            "@schema.json",
+            "--format",
+            "json",
+        ])?;
+        let Some(Command::Run {
+            prompt,
+            prompt_file,
+            load,
+            cwd,
+            routing,
+            turn_timeout,
+            headless,
+            result_schema,
+            ..
+        }) = cli.command
+        else {
+            anyhow::bail!("expected run command");
+        };
+        assert!(prompt.is_none());
+        assert_eq!(prompt_file.as_deref(), Some(Path::new("prompt.txt")));
+        assert_eq!(load.as_deref(), Some("native-session"));
+        assert_eq!(cwd.as_deref(), Some(Path::new("workspace")));
+        assert!(routing.direct);
+        assert!(routing.no_start);
+        assert_eq!(
+            routing.base_url.as_deref(),
+            Some("http://127.0.0.1:4356/v1")
+        );
+        assert_eq!(routing.model.as_deref(), Some("provider/model"));
+        assert_eq!(turn_timeout, Some(60));
+        assert_eq!(
+            headless.permission_policy.as_deref(),
+            Some("@permissions.json")
+        );
+        assert_eq!(headless.format, PromptFormat::Ndjson);
+        assert_eq!(result_schema.as_deref(), Some("@schema.json"));
+
+        let stdin = Cli::try_parse_from(["bro", "run", "codex", "-", "--resume", "session"])?;
+        assert!(matches!(
+            stdin.command,
+            Some(Command::Run {
+                prompt: Some(prompt),
+                resume: Some(session),
+                ..
+            }) if prompt == "-" && session == "session"
+        ));
+        for args in [
+            vec!["bro", "run", "codex", "text", "--prompt-file", "prompt.txt"],
+            vec![
+                "bro", "run", "codex", "text", "--load", "s", "--resume", "s",
+            ],
+            vec![
+                "bro",
+                "run",
+                "codex",
+                "text",
+                "--no-wait",
+                "--result-schema",
+                "{}",
+            ],
+        ] {
+            let error = Cli::try_parse_from(args.iter().copied())
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("conflicting options parsed: {args:?}"))?;
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn offline_acp_inspection_commands_parse_in_every_profile() -> anyhow::Result<()> {
+        for suffix in [
+            vec!["list"],
+            vec!["show", "checkpoint"],
+            vec!["resources", "checkpoint"],
+            vec!["history"],
+            vec!["effective"],
+            vec!["family"],
+        ] {
+            let mut args = vec!["bro", "acp", "checkpoints", "--agent", "codex", "session"];
+            args.extend(suffix);
+            let cli = Cli::try_parse_from(args)?;
+            assert!(matches!(
+                cli.command,
+                Some(Command::Acp {
+                    cmd: AcpCmd::Checkpoints { .. },
+                })
+            ));
+        }
+        for suffix in [
+            vec!["list", "--agent", "codex"],
+            vec!["show", "--agent", "codex", "session"],
+        ] {
+            let mut args = vec!["bro", "acp", "recordings"];
+            args.extend(suffix);
+            let cli = Cli::try_parse_from(args)?;
+            assert!(matches!(
+                cli.command,
+                Some(Command::Acp {
+                    cmd: AcpCmd::Recordings { .. },
+                })
+            ));
         }
         Ok(())
     }
@@ -8044,8 +8266,7 @@ mod tests {
     /// The headless permission flags are mutually exclusive, parse on both
     /// front doors, and default to deny-all with NDJSON.
     #[test]
-    fn headless_permission_flags_parse_on_both_front_doors() {
-        use bitrouter::acp_cli::{HeadlessOptions, PromptFormat};
+    fn headless_permission_flags_parse_on_both_front_doors() -> anyhow::Result<()> {
         use clap::Parser;
 
         let cli = Cli::try_parse_from([
@@ -8057,22 +8278,20 @@ mod tests {
             "--approve-reads",
             "--format",
             "quiet",
-        ])
-        .expect("parse");
+        ])?;
         match cli.command {
             Some(Command::Spawn { headless, .. }) => {
                 assert!(headless.approve_reads);
                 assert_eq!(headless.format, PromptFormat::Quiet);
             }
-            _ => panic!("expected `spawn -p`"),
+            _ => anyhow::bail!("expected `spawn -p`"),
         }
-        let cli = Cli::try_parse_from(["bitrouter", "acp", "prompt", "--agent", "a", "hi"])
-            .expect("parse");
+        let cli = Cli::try_parse_from(["bitrouter", "acp", "prompt", "--agent", "a", "hi"])?;
         match cli.command {
             Some(Command::Acp {
                 cmd: AcpCmd::Prompt { headless, .. },
             }) => assert_eq!(headless, HeadlessOptions::default()),
-            _ => panic!("expected `acp prompt`"),
+            _ => anyhow::bail!("expected `acp prompt`"),
         }
         assert!(
             Cli::try_parse_from([
@@ -8088,6 +8307,7 @@ mod tests {
             .is_err(),
             "one mode at a time"
         );
+        Ok(())
     }
 
     #[test]

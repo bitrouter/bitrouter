@@ -203,22 +203,39 @@ pub fn providers(config: &Config, source: &str) -> ProvidersReport {
 }
 
 pub fn agents(config: &Config, source: &str) -> AgentsReport {
+    #[cfg(feature = "harness")]
+    let agents = crate::agents::list(config)
+        .into_iter()
+        .map(|row| AgentEntry {
+            id: row.id,
+            configured: row.configured,
+            in_catalog: row.in_catalog,
+            description: if row.in_catalog {
+                row.description
+            } else {
+                "Custom configured agent".into()
+            },
+        })
+        .collect();
+    // Reduced builds retain configuration inspection without loading an agent
+    // execution catalog or claiming that a configured agent can run locally.
+    #[cfg(not(feature = "harness"))]
+    let agents = {
+        let mut ids: Vec<_> = config.agents.keys().collect();
+        ids.sort();
+        ids.into_iter()
+            .map(|id| AgentEntry {
+                id: id.clone(),
+                configured: true,
+                in_catalog: false,
+                description: "Custom configured agent".into(),
+            })
+            .collect()
+    };
     AgentsReport {
         resolved_via: source.into(),
         readiness_checked: false,
-        agents: crate::agents::list(config)
-            .into_iter()
-            .map(|row| AgentEntry {
-                id: row.id,
-                configured: row.configured,
-                in_catalog: row.in_catalog,
-                description: if row.in_catalog {
-                    row.description
-                } else {
-                    "Custom configured agent".into()
-                },
-            })
-            .collect(),
+        agents,
     }
 }
 

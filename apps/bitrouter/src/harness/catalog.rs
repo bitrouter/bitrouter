@@ -18,14 +18,7 @@
 //! launch fallback and then apply that same plan through ACP provider setup;
 //! other adapters retain the catalog's legacy env/args behavior.
 
-/// BitRouter's own API-key env var (`brk_…`). When set, it is forwarded to the
-/// harness as the gateway bearer credential.
-pub const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
-
-/// Placeholder credential injected when no real key is available. Ignored by
-/// the daemon under `skip_auth: true` (the `bro init` default); the
-/// harness merely needs *some* credential to start.
-pub const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
+use crate::client::local_gateway::{BITROUTER_API_KEY_ENV, PLACEHOLDER_API_KEY};
 
 use anyhow::Context;
 

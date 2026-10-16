@@ -22,6 +22,7 @@ use wiremock::{
 
 use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::checkpoint::types::CriterionScore;
+use crate::commands::agent_options::{RoutingOptions, SessionSelection};
 use crate::core::evolution::evidence::{EvidenceKind, EvidencePacket};
 use crate::core::evolution::rubric::{
     Applicability, RUBRIC_VERSION, RubricEvaluation, RubricItem, library,

@@ -283,6 +283,7 @@ pub fn discover_all_skills(root: &Path) -> Vec<DiscoveredSkill> {
     discover(root, usize::MAX, usize::MAX).unwrap_or_default()
 }
 
+#[cfg(feature = "harness")]
 pub(crate) fn discover_bounded(root: &Path, skill_limit: usize) -> Result<Vec<DiscoveredSkill>> {
     discover(root, 4096, skill_limit)
 }

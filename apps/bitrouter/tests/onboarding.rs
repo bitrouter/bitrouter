@@ -312,6 +312,42 @@ fn bare_interactive_entry_requires_tui_without_saving_or_launching() -> anyhow::
     Ok(())
 }
 
+#[cfg(not(feature = "harness"))]
+#[test]
+fn bare_entry_without_harness_never_creates_session_logs() -> anyhow::Result<()> {
+    for saved in [
+        None,
+        Some("inherit_defaults: false\n"),
+        Some("inherit_defaults: false\nchat: { agent: codex-acp }\n"),
+    ] {
+        let home = TempDir::new()?;
+        let data = TempDir::new()?;
+        let config = home.path().join("bitrouter.yaml");
+        if let Some(raw) = saved {
+            std::fs::write(&config, raw)?;
+        }
+        let output = run_cli(home.path(), data.path(), &[], &[]);
+        if saved.is_some_and(|raw| raw.contains("codex-acp")) {
+            assert!(!output.status.success());
+            let diagnostic = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(diagnostic.contains("harness feature"), "{diagnostic}");
+        } else {
+            assert!(output.status.success());
+        }
+        assert!(!home.path().join(".bitrouter").exists());
+        assert!(!home.path().join("logs").exists());
+        assert!(std::fs::read_dir(data.path())?.next().is_none());
+        if let Some(raw) = saved {
+            assert_eq!(std::fs::read_to_string(config)?, raw);
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn bare_unconfigured_emits_inert_envelope_and_exits_zero() {
     let home = TempDir::new().unwrap();

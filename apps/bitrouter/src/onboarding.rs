@@ -379,6 +379,7 @@ fn config_path(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
     )?)
 }
 
+#[cfg(feature = "harness")]
 async fn start_default_chat(
     source: &crate::paths::ConfigSource,
     config: crate::config::Config,
@@ -387,7 +388,7 @@ async fn start_default_chat(
         config.chat.agent.clone().with_context(|| {
             format!("no default ACP harness; run `{} init`", invocation::name())
         })?;
-    let routing = crate::acp_cli::RoutingOptions {
+    let routing = crate::commands::agent_options::RoutingOptions {
         model: config.chat.model.clone(),
         ..Default::default()
     };
@@ -415,7 +416,7 @@ async fn start_default_chat(
             None,
             Some(crate::dashboard::SessionRequest {
                 agent,
-                selection: crate::acp_cli::SessionSelection::New,
+                selection: crate::commands::agent_options::SessionSelection::New,
                 turn_timeout: None,
                 routing,
             }),
@@ -424,6 +425,18 @@ async fn start_default_chat(
     }
     #[cfg(not(feature = "tui"))]
     anyhow::bail!("interactive default chat requires the tui feature")
+}
+
+#[cfg(not(feature = "harness"))]
+async fn start_default_chat(
+    _source: &crate::paths::ConfigSource,
+    _config: crate::config::Config,
+) -> Result<()> {
+    anyhow::ensure!(
+        !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal(),
+        "interactive default chat requires the tui feature"
+    );
+    anyhow::bail!("default agent chat requires the harness feature")
 }
 
 /// Persist onboarding atomically; an interrupted wizard never marks itself complete.
@@ -819,7 +832,7 @@ async fn interactive_credentials(
     for provider in &providers {
         if provider
             .env_credential_var()
-            .is_some_and(|var| crate::spawn::nonempty_env(&var).is_some())
+            .is_some_and(|var| crate::client::local_gateway::nonempty_env(&var).is_some())
         {
             configured.insert(provider.name.clone());
         }
@@ -1028,7 +1041,7 @@ async fn finish_serve(
 ) -> Result<()> {
     let source = crate::paths::resolve_config(Some(path))?;
     let cfg = crate::paths::load_config(&source).await?;
-    crate::spawn::ensure_local_daemon(&source, &cfg, false).await;
+    crate::client::local_gateway::ensure_local_daemon(&source, &cfg, false).await;
     report.snippet = Some(build_snippet(&cfg.server.listen));
     emit(output, &report)
 }
@@ -1037,9 +1050,11 @@ async fn finish_serve(
 /// auth mode: a real exported `BITROUTER_API_KEY` (`brk_`) when present, else
 /// the local `skip_auth` placeholder. The Codex example opens Code.
 fn build_snippet(listen: &str) -> Snippet {
-    let base_url = crate::spawn::derive_base_url(listen);
-    let token = crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV)
-        .unwrap_or_else(|| crate::harness::catalog::PLACEHOLDER_API_KEY.to_string());
+    let base_url = crate::client::local_gateway::derive_base_url(listen);
+    let token = crate::client::local_gateway::nonempty_env(
+        crate::client::local_gateway::BITROUTER_API_KEY_ENV,
+    )
+    .unwrap_or_else(|| crate::client::local_gateway::PLACEHOLDER_API_KEY.to_string());
     let v1 = {
         let trimmed = base_url.trim_end_matches('/');
         if trimmed.ends_with("/v1") {
@@ -1427,7 +1442,11 @@ mod tests {
         // With no BITROUTER_API_KEY exported, the local `skip_auth` placeholder
         // is templated into all three shapes.
         // (This test process does not set BITROUTER_API_KEY.)
-        if crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV).is_some() {
+        if crate::client::local_gateway::nonempty_env(
+            crate::client::local_gateway::BITROUTER_API_KEY_ENV,
+        )
+        .is_some()
+        {
             return; // environment is non-hermetic; skip rather than false-fail
         }
         let snippet = build_snippet("127.0.0.1:4356");
@@ -1439,7 +1458,7 @@ mod tests {
         );
         assert!(snippet.anthropic.contains(&format!(
             "ANTHROPIC_AUTH_TOKEN={}",
-            crate::harness::catalog::PLACEHOLDER_API_KEY
+            crate::client::local_gateway::PLACEHOLDER_API_KEY
         )));
         // OpenAI shape carries the /v1 suffix.
         assert!(

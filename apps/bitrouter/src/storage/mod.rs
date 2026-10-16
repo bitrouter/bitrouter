@@ -3,6 +3,7 @@
 
 pub(crate) mod acp_history;
 
+#[cfg(any(feature = "core", feature = "harness"))]
 pub mod checkpoint;
 
 pub mod evaluation;

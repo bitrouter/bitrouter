@@ -389,6 +389,7 @@ impl CoreSession {
     /// Import native instructions and complete paired history at an idle or
     /// fully settled work boundary. Existing evidence must survive; only user/instruction
     /// messages may be added to a previously bound conversation.
+    #[cfg(feature = "harness")]
     pub(crate) async fn seed_native_context(
         &self,
         messages: Vec<Message>,

@@ -50,9 +50,9 @@ use crate::gateway::pipeline::hooks::HookDecision;
 pub mod skills;
 pub mod transport;
 
-// These owners also serve the currently unconditional harness resources.
-// Gate them with `mcp` once harness execution is independently feature-gated.
+#[cfg(feature = "mcp")]
 pub mod client;
+#[cfg(feature = "mcp")]
 mod process;
 
 #[cfg(feature = "mcp")]

@@ -120,17 +120,6 @@ impl DaemonReloader for NoopReloader {
 pub struct OpaqueSessionPayload(serde_json::Value);
 
 #[cfg(not(feature = "harness"))]
-impl OpaqueSessionPayload {
-    pub(crate) fn new(value: serde_json::Value) -> Self {
-        Self(value)
-    }
-
-    pub(crate) fn into_value(self) -> serde_json::Value {
-        self.0
-    }
-}
-
-#[cfg(not(feature = "harness"))]
 impl std::fmt::Debug for OpaqueSessionPayload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OpaqueSessionPayload([redacted])")

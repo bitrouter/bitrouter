@@ -85,11 +85,13 @@ pub fn default_manager() -> Result<Arc<CredentialManager>> {
 /// One lazily constructed account manager shared by the Cloud consumers of a
 /// standalone ACP invocation. Construction does not read the credential store;
 /// resolution remains best-effort at each consumer boundary.
+#[cfg(feature = "harness")]
 #[derive(Clone)]
 pub(crate) struct StandaloneCloudCredentials {
     manager: Option<Arc<CredentialManager>>,
 }
 
+#[cfg(feature = "harness")]
 impl StandaloneCloudCredentials {
     /// Construct the invocation-scoped manager once. A path-construction
     /// failure preserves the existing best-effort fallback behavior.

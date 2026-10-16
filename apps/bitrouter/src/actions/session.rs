@@ -9,11 +9,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::actions::ACTIONS;
+#[cfg(feature = "harness")]
+use crate::actions::Requires;
 use crate::actions::ToolError;
 use crate::actions::models::ModelsQuery;
 use crate::actions::status::StatusQuery;
-use crate::actions::{ACTIONS, Requires};
 use crate::commands::chat::Command;
+#[cfg(feature = "harness")]
 use crate::harness::acp::client::{AcpClient, RouteMethod};
 use {crate::actions::route::RouteQuery, bitrouter_ai::control::route::RouteInput};
 
@@ -21,11 +24,13 @@ use crate::output::CliReport;
 use crate::paths::ConfigSource;
 
 /// What `/route` says at a session with no route surface to open a picker over.
+#[cfg(feature = "harness")]
 const NOT_ROUTABLE: &str = "this session cannot be rerouted (the controller advertises no route \
                             control: running direct, or without a trusted local daemon binding)";
 /// What `/route reset` says at the same session. Distinct from [`NOT_ROUTABLE`]
 /// because a controller may advertise `set` without `reset`, and a reader told
 /// "cannot be rerouted" would not know which of the two they had.
+#[cfg(feature = "harness")]
 const NOT_RESETTABLE: &str = "this session has no route lease to drop (the controller advertises \
                               no route reset)";
 
@@ -53,6 +58,7 @@ pub fn summary_for(action: &str) -> &'static str {
 /// Resolved once, at launch, and handed to the reducer as plain data. A row
 /// whose requirement is unmet is still returned — with the reason — because a
 /// control the session cannot run should say why rather than vanish.
+#[cfg(feature = "harness")]
 pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
     let capability = client.route_control();
     offered_route_commands(
@@ -64,6 +70,7 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
 
 /// Resolve the same command inventory for a supervised client's negotiated
 /// snapshot without granting that presentation a direct controller handle.
+#[cfg(feature = "harness")]
 pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<Command> {
     ACTIONS
         .iter()
@@ -96,7 +103,7 @@ pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<
 /// concept, the session's command surface.
 pub struct SessionSurface<'a> {
     /// BitRouter's own commands. Empty until the controller has been asked:
-    /// [`offered_commands`] needs a live client, so the piped path fills this
+    /// `offered_commands` needs a live client, so the piped path fills this
     /// in once its session is open.
     pub commands: Vec<Command>,
     /// The user's prompt-expansion commands, resolved from config at launch.

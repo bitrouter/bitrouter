@@ -1,7 +1,7 @@
 //! MCP registry client — discovery over the official MCP Registry
 //! (<https://registry.modelcontextprotocol.io>, unauthenticated v0.1 REST API).
 //!
-//! Mirrors the ACP integration ([`crate::agent_registry`]): a thin client that
+//! Mirrors the ACP integration (`crate::agent_registry`, when harness is enabled): a thin client that
 //! classifies install support and emits config stubs, while `mcp_servers:` in
 //! `bitrouter.yaml` remains the sole source of truth for what can launch.
 //!
@@ -602,7 +602,7 @@ pub fn stub_id(name: &str) -> String {
 }
 
 fn render_stub(id: &str, comment: &str, source: &str, invocation: &Invocation) -> String {
-    use crate::agents::yaml_scalar;
+    use crate::config::yaml::yaml_scalar;
     let mut out = String::new();
     out.push_str(&format!(
         "# {comment} — paste under `mcp_servers:` in bitrouter.yaml.\n"

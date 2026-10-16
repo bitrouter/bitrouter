@@ -16,7 +16,6 @@ use crossterm::event::EventStream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
-use crate::acp_cli::SessionSelection;
 #[cfg(feature = "core")]
 use crate::actions::code::evolution::candidate::CandidateDraft;
 #[cfg(feature = "core")]
@@ -26,6 +25,7 @@ use crate::actions::code::evolution::{Panel, SessionRef};
 use crate::actions::code::{CodeServices, OpenedSession};
 use crate::actions::supervised::SupervisedHandle;
 use crate::agent_sessions::{AgentResult, BackgroundClient};
+use crate::commands::agent_options::SessionSelection;
 use crate::commands::agents::AgentEffect;
 use crate::dashboard::SessionRequest;
 use crate::presentation::agents::NewAgentRunTarget;
@@ -1525,7 +1525,7 @@ async fn next_route(probe: &mut Option<LocalBoxFuture<'static, Result<String>>>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp_cli::RoutingOptions;
+    use crate::commands::agent_options::RoutingOptions;
 
     #[test]
     fn fresh_session_retains_same_agent_launch_settings_without_replaying_native_history() {

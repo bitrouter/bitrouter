@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Result, bail, ensure};
 
 #[cfg(feature = "tui")]
-use crate::acp_cli::{CapabilitySnapshot, LaunchOptions, RoutingOptions, SessionSelection};
+use crate::acp_cli::LaunchOptions;
 #[cfg(feature = "tui")]
 use crate::client::sessions;
 #[cfg(feature = "tui")]
@@ -18,6 +18,8 @@ use crate::client::sessions::wire::{
     RouteState, RunSnapshot, SessionAction, SessionCommand, SessionGrant, SessionMutation,
     SessionResponse, SessionScope, StartRunRequest,
 };
+#[cfg(feature = "tui")]
+use crate::commands::agent_options::{CapabilitySnapshot, RoutingOptions, SessionSelection};
 use crate::daemon::{self, DaemonStartOutcome};
 #[cfg(feature = "tui")]
 use crate::harness::acp::client::SessionInitialSettings;

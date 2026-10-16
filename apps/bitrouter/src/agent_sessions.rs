@@ -42,7 +42,6 @@ use tokio::sync::Mutex;
 #[cfg(feature = "tui")]
 use tokio::time::MissedTickBehavior;
 
-use crate::acp_cli::{RoutingOptions, SessionSelection};
 use crate::client::sessions;
 use crate::client::sessions::wire::{
     ActionAcknowledgement, AttentionState, ControlFence, LeaseMode, ProcessState, ReviewState,
@@ -50,6 +49,7 @@ use crate::client::sessions::wire::{
     SessionEventKind, SessionGrant, SessionMutation, SessionResponse, SessionScope,
     StartRunRequest, TurnState,
 };
+use crate::commands::agent_options::{RoutingOptions, SessionSelection};
 use crate::harness::acp::translate::SessionUpdateKind;
 use crate::paths::ConfigSource;
 

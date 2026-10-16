@@ -57,7 +57,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::client::local_gateway::{self, BITROUTER_API_KEY_ENV};
 use crate::client::sessions::wire::{PermissionDefault, PermissionPolicy};
+use crate::commands::agent_options::{
+    CapabilitySnapshot, HeadlessOptions, PromptFormat, RoutingOptions, SessionSelection,
+};
 use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::agent::{AcpAgentConfig, AcpTransport};
@@ -79,28 +83,6 @@ use agent_client_protocol::schema::v1::{Cost, LlmProtocol, SessionUpdate};
 use crate::paths::ConfigSource;
 
 // ── routing (spawn --via-daemon by default) ─────────────────────────────────────
-
-/// Per-invocation routing decision for a spawned sub-agent. Routing is on by
-/// default; `direct` opts out. See `docs/SPAWN_SPEC.md` §5.
-#[derive(
-    clap::Args, Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
-pub struct RoutingOptions {
-    /// Do NOT route this session's LLM traffic through the daemon — let the
-    /// harness use its own provider auth. Routing is attempted by default
-    /// when the harness supports headless redirection.
-    #[arg(long)]
-    pub direct: bool,
-    /// Override the gateway base URL (else derived from `server.listen`).
-    #[arg(long)]
-    pub base_url: Option<String>,
-    /// Pin the harness's model (via its model env var / `-c model=`).
-    #[arg(long)]
-    pub model: Option<String>,
-    /// Never auto-start a local daemon when none is running — fail fast.
-    #[arg(long)]
-    pub no_start: bool,
-}
 
 /// Resolve a user-facing ACP agent name. Configured ids are authoritative;
 /// friendly built-in aliases are considered only when no exact config entry
@@ -171,10 +153,8 @@ mod session_host_tests {
     use futures::StreamExt;
     use tokio_util::sync::CancellationToken;
 
-    use super::{
-        RoutingOptions, SessionHost, SessionSelection, SpawnContext, is_lifecycle_cancelled,
-        launch_options,
-    };
+    use super::{SessionHost, SpawnContext, is_lifecycle_cancelled, launch_options};
+    use crate::commands::agent_options::{RoutingOptions, SessionSelection};
     use crate::config::Config;
     use crate::config::agent::{AcpAgentConfig, AcpTransport};
 
@@ -587,46 +567,6 @@ done
 
 // ── headless presentation and permissions ────────────────────────────────────
 
-/// What a headless `prompt` prints.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
-pub enum PromptFormat {
-    /// One self-describing JSON object per line.
-    #[default]
-    #[value(alias = "json")]
-    Ndjson,
-    /// The transcript as the piped `bro chat <agent>` compatibility path prints it.
-    Text,
-    /// The assistant's text and nothing else.
-    Quiet,
-}
-
-/// The flags a headless caller states instead of sitting at the terminal:
-/// how permission requests are answered, and what is printed.
-#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
-pub struct HeadlessOptions {
-    /// Approve every permission request the harness makes.
-    #[arg(long, conflicts_with_all = ["approve_reads", "deny_all"])]
-    pub approve_all: bool,
-    /// Approve tool calls the harness labels `read` or `search` (the ACP tool
-    /// kind); deny everything else, including unlabelled calls.
-    #[arg(long, conflicts_with_all = ["approve_all", "deny_all"])]
-    pub approve_reads: bool,
-    /// Deny every permission request. This is the default.
-    #[arg(long, conflicts_with_all = ["approve_all", "approve_reads"])]
-    pub deny_all: bool,
-    /// Per-tool policy, inline JSON or `@path`:
-    /// `{"autoApprove":[…],"autoDeny":[…],"defaultAction":"approve"|"deny"}`.
-    /// Entries match the ACP tool kind (`read`, `edit`, `execute`, …), the
-    /// tool-call title, or its first word. `autoDeny` wins over `autoApprove`;
-    /// an unmatched request uses `defaultAction`, else the mode flag.
-    #[arg(long, value_name = "JSON|@PATH")]
-    pub permission_policy: Option<String>,
-    /// Output: `ndjson` (the default), `text` (the transcript as
-    /// `code <agent>` prints it to a pipe), or `quiet` (assistant text only).
-    #[arg(long, value_enum, default_value_t)]
-    pub format: PromptFormat,
-}
-
 /// The per-tool half of [`HeadlessOptions::permission_policy`], as written.
 ///
 /// `escalate` — acpx's fourth action — is deliberately not a field: nobody is
@@ -709,8 +649,8 @@ impl HeadlessOptions {
 
 #[cfg(test)]
 mod supervised_permission_policy_tests {
-    use super::{HeadlessOptions, PromptFormat};
     use crate::client::sessions::wire::PermissionDefault;
+    use crate::commands::agent_options::{HeadlessOptions, PromptFormat};
 
     fn options() -> HeadlessOptions {
         HeadlessOptions {
@@ -789,40 +729,6 @@ pub struct PromptOptions {
     pub cwd: Option<PathBuf>,
 }
 
-/// Which harness-native session a one-shot driver opens.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SessionSelection {
-    /// Create a new harness-native session.
-    #[default]
-    New,
-    /// Load a session and replay its history.
-    Load(String),
-    /// Resume a session without replaying its history.
-    Resume(String),
-}
-
-/// Negotiated facts shared by every BitRouter-owned ACP client surface.
-///
-/// Drivers render or reject controls from this value; they do not infer
-/// support from an agent name or optimistically send draft methods.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CapabilitySnapshot {
-    pub load: bool,
-    pub resume: bool,
-    pub list: bool,
-    pub close: bool,
-    pub delete: bool,
-    pub fork: bool,
-    pub mcp_stdio: bool,
-    pub mcp_http: bool,
-    pub mcp_sse: bool,
-    pub authentication_methods: Vec<String>,
-    pub terminal_auth: bool,
-    pub route_list: bool,
-    pub route_set: bool,
-    pub route_reset: bool,
-}
-
 impl CapabilitySnapshot {
     #[cfg(any(feature = "harness", all(test, unix)))]
     fn from_client(client: &AcpClient, terminal_auth: bool) -> Self {
@@ -851,24 +757,6 @@ impl CapabilitySnapshot {
             route_set: route.allows(crate::harness::acp::client::RouteMethod::Set),
             route_reset: route.allows(crate::harness::acp::client::RouteMethod::Reset),
         }
-    }
-
-    /// Compact lifecycle explanation used by the Code TUI.
-    pub fn lifecycle_summary(&self) -> String {
-        let mut supported = vec!["new"];
-        for (name, enabled) in [
-            ("list", self.list),
-            ("load", self.load),
-            ("resume", self.resume),
-            ("close", self.close),
-            ("fork*", self.fork),
-            ("delete*", self.delete),
-        ] {
-            if enabled {
-                supported.push(name);
-            }
-        }
-        supported.join(", ")
     }
 }
 
@@ -1178,14 +1066,14 @@ async fn apply_routing_with_diagnostics(
     let base_url = opts
         .base_url
         .clone()
-        .unwrap_or_else(|| crate::spawn::derive_base_url(&config.server.listen));
+        .unwrap_or_else(|| local_gateway::derive_base_url(&config.server.listen));
     let target_authority = opts
         .base_url
         .as_deref()
-        .and_then(crate::spawn::listen_from_base_url);
+        .and_then(local_gateway::listen_from_base_url);
     let target_is_local = match &target_authority {
-        Some(a) => crate::spawn::listen_is_local(a),
-        None => crate::spawn::listen_is_local(&config.server.listen),
+        Some(a) => local_gateway::listen_is_local(a),
+        None => local_gateway::listen_is_local(&config.server.listen),
     };
     // A remote daemon's `skip_auth` is unknowable here, so require a key.
     let require_key = !target_is_local || !config.server.skip_auth;
@@ -1202,7 +1090,7 @@ async fn apply_routing_with_diagnostics(
         ));
     }
 
-    let explicit_key = crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV);
+    let explicit_key = local_gateway::nonempty_env(BITROUTER_API_KEY_ENV);
     let stored_cloud_key = if explicit_key.is_none() && require_key && !target_is_local {
         cloud_credentials.routing_fallback(&base_url).await
     } else {
@@ -1230,7 +1118,7 @@ async fn apply_routing_with_diagnostics(
     // daemon is still unreachable (a routed sub-agent without one is
     // guaranteed-dead) — before any session side effect.
     if opts.base_url.is_none() && target_is_local {
-        crate::spawn::ensure_local_daemon(source, config, opts.no_start).await;
+        local_gateway::ensure_local_daemon(source, config, opts.no_start).await;
     }
     if !crate::spawn::base_url_reachable(&base_url).await {
         return Err(RoutingError::DaemonUnreachable { via: base_url });
@@ -1401,7 +1289,7 @@ pub async fn spawn_check(
     let base_url = routing
         .base_url
         .clone()
-        .unwrap_or_else(|| crate::spawn::derive_base_url(&config.server.listen));
+        .unwrap_or_else(|| local_gateway::derive_base_url(&config.server.listen));
     let harness = crate::harness::catalog::match_invocation(&command, &args);
     let mut routable_harness: Option<&'static crate::harness::catalog::Harness> = None;
     if routing.direct {
@@ -1446,12 +1334,11 @@ pub async fn spawn_check(
         let target_is_local = routing
             .base_url
             .as_deref()
-            .and_then(crate::spawn::listen_from_base_url)
-            .map(|a| crate::spawn::listen_is_local(&a))
-            .unwrap_or_else(|| crate::spawn::listen_is_local(&config.server.listen));
+            .and_then(local_gateway::listen_from_base_url)
+            .map(|a| local_gateway::listen_is_local(&a))
+            .unwrap_or_else(|| local_gateway::listen_is_local(&config.server.listen));
         let require_key = !target_is_local || !config.server.skip_auth;
-        let has_key =
-            crate::spawn::nonempty_env(crate::harness::catalog::BITROUTER_API_KEY_ENV).is_some();
+        let has_key = local_gateway::nonempty_env(BITROUTER_API_KEY_ENV).is_some();
         checks.push(if require_key && !has_key {
             row(
                 "auth",
@@ -3475,7 +3362,8 @@ where
 
 #[cfg(test)]
 mod text_presenter_tests {
-    use super::{Presenter, PromptFormat};
+    use super::Presenter;
+    use crate::commands::agent_options::PromptFormat;
     use agent_client_protocol_schema::v1::{
         ContentBlock, ContentChunk, MessageId, SessionUpdate, TextContent,
     };
@@ -3539,7 +3427,8 @@ mod text_presenter_tests {
 
 #[cfg(test)]
 mod ndjson_presenter_tests {
-    use super::{Presenter, PromptFormat};
+    use super::Presenter;
+    use crate::commands::agent_options::PromptFormat;
 
     #[tokio::test]
     async fn every_event_is_versioned_and_sequenced() -> anyhow::Result<()> {

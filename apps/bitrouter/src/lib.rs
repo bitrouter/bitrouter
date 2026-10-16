@@ -16,18 +16,26 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "harness")]
 pub mod acp_cli;
 pub mod acp_trajectory;
 pub mod actions;
 pub mod administration_target;
+#[cfg(feature = "harness")]
 pub mod agent_api;
+#[cfg(feature = "harness")]
 pub mod agent_local;
+#[cfg(feature = "harness")]
 pub mod agent_registry;
+#[cfg(feature = "harness")]
 pub mod agent_sessions;
+#[cfg(feature = "harness")]
 pub mod agent_store;
+#[cfg(feature = "harness")]
 pub mod agents;
 pub mod assemble;
 pub mod auth;
+#[cfg(feature = "harness")]
 pub mod chat;
 pub mod claude_code;
 pub mod client;
@@ -35,7 +43,9 @@ pub mod cloud;
 mod codex_router;
 pub mod commands;
 pub mod config;
+#[cfg(feature = "harness")]
 pub mod config_synthesis;
+#[cfg(feature = "harness")]
 pub mod conformance;
 pub mod contexts;
 pub mod continuation;
@@ -48,10 +58,14 @@ pub mod dashboard;
 pub mod db;
 pub mod error_report;
 pub mod gateway;
+#[cfg(feature = "harness")]
 pub mod gateways;
+#[cfg(feature = "harness")]
 pub mod harness;
 pub mod host;
+#[cfg(feature = "harness")]
 mod local_cli;
+#[cfg(feature = "harness")]
 pub mod managed_store;
 pub mod managed_task;
 pub mod mcp_registry;
@@ -78,6 +92,7 @@ pub mod result_contract;
 pub mod router_migration;
 pub mod session_identity;
 pub mod skills;
+#[cfg(feature = "harness")]
 pub mod spawn;
 pub mod storage;
 pub mod style;

@@ -13,6 +13,15 @@ MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`
 Without `harness`, the daemon opens no local task or native ACP listener, and
 `agent_api.enabled` and `acp serve` report the missing capability before startup.
 Empty MCP configuration and disabled agent API settings remain readable.
+Agent execution commands (`run`, `spawn`, `launch`, native launch aliases,
+`chat`, ACP execution and live session operations) require `harness` before
+reading prompt/policy files or stdin, loading configuration, or creating logs.
+Gateway-only builds retain `agents list` configuration/control inspection and
+historical `acp recordings`/checkpoint reads; they do not load the bundled agent
+execution catalog. Bare noninteractive setup remains inert; a saved default
+agent reports unavailable harness without creating session logs. Provider login
+and offline skill inspection remain usable without ACP runtime dependencies.
+The updater's daemon handoff is independent of agent/session commands.
 Local native headless execution requires both `core` and `harness`.
 Supervised sessions and ACP route-lease control also require `harness`; a
 gateway-only daemon leaves the supervisor ledger untouched. Request identity

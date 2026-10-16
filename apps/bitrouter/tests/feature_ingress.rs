@@ -74,6 +74,69 @@ async fn offline_skills_commands_preserve_valid_and_invalid_entries() -> Result<
     Ok(())
 }
 
+#[cfg(not(feature = "harness"))]
+#[tokio::test]
+async fn unavailable_agent_execution_rejects_without_reading_inputs_or_creating_state() -> Result<()>
+{
+    let cases: &[&[&str]] = &[
+        &["run", "codex", "--prompt-file", "missing-prompt.txt"],
+        &[
+            "run",
+            "codex",
+            "-",
+            "--permission-policy",
+            "@missing-policy.json",
+        ],
+        &["run", "codex", "hello", "--background"],
+        &["spawn", "codex-acp", "-p", "-"],
+        &["launch", "codex", "--check"],
+        &["claude", "--check"],
+        &["codex", "--check"],
+        &["chat", "codex-acp"],
+        &["agents", "check", "codex-acp"],
+        &["agents", "sessions"],
+        &["acp", "serve", "--agent", "codex-acp"],
+        &["acp", "prompt", "--agent", "codex-acp", "-"],
+        &["acp", "commands", "--agent", "codex-acp"],
+    ];
+    for arguments in cases {
+        let directory = tempfile::tempdir()?;
+        let config = directory.path().join("bitrouter.yaml");
+        let invalid = "invalid: [configuration must not be read";
+        std::fs::write(&config, invalid)?;
+        let mut process = command(directory.path())
+            .args(*arguments)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        // Hold stdin open: an unavailable operation must not wait for EOF.
+        let input = process.stdin.take().context("missing piped input")?;
+        let output =
+            tokio::time::timeout(Duration::from_secs(10), process.wait_with_output()).await??;
+        drop(input);
+        let diagnostic = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        ensure!(
+            !output.status.success(),
+            "{arguments:?}: accepted unavailable execution"
+        );
+        ensure!(
+            diagnostic.contains("harness feature"),
+            "{arguments:?}: {diagnostic}"
+        );
+        ensure!(std::fs::read_to_string(&config)? == invalid);
+        ensure!(
+            std::fs::read_dir(directory.path())?.count() == 1,
+            "{arguments:?}: created runtime state"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn unavailable_database_backend_rejects_before_service_activation() -> Result<()> {
     let mut cases = Vec::new();
@@ -472,6 +535,26 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
             }
         }
     }
+    // The replacement executable's update continuation must be reachable in
+    // every profile without using a session/harness command as a trampoline.
+    let before_handoff = process.id().context("gateway has no process identity")?;
+    let handoff = tokio::time::timeout(
+        Duration::from_secs(20),
+        command(directory.path())
+            .args(["--json", "__daemon-handoff", "--config"])
+            .arg(&config_path)
+            .arg("--socket")
+            .arg(&socket)
+            .output(),
+    )
+    .await??;
+    ensure!(
+        handoff.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&handoff.stdout),
+        String::from_utf8_lossy(&handoff.stderr)
+    );
+    ensure!(process.id() == Some(before_handoff) && process.try_wait()?.is_none());
     let client = reqwest::Client::new();
     ensure!(
         client

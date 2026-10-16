@@ -126,4 +126,5 @@ mod tests {
     }
 }
 
+#[cfg(feature = "harness")]
 pub(crate) mod plain;

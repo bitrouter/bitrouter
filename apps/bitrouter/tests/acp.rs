@@ -146,7 +146,7 @@ async fn prompt_ndjson() {
         config: stub_config(),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -323,7 +323,7 @@ async fn result_line_for(script: &str) -> serde_json::Value {
         config: stub_config_with(script),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -393,7 +393,7 @@ async fn routing_fails_fast_on_dead_daemon() {
     // credential resolves to the placeholder regardless of the environment.
     cfg.server.skip_auth = true;
 
-    let opts = bitrouter::acp_cli::RoutingOptions {
+    let opts = bitrouter::commands::agent_options::RoutingOptions {
         direct: false,
         // Loopback discard port — nothing serves `/health`, so the liveness
         // probe fails deterministically. `base_url` set means no auto-start.
@@ -427,7 +427,7 @@ async fn routing_direct_skips_daemon_and_reports_no_via() {
         home: base.path().to_path_buf(),
     };
     let mut cfg = Config::default();
-    let opts = bitrouter::acp_cli::RoutingOptions {
+    let opts = bitrouter::commands::agent_options::RoutingOptions {
         direct: true,
         base_url: Some("http://127.0.0.1:9".to_string()),
         model: None,
@@ -463,7 +463,7 @@ async fn routing_returns_and_applies_one_endpoint_plan() -> anyhow::Result<()> {
     };
     let mut config = Config::default();
     config.server.skip_auth = true;
-    let options = bitrouter::acp_cli::RoutingOptions {
+    let options = bitrouter::commands::agent_options::RoutingOptions {
         direct: false,
         base_url: Some(daemon.uri()),
         model: Some("logical/model".to_string()),
@@ -528,7 +528,7 @@ async fn unpinned_codex_acp_never_receives_cli_config_arguments() -> anyhow::Res
             },
         },
     );
-    let options = bitrouter::acp_cli::RoutingOptions {
+    let options = bitrouter::commands::agent_options::RoutingOptions {
         direct: false,
         base_url: Some("http://127.0.0.1:9".to_string()),
         model: Some("logical/model".to_string()),
@@ -926,7 +926,7 @@ async fn prompt_headless_denies_permission_and_completes() {
         config: cfg,
         agent_id: "perm-stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -1020,7 +1020,7 @@ async fn headless(
         config: stub_config_with(&script),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -1114,7 +1114,7 @@ async fn prompt_permission_policy_title_head_wins() {
 #[tokio::test]
 async fn prompt_format_quiet_prints_only_the_text() {
     let options = bitrouter::acp_cli::PromptOptions {
-        format: bitrouter::acp_cli::PromptFormat::Quiet,
+        format: bitrouter::commands::agent_options::PromptFormat::Quiet,
         ..Default::default()
     };
     let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
@@ -1126,7 +1126,7 @@ async fn prompt_format_quiet_prints_only_the_text() {
 #[tokio::test]
 async fn prompt_format_text_renders_the_transcript() {
     let options = bitrouter::acp_cli::PromptOptions {
-        format: bitrouter::acp_cli::PromptFormat::Text,
+        format: bitrouter::commands::agent_options::PromptFormat::Text,
         ..Default::default()
     };
     let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
@@ -1170,7 +1170,7 @@ async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
         agent_id: "stub",
         // One second, plus the client's three-second cooperative-cancel grace.
         options: bitrouter::acp_cli::launch_options(Some(1)),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -1216,7 +1216,7 @@ async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
         config: stub_config_with(DYING_STUB),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },

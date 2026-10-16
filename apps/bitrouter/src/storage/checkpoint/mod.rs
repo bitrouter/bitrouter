@@ -38,12 +38,14 @@ pub(crate) fn validate_tool_start_fences(fences: &[ToolStartFence]) -> Result<()
 
 /// A verified decode tied to immutable bytes and the limits used to admit them.
 /// Internal replay consumers can share it without accepting an arbitrary payload.
+#[cfg(feature = "harness")]
 pub(crate) struct VerifiedBatch<'a> {
     batch: &'a CheckpointBatch,
     limits: &'a Limits,
     payload: CheckpointPayload,
 }
 
+#[cfg(feature = "harness")]
 impl VerifiedBatch<'_> {
     pub(crate) fn batch(&self) -> &CheckpointBatch {
         self.batch
@@ -294,6 +296,7 @@ impl CheckpointBatchExt for CheckpointBatch {
     }
 }
 
+#[cfg(feature = "harness")]
 pub(crate) fn verified_batch<'a>(
     batch: &'a CheckpointBatch,
     limits: &'a Limits,

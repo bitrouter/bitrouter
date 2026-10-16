@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+#[cfg(feature = "harness")]
 use crate::client::sessions::wire::{
     AttentionState, ProcessState, ReviewState, RunSnapshot, RunSummary, TurnState,
 };
@@ -111,10 +112,12 @@ impl CliReport for AgentsCheckReport {
 
 /// Scriptable inventory returned by `agents sessions`.
 #[derive(Serialize)]
+#[cfg(feature = "harness")]
 pub struct AgentSessionsReport {
     pub runs: Vec<RunSummary>,
 }
 
+#[cfg(feature = "harness")]
 impl CliReport for AgentSessionsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         let mut table = Table::new(["RUN", "LABEL", "AGENT", "STATE", "DIRECTORY", "ACTIVITY"]);
@@ -141,6 +144,7 @@ pub struct BackgroundRunReport {
     pub state: String,
 }
 
+#[cfg(feature = "harness")]
 impl BackgroundRunReport {
     pub fn from_snapshot(snapshot: &RunSnapshot) -> Self {
         Self {
@@ -179,6 +183,7 @@ impl CliReport for AgentSessionMutationReport {
     }
 }
 
+#[cfg(feature = "harness")]
 fn run_group(run: &RunSnapshot) -> &'static str {
     match (run.attention, run.review, run.turn, run.process) {
         (
@@ -197,6 +202,7 @@ fn run_group(run: &RunSnapshot) -> &'static str {
     }
 }
 
+#[cfg(feature = "harness")]
 fn summary_group(run: &RunSummary) -> &'static str {
     match (run.attention, run.review, run.turn, run.process) {
         (

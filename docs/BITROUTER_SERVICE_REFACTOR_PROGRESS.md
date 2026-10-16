@@ -60,10 +60,10 @@ the contract move must preserve its bytes.
 | --- | --- | --- |
 | P0 0 Compatibility baseline | In progress | Frozen full baseline: 4,473 passed, 22 skipped; independent persisted payload fixtures and performance measurements pending |
 | P0 1 Public contracts | In progress | Observation/event/request-check, control, eval, managed-attempt evidence and core protocol/checkpoint contracts moved to AI; matcher detached from old SDK; legacy adapters moved to application; final public-consumer coverage and service/client isolation remain |
-| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; terminal-free transcript formatting and TUI feature isolation verified; base helpers, local supervisor, live capture and shared MCP transport ownership separated; remaining harness/MCP dependency closure is in progress |
+| P0 2 Application consolidation | In progress | Core/harness, telemetry and TUI merged; shared command/permission/presentation extraction verified; checkpoint codecs, persisted snapshot records and offline context-history checks detached from scheduler modules; terminal-free transcript formatting and TUI feature isolation verified; base helpers, local supervisor, live capture and shared MCP transport ownership separated; harness/MCP dependency isolation and representative behavior are verified; the complete final matrix remains |
 | P0 3 Gateway and lightweight AI | In progress | Old SDK service and AI model/provider runtime moved to application; AI contract isolation and current public API guards verified; serving workflow, observations, settlement and judge admission moved to gateway with shared durable records in storage; eval publication is optional; canonical inventory/observation/bound records and dispatch fences now have a gateway owner; evaluation, optimization, workflow research and policy production are core-owned; published block serving is gateway-owned and evolution learning is core-gated; final dependency matrix remains |
 | P0 4 HTTP SDK | In progress | Typed gateway HTTP/SSE, control, eval and core HTTP/WebSocket clients verified; remaining harness API consumer extraction and independent packaged-service process consumer remain |
-| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; remaining harness/MCP module and dependency isolation precede the complete matrix |
+| P0 5 Feature isolation | In progress | Scheduler/learning and optional ingress gates are in place; supervisor startup and ACP route leases require harness while gateway identity/metering remain unconditional; minimum, core-only, harness-only and MCP-only ingress process tests pass; no-OTLP and disabled-core behavior verified; real SQLite/PostgreSQL/MySQL store and transaction regressions pass; TUI normal/build dependencies are isolated; harness/MCP module and dependency isolation is verified; final feature matrix and artifact/profile transitions remain |
 | P0 6 Delivery and review | Pending | Regression checks, migration notes, packaging, independent review and PR |
 
 ## Acceptance ledger
@@ -2341,3 +2341,82 @@ before making ACP/MCP dependencies optional. This stage advances ownership and
 behavior evidence; it does not complete A05 or any final A01–A16 gate. SDK harness
 coverage, artifact identity/updates, historical profile transitions, packaged
 gateway/consumer validation, performance comparison and final P0 review remain.
+
+## P0 2/P0 5 Harness and MCP dependency isolation (2026-10-16)
+
+Agent CLI option and capability data now live in `commands::agent_options`;
+permission-policy loading and ACP conversions remain with execution. Shared
+local gateway endpoint/startup helpers live in `client::local_gateway`, and
+agent/MCP YAML scalar encoding lives in application configuration. These moves
+preserve existing defaults, aliases, conflicts, credentials and serialization.
+
+Harness execution owners and agent catalog generation are feature-gated. ACP,
+conductor/schema, glob/ignore and harness stream dependencies are optional under
+harness; MCP owns `rmcp` and process lifecycle support. Historical ACP readers,
+gateway management, provider login and offline skill inspection remain available.
+No-harness accepted agent reports retain sorted configured entries and the
+existing redacted custom-agent description, without loading the execution catalog
+or claiming readiness. Live execution tests require their actual capabilities;
+historical and MCP-only suites remain independently selectable.
+
+Independent review found and the stage corrected two regressions: update used
+`agents sessions` as a handoff trampoline, and bare no-harness entry created a
+session log before rejecting default chat. Update now invokes a hidden, explicit
+configuration/socket handoff command in the replacement executable. Bare entry
+retains inert noninteractive setup and performs no session logging without
+harness. Explicit execution rejects before prompt/policy/stdin/config access.
+The new process test holds stdin open and supplies invalid configuration to
+prove early rejection. The handoff fixture proves reachability and preservation
+of an already matching daemon; it does not replace the later cross-profile
+replacement acceptance requirement.
+
+Stage validation:
+
+- Minimum selection: **198/198** passed in 2.486s, including command parsing,
+  shared actions/helpers, historical ACP/checkpoint access, daemon/control,
+  source boundaries, setup and real-process ingress. 2,119 unrelated tests were
+  outside this selection. Initial failures caught a changed redacted description
+  and an incorrect new fixture invocation; the original description and actual
+  positional `spawn` grammar are retained.
+- Strict Rust 1.97 all-target Clippy passed for minimum (40.53s), core (41.28s),
+  MCP (28.07s), harness (45.58s) and full workspace/all-features (1m11s).
+  Core-only lint identified harness-only native import/verified replay wrappers;
+  they now follow their real consumers without gating shared checkpoint codecs.
+- Normal/build trees for minimum, core, harness, MCP, TUI and core+harness have
+  the expected ACP/MCP/terminal closure. Minimum excludes all three runtimes;
+  core is independent of harness, and headless profiles have no terminal stack.
+  These selected profiles also exclude OTLP and non-SQLite drivers.
+
+- Core-only checkpoint/contract/execution/ingress selection: **346/346** passed
+  in 321.312s (three slow capacity/ACK-loss cases), with 2,459 unrelated tests
+  outside the selection. This exercises scheduling without production harness.
+- Harness-only ACP, options/permissions, native replay, shared presentation,
+  setup, SQLite capture and ingress selection: **230/230** passed in 7.774s;
+  2,524 unrelated tests skipped.
+- MCP-only discovery, timeout/cancellation/confirmed child and descendant cleanup,
+  CLI and ingress selection: **30/30** passed in 37.856s; 2,295 unrelated tests
+  skipped. Sources remained fixed during the fixture's nested Cargo builds.
+
+- Full-product representative selection: **293/293** passed in 88.884s (two
+  slow cases), with 3,354 unrelated tests skipped. Includes shared commands and
+  helpers, ACP, actual native process/HTTP/resource behavior, onboarding, three
+  real-terminal chat/session cases and source-boundary checks.
+- Final strict Rustdoc passed for minimum (22.09s) and the full workspace
+  (43.87s). Its initial optional-agent-module link finding is corrected without
+  requiring that module in reduced builds. Final full-workspace/all-targets
+  strict Clippy passed in 1m22s after that documentation correction and replacing
+  a relocated scalar fixture's legacy `expect` with ordinary error propagation.
+- Formatting, patch whitespace and CI YAML parsing pass. Independent full-stage
+  source review against `d3ce80b`, followed by review of the final helper gates
+  and report semantics, found no remaining behavioral/ownership issues. Review
+  does not stand in for the execution results above or cross-platform CI.
+
+Logs use `/tmp/bitrouter-p0-harness-isolation-*`. No final A01–A16 gate is closed
+by this stage record; SDK harness coverage, artifact identity/updates, historical
+profile transitions, packaging/independent consumer, final matrix/full-suite and
+performance evidence remain.
+
+Remote `main` was refreshed during this stage to `eafa838` (registry updates
+#980/#982). Integration follows this validated stage commit. The upstream changes include catalog data,
+one policy-lock test model ID, PTY synchronization and native worker test timing;
+the retired orchestrator test changes must be applied at their harness owner.

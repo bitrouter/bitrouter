@@ -22,8 +22,8 @@ path = "src/main.rs"
 [features]
 default = ["core", "harness", "tui", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql"]
 core = ["dep:rand_distr"]
-harness = ["mcp"]
-mcp = []
+harness = ["mcp", "dep:agent-client-protocol", "dep:agent-client-protocol-schema", "dep:agent-client-protocol-conductor", "dep:globset", "dep:ignore", "dep:tokio-stream"]
+mcp = ["dep:rmcp", "dep:process-wrap"]
 server-tools = ["mcp"]
 tui = ["harness", "dep:ratatui", "dep:crossterm"]
 guardrails = ["dep:bitrouter-guardrails"]
@@ -74,16 +74,16 @@ pin-project-lite.workspace = true
 tonic = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 
-# Internal scheduling/harness modules; dependency isolation follows their move.
-process-wrap = { workspace = true, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
-rmcp.workspace = true
-globset.workspace = true
-ignore.workspace = true
+# Harness execution and shared MCP transports have separate capability gates.
+process-wrap = { workspace = true, optional = true, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
+rmcp = { workspace = true, optional = true }
+globset = { workspace = true, optional = true }
+ignore = { workspace = true, optional = true }
 regex.workspace = true
 similar.workspace = true
-agent-client-protocol-schema.workspace = true
-agent-client-protocol-conductor.workspace = true
-tokio-stream = { workspace = true, features = ["sync"] }
+agent-client-protocol-schema = { workspace = true, optional = true }
+agent-client-protocol-conductor = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true, features = ["sync"] }
 bitrouter-guardrails = { workspace = true, optional = true }
 bitrouter-ai = { workspace = true, features = ["schema"] }
 # Product-only OS keyring discovery for explicitly adopted external CLI sessions.
@@ -122,7 +122,7 @@ http.workspace = true
 axum = { workspace = true, features = ["ws"] }
 http-body.workspace = true
 futures.workspace = true
-agent-client-protocol.workspace = true
+agent-client-protocol = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["compat", "rt"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
@@ -147,6 +147,9 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+# Differential stored-history tests use the pinned schema without activating
+# an ACP runtime in the application's normal/build dependency closure.
+agent-client-protocol-schema.workspace = true
 bitrouter-sdk = { workspace = true, features = ["core"] }
 bitrouter-ai = { workspace = true, features = ["testing"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
@@ -252,3 +255,19 @@ required-features = ["tui"]
 [[test]]
 name = "native_agent_tui"
 required-features = ["core", "tui"]
+
+[[test]]
+name = "acp"
+required-features = ["harness"]
+
+[[test]]
+name = "native_acp"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "native_agent_process"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "native_harness_resources"
+required-features = ["core", "harness"]

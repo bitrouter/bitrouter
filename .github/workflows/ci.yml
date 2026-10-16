@@ -347,6 +347,12 @@ jobs:
                fi ;;
           esac
           case ",$PROFILE_FEATURES," in
+            *,mcp,*|*,server-tools,*|*,harness,*|*,tui,*) ;;
+            *) if grep -Eq '^(rmcp|process-wrap) v' profile-tree.txt; then
+                 echo '::error::profile without MCP pulled its transport runtime'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
             *,otel-http,*|*,otel-grpc,*) ;;
             *) if grep -Eq '^(opentelemetry[^ ]*|tracing-opentelemetry) v' profile-tree.txt; then
                  echo '::error::profile without OTLP pulled exporter dependencies'; exit 1
@@ -394,8 +400,8 @@ jobs:
         if: matrix.features == ''
         run: >-
           cargo nextest run -p bitrouter --no-default-features
-          --lib --build-jobs 2 --test-threads 2
-          -E 'test(providers::cli_install::) | test(skills::) | test(skills_init_tests) | test(client::sessions::) | test(daemon::tests::opaque_session)'
+          --lib --bin bro --build-jobs 2 --test-threads 2
+          -E 'test(providers::cli_install::) | test(skills::) | test(skills_init_tests) | test(config::yaml::) | test(daemon::tests::opaque_session) | binary(bro)'
 
       - name: verify stored history without live capture
         if: matrix.features == '' || matrix.features == 'core'

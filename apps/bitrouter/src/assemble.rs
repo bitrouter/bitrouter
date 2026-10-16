@@ -1699,7 +1699,7 @@ enum BearerPlan {
 /// opt-in, the `otel:` block, env vars), including the live account-bearer
 /// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
 /// surfaced as warnings, never as session failures.
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(all(feature = "harness", any(feature = "otel-http", feature = "otel-grpc")))]
 pub(crate) async fn build_otel_exporter_standalone_with_credentials(
     config: &Config,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
