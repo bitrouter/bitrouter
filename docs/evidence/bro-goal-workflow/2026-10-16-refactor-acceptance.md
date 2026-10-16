@@ -36,7 +36,7 @@ The mapping states the implemented local scope. It does not turn design directio
 
 ```sh
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
-  BRO_GOAL_FIXTURE_KEEP_FAILURES=1 cargo nextest run --workspace --all-features --no-fail-fast
+  BRO_GOAL_FIXTURE_KEEP_FAILURES=1 cargo nextest run --workspace --all-features --no-fail-fast --test-threads 2
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt -- --check
 cargo test --workspace --all-features --doc
@@ -47,4 +47,6 @@ For the focused ACP matrix, select `test(acp_pre_prompt_recovery_loads_only_the_
 
 Raw failures, exact source maps/tars, configurations, runners, fixture images, extraction audits and recoverable Git bundles belong to the independent refactor archive. The adjacent final summary pins its immutable commit and checksum manifest. No raw multi-round log is added here.
 
-Independent immutable archive: [0fc618e2](https://github.com/bitrouter/bitrouter/tree/0fc618e2594586da5f480a30fb9f2f035b1acb47), retaining 3966 original files (76719035 bytes). Its SHA256SUMS digest is `4b13ef23884b4cbd4466d62ed915a19228ee1752b176472798e962b171073683`. Nested fixture directories are packaged intact; PAYLOAD.json maps every original file's bytes/mode/hash. All 1115 published files were verified from an independently extracted Git tree. The source checkpoint is `6a72cfb1da0e2d4641a96097e09a507d7d032189`; final publication changes only explicit documentation/skill/plugin metadata, with executable and test inputs unchanged from final15.
+The initial immutable archive remains at [0fc618e2](https://github.com/bitrouter/bitrouter/tree/0fc618e2594586da5f480a30fb9f2f035b1acb47). The final summary pins the later portability-correction annex after publication; all earlier files remain preserved.
+
+The final local run is `ci-portability-final36` with two outer test slots; the same-source parallel final31 output-leak report remains retained. Internal workflow concurrency and leak detection are unchanged, and help is repeated three times. This run includes explicit native/ACP feature isolation, an ACP-free native dependency tree and Rust 1.93 native compilation. The first hosted head failed those optional-feature/compiler checks despite its earlier local all-feature pass. Original logs are retained. The actual restored permission case refuses a non-offered option without committing a selection, then permits the original offered allow-once write. The native parallel integration test now bounds worker handoffs and root acceptance separately with the original 45s helper: its aggregate allowance increases. Overlap, isolation, dependency, delivery, feature-isolation assertions and product limits remain unchanged.
