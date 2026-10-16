@@ -3116,5 +3116,21 @@
     "actionable_findings": 0,
     "verification": "Independent read-only review reconciled 104 log hashes, acceptance source and binary hashes, archive checksum, eight registry snapshots, schema, named skip dispositions and performance calculations.",
     "remaining_gate": "Hosted Linux/macOS/Windows CI on the final PR revision"
+  },
+  "hosted_workflow_startup_repair": {
+    "initial_revision": "71566bdc350a9a800012418192d20a89aead8dd0",
+    "initial_run": "https://github.com/bitrouter/bitrouter/actions/runs/38959677527",
+    "initial_result": "rejected before jobs: runner.temp unavailable in job-level env",
+    "changed_file": ".github/workflows/gateway-artifacts.yml",
+    "changed_file_sha256": "829cafd844704e2a852e87194003bad44d7039bf61897bea383d11faa602fe83",
+    "validation_command": [
+      "/tmp/bitrouter-p0-actionlint/actionlint",
+      "-shellcheck=",
+      "-pyflakes="
+    ],
+    "tool_version": "1.7.12; official release archive checksum verified",
+    "local_validation_passed": true,
+    "independent_review": "No actionable findings; independently repeated all-workflow and caller-set validation",
+    "remaining": "Hosted execution on the repaired revision; no runtime source change"
   }
 }

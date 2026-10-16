@@ -3558,3 +3558,23 @@ CI remains a required gate on the final PR revision; overall P0 delivery remains
 pending those results. The unavailable
 optional `rust_diagnostics` tool is not claimed as MCP verification; actual Cargo
 checks, runtime scenarios and artifact evidence are recorded above.
+
+## Hosted workflow startup repair (2026-10-17)
+
+PR [#984](https://github.com/bitrouter/bitrouter/pull/984) was opened after local
+aggregate review. Its initial hosted workflows were rejected before test jobs
+could start: the gateway reusable workflow used `runner.temp` in job-level
+`env`, where that context is unavailable. The
+[rejected run](https://github.com/bitrouter/bitrouter/actions/runs/38959677527)
+retains the exact validation error. This is a failed workflow validation, not a
+passing CI run or a product test failure.
+
+The artifact-directory value now lives in step-level `env` and is written to
+`GITHUB_ENV` before build, unpack and SDK acceptance. Both callers retain their
+existing profiles (CI `dev`, release `dist`). Official actionlint 1.7.12 passed
+all repository workflows and the explicit reusable-workflow/caller set;
+ShellCheck and Pyflakes integration were disabled, so their checks are not
+claimed. Independent review reran those static checks and found no actionable
+issue. Product sources, public manifests and measured artifact bytes did not
+change. Hosted jobs must run on the repaired PR revision before the remaining
+cross-platform gate can close.
