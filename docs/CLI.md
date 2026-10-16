@@ -161,7 +161,7 @@ loading or reconnecting never resumes a stored queue. No operator recovery
 command is published.
 
 Defaults: 8 active Turns, 32 hot Threads, 32 queued inputs per Thread, 2 MiB
-context per Thread / 64 MiB hot context, and 32 settled Turn snapshots / 64 MiB
+context per Thread / 256 MiB hot context, and 32 settled Turn snapshots / 64 MiB
 for up to 30 minutes. Thread observation caches retain 256 events / 2 MiB,
 with 8 subscribers and 32 queued events per subscriber. Live snapshots retain
 at most 32 KiB. Evicting a snapshot or hot Thread does not remove durable keys
@@ -1054,7 +1054,7 @@ It does not undo committed requirements, cancel worker/tool effects, resume
 work or increase a cap; other accepted/in-flight inputs remain ordered.
 Additional words, quotes and hypothetical discussion use normal understanding.
 The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 4; older outboxes are retained and rejected without replay
+Goal IPC is version 5; older outboxes are retained and rejected without replay
 or reinterpretation. Native/ACP protocol versions are separate.
 Superseded reconciled executions without active references are archived into
 immutable Goal operation history. The current snapshot retains the archive count

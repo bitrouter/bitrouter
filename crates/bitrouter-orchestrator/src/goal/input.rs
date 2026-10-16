@@ -668,6 +668,17 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     updated_checks.insert(update.task_id.clone(), checks);
                 }
             }
+            // Goal-wide requirements apply to every existing task. A model
+            // may omit instruction rewrites, but that cannot leave workers
+            // authorized under the previous Goal contract. Scoped task edits
+            // still invalidate only that task and its dependents.
+            if proposal
+                .objective
+                .as_ref()
+                .is_some_and(|objective| objective != &goal.objective)
+            {
+                affected.extend(goal.workflow.tasks.iter().map(|task| task.spec.id.clone()));
+            }
             loop {
                 let before = affected.len();
                 for task in &goal.workflow.tasks {

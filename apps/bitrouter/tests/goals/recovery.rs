@@ -3,6 +3,155 @@ use super::*;
 use bitrouter_orchestrator::goal::workflow::LocalReconciliation;
 
 #[tokio::test]
+async fn late_original_stop_confirmation_survives_reopen_without_reconciling_effects() -> Result<()>
+{
+    let directory = tempfile::tempdir()?;
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("late-stop.db").display()
+    );
+    let db = bitrouter::db::connect(&url).await?;
+    bitrouter::db::run_migrations(&db).await?;
+    let goals = service(db.clone());
+    let id = planned(&goals, directory.path()).await?;
+    request(&goals, &id, "original").await?;
+    admit_dispatch(&goals, &id, "original").await?;
+    for (key, change) in [
+        (
+            "unknown-execution",
+            Change::ObserveExecution {
+                execution_id: "original".into(),
+                observation: Observation::Unknown {
+                    run_id: Some("original-run".into()),
+                    reason: "original process outcome unavailable".into(),
+                },
+            },
+        ),
+        (
+            "stop-original",
+            Change::RequestStop {
+                execution_id: "original".into(),
+                operation_id: "original-stop".into(),
+            },
+        ),
+        (
+            "unknown-stop",
+            Change::ObserveStop {
+                execution_id: "original".into(),
+                operation_id: "original-stop".into(),
+                confirmed: false,
+                detail: "stop result has not arrived".into(),
+            },
+        ),
+    ] {
+        goals
+            .workflow_change(actor(), &id, key, 1, change, 100)
+            .await?;
+    }
+    let before = snapshot(&goals, &id).await?;
+    drop(goals);
+    db.close().await?;
+    let goals = service(bitrouter::db::connect(&url).await?);
+    let confirmation = Change::ObserveStop {
+        execution_id: "original".into(),
+        operation_id: "original-stop".into(),
+        confirmed: true,
+        detail: "late original process exit receipt; external effects remain unresolved".into(),
+    };
+    for change in [
+        Change::ObserveStop {
+            execution_id: "original".into(),
+            operation_id: "another-stop".into(),
+            confirmed: true,
+            detail: "receipt for another action".into(),
+        },
+        Change::ObserveStop {
+            execution_id: "original".into(),
+            operation_id: "original-stop".into(),
+            confirmed: false,
+            detail: "still unknown".into(),
+        },
+    ] {
+        assert!(matches!(
+            goals
+                .workflow_change(actor(), &id, "invalid-refinement", 1, change, 100)
+                .await,
+            Err(GoalError::Conflict)
+        ));
+    }
+    assert!(matches!(
+        goals
+            .workflow_change(
+                WorkflowActor {
+                    owner: "local",
+                    coordinator_id: "stale-owner"
+                },
+                &id,
+                "stale-refinement",
+                1,
+                confirmation.clone(),
+                100,
+            )
+            .await,
+        Err(GoalError::Conflict)
+    ));
+    assert_eq!(snapshot(&goals, &id).await?.revision, before.revision);
+    let receipt = goals
+        .workflow_change(
+            actor(),
+            &id,
+            "late-confirmation",
+            1,
+            confirmation.clone(),
+            100,
+        )
+        .await?;
+    assert_eq!(
+        goals
+            .workflow_change(actor(), &id, "late-confirmation", 1, confirmation, 101)
+            .await?,
+        receipt
+    );
+    let after = snapshot(&goals, &id).await?;
+    let original = &after.workflow.tasks[0].executions[0];
+    assert!(matches!(&original.stop,
+        Some(StopState::Confirmed { operation_id, .. }) if operation_id == "original-stop"));
+    assert_eq!(
+        original.observation,
+        before.workflow.tasks[0].executions[0].observation
+    );
+    assert!(!original.effects_reconciled());
+    assert_eq!(after.run_intent, before.run_intent);
+    assert_eq!(after.budget, before.budget);
+    assert_eq!(after.requirements_revision, before.requirements_revision);
+    assert_eq!(after.workflow.tasks[0].executions.len(), 1);
+    assert!(!after.workflow.completion.completed_for(1));
+    assert!(matches!(
+        request(&goals, &id, "unreconciled-replacement").await,
+        Err(GoalError::Conflict)
+    ));
+    assert!(matches!(
+        goals
+            .workflow_change(
+                actor(),
+                &id,
+                "downgrade-confirmed",
+                1,
+                Change::ObserveStop {
+                    execution_id: "original".into(),
+                    operation_id: "original-stop".into(),
+                    confirmed: false,
+                    detail: "late uncertainty cannot erase confirmation".into()
+                },
+                101
+            )
+            .await,
+        Err(GoalError::Conflict)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn mapped_failure_stop_is_separate_from_control_intent_and_retry_admission() -> Result<()> {
     for observation in [
         Observation::Unknown {
@@ -14,7 +163,7 @@ async fn mapped_failure_stop_is_separate_from_control_intent_and_retry_admission
             reason: "startup failed".into(),
         },
         Observation::Running {
-            run_id: "owned-run".into(),
+            run_id: Some("owned-run".into()),
             native_session_id: None,
         },
     ] {
@@ -151,7 +300,7 @@ async fn recovering_unknown_dispatch_only_restores_a_mapping() -> Result<()> {
                 Change::ObserveExecution {
                     execution_id: "unadmitted".into(),
                     observation: Observation::Running {
-                        run_id: "not-admitted-run".into(),
+                        run_id: Some("not-admitted-run".into()),
                         native_session_id: None,
                     },
                 },
@@ -164,7 +313,7 @@ async fn recovering_unknown_dispatch_only_restores_a_mapping() -> Result<()> {
     for (index, observation) in [
         Observation::Requested,
         Observation::Candidate {
-            run_id: "unproved-result".into(),
+            run_id: Some("unproved-result".into()),
             native_session_id: None,
             report: report(workspace.path(), "not original execution evidence")?,
         },
@@ -245,7 +394,7 @@ async fn recovering_unknown_dispatch_only_restores_a_mapping() -> Result<()> {
                 Change::ObserveExecution {
                     execution_id: "original".into(),
                     observation: Observation::Running {
-                        run_id: "another-run".into(),
+                        run_id: Some("another-run".into()),
                         native_session_id: None,
                     },
                 },
@@ -300,7 +449,7 @@ async fn replacement_requires_confirmed_stop_and_current_control_proof() -> Resu
             Change::ObserveExecution {
                 execution_id: "original".into(),
                 observation: Observation::Running {
-                    run_id: "actual-run".into(),
+                    run_id: Some("actual-run".into()),
                     native_session_id: None,
                 },
             },
@@ -466,7 +615,7 @@ async fn superseded_stop_wait_is_durable_bounded_and_not_stop_or_retry_authority
             Change::ObserveExecution {
                 execution_id: "original".into(),
                 observation: Observation::Running {
-                    run_id: "owned-run".into(),
+                    run_id: Some("owned-run".into()),
                     native_session_id: None,
                 },
             },

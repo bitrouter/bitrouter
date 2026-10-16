@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 type FixtureResult<T = ()> = Result<T, Box<dyn Error + Send + Sync>>;
 
 struct State {
-    provider: Option<agent_client_protocol::schema::v1::SetProviderRequest>,
+    provider: Option<agent_client_protocol_schema::v1::SetProviderRequest>,
     cwd: PathBuf,
     pending: Option<(Value, String)>,
     permissions: BTreeSet<String>,
@@ -199,7 +199,7 @@ impl Peer {
                 self.respond(id, json!({}))?;
             }
             Some("providers/list") => {
-                use agent_client_protocol::schema::v1::{ListProvidersResponse, ProviderInfo, ProviderCurrentConfig};
+                use agent_client_protocol_schema::v1::{ListProvidersResponse, ProviderInfo, ProviderCurrentConfig};
                 let configured = lock(&self.state)?.provider.clone().ok_or("provider not configured")?;
                 let current = ProviderCurrentConfig::new(configured.api_type.clone(), configured.base_url);
                 let response = ListProvidersResponse::new(vec![ProviderInfo::new(configured.provider_id,

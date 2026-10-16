@@ -2,7 +2,7 @@ use super::*;
 use bitrouter_orchestrator::goal::completion::State as CompletionState;
 use bitrouter_orchestrator::goal::decision::PermissionState;
 use bitrouter_orchestrator::goal::workflow::{
-    LocalReconciliation, Observation, Planning, ReviewState, StopState,
+    ExecutionAdmission, LocalReconciliation, Observation, Planning, ReviewState, StopState,
 };
 use bitrouter_tui::goals::{Acceptance, Artifact, Decision, DecisionOption, Facts, Goal, Task};
 
@@ -115,24 +115,11 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             if attempt.stop_boundary_deadline_ms.is_some() {
                 detail.push("Requirements saved; waiting briefly for a tool permission or settled boundary before stopping this superseded execution. Replacement has not started; no new permissions are admitted for this version.".into());
             }
-            let retry_ready = attempt.replacement_ready(
-                task.requirements_revision,
-                snapshot
-                    .control_source_revision
-                    .max(task.control_source_revision),
-            ) || !attempt.dispatch_requested
-                && matches!(
-                    attempt.observation,
-                    Observation::Failed { run_id: None, .. }
-                );
-            let retry_limit = retry_ready
-                && (task.executions.len() >= 16
-                    || task
-                        .executions
-                        .iter()
-                        .filter(|execution| execution.task_revision == task.requirements_revision)
-                        .count()
-                        >= 3);
+            let admission = task.execution_admission(
+                snapshot.requirements_revision,
+                snapshot.control_source_revision,
+            );
+            let retry_limit = admission == ExecutionAdmission::RetryLimit;
             if retry_limit {
                 facts.blocked = true;
                 recovery_needs_you = true;
@@ -227,7 +214,15 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                     "effects unknown"
                 }
                 Observation::Running { run_id, .. } => {
-                    detail.push(format!("Supervisor run: {run_id}"));
+                    if let Some(run_id) = run_id {
+                        detail.push(format!("Supervisor run: {run_id}"));
+                    }
+                    if let Some(thread) = &attempt.thread {
+                        detail.push(format!(
+                            "Thread {} / Turn {}",
+                            thread.thread_id, thread.turn_id
+                        ));
+                    }
                     if matches!(attempt.stop, Some(StopState::Confirmed { .. })) {
                         "owned process stopped"
                     } else {
@@ -244,9 +239,18 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 }
                 Observation::Requested => {
                     if execution != "Effects unknown" {
-                        execution = "Preparing / startup unresolved".into();
+                        execution = if attempt.thread.is_some() {
+                            "Accepted / awaiting execution evidence"
+                        } else {
+                            "Preparing / startup unresolved"
+                        }
+                        .into();
                     }
-                    "preparing"
+                    if attempt.thread.is_some() {
+                        "execution accepted"
+                    } else {
+                        "preparing"
+                    }
                 }
                 Observation::Candidate { report, .. } => {
                     artifacts.insert(
@@ -389,8 +393,8 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             status: status.into(),
             dependencies: task.spec.dependencies.clone(),
             resource: format!(
-                "ACP harness: {} · BRO route: {} · MCP selected: {} · skills selected: {} · context selected: {} · actual provider/use: unreported",
-                task.spec.harness, task.spec.resources.model_route.as_deref().unwrap_or("harness default"), task.spec.resources.mcp_servers.len(), task.spec.resources.skills.len(), task.spec.resources.context_files.len()
+                "Executor: {} · BRO route: {} · MCP selected: {} · skills selected: {} · context selected: {} · actual provider/use: unreported",
+                task.spec.harness.as_deref().unwrap_or("built-in"), task.spec.resources.model_route.as_deref().unwrap_or("executor default"), task.spec.resources.mcp_servers.len(), task.spec.resources.skills.len(), task.spec.resources.context_files.len()
             ),
             details: detail,
             artifacts,
@@ -418,13 +422,15 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 label: format!(
                     "Permission for task {} · harness {}",
                     task.map_or("unreported", |task| task.spec.id.as_str()),
-                    task.map_or("unreported", |task| task.spec.harness.as_str())
+                    task.map_or("unreported", |task| task.spec.harness.as_deref().unwrap_or("built-in"))
                 ),
                 details: vec![
-                    format!(
-                        "Execution {} / supervisor run {}",
-                        decision.execution_id, decision.run_id
-                    ),
+                    match &decision.run_id {
+                        Some(run_id) => format!("Execution {} / supervisor run {run_id}", decision.execution_id),
+                        None => execution.and_then(|execution| execution.thread.as_ref())
+                            .map_or_else(|| format!("Execution {} / native binding unavailable", decision.execution_id),
+                                |thread| format!("Execution {} / Thread {} / Turn {}", decision.execution_id, thread.thread_id, thread.turn_id)),
+                    },
                     format!(
                         "Request requirements {} / task {}; current Goal requirements {}",
                         decision.requirements_revision,
@@ -640,9 +646,21 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
 }
 
 pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
+    let material = crate::goal_permission_material::checked_value(bytes, None)?;
+    if material.get("native").is_some() {
+        let request = crate::goal_permission_material::native::Request::decode(bytes)?;
+        return Ok(format!(
+            "Requested native operation: {}\nThread: {}\nTurn: {}\nRequest: {}\nTool: {}\n\nOriginal arguments:\n{}\n\nThis is a permission request, not consent or evidence that the tool ran.",
+            request.input.tool_name,
+            request.native.thread_id,
+            request.native.turn_id,
+            request.input.request_id,
+            request.input.tool_id,
+            request.input.arguments
+        ));
+    }
     let permission: crate::supervisor::PendingPermissionSnapshot = serde_json::from_slice(bytes)
         .context("permission evidence is not a supported actual request")?;
-    let material = crate::goal_permission_material::checked_value(bytes, None)?;
     let tool = serde_json::to_value(&permission.tool_call)?;
     let mut text = format!(
         "Requested operation (harness reported): {}\nKind (harness reported): {}\nDeclared locations: {}\n\nActual request:\n{}",
@@ -721,6 +739,9 @@ pub(super) fn operation(operation: &GoalOperation) -> Option<String> {
             "Your explicit withdrawal of input {input_id} / source requirements {source_requirements_revision} was saved without model use; existing requirements, controls, effects and budget remain"
         ),
         OperationKind::Workflow { change } => match change.as_ref() {
+            Change::BindOwnerThread { thread_id } => format!(
+                "Goal owner Thread {thread_id} linked; Turn dispatch, adoption and verification require their own execution evidence"
+            ),
             Change::ArchiveExecution { task_id, execution, .. } => format!(
                 "Execution {} / task {} / source Goal requirements {} / task revision {} archived with its complete original record. Work and effects were not replayed.",
                 execution.id, task_id, execution.requirements_revision, execution.task_revision

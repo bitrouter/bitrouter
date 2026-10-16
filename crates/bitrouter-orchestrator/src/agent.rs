@@ -176,6 +176,7 @@ pub struct RunReport {
 
 #[derive(Clone)]
 pub struct Agent {
+    work_control: Option<Arc<dyn crate::control::WorkControl>>,
     native: Option<native::Saved>,
     native_record_bytes: usize,
     native_checkpoint_bytes: u64,
@@ -221,6 +222,17 @@ pub(crate) struct ApprovalRequest {
 }
 
 impl Agent {
+    pub(crate) fn with_work_control(
+        mut self,
+        control: Arc<dyn crate::control::WorkControl>,
+    ) -> Self {
+        self.work_control = Some(control);
+        self
+    }
+    pub(crate) fn work_control(&self) -> Option<Arc<dyn crate::control::WorkControl>> {
+        self.work_control.clone()
+    }
+
     pub(crate) fn with_native(mut self, saved: Option<native::Saved>) -> Self {
         self.native = saved;
         self
@@ -331,6 +343,7 @@ impl Agent {
             WorkspaceTools::new(workspace, config.tool_mode).map_err(|error| error.to_string())?;
         let instruction_root = tools.root().to_path_buf();
         Ok(Self {
+            work_control: None,
             native: None,
             native_record_bytes: 4 * 1024 * 1024,
             native_checkpoint_bytes: 32 * 1024 * 1024,

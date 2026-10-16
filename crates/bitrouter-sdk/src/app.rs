@@ -375,6 +375,31 @@ struct TransformCheckedControl {
 
 #[async_trait::async_trait]
 impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    async fn before_typed_decision(
+        &self,
+        attempt_id: &str,
+        request: &crate::decision_model::types::DecisionRequest,
+        pricing: Option<&crate::decision_model::policy::DecisionPricing>,
+    ) -> Result<()> {
+        self.inner
+            .before_typed_decision(attempt_id, request, pricing)
+            .await
+    }
+
+    async fn after_typed_decision(
+        &self,
+        attempt_id: &str,
+        outcome: &std::result::Result<
+            crate::decision_model::types::DecisionResponse,
+            crate::decision_model::types::DecisionError,
+        >,
+        pricing: Option<&crate::decision_model::policy::DecisionPricing>,
+    ) -> Result<()> {
+        self.inner
+            .after_typed_decision(attempt_id, outcome, pricing)
+            .await
+    }
+
     async fn prepare_routing(
         &self,
         prompt: &Prompt,

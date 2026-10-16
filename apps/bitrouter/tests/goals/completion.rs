@@ -764,6 +764,7 @@ async fn in_flight_work_prevents_completion_until_its_outcome_is_observed() -> R
             Change::Accounting {
                 event: bitrouter_orchestrator::goal::accounting::Event::Begin {
                     work: bitrouter_orchestrator::goal::accounting::Work {
+                        source: None,
                         id: "in-flight-work".into(),
                         kind: bitrouter_orchestrator::goal::accounting::WorkKind::ProviderAttempt,
                         requirements_revision: 1,
