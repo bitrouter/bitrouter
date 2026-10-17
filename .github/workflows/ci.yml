@@ -145,7 +145,7 @@ jobs:
         shell: bash
         run: |
           read -r -a target_flags <<< "$TEST_TARGET_FLAGS"
-          cargo nextest run -p bitrouter --all-features \
+          cargo nextest run -p bitrouter --all-features --no-fail-fast \
             --build-jobs "$TEST_BUILD_JOBS" \
             "${target_flags[@]}"
 
